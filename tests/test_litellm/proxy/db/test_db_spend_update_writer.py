@@ -28,6 +28,7 @@ from litellm.proxy.db.db_spend_update_writer import (
     _SpendTableName,
     _spend_tables_left_to_send,
 )
+from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
@@ -4264,12 +4265,18 @@ async def test_daily_transaction_attributes_caching_savings_only_with_an_injecti
 
 
 class _StallingDailySpendFakeDB(_DailySpendFakeDB):
-    """Holds the daily upsert aimed at one table until it is cancelled, like a starved pool does."""
+    """Holds the daily upsert aimed at one table until it is cancelled, like a starved pool does.
+
+    The rollback of that transaction waits for ``rollback_release``: the query engine only
+    rolls back once the statement it is running has returned, which behind a lock takes
+    as long as the lock is held."""
 
     def __init__(self, stalled_table: str) -> None:
         super().__init__(failing_table=None)
         self.stalled_table = stalled_table
         self.stalled = asyncio.Event()
+        self.rollback_release = asyncio.Event()
+        self.rolled_back = asyncio.Event()
         self.transaction_outcomes: list[str] = []
 
     async def execute_raw(self, query: str, *args: object) -> int:
@@ -4283,7 +4290,9 @@ class _StallingDailySpendFakeDB(_DailySpendFakeDB):
         try:
             yield self
         except BaseException:
+            await self.rollback_release.wait()
             self.transaction_outcomes.append("rollback")
+            self.rolled_back.set()
             raise
         self.transaction_outcomes.append("commit")
 
@@ -4302,6 +4311,15 @@ _DAILY_SPEND_ENTITIES: Final = [
     ),
     pytest.param("daily_agent_spend_update_queue", "agent", "agent_id", "LiteLLM_DailyAgentSpend", id="agent"),
 ]
+
+_DAILY_SPEND_QUEUES: Final[dict[str, Callable[[DBSpendUpdateWriter], DailySpendUpdateQueue]]] = {
+    "daily_spend_update_queue": lambda writer: writer.daily_spend_update_queue,
+    "daily_team_spend_update_queue": lambda writer: writer.daily_team_spend_update_queue,
+    "daily_org_spend_update_queue": lambda writer: writer.daily_org_spend_update_queue,
+    "daily_tag_spend_update_queue": lambda writer: writer.daily_tag_spend_update_queue,
+    "daily_end_user_spend_update_queue": lambda writer: writer.daily_end_user_spend_update_queue,
+    "daily_agent_spend_update_queue": lambda writer: writer.daily_agent_spend_update_queue,
+}
 
 _DAILY_SPEND_COMMITS: Final = {
     "user": DBSpendUpdateWriter.update_daily_user_spend,
@@ -4324,7 +4342,7 @@ async def test_daily_spend_batch_cancelled_mid_flight_is_rolled_back_requeued_an
     statement that did reach Postgres is rolled back with the cancel and the requeued rows
     land exactly once."""
     db_writer = DBSpendUpdateWriter()
-    queue = getattr(db_writer, queue_name)
+    queue = _DAILY_SPEND_QUEUES[queue_name](db_writer)
     await queue.add_update({"key-a": _daily_entity_txn(entity_id_field)})
     await queue.add_update({"key-a": _daily_entity_txn(entity_id_field)})
     db = _StallingDailySpendFakeDB(stalled_table=table)
@@ -4344,12 +4362,17 @@ async def test_daily_spend_batch_cancelled_mid_flight_is_rolled_back_requeued_an
     tick = asyncio.ensure_future(flush(db))
     await asyncio.wait_for(db.stalled.wait(), timeout=5)
     tick.cancel()
+    finished, _ = await asyncio.wait({tick}, timeout=1)
+    assert finished == {tick}, "the cancelled tick must return before the rolled-back statement unwinds"
     with pytest.raises(asyncio.CancelledError):
-        await tick
+        tick.result()
 
+    assert not queue.update_queue.empty(), "the cancelled batch must go back on the queue before the rollback lands"
+    assert db.transaction_outcomes == []
+    db.rollback_release.set()
+    await asyncio.wait_for(db.rolled_back.wait(), timeout=5)
     assert db.transaction_outcomes == ["rollback"]
     assert _daily_upserts(db, table) == []
-    assert not queue.update_queue.empty(), "the cancelled batch must go back on the queue"
 
     final_db = _DailySpendFakeDB(failing_table=None)
     await flush(final_db)
@@ -4386,3 +4409,44 @@ async def test_cancelled_flush_of_an_empty_daily_queue_requeues_nothing():
         )
 
     assert queue.update_queue.empty()
+
+
+class _AnnouncingDailySpendFakeDB(_DailySpendFakeDB):
+    """Signals ``written`` the moment the daily upsert has been committed."""
+
+    def __init__(self) -> None:
+        super().__init__(failing_table=None)
+        self.written = asyncio.Event()
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        rows = await super().execute_raw(query, *args)
+        self.written.set()
+        return rows
+
+
+@pytest.mark.asyncio
+async def test_cancel_that_lands_after_the_daily_batch_committed_does_not_requeue_it():
+    """The commit has returned but the tick has not resumed yet when the cancel arrives.
+    Putting the batch back now would write the same spend twice on the final flush."""
+    db_writer = DBSpendUpdateWriter()
+    queue = db_writer.daily_spend_update_queue
+    await queue.add_update({"key-a": _daily_txn()})
+    db = _AnnouncingDailySpendFakeDB()
+
+    tick = asyncio.ensure_future(
+        db_writer._flush_daily_spend_queue(
+            queue=queue,
+            entity_type="user",
+            commit=DBSpendUpdateWriter.update_daily_user_spend,
+            n_retry_times=0,
+            prisma_client=_WindowSpendFakePrisma(db),
+            proxy_logging_obj=MagicMock(),
+        )
+    )
+    await db.written.wait()
+    tick.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await tick
+
+    assert len(_daily_upserts(db, "LiteLLM_DailyUserSpend")) == 1
+    assert queue.update_queue.empty(), "a batch that already committed must not be requeued"

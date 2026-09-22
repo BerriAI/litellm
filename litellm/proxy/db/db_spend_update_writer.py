@@ -1606,14 +1606,18 @@ class DBSpendUpdateWriter:
         proxy_logging_obj: ProxyLogging,
     ) -> None:
         transactions: Final = await queue.flush_and_get_aggregated_daily_spend_update_transactions()
-        try:
-            await commit(
+        commit_task: Final = asyncio.ensure_future(
+            commit(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
                 daily_spend_transactions=cast(dict[str, _DailySpendTransactionT], transactions),
             )
+        )
+        try:
+            await asyncio.shield(commit_task)
         except asyncio.CancelledError:
+            commit_task.cancel()
             if transactions:
                 await queue.add_update(transactions)
             raise
