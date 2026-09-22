@@ -159,6 +159,9 @@
     "tests/integration/routing/test_redis_recovery.py::test_owned_redis_outage_recovers_requests_and_real_response_cache": [
       "other.routing.redis.owned_outage_recovers_serving_and_response_cache"
     ],
+    "tests/integration/routing/test_stale_cost_map_boot.py::test_config_deployment_dropped_by_stale_boot_cost_map_is_restored_after_reload": [
+      "other.routing.cost_map.config_deployment_dropped_by_stale_boot_map_is_restored_after_reload"
+    ],
     "tests/integration/providers/test_anthropic_wire.py::test_anthropic_tool_history_and_cache_tokens_keep_wire_and_accounting_contracts": [
       "other.provider_wire.anthropic.tool_history_system_cache_and_internal_fields",
       "quota_management.spend_tracking.cache_tokens.disjoint_classes_use_explicit_rates"
