@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Daily Claude Code compatibility-matrix populator.
 #
-# Runs from the GCP VM `litellm-compatibility-matrix-populator` via the
-# systemd timer in this directory. The flow is:
+# Runs daily as the Render cron job `litellm-compat-matrix`, built from
+# the Dockerfile in this directory (see README.md). The flow is:
 #
 #   1. Resolve the latest LiteLLM final release tag from the GitHub
 #      Releases API.
@@ -33,12 +33,12 @@
 # rather than spawning a new one. If the JSON is byte-identical to the
 # docs branch, we skip the push entirely.
 #
-# Required commands on $PATH: git, uv, gh, jq, curl, claude, npm.
+# Required commands on $PATH: git, uv, gh, jq, curl, claude.
 # Required state: a litellm checkout at $LITELLM_REPO (this file lives in
-# it), $WORKTREE is created on first run, gh is already authenticated.
+# it); $WORKTREE is created on first run.
 #
-# Override any default by setting the matching env var; see the systemd
-# unit for the production wiring.
+# Override any default by setting the matching env var; see README.md
+# for the production wiring.
 
 set -Eeuo pipefail
 
@@ -52,12 +52,12 @@ DOCS_TARGET_PATH="${DOCS_TARGET_PATH:-src/data/compatibility-matrix.json}"
 SKIP_PUBLISH="${SKIP_PUBLISH:-0}"
 PYTEST_K="${PYTEST_K:-}"
 # The e2e suite uses PEP 695 `type` aliases, so the venv needs Python
-# >= 3.12 (also what repo CI runs) even when the VM's system python is
+# >= 3.12 (also what repo CI runs) even when the host's system python is
 # older. uv fetches a managed CPython of this version on first use --
 # checksum-verified against the manifest baked into the pinned uv
 # binary -- and installs it under ${WORKTREE}/.uv-python (see
-# UV_PYTHON_INSTALL_DIR below) so it lives inside the one tree the
-# systemd sandbox lets us write to.
+# UV_PYTHON_INSTALL_DIR below) so everything the run writes lives inside
+# the worktree.
 CRON_PYTHON_VERSION="${CRON_PYTHON_VERSION:-3.12}"
 # Merge method for auto-merge. BerriAI/litellm-docs only allows squash
 # merges (merge-commit and rebase are disabled at the repo level), so
@@ -113,9 +113,9 @@ for cmd in git uv gh jq curl claude; do
 done
 
 # Publishing pushes the branch straight to BerriAI/litellm-docs and opens
-# the PR as mateo-berri, who has write access on the docs repo. Under
-# systemd the PAT arrives as a file via LoadCredential=, NOT via the
-# EnvironmentFile: several suite cells let the model-driven claude CLI
+# the PR as mateo-berri, who has write access on the docs repo. On
+# Render the PAT arrives as a secret file under ${CREDENTIALS_DIRECTORY},
+# NOT via an env var: several suite cells let the model-driven claude CLI
 # read arbitrary files as this user, and /proc/<pid>/environ of the
 # script, pytest, and the proxy would hand an env-borne token to any
 # same-UID reader. Kept as an unexported shell variable and passed per
@@ -125,13 +125,13 @@ done
 # quota.
 if [[ -z "${GITHUB_TOKEN:-}" && -n "${CREDENTIALS_DIRECTORY:-}" && -f "${CREDENTIALS_DIRECTORY}/github-token" ]]; then
   GITHUB_TOKEN="$(<"${CREDENTIALS_DIRECTORY}/github-token")"
-  log "publish token source: systemd credential store"
+  log "publish token source: ${CREDENTIALS_DIRECTORY}/github-token"
 elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
   log "publish token source: process environment"
 fi
 if [[ "${SKIP_PUBLISH}" != "1" ]]; then
   [[ -n "${GITHUB_TOKEN:-}" ]] \
-    || die "publish token required: /etc/litellm-compat-matrix-github-token via LoadCredential under systemd, or an exported GITHUB_TOKEN for manual runs (or set SKIP_PUBLISH=1)"
+    || die "publish token required: the github-token secret file under CREDENTIALS_DIRECTORY, or an exported GITHUB_TOKEN for manual runs (or set SKIP_PUBLISH=1)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -205,7 +205,7 @@ log "local claude code: ${CLAUDE_CODE_VERSION}"
 if [[ ! -d "${WORKTREE}/.git" ]]; then
   log "first run: cloning litellm into ${WORKTREE}"
   mkdir -p "$(dirname "${WORKTREE}")"
-  git clone https://github.com/BerriAI/litellm.git "${WORKTREE}"
+  git clone --filter=blob:none https://github.com/BerriAI/litellm.git "${WORKTREE}"
 fi
 
 log "updating worktree to ${LITELLM_VERSION}"
@@ -321,10 +321,10 @@ log "starting proxy on 127.0.0.1:${PROXY_PORT}"
 # Bind the proxy to loopback only. The populator proxy is talked to
 # exclusively by the pytest run on the same host (the health check and
 # the test env set `LITELLM_PROXY_URL=http://127.0.0.1:...`),
-# so there's no reason to expose it on the VM's external interfaces.
+# so there's no reason to expose it on the container's external interfaces.
 # Without `--host`, `litellm` defaults to 0.0.0.0, which combined with
 # the predictable default `LITELLM_MASTER_KEY=sk-cron-matrix` would
-# allow anything that can reach :${PROXY_PORT} on the VM to authenticate
+# allow anything that can reach :${PROXY_PORT} on the host to authenticate
 # and burn upstream provider credentials.
 #
 # `setsid` puts the proxy in its own session+pgroup so cleanup() can
@@ -415,7 +415,7 @@ BRANCH_NAME="compat-matrix/${LITELLM_VERSION}-${CLAUDE_CODE_VERSION}-${DATE_UTC}
 DOCS_CLONE="${WORKDIR}/litellm-docs"
 
 log "cloning ${DOCS_REPO}@${DOCS_BRANCH}"
-gh repo clone "${DOCS_REPO}" "${DOCS_CLONE}" -- --depth 1 --branch "${DOCS_BRANCH}"
+GH_TOKEN="${GITHUB_TOKEN}" gh repo clone "${DOCS_REPO}" "${DOCS_CLONE}" -- --depth 1 --branch "${DOCS_BRANCH}"
 
 cd "${DOCS_CLONE}"
 git config user.email "litellm-bot@berri.ai"
@@ -492,7 +492,7 @@ git commit -m "${COMMIT_MSG}"
 #
 # Plain --force (not --force-with-lease) is acceptable here: the
 # compat-matrix/* branch is bot-owned, only this script ever writes to
-# it, and runs are serialized by the systemd timer. --force-with-lease
+# it, and runs are serialized by the cron schedule. --force-with-lease
 # would require a fetch to populate the remote-tracking ref before each
 # push and adds no safety in this single-writer setup.
 PUBLISH_PUSH_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${DOCS_REPO}.git"
@@ -660,7 +660,7 @@ while IFS=$'\t' read -r stale_pr stale_head; do
   GH_TOKEN="${GITHUB_TOKEN}" gh pr close "${stale_pr}" \
     --repo "${DOCS_REPO}" \
     --delete-branch \
-    --comment "Superseded by the newer daily compat-matrix PR from \`${BRANCH_NAME}\`; the populator keeps only the most recent compat-matrix PR open." 2>&1 | sed 's/^/  /'
+    --comment "Superseded by the newer daily compat-matrix PR from \`${BRANCH_NAME}\`; the populator keeps only the most recent compat-matrix PR open" 2>&1 | sed 's/^/  /'
   if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
     log "closed stale compat-matrix PR #${stale_pr} (${stale_head})"
   else
