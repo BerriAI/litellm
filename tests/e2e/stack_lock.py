@@ -1,6 +1,8 @@
 """Cross-process reader/writer lock over the proxy stack every xdist worker shares.
-Ordinary e2e tests hold it shared; a `quiet_stack` test holds it exclusive, and the
-`gate` file makes a waiting exclusive holder win over readers that arrive after it."""
+Every collected test holds it shared, marker or not, since the Claude Code cells and
+other unmarked suites drive the same stack; a `quiet_stack` test holds it exclusive,
+and the `gate` file makes a waiting exclusive holder win over readers that arrive
+after it."""
 
 from __future__ import annotations
 
