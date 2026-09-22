@@ -2427,3 +2427,111 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 429, response.text
         assert response.json()["error"]["message"] == "rate limited"
+
+
+class TestStoreBackgroundResponseInManagedObjects:
+    """Regression for #32782: background=true must not 500 without litellm_enterprise."""
+
+    def _response(self, *, model_id: str | None = "deployment-123"):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        response = ResponsesAPIResponse(
+            id="resp_bg123",
+            created_at=1234567890,
+            model="gpt-4o",
+            object="response",
+            status="queued",
+            output=[],
+        )
+        response._hidden_params = {"model_id": model_id} if model_id else {}
+        return response
+
+    @pytest.mark.asyncio
+    async def test_missing_enterprise_package_is_noop(self):
+        import sys
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _store_background_response_in_managed_objects,
+        )
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.get_proxy_hook = MagicMock()
+
+        with patch.dict(
+            sys.modules,
+            {"litellm_enterprise.proxy.hooks.managed_files": None},
+        ):
+            await _store_background_response_in_managed_objects(
+                response=self._response(),
+                proxy_logging_obj=proxy_logging_obj,
+                llm_router=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+        proxy_logging_obj.get_proxy_hook.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stores_object_when_enterprise_hook_present(self):
+        import sys
+        import types
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _store_background_response_in_managed_objects,
+        )
+
+        fake_module = types.ModuleType("litellm_enterprise.proxy.hooks.managed_files")
+        fake_module._PROXY_LiteLLMManagedFiles = type("_FakeManagedFiles", (), {})
+
+        managed_files_obj = MagicMock()
+        managed_files_obj.store_unified_object_id = AsyncMock()
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.get_proxy_hook = MagicMock(return_value=managed_files_obj)
+
+        response = self._response()
+        with patch.dict(
+            sys.modules,
+            {"litellm_enterprise.proxy.hooks.managed_files": fake_module},
+        ):
+            await _store_background_response_in_managed_objects(
+                response=response,
+                proxy_logging_obj=proxy_logging_obj,
+                llm_router=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+        managed_files_obj.store_unified_object_id.assert_awaited_once()
+        kwargs = managed_files_obj.store_unified_object_id.await_args.kwargs
+        assert kwargs["unified_object_id"] == response.id
+        assert kwargs["file_purpose"] == "response"
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_model_id(self):
+        import sys
+        import types
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _store_background_response_in_managed_objects,
+        )
+
+        fake_module = types.ModuleType("litellm_enterprise.proxy.hooks.managed_files")
+        fake_module._PROXY_LiteLLMManagedFiles = type("_FakeManagedFiles", (), {})
+
+        managed_files_obj = MagicMock()
+        managed_files_obj.store_unified_object_id = AsyncMock()
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.get_proxy_hook = MagicMock(return_value=managed_files_obj)
+
+        with patch.dict(
+            sys.modules,
+            {"litellm_enterprise.proxy.hooks.managed_files": fake_module},
+        ):
+            await _store_background_response_in_managed_objects(
+                response=self._response(model_id=None),
+                proxy_logging_obj=proxy_logging_obj,
+                llm_router=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+        managed_files_obj.store_unified_object_id.assert_not_awaited()
