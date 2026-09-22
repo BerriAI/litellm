@@ -17,6 +17,7 @@ import pytest
 from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
 from e2e_http import Success, require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage
 
@@ -88,6 +89,15 @@ def _roomy_send(client: BudgetClient, key: str) -> str:
 
 class TestTeamMemberBudgetIsolation:
     @pytest.mark.covers("quota_management.budget.team_member.isolates_per_member")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_blocked_member_does_not_block_peer(self, client: BudgetClient, pair: _Pair) -> None:
         blocked = False
         for _ in range(40):

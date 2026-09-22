@@ -46,6 +46,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, KeyMetadata, LiteLLMParamsBody
 from quota_client import QuotaClient
@@ -157,6 +158,15 @@ class TestDynamicRateLimitPriority:
         "quota_management.ratelimit.priority_generous.picks_under_tpm",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_generous_mode_lets_priority_borrow_past_reservation(
         self, client: QuotaClient, resources: ResourceManager
     ) -> None:
@@ -198,6 +208,15 @@ class TestDynamicRateLimitPriority:
     @pytest.mark.covers(
         "quota_management.ratelimit.priority_strict.picks_under_tpm",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_strict_mode_blocks_saturated_priority_but_serves_the_other(
         self, client: QuotaClient, resources: ResourceManager

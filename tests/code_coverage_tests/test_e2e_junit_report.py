@@ -37,7 +37,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from e2e_metadata import step
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta, step
 
 FIRST_ATTEMPT_MADE = Path(__file__).with_name("first-attempt-made")
 
@@ -99,6 +99,20 @@ def test_passes_on_the_rerun(key: None) -> None:
     FIRST_ATTEMPT_MADE.touch()
     chat(ok=not first_attempt)
     poll_spend_logs()
+
+
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.BEDROCK, Provider.ANTHROPIC),
+        models=("claude-sonnet-4-5", "claude-opus-4-7", "claude-haiku-4-5"),
+        capabilities=(Capability.VISION, Capability.FUNCTION_CALLING),
+        mode=Mode.STREAM,
+    )
+)
+def test_declares_two_providers_and_three_models() -> None:
+    assert Provider.BEDROCK.value == "bedrock"
 """
 
 WIDE_FINALIZER_SUITE: Final = """
@@ -145,6 +159,15 @@ def identity() -> None:
 
 def test_dies_in_a_module_scoped_fixture(identity: None) -> None:
     assert identity is None
+"""
+
+BARE_STR_SUITE: Final = """
+from e2e_metadata import Subject, meta
+
+
+@meta(Subject(models=("gpt-5.5")))
+def test_never_collected() -> None:
+    assert Subject is not None
 """
 
 Properties = tuple[tuple[str, str], ...]
@@ -238,7 +261,7 @@ def report(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFact
     assert xml.exists(), f"the child run wrote no JUnit report:\n{child.stdout}\n{child.stderr}"
     testsuite: Final = next(ElementTree.parse(xml).getroot().iter("testsuite"))
     outcomes: Final = {name: testsuite.get(name) for name in ("tests", "failures", "errors", "skipped")}
-    assert outcomes == {"tests": "6", "failures": "1", "errors": "2", "skipped": "0"}, child.stdout
+    assert outcomes == {"tests": "7", "failures": "1", "errors": "2", "skipped": "0"}, child.stdout
     return properties_by_test(testsuite)
 
 
@@ -286,3 +309,38 @@ class TestStepsReachTheReport:
         already read, on every outcome including a setup error."""
         for name in ("test_passes", "test_fails", "test_errors_in_setup"):
             assert tuple(prop for prop, _ in report[name])[:4] == ("package", "covers", "source", "step"), name
+
+
+class TestDeclaredPropertiesReachTheReport:
+    def test_repeated_provider_model_and_capability_round_trip(self, report: Mapping[str, Properties]) -> None:
+        """One <property> per member under the SINGULAR name, deduped and sorted,
+        with no pairing between the two providers and the three models."""
+        declared: Final = tuple(
+            (prop, value)
+            for prop, value in report["test_declares_two_providers_and_three_models"]
+            if prop not in {"package", "covers", "source"}
+        )
+        assert declared == (
+            ("domain", "llm-translation"),
+            ("route", "messages"),
+            ("provider", "anthropic"),
+            ("provider", "bedrock"),
+            ("model", "claude-haiku-4-5"),
+            ("model", "claude-opus-4-7"),
+            ("model", "claude-sonnet-4-5"),
+            ("capability", "function_calling"),
+            ("capability", "vision"),
+            ("mode", "stream"),
+        )
+
+
+class TestBareStrIsACollectionError:
+    def test_a_str_where_a_tuple_belongs_fails_collection_and_names_the_fix(self, tmp_path: Path) -> None:
+        """`models=("gpt-5.5")` raises where the decorator runs, which is import, so
+        pytest stops at collection and points at the file. Nothing is run and no
+        one-letter `model` properties are ever shipped."""
+        write_suite(tmp_path, {"test_bare_str.py": BARE_STR_SUITE})
+        child: Final = run_child_pytest(tmp_path)
+        assert child.returncode == pytest.ExitCode.INTERRUPTED, child.stdout
+        assert "Subject.models must be a tuple, got str: 'gpt-5.5'" in child.stdout
+        assert "models=(x,), not models=(x)" in child.stdout

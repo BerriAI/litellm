@@ -112,6 +112,11 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
+        "meta(subject): typed e2e_metadata.Subject describing what this test drives"
+        " (domain/route/providers/models/capabilities/mode); attach it with @meta(Subject(...))",
+    )
+    config.addinivalue_line(
+        "markers",
         "replayable: edge-wired test whose provider traffic replays from a fixture bundle, so it makes "
         "zero provider calls in replay mode; the record/replay CI lane selects it with -m replayable",
     )

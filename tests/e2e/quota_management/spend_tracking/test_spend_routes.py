@@ -22,6 +22,7 @@ from typing import Final
 import pytest
 
 from e2e_http import ProbeResult
+from e2e_metadata import Domain, Route, Subject, meta
 from models import DateRangeParams
 from spend_e2e_client import SpendClient
 
@@ -102,12 +103,24 @@ def _probe(client: SpendClient, route: str) -> ProbeResult:
 
 
 @pytest.mark.parametrize("route", SPEND_ROUTES)
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.SPEND_REPORTING,
+    )
+)
 def test_spend_route_responsive(client: SpendClient, route: str) -> None:
     result = _probe(client, route)
     print(f"{route} -> {result.status_code}\n{result.body[:600]}")
     assert result.healthy, f"{route} -> {result.status_code}\n{result.body[:600]}"
 
 
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.SPEND_REPORTING,
+    )
+)
 def test_schema_listed_spend_routes_are_responsive(client: SpendClient) -> None:
     """Probe any spend GET route the schema lists that isn't in SPEND_ROUTES."""
     schema = client.openapi()

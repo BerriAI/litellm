@@ -39,6 +39,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
 from e2e_http import StreamingResponse, require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import KeyGenerateBody
 from quota_client import QuotaClient
@@ -176,6 +177,15 @@ def _assert_rate_limited(outcome: StreamingResponse, limit_type: str) -> None:
 
 class TestKeyRateLimits:
     @pytest.mark.covers("quota_management.ratelimit.rpm.blocks_over_limit")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_rpm_limit_blocks_over_limit(self, client: QuotaClient, resources: ResourceManager) -> None:
         key = _limited_key(client, resources, rpm_limit=3)
         info = client.proxy.key_info(key)
@@ -188,6 +198,15 @@ class TestKeyRateLimits:
         _assert_rate_limited(_chat(client, key), "requests")
 
     @pytest.mark.covers("quota_management.ratelimit.tpm.blocks_over_limit")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_tpm_limit_blocks_over_limit(self, client: QuotaClient, resources: ResourceManager) -> None:
         key = _limited_key(client, resources, tpm_limit=TPM_LIMIT)
         info = client.proxy.key_info(key)
@@ -207,6 +226,15 @@ class TestKeyRateLimits:
                 _assert_rate_limited(_chat(client, key), "tokens")
 
     @pytest.mark.covers("quota_management.ratelimit.rpm.resets_after_window")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_rpm_limit_resets_after_window(self, client: QuotaClient, resources: ResourceManager) -> None:
         key = _limited_key(client, resources, rpm_limit=1)
 
@@ -232,6 +260,15 @@ class TestKeyRateLimits:
         pytest.fail("a blocked key never recovered after the rate-limit window elapsed")
 
     @pytest.mark.covers("quota_management.ratelimit.rpm.headers_report_remaining")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_headers_report_limit_and_remaining(self, client: QuotaClient, resources: ResourceManager) -> None:
         key = _limited_key(client, resources, rpm_limit=5, tpm_limit=100000)
 

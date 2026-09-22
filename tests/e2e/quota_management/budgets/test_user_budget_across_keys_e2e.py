@@ -15,6 +15,7 @@ import pytest
 from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
@@ -58,6 +59,15 @@ def _expect_prompt_block(client: BudgetClient, key: str, subject: str) -> None:
 
 class TestUserBudgetAcrossKeys:
     @pytest.mark.covers("quota_management.budget.internal_user.enforced_across_keys")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_user_budget_blocks_a_second_key(self, client: BudgetClient, resources: ResourceManager) -> None:
         user_id = client.create_user(max_budget=TINY_CAP)
         resources.defer(lambda: client.delete_user(user_id))

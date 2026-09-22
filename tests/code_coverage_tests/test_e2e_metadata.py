@@ -13,11 +13,32 @@ import threading
 import warnings
 from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
-from e2e_metadata import MAX_STEPS, STEP_FRAMES, STEPS, step, step_properties
-from junit_properties import attach_result_properties, attach_step_properties
+from e2e_metadata import (
+    MAX_STEPS,
+    STEP_FRAMES,
+    STEPS,
+    Capability,
+    Domain,
+    Mode,
+    Provider,
+    Route,
+    Subject,
+    meta,
+    step,
+    step_properties,
+    subject_properties,
+)
+from junit_properties import (
+    attach_result_properties,
+    attach_step_properties,
+    package_from_nodeid,
+    result_properties,
+    source_from_item,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +53,216 @@ def empty_step_log() -> Generator[None]:
 def collected_item(request: pytest.FixtureRequest, name: str) -> pytest.Item:
     """The Item pytest collected for test ``name`` in this file, as pytest built it."""
     return next(item for item in request.session.items if item.path == request.path and item.name == name)
+
+
+def fixed_prefix(item: pytest.Item, covers: str) -> tuple[tuple[str, str], ...]:
+    """The three-tuple every testcase in the suite has carried since before the
+    typed marker existed. Its shape and order are spelled out rather than taken
+    from `result_properties`, so a change to either fails a test instead of
+    agreeing with itself. `package` and `source` are read off the item, since
+    this file sits outside the suite root; tests/e2e/test_junit_properties.py
+    pins their values."""
+    return (
+        ("package", package_from_nodeid(item.nodeid)),
+        ("covers", covers),
+        ("source", source_from_item(item)),
+    )
+
+
+class TestSubjectProperties:
+    """The declared half: `@meta(Subject(...))` -> `<property>` pairs.
+
+    Markers are applied at run time via `request.applymarker`, the idiom the
+    `covers` tests above already use, so the coverage registry's collect-only pass
+    never sees a marker that exists only to be serialized.
+    """
+
+    def test_every_declared_field_becomes_a_property_in_field_order(self, request: pytest.FixtureRequest) -> None:
+        """One pass over `dataclasses.asdict`: declaration order is emission order,
+        a (str, Enum) member is written as its `.value` and never `str(member)`,
+        and every plural field emits a repeated SINGULAR name (`provider`, `model`,
+        `capability`), one <property> per member and never a delimiter-joined value."""
+        test = type(self).test_every_declared_field_becomes_a_property_in_field_order
+        request.applymarker(
+            meta(
+                Subject(
+                    domain=Domain.SPEND_BUDGETS,
+                    route=Route.CHAT_COMPLETIONS,
+                    providers=(Provider.GEMINI, Provider.ANTHROPIC),
+                    models=("gemini-2.5-flash", "claude-haiku-4-5"),
+                    capabilities=(Capability.VISION, Capability.FUNCTION_CALLING, Capability.VISION),
+                    mode=Mode.NONSTREAM,
+                )
+            )
+        )
+        assert subject_properties(collected_item(request, test.__name__)) == (
+            ("domain", "spend-budgets"),
+            ("route", "chat_completions"),
+            ("provider", "anthropic"),
+            ("provider", "gemini"),
+            ("model", "claude-haiku-4-5"),
+            ("model", "gemini-2.5-flash"),
+            ("capability", "function_calling"),
+            ("capability", "vision"),
+            ("mode", "nonstream"),
+        )
+
+    def test_one_provider_with_three_models_pairs_nothing(self, request: pytest.FixtureRequest) -> None:
+        """The claude_code matrix shape: one test node drives haiku, sonnet and opus
+        through a single provider. The two lists are independent sets, so their
+        lengths need not agree and no model is tied to a provider by position."""
+        test = type(self).test_one_provider_with_three_models_pairs_nothing
+        request.applymarker(
+            meta(
+                Subject(
+                    providers=(Provider.BEDROCK,),
+                    models=("claude-sonnet-4-5", "claude-opus-4-7", "claude-haiku-4-5"),
+                )
+            )
+        )
+        assert subject_properties(collected_item(request, test.__name__)) == (
+            ("provider", "bedrock"),
+            ("model", "claude-haiku-4-5"),
+            ("model", "claude-opus-4-7"),
+            ("model", "claude-sonnet-4-5"),
+        )
+
+    def test_an_empty_plural_field_emits_nothing(self, request: pytest.FixtureRequest) -> None:
+        """No `provider`, `model` or `capability` property at all, rather than one
+        with an empty value: the emitter is what turns absence into `[]`."""
+        test = type(self).test_an_empty_plural_field_emits_nothing
+        request.applymarker(meta(Subject(domain=Domain.MANAGEMENT)))
+        assert subject_properties(collected_item(request, test.__name__)) == (("domain", "management"),)
+
+    def test_scalar_property_names_are_the_dataclass_field_names(self, request: pytest.FixtureRequest) -> None:
+        """The mapping is `asdict`, not a hand-written table: a scalar field added
+        to `Subject` later serializes under its own name with no edit to the
+        serializer. Proven by reading the field list back off the dataclass."""
+        test = type(self).test_scalar_property_names_are_the_dataclass_field_names
+        request.applymarker(meta(Subject(domain=Domain.UNKNOWN, route=Route.HEALTH, mode=Mode.STREAM)))
+        declared = tuple(field.name for field in fields(Subject))
+        emitted = tuple(name for name, _ in subject_properties(collected_item(request, test.__name__)))
+        assert emitted == tuple(name for name in declared if name in {"domain", "route", "mode"})
+
+    def test_every_plural_field_is_deduped_and_sorted_at_declaration(self) -> None:
+        """Canonicalized in `__post_init__`, so two tests that spelled the same set
+        in different orders produce byte-identical properties and the committed run
+        files diff cleanly. Sorted by the value that is serialized, which for an
+        enum is its `.value` and not its member name."""
+        subject = Subject(
+            providers=(Provider.OPENAI, Provider.ANTHROPIC, Provider.OPENAI),
+            models=("gpt-5.5", "claude-haiku-4-5", "gpt-5.5"),
+            capabilities=(Capability.VISION, Capability.REASONING, Capability.VISION),
+        )
+        assert subject.providers == (Provider.ANTHROPIC, Provider.OPENAI)
+        assert subject.models == ("claude-haiku-4-5", "gpt-5.5")
+        assert subject.capabilities == (Capability.REASONING, Capability.VISION)
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("models", "gpt-5.5"),
+            ("models", ["gpt-5.5"]),
+            ("providers", Provider.OPENAI),
+            ("providers", [Provider.OPENAI]),
+            ("capabilities", Capability.VISION),
+            ("capabilities", frozenset({Capability.VISION})),
+        ],
+    )
+    def test_a_plural_field_refuses_anything_but_a_tuple(self, field: str, value: object) -> None:
+        """`models=("gpt-5.5")` is a str, not a one-member tuple: the parentheses
+        do nothing without the trailing comma, and iterating the str would declare
+        one model per character. basedpyright flags it at the call site; this is
+        the runtime half, raised where the decorator runs, so it lands as a
+        collection error naming the file. `replace` is the untyped way in, since
+        the typed constructor would not let the test spell the mistake."""
+        with pytest.raises(TypeError, match=rf"Subject\.{field} must be a tuple"):
+            _ = replace(Subject(), **{field: value})
+
+    @pytest.mark.parametrize(
+        ("field", "value", "member_type"),
+        [
+            ("providers", ("openai",), "Provider"),
+            ("capabilities", ("vision",), "Capability"),
+            ("models", (5,), "str"),
+        ],
+    )
+    def test_a_plural_field_refuses_a_member_of_the_wrong_type(
+        self, field: str, value: object, member_type: str
+    ) -> None:
+        """A bare "openai" where `Provider.OPENAI` belongs would serialize fine
+        today and stop joining the day the enum value is renamed."""
+        with pytest.raises(TypeError, match=rf"Subject\.{field} takes {member_type} members"):
+            _ = replace(Subject(), **{field: value})
+
+    def test_a_blank_model_is_dropped_rather_than_refused(self) -> None:
+        """`models` is fed from env-overridable constants. A blank override is the
+        operator's mistake, and it must cost one missing property, not the
+        collection of the whole module."""
+        assert Subject(models=("", "gpt-5.5")).models == ("gpt-5.5",)
+
+    def test_the_typed_marker_only_ever_appends_to_the_fixed_prefix(self, request: pytest.FixtureRequest) -> None:
+        """Loki, Grafana and the status page read `package`/`covers`/`source`; the
+        typed fields ride behind them and must not disturb them."""
+        test = type(self).test_the_typed_marker_only_ever_appends_to_the_fixed_prefix
+        request.applymarker(pytest.mark.covers("quota_management.budget.key.blocks_over_limit"))
+        request.applymarker(meta(Subject(route=Route.SPEND_REPORTING)))
+        item = collected_item(request, test.__name__)
+        assert result_properties(item) == fixed_prefix(item, "quota_management.budget.key.blocks_over_limit") + (
+            ("route", "spend_reporting"),
+        )
+
+    def test_a_test_with_only_the_old_string_covers_is_unchanged(self, request: pytest.FixtureRequest) -> None:
+        """The existing `@pytest.mark.covers("cell.id")` call sites keep emitting
+        exactly what they emitted before the typed marker existed."""
+        test = type(self).test_a_test_with_only_the_old_string_covers_is_unchanged
+        request.applymarker(pytest.mark.covers("llm.responses.openai.tool_use.nonstream.works"))
+        item = collected_item(request, test.__name__)
+        assert result_properties(item) == fixed_prefix(item, "llm.responses.openai.tool_use.nonstream.works")
+
+    def test_a_test_with_neither_marker_carries_only_the_prefix(self, request: pytest.FixtureRequest) -> None:
+        """Which is every test in the suite until the backfill lands: an empty
+        `covers` and no typed properties at all, never five empty ones."""
+        test = type(self).test_a_test_with_neither_marker_carries_only_the_prefix
+        item = collected_item(request, test.__name__)
+        assert subject_properties(item) == ()
+        assert result_properties(item) == fixed_prefix(item, "")
+
+    def test_a_marker_carrying_something_other_than_a_subject_emits_nothing(
+        self, request: pytest.FixtureRequest
+    ) -> None:
+        """`@meta` is typed, but `pytest.mark.meta` is not, and a bare
+        `@pytest.mark.meta` carries no args at all. Neither may produce a property
+        whose value is a repr."""
+        test = type(self).test_a_marker_carrying_something_other_than_a_subject_emits_nothing
+        request.applymarker(pytest.mark.meta("spend-budgets"))
+        assert subject_properties(collected_item(request, test.__name__)) == ()
+
+
+class TestProviderMirrorsLitellm:
+    """`Provider` copies litellm's `LlmProviders` values rather than importing
+    them, so collecting tests/e2e never needs the litellm package -- the suite is
+    shipped to the e2e runner image on its own, and a `from litellm...` at module
+    scope in a test file would turn a missing package into a collection error for
+    every test rather than a slow import.
+
+    A copy can drift, so it is checked here, wherever litellm IS importable (a dev
+    checkout, this repo's own CI). Where it is not, the whole point is that
+    nothing fails, so the check skips.
+    """
+
+    def test_every_provider_value_is_a_real_litellm_provider(self) -> None:
+        """One direction only. litellm ships 155 providers and the e2e suite names
+        a handful; a value missing from `Provider` is a line to add when a test
+        needs it, but a value that is not a provider at all would ship a property
+        no consumer can join on."""
+        try:
+            from litellm.types.utils import LlmProviders
+        except ImportError:  # pragma: no cover - the runner image's shape
+            pytest.skip("litellm is not importable here, which is the property under test")
+        known = {str(member.value) for member in LlmProviders}
+        unknown = sorted(member.value for member in Provider if member.value not in known)
+        assert not unknown, f"not LlmProviders values: {unknown}"
 
 
 class TestStepRecording:

@@ -13,6 +13,7 @@ import pytest
 
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, LiteLLMParamsBody
 from quota_client import QuotaClient
@@ -39,6 +40,15 @@ class TestRedisBackedRateLimit:
     @pytest.mark.covers(
         "quota_management.ratelimit.redis_backed.blocks_over_limit",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_rpm_limit_one_blocks_second_call(
         self, client: QuotaClient, resources: ResourceManager

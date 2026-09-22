@@ -36,6 +36,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from models import KeyGenerateBody
 from proxy_client import Converged, await_converged
 from pydantic import BaseModel
@@ -61,6 +62,7 @@ EMBED_MODEL: Final = "openai-text-embedding-3-small"
 BATCH_MODEL: Final = "openai-gpt-4o-mini"
 BATCH_BACKEND_MODEL: Final = "gpt-4o-mini"
 BATCH_PROVIDER: Final = "openai"
+DRIVEN_MODELS: Final = (CHAT_MODEL, MESSAGES_MODEL, RESPONSES_MODEL, EMBED_MODEL, BATCH_MODEL)
 HEALTH_SERVICE_ACCOUNT: Final = "litellm-internal-health-check"
 BATCH_TERMINAL_STATUSES: Final = frozenset({"completed", "failed", "cancelled", "expired"})
 FAILED_BATCH_POLL_SECONDS: Final = 120.0
@@ -281,6 +283,14 @@ class TestKeyAttribution:
             "rust_control_plane",
         ],
     )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.SPEND_REPORTING,
+            providers=(Provider.GEMINI, Provider.ANTHROPIC, Provider.OPENAI),
+            models=DRIVEN_MODELS,
+        )
+    )
     def test_every_write_path_row_joins_the_key(self, client: SpendClient, driven: DrivenKey) -> None:
         assert tuple(path.name for path in driven.paths) == WRITE_PATHS
         found: Final = tuple((path, client.proxy.poll_logs_for_request_id(path.request_id)) for path in driven.paths)
@@ -317,6 +327,14 @@ class TestKeyAttribution:
             "rust_control_plane",
         ],
     )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.SPEND_REPORTING,
+            providers=(Provider.GEMINI, Provider.ANTHROPIC, Provider.OPENAI),
+            models=DRIVEN_MODELS,
+        )
+    )
     def test_spend_logs_by_key_return_every_row_with_the_alias(self, client: SpendClient, driven: DrivenKey) -> None:
         expected_ids: Final = frozenset(path.request_id for path in driven.paths)
         rows: Final = client.poll_logs_for_key(
@@ -345,6 +363,14 @@ class TestKeyAttribution:
             "rust_control_plane",
         ],
     )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.SPEND_REPORTING,
+            providers=(Provider.GEMINI, Provider.ANTHROPIC, Provider.OPENAI),
+            models=DRIVEN_MODELS,
+        )
+    )
     def test_user_daily_activity_reports_alias_and_email(self, client: SpendClient, driven: DrivenKey) -> None:
         breakdown: Final[DailyActivityKeyBreakdown | None] = client.poll_daily_activity_for_key(
             driven.identity.token,
@@ -367,6 +393,14 @@ class TestKeyAttribution:
         "quota_management.spend_tracking.key_attribution.health_rows_keep_service_account",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.HEALTH,
+            providers=(Provider.GEMINI,),
+            models=(CHAT_MODEL,),
+        )
+    )
     def test_health_check_rows_keep_the_service_account_key(self, client: SpendClient) -> None:
         started_at: Final = datetime.now(timezone.utc)
         probe: Final = client.health(CHAT_MODEL)
@@ -379,6 +413,15 @@ class TestKeyAttribution:
     @pytest.mark.covers(
         "quota_management.spend_tracking.key_attribution.retrieve_batch_cost_joins_retrieving_key",
         exercised_on=["batches"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.BATCHES,
+            providers=(Provider.OPENAI,),
+            models=(BATCH_MODEL,),
+            mode=Mode.BATCH,
+        )
     )
     def test_terminal_batch_cost_row_joins_the_retrieving_key(self, client: SpendClient, driven: DrivenKey) -> None:
         provider_batch_id: Final = _provider_batch_id(_driven_batch_id(driven))
