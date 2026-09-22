@@ -19,7 +19,7 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
 )
 from litellm.exceptions import GuardrailRaisedException
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
 from litellm.exceptions import BlockedPiiEntityError
 
 
@@ -2345,6 +2345,78 @@ def _anthropic_text_deltas(chunks: list[bytes]) -> list[tuple[int, str]]:
         if event.get("type") == "content_block_delta" and event["delta"].get("type") == "text_delta":
             deltas.append((event["index"], event["delta"]["text"]))
     return deltas
+
+
+def _chat_delta_chunk(text: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-out-mask",
+        choices=[StreamingChoices(index=0, delta=Delta(content=text, role="assistant"), finish_reason=finish_reason)],
+        created=1,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_chat_chunks_are_masked_as_one_response():
+    """
+    Structured chat completion chunks are buffered, assembled and masked as a
+    whole, so a card number split across deltas cannot reach the caller.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "my card is <CREDIT_CARD>"},
+    )
+
+    async def mock_stream():
+        yield _chat_delta_chunk("my card is 4111")
+        yield _chat_delta_chunk(" 1111 1111 1111")
+        yield _chat_delta_chunk("", finish_reason="stop")
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={"messages": [{"role": "user", "content": "what is my card"}]},
+    ):
+        collected.append(chunk)
+
+    assert all(isinstance(chunk, ModelResponseStream) for chunk in collected)
+    joined = "".join(chunk.choices[0].delta.content or "" for chunk in collected)
+    assert joined == "my card is <CREDIT_CARD>"
+    assert collected[-1].choices[0].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_bytes_after_chat_chunks_are_passed_through_in_order():
+    """
+    Once structured chunks have been buffered, a trailing bytes frame belongs to
+    the same stream and must be forwarded rather than treated as a new SSE stream.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "hello"},
+    )
+    trailer = b"data: [DONE]\n\n"
+
+    async def mock_stream():
+        yield _chat_delta_chunk("hello", finish_reason="stop")
+        yield trailer
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert collected[0] == trailer
+    assert len(collected) == 2
+    assert isinstance(collected[1], ModelResponseStream)
+    assert collected[1].choices[0].delta.content == "hello"
 
 
 @pytest.mark.asyncio
