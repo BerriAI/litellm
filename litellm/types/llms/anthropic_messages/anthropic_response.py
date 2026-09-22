@@ -1,6 +1,6 @@
 from typing import Any, Literal, TypeAlias
 
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
@@ -89,3 +89,4 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     type: Literal["message"] | None
     usage: AnthropicUsage | None
     context_management: NotRequired[ContextManagementResponse]
+    safeguard_results: NotRequired[ReadOnly[list[dict[str, object]]]]
