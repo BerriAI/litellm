@@ -16,8 +16,8 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import EMPTY_MAPPING
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
+from litellm.constants import EMPTY_MAPPING
 from litellm.llms.anthropic.batches.transformation import (
     transform_openai_batch_lines_to_anthropic_requests,
 )
