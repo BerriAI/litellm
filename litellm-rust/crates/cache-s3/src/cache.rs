@@ -10,13 +10,14 @@ use aws_sdk_s3::{
     primitives::ByteStream,
 };
 use aws_smithy_types::{DateTime, date_time::Format};
+use futures_util::future::try_join_all;
 use litellm_auth_aws::AwsAuthConfig;
 use litellm_cache::{
-    BaseCache, BatchCache, CacheCodec, CacheConnectionResult, Error, ExactCacheContext, FlushCache,
+    BaseCache, BatchCache, CacheCodec, DisconnectCache, Error, ExactCacheContext, FlushCache,
 };
 use tokio::runtime::Handle;
 
-use crate::auth::Credentials;
+use crate::{auth::S3Credentials, transport::ReqwestHttpClient};
 
 pub struct S3Endpoint {
     pub url: String,
@@ -41,12 +42,13 @@ pub struct S3Cache<C: CacheCodec> {
 }
 
 impl<C: CacheCodec> S3Cache<C> {
-    pub fn new(config: S3CacheConfig, codec: C, runtime: Handle) -> Self {
+    pub fn new(config: S3CacheConfig, http: reqwest::Client, codec: C, runtime: Handle) -> Self {
         let endpoint_url: Option<String> = config.endpoint.map(|endpoint| endpoint.url);
         let base = aws_sdk_s3::Config::builder()
             .behavior_version(BehaviorVersion::latest())
             .region(Region::new(config.region.clone()))
-            .credentials_provider(Credentials::new(config.auth))
+            .http_client(ReqwestHttpClient(http))
+            .credentials_provider(S3Credentials::new(config.auth))
             .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
             .response_checksum_validation(ResponseChecksumValidation::WhenRequired);
         let builder = match &endpoint_url {
@@ -202,12 +204,25 @@ impl<C: CacheCodec> BaseCache for S3Cache<C> {
         self.get(key).await
     }
 
+    async fn async_set_cache_pipeline(
+        &self,
+        entries: Vec<(String, Self::Value)>,
+        context: Self::Context,
+    ) -> Result<(), Error> {
+        let context = &context;
+        try_join_all(
+            entries
+                .into_iter()
+                .map(|(key, value)| async move { self.put(&key, value, context).await }),
+        )
+        .await
+        .map(drop)
+    }
+}
+
+impl<C: CacheCodec> DisconnectCache for S3Cache<C> {
     async fn disconnect(&self) -> Result<(), Error> {
         Ok(())
-    }
-
-    async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
-        Err(Error::UnsupportedOperation)
     }
 }
 

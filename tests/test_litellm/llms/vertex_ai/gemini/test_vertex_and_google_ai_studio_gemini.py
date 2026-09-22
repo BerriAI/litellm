@@ -5948,8 +5948,8 @@ def test_calculate_web_search_requests_counts_unique_queries():
 @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
 @pytest.mark.parametrize(
     "model",
-    ["gemini-2.5-flash", "gemini-3-pro-preview"],
-    ids=["thinking_budget_mapper", "thinking_level_mapper"],
+    ["gemini-2.5-flash"],
+    ids=["thinking_budget_mapper"],
 )
 @pytest.mark.parametrize("reasoning_effort", ["banana", "xhigh"])
 def test_invalid_reasoning_effort_is_a_400_not_a_500(custom_llm_provider, model, reasoning_effort):

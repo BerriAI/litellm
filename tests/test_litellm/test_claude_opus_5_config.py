@@ -41,7 +41,10 @@ ALL_OPUS_5_VARIANTS = (
     "jp.anthropic.claude-opus-5",
     "vertex_ai/claude-opus-5",
     "vertex_ai/claude-opus-5@default",
+    "vertex_ai/claude-opus-5-5",
+    "vertex_ai/claude-opus-5-5@default",
     "azure_ai/claude-opus-5",
+    "azure_ai/claude-opus-5-5",
 )
 
 BEDROCK_OPUS_5_VARIANTS = (
@@ -69,20 +72,37 @@ def test_opus_5_registered_for_bedrock_converse():
     assert "anthropic.claude-opus-5" in BEDROCK_CONVERSE_MODELS
 
 
-def test_opus_5_5_present_in_bundled_backup():
+OPUS_5_5_VARIANTS = (
+    "claude-opus-5-5",
+    "vertex_ai/claude-opus-5-5",
+    "vertex_ai/claude-opus-5-5@default",
+    "azure_ai/claude-opus-5-5",
+)
+
+
+@pytest.mark.parametrize("model_name", OPUS_5_5_VARIANTS)
+def test_opus_5_5_present_in_bundled_backup(model_name):
     backup = GetModelCostMap.load_local_model_cost_map()
     root = _load_root_cost_map()
-    assert "claude-opus-5-5" in backup
-    assert "claude-opus-5-5" in root
-    assert backup["claude-opus-5-5"] == root["claude-opus-5-5"]
+    assert model_name in backup
+    assert model_name in root
+    assert backup[model_name] == root[model_name]
 
 
-@pytest.mark.parametrize("model", ["claude-opus-5-5", "anthropic/claude-opus-5-5"])
-def test_opus_5_5_thinking_profile(local_model_cost_map, model):
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [
+        ("claude-opus-5-5", "anthropic"),
+        ("anthropic/claude-opus-5-5", "anthropic"),
+        ("vertex_ai/claude-opus-5-5", "vertex_ai"),
+        ("azure_ai/claude-opus-5-5", "azure_ai"),
+    ],
+)
+def test_opus_5_5_thinking_profile(local_model_cost_map, model, provider):
     """Opus 5.5 has thinking always on with the adaptive thinking surface, and
     no forced tool use, same as Fable 5.1."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-    assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
-    assert AnthropicModelInfo._is_always_on_thinking_model(model, "anthropic") is True
+    assert AnthropicModelInfo._is_adaptive_thinking_model(model, provider) is True
+    assert AnthropicModelInfo._is_always_on_thinking_model(model, provider) is True
     assert AnthropicModelInfo.forced_tool_use_unsupported(model.removeprefix("anthropic/")) is True

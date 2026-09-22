@@ -141,7 +141,7 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
     },
     {
       key: "reminder-markers",
-      label: <strong className="text-foreground font-semibold">Advanced: Reminder Markers</strong>,
+      label: <strong className="text-foreground font-semibold">Advanced: Ignore Custom Tags</strong>,
       children: <ReminderMarkers value={value} onChange={onChange} showValidationErrors={showValidationErrors} />,
     },
     {

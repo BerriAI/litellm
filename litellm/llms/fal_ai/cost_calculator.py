@@ -136,12 +136,18 @@ def _entry(key: str) -> Mapping[str, object] | None:
     return _OBJECT_MAP.validate_python(raw_entry)
 
 
+def _resolution_key(resolution: object) -> str | None:
+    if isinstance(resolution, bool) or not isinstance(resolution, (int, str)):
+        return None
+    return str(resolution)
+
+
 def fal_ai_passthrough_cost(model: str, request_body: Mapping[str, object]) -> float | None:
     entry: Final = _entry(f"{litellm.LlmProviders.FAL_AI.value}/{model}")
     if entry is None:
         return None
-    resolution: Final = request_body.get("resolution")
-    keyed_cost: Final = entry.get(f"output_cost_per_image_{resolution}") if isinstance(resolution, int) else None
+    resolution: Final = _resolution_key(request_body.get("resolution"))
+    keyed_cost: Final = entry.get(f"output_cost_per_image_{resolution}") if resolution is not None else None
     cost: Final = keyed_cost if isinstance(keyed_cost, (int, float)) else entry.get("output_cost_per_image")
     return float(cost) if isinstance(cost, (int, float)) else None
 

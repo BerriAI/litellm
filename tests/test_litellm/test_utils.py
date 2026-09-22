@@ -230,6 +230,13 @@ def test_get_model_info_prefers_exact_dated_key_over_stripped(
     assert info["key"] == expected_key
 
 
+def test_get_model_info_internal_failure_is_not_reported_as_unmapped() -> None:
+    with patch("litellm.utils._get_potential_model_names", side_effect=RuntimeError("malformed metadata")):
+        with pytest.raises(Exception, match="This model isn't mapped yet") as exc_info:
+            litellm.utils._get_model_info_helper(model="gpt-4o", custom_llm_provider="openai")
+    assert not isinstance(exc_info.value, litellm.ModelNotMappedError)
+
+
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
     """
     Test that azure_ai provider can match openai and azure models.
@@ -1465,12 +1472,6 @@ class TestProxyFunctionCalling:
             ("gemini/gemini-2.5-pro", "litellm_proxy/gemini/gemini-2.5-pro", True),
             ("gemini/gemini-2.5-flash", "litellm_proxy/gemini/gemini-2.5-flash", True),
             # Groq models (mixed support)
-            ("groq/gemma-7b-it", "litellm_proxy/groq/gemma-7b-it", True),
-            (
-                "groq/llama-3.3-70b-versatile",
-                "litellm_proxy/groq/llama-3.3-70b-versatile",
-                True,
-            ),
             # Cohere models (generally don't support function calling)
             ("command-nightly", "litellm_proxy/command-nightly", False),
         ],

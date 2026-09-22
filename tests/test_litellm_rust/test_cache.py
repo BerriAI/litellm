@@ -15,7 +15,7 @@ from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Final, Protocol, cast
+from typing import Final, Protocol, TypeAlias, cast
 from unittest.mock import Mock
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -37,10 +37,10 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.caching.redis_semantic_cache import RedisSemanticCache
 from litellm.caching.s3_cache import S3Cache
-from litellm.rust_bridge import _native
+from litellm.rust_bridge import _native, catalog
 from litellm.rust_bridge.catalog import CacheRule, Route, RouteRule, SecretManagerRule
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.response_cache import ResponseCacheRuntime, resolve_response_cache
+from litellm.rust_bridge.response_cache import NativeResponseCacheRuntime, ResponseCacheRuntime, resolve_response_cache
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.llms.custom_llm import CustomLLMItem
 from litellm.types.utils import EmbeddingResponse
@@ -1843,9 +1843,7 @@ async def test_qdrant_semantic_async_parity(qdrant_url: str, fake_embedding_endp
     assert python_value["response"] == {"id": "native"}
 
 
-async def test_qdrant_semantic_async_store_batch_shares_entries(
-    qdrant_url: str, fake_embedding_endpoint: str
-) -> None:
+async def test_qdrant_semantic_async_store_batch_shares_entries(qdrant_url: str, fake_embedding_endpoint: str) -> None:
     del fake_embedding_endpoint
     collection: Final = f"cache_{uuid4().hex}"
     facade: Final = qdrant_facade(qdrant_url, collection)
@@ -1865,14 +1863,12 @@ async def test_qdrant_semantic_async_store_batch_shares_entries(
 
     assert binding.lookup(entries[0]) == {"id": "one"}
     assert binding.lookup(entries[1]) == {"id": "two"}
-    assert (
-        (await facade.cache.async_get_cache("batch-one", messages=entries[0]["messages"]))["response"]
-        == {"id": "one"}
-    )
-    assert (
-        (await facade.cache.async_get_cache("batch-two", messages=entries[1]["messages"]))["response"]
-        == {"id": "two"}
-    )
+    assert (await facade.cache.async_get_cache("batch-one", messages=entries[0]["messages"]))["response"] == {
+        "id": "one"
+    }
+    assert (await facade.cache.async_get_cache("batch-two", messages=entries[1]["messages"]))["response"] == {
+        "id": "two"
+    }
 
 
 async def test_qdrant_semantic_malformed_entries_and_unsupported_operations(
@@ -1962,3 +1958,389 @@ def test_qdrant_semantic_mutation_and_projection_fallback(qdrant_url: str, fake_
     unsupported.cache.qdrant_api_base = "http://127.0.0.1:7777"
     with pytest.raises(TypeError, match="gRPC"):
         handle._bind_facade(unsupported)
+
+
+CacheFactory: TypeAlias = Callable[[], Cache]
+
+
+def require_rust(monkeypatch: pytest.MonkeyPatch, backend: LiteLLMCacheType) -> None:
+    monkeypatch.setattr(catalog, "RULES", (CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({backend})),))
+
+
+def native_runtime(facade: Cache) -> ResponseCacheRuntime:
+    runtime: Final = facade._native_cache  # pyright: ignore[reportPrivateUsage]  # the activation under test has no public accessor
+    assert isinstance(runtime, ResponseCacheRuntime)
+    assert runtime.kind == "native"
+    return runtime
+
+
+@pytest.fixture
+def cache_factory(request: pytest.FixtureRequest, tmp_path: Path) -> CacheFactory:
+    backend: Final = cast(LiteLLMCacheType, request.param)
+    match backend:
+        case LiteLLMCacheType.LOCAL:
+            return lambda: Cache(type=backend)
+        case LiteLLMCacheType.DISK:
+            return lambda: Cache(type=backend, disk_cache_dir=str(tmp_path))
+        case LiteLLMCacheType.REDIS:
+            parsed: Final = urlparse(cast(str, request.getfixturevalue("redis_url")))
+            return lambda: Cache(type=backend, host=parsed.hostname, port=str(parsed.port))
+        case LiteLLMCacheType.S3:
+            stub: Final = cast(S3Stub, request.getfixturevalue("s3_stub"))
+            return lambda: Cache(
+                type=backend,
+                s3_bucket_name="cache-bucket",
+                s3_region_name="us-east-1",
+                s3_endpoint_url=stub.url,
+                s3_aws_access_key_id="key",
+                s3_aws_secret_access_key="secret",
+                s3_path="team",
+            )
+        case LiteLLMCacheType.GCS:
+            return lambda: Cache(type=backend, gcs_bucket_name="bucket", gcs_path="cache/")
+        case LiteLLMCacheType.REDIS_SEMANTIC:
+            return lambda: Cache(
+                type=backend,
+                redis_url="redis://127.0.0.1:6379",
+                similarity_threshold=0.8,
+                redis_semantic_cache_embedding_model="text-embedding-3-small",
+            )
+        case LiteLLMCacheType.VALKEY_SEMANTIC:
+            return lambda: Cache(type=backend, redis_url="redis://127.0.0.1:6390/0", similarity_threshold=0.8)
+        case _:
+            raise AssertionError(f"no local factory for {backend}")
+
+
+ROUND_TRIP_BACKENDS: Final = (
+    LiteLLMCacheType.LOCAL,
+    LiteLLMCacheType.DISK,
+    LiteLLMCacheType.REDIS,
+    LiteLLMCacheType.S3,
+)
+SHARED_STORE_BACKENDS: Final = (LiteLLMCacheType.DISK, LiteLLMCacheType.REDIS, LiteLLMCacheType.S3)
+
+
+def completion_kwargs(label: str) -> dict[str, object]:
+    return {"model": "gpt-4o", "messages": [{"role": "user", "content": f"{label} {uuid4().hex}"}]}
+
+
+@pytest.mark.parametrize("backend", list(LiteLLMCacheType))
+def test_shipped_rules_keep_every_backend_on_python(backend: LiteLLMCacheType) -> None:
+    assert resolve_response_cache(cast(Cache, SimpleNamespace(type=backend))) is None
+
+
+@pytest.mark.parametrize(
+    "cache_factory",
+    [
+        LiteLLMCacheType.LOCAL,
+        LiteLLMCacheType.DISK,
+        LiteLLMCacheType.REDIS,
+        LiteLLMCacheType.S3,
+        LiteLLMCacheType.GCS,
+        LiteLLMCacheType.REDIS_SEMANTIC,
+        LiteLLMCacheType.VALKEY_SEMANTIC,
+    ],
+    indirect=True,
+)
+def test_shipped_rules_construct_python_backed_facades(cache_factory: CacheFactory) -> None:
+    assert cache_factory()._native_cache is None  # pyright: ignore[reportPrivateUsage]  # the activation under test has no public accessor
+
+
+@pytest.mark.parametrize(
+    "cache_factory",
+    [
+        LiteLLMCacheType.LOCAL,
+        LiteLLMCacheType.DISK,
+        LiteLLMCacheType.REDIS,
+        LiteLLMCacheType.S3,
+        LiteLLMCacheType.GCS,
+        LiteLLMCacheType.REDIS_SEMANTIC,
+        LiteLLMCacheType.VALKEY_SEMANTIC,
+    ],
+    indirect=True,
+)
+def test_rust_required_rule_activates_the_native_backend(
+    cache_factory: CacheFactory, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    require_rust(monkeypatch, cast(LiteLLMCacheType, request.node.callspec.params["cache_factory"]))
+    native_runtime(cache_factory())
+
+
+@pytest.mark.parametrize("cache_factory", ROUND_TRIP_BACKENDS, indirect=True)
+async def test_facade_storage_calls_round_trip_through_the_native_backend(
+    cache_factory: CacheFactory, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    require_rust(monkeypatch, cast(LiteLLMCacheType, request.node.callspec.params["cache_factory"]))
+    facade: Final = cache_factory()
+    native_runtime(facade)
+
+    sync_kwargs: Final = completion_kwargs("sync")
+    facade.add_cache({"answer": 1}, **sync_kwargs)
+    assert facade.get_cache(**sync_kwargs) == {"answer": 1}
+
+    async_kwargs: Final = completion_kwargs("async")
+    await facade.async_add_cache({"answer": 2}, **async_kwargs)
+    assert await facade.async_get_cache(**async_kwargs) == {"answer": 2}
+    assert facade.get_cache(**completion_kwargs("absent")) is None
+
+
+async def test_memory_facade_writes_bypass_the_python_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    require_rust(monkeypatch, LiteLLMCacheType.LOCAL)
+    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    native_runtime(facade)
+    kwargs: Final = completion_kwargs("memory")
+    facade.add_cache({"answer": 1}, **kwargs)
+    assert facade.cache.get_cache(facade.get_cache_key(**kwargs)) is None
+    assert facade.get_cache(**kwargs) == {"answer": 1}
+
+
+@pytest.mark.parametrize("cache_factory", SHARED_STORE_BACKENDS, indirect=True)
+async def test_native_and_python_facades_share_one_wire_format(
+    cache_factory: CacheFactory, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    python_facade: Final = cache_factory()
+    assert python_facade._native_cache is None  # pyright: ignore[reportPrivateUsage]  # the activation under test has no public accessor
+    require_rust(monkeypatch, cast(LiteLLMCacheType, request.node.callspec.params["cache_factory"]))
+    native_facade: Final = cache_factory()
+    native_runtime(native_facade)
+
+    native_written: Final = completion_kwargs("native")
+    native_facade.add_cache({"writer": "native"}, **native_written)
+    assert python_facade.get_cache(**native_written) == {"writer": "native"}
+
+    python_written: Final = completion_kwargs("python")
+    python_facade.add_cache({"writer": "python"}, **python_written)
+    assert native_facade.get_cache(**python_written) == {"writer": "python"}
+
+    async_native: Final = completion_kwargs("async-native")
+    await native_facade.async_add_cache({"writer": "async-native"}, **async_native)
+    assert await python_facade.async_get_cache(**async_native) == {"writer": "async-native"}
+
+    async_python: Final = completion_kwargs("async-python")
+    await python_facade.async_add_cache({"writer": "async-python"}, **async_python)
+    assert await native_facade.async_get_cache(**async_python) == {"writer": "async-python"}
+
+
+@pytest.mark.parametrize("cache_factory", ROUND_TRIP_BACKENDS, indirect=True)
+async def test_embedding_pipeline_stores_one_native_entry_per_input(
+    cache_factory: CacheFactory, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    require_rust(monkeypatch, cast(LiteLLMCacheType, request.node.callspec.params["cache_factory"]))
+    facade: Final = cache_factory()
+    native_runtime(facade)
+    inputs: Final = [f"alpha {uuid4().hex}", f"beta {uuid4().hex}"]
+    result: Final = EmbeddingResponse(
+        model="text-embedding-3-small",
+        data=[
+            {"object": "embedding", "index": 0, "embedding": [0.1, 0.2]},
+            {"object": "embedding", "index": 1, "embedding": [0.3, 0.4]},
+        ],
+    )
+    await facade.async_add_cache_pipeline(result, model="text-embedding-3-small", input=inputs)
+
+    keys: Final = [facade.get_cache_key(model="text-embedding-3-small", input=text) for text in inputs]
+    assert len(set(keys)) == len(inputs)
+    for text, expected in zip(inputs, ([0.1, 0.2], [0.3, 0.4]), strict=True):
+        cached = await facade.async_get_cache(model="text-embedding-3-small", input=text)
+        assert isinstance(cached, dict)
+        assert cached["embedding"] == expected
+    assert await facade.async_get_cache(model="text-embedding-3-small", input=inputs) is None
+
+
+def redis_facade(redis_url: str, **settings: object) -> Cache:
+    parsed: Final = urlparse(redis_url)
+    return Cache(type=LiteLLMCacheType.REDIS, host=parsed.hostname, port=str(parsed.port), **settings)
+
+
+@pytest.mark.parametrize(
+    ("settings", "message"),
+    [
+        pytest.param({"max_connections": 10}, "max_connections requires Python", id="pool-size"),
+        pytest.param({"socket_timeout": 1.0}, "socket_timeout and socket_connect_timeout", id="socket-timeout"),
+        pytest.param(
+            {"socket_connect_timeout": 1.0}, "socket_timeout and socket_connect_timeout", id="connect-timeout"
+        ),
+        pytest.param({"socket_keepalive": True}, "does not support socket_keepalive", id="keepalive"),
+        pytest.param({"health_check_interval": 5}, "does not support health_check_interval", id="health-check"),
+        pytest.param({"client_name": "litellm"}, "does not support client_name", id="client-name"),
+        pytest.param({"ssl": True}, "ssl_check_hostname=false require Python", id="tls-default-hostname-check"),
+        pytest.param({"ssl": True, "ssl_cert_reqs": "none"}, "ssl_cert_reqs=none", id="tls-without-verification"),
+        pytest.param(
+            {"ssl": True, "ssl_check_hostname": True, "ssl_ca_certs": "/ca.pem"},
+            "does not support ssl_ca_certs",
+            id="tls-custom-ca",
+        ),
+        pytest.param(
+            {"ssl": True, "ssl_check_hostname": True, "ssl_certfile": "/client.pem", "ssl_keyfile": "/client.key"},
+            "does not support ssl_ca_certs, ssl_ca_data, ssl_certfile or ssl_keyfile",
+            id="tls-client-certificate",
+        ),
+    ],
+)
+def test_redis_settings_the_native_client_cannot_honor_decline(
+    redis_url: str, monkeypatch: pytest.MonkeyPatch, settings: dict[str, object], message: str
+) -> None:
+    require_rust(monkeypatch, LiteLLMCacheType.REDIS)
+    with pytest.raises(RuntimeError, match=f"declined the cache: native Redis.*{message}"):
+        redis_facade(redis_url, **settings)
+
+
+def test_redis_verified_tls_activates_natively(redis_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    require_rust(monkeypatch, LiteLLMCacheType.REDIS)
+    native_runtime(redis_facade(redis_url, ssl=True, ssl_check_hostname=True))
+
+
+async def test_redis_flush_size_buffers_native_facade_writes(redis_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    require_rust(monkeypatch, LiteLLMCacheType.REDIS)
+    facade: Final = redis_facade(redis_url, redis_flush_size=2, namespace="team")
+    native_runtime(facade)
+    client: Final = redis.Redis.from_url(redis_url)
+    first: Final = completion_kwargs("first")
+    await facade.async_add_cache({"value": 1}, **first)
+    first_key: Final = facade.get_cache_key(**first)
+    assert first_key.startswith("team:")
+    assert client.get(first_key) is None
+    second: Final = completion_kwargs("second")
+    await facade.async_add_cache({"value": 2}, **second)
+    assert client.get(first_key) is not None
+    assert client.get(facade.get_cache_key(**second)) is not None
+    client.close()
+
+
+@pytest.mark.parametrize(
+    ("backend", "settings", "message"),
+    [
+        pytest.param(
+            LiteLLMCacheType.VALKEY_SEMANTIC,
+            {"redis_url": "rediss://127.0.0.1:6390/0", "similarity_threshold": 0.8},
+            "native Valkey semantic cache does not support TLS connections",
+            id="valkey-tls",
+        ),
+        pytest.param(
+            LiteLLMCacheType.VALKEY_SEMANTIC,
+            {"redis_url": "redis://127.0.0.1:6390/0?socket_timeout=1", "similarity_threshold": 0.8},
+            "native Redis uses fixed socket timeouts; socket_timeout and socket_connect_timeout require Python",
+            id="valkey-socket-timeout",
+        ),
+        pytest.param(
+            LiteLLMCacheType.REDIS_SEMANTIC,
+            {"redis_url": "rediss://127.0.0.1:6380", "similarity_threshold": 0.8},
+            "native Redis semantic cache does not support TLS or query options in redis_url",
+            id="redis-semantic-tls",
+        ),
+        pytest.param(
+            LiteLLMCacheType.REDIS_SEMANTIC,
+            {"redis_url": "redis://127.0.0.1:6379?socket_timeout=1", "similarity_threshold": 0.8},
+            "native Redis semantic cache does not support TLS or query options in redis_url",
+            id="redis-semantic-query",
+        ),
+    ],
+)
+def test_semantic_settings_the_native_client_cannot_honor_decline(
+    monkeypatch: pytest.MonkeyPatch, backend: LiteLLMCacheType, settings: dict[str, object], message: str
+) -> None:
+    require_rust(monkeypatch, backend)
+    with pytest.raises(RuntimeError, match=f"declined the cache: {message}"):
+        Cache(type=backend, **settings)
+
+
+def test_rust_with_fallback_keeps_python_when_the_native_client_declines(
+    redis_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        catalog,
+        "RULES",
+        (CacheRule(Rollout.RUST_OPT_OUT, backends=frozenset({LiteLLMCacheType.REDIS})),),
+    )
+    assert redis_facade(redis_url, socket_timeout=1.0)._native_cache is None  # pyright: ignore[reportPrivateUsage]  # the activation under test has no public accessor
+
+
+def test_qdrant_semantic_rust_required_rule_activates_natively(
+    qdrant_url: str, fake_embedding_endpoint: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del fake_embedding_endpoint
+    require_rust(monkeypatch, LiteLLMCacheType.QDRANT_SEMANTIC)
+    facade: Final = qdrant_facade(qdrant_url, f"cache_{uuid4().hex}")
+    native_runtime(facade)
+    kwargs: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": "qdrant activation"}]}
+    facade.add_cache({"answer": "qdrant"}, **kwargs)
+    assert facade.get_cache(**kwargs) == {"answer": "qdrant"}
+
+
+async def test_redis_semantic_rust_required_rule_activates_natively(
+    redis_stack: tuple[str, str], semantic_embedding: DeterministicEmbedding, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del semantic_embedding
+    url, index = redis_stack
+    require_rust(monkeypatch, LiteLLMCacheType.REDIS_SEMANTIC)
+    facade: Final = Cache(
+        type=LiteLLMCacheType.REDIS_SEMANTIC,
+        redis_url=url,
+        similarity_threshold=0.8,
+        redis_semantic_cache_embedding_model=SEMANTIC_EMBEDDING_MODEL,
+        redis_semantic_cache_index_name=index,
+    )
+    native_runtime(facade)
+    kwargs: Final = {"model": "gpt-4o", "messages": semantic_messages("name a primary color")}
+    await facade.async_add_cache({"answer": "blue"}, **kwargs)
+    assert await facade.async_get_cache(**kwargs) == {"answer": "blue"}
+
+
+async def test_azure_blob_rust_required_rule_activates_natively(monkeypatch: pytest.MonkeyPatch) -> None:
+    account_url: Final = os.environ.get("AZURE_BLOB_CACHE_ACCOUNT_URL")
+    if account_url is None:
+        pytest.skip(
+            "live Azure Blob parity needs AZURE_BLOB_CACHE_ACCOUNT_URL plus DefaultAzureCredential inputs in the environment"
+        )
+    require_rust(monkeypatch, LiteLLMCacheType.AZURE_BLOB)
+    facade: Final = Cache(
+        type=LiteLLMCacheType.AZURE_BLOB,
+        azure_account_url=account_url,
+        azure_blob_container=f"litellm-parity-{uuid.uuid4().hex[:12]}",
+    )
+    backend: Final = facade.cache
+    assert isinstance(backend, AzureBlobCache)
+    try:
+        native_runtime(facade)
+        kwargs: Final = completion_kwargs("azure")
+        await facade.async_add_cache({"answer": "azure"}, **kwargs)
+        assert await facade.async_get_cache(**kwargs) == {"answer": "azure"}
+        assert backend.get_cache(facade.get_cache_key(**kwargs))["response"] == {"answer": "azure"}
+    finally:
+        backend.container_client.delete_container()
+        await backend.disconnect()
+
+
+class _SemanticHit:
+    """A native semantic runtime that answers every lookup with one cached response."""
+
+    kind: Final = "native"
+
+    def lookup_semantic(self, request: object) -> tuple[object, float | None]:
+        return {"answer": 42}, 0.97
+
+    async def async_lookup_semantic(self, request: object) -> tuple[object, float | None]:
+        return {"answer": 42}, 0.97
+
+
+@pytest.mark.parametrize("semantic_type", [LiteLLMCacheType.QDRANT_SEMANTIC, LiteLLMCacheType.REDIS_SEMANTIC])
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+def test_native_semantic_hit_stamps_similarity_on_request_metadata(
+    semantic_type: LiteLLMCacheType, use_async: bool
+) -> None:
+    """Python semantic backends write `metadata["semantic-similarity"]` on every lookup, and the
+    facade copies it to the caller's metadata; the native path must report it the same way."""
+    facade: Final = Cache()
+    facade.type = semantic_type
+    facade._native_cache = ResponseCacheRuntime(cast(NativeResponseCacheRuntime, _SemanticHit()))  # pyright: ignore[reportPrivateUsage]  # the native path under test has no public setter
+    metadata: Final[dict[str, object]] = {}
+    kwargs: Final = {
+        "cache_key": "semantic-key",
+        "messages": [{"role": "user", "content": "hello"}],
+        "metadata": metadata,
+    }
+
+    result: Final = asyncio.run(facade.async_get_cache(**kwargs)) if use_async else facade.get_cache(**kwargs)
+
+    assert result == {"answer": 42}
+    assert metadata["semantic-similarity"] == 0.97

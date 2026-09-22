@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import ssl
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,7 +39,7 @@ class Wire:
 
 
 @contextmanager
-def wire_server(respond: Callable[[Request], Reply]) -> Iterator[Wire]:
+def wire_server(respond: Callable[[Request], Reply], tls: ssl.SSLContext | None = None) -> Generator[Wire, None, None]:
     """Owned TCP peer; requests traverse the real HTTP client and serialization."""
     received: Final[SimpleQueue[Request]] = SimpleQueue()
     errors: Final[SimpleQueue[Exception]] = SimpleQueue()
@@ -50,7 +51,8 @@ def wire_server(respond: Callable[[Request], Reply]) -> Iterator[Wire]:
 
         def respond(self) -> None:
             request: Final = Request(
-                self.command, self.path,
+                self.command,
+                self.path,
                 {name.lower(): value for name, value in self.headers.items()},
                 self.rfile.read(int(self.headers.get("content-length", "0"))),
             )
@@ -99,11 +101,20 @@ def wire_server(respond: Callable[[Request], Reply]) -> Iterator[Wire]:
     class OwnedHTTPServer(ThreadingHTTPServer):
         daemon_threads = False
 
+        def server_bind(self) -> None:
+            super().server_bind()
+            if tls is not None:
+                self.socket = tls.wrap_socket(self.socket, server_side=True)
+
     with OwnedHTTPServer(("127.0.0.1", 0), Handler) as server:
         thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
         thread.start()
         try:
-            yield Wire(f"http://127.0.0.1:{server.server_port}", received, disconnected)
+            yield Wire(
+                f"{'https' if tls is not None else 'http'}://127.0.0.1:{server.server_port}",
+                received,
+                disconnected,
+            )
         finally:
             server.shutdown()
             thread.join(timeout=6)
