@@ -4,7 +4,7 @@ import json
 import math
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
@@ -32,6 +32,7 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.rust_bridge import bindings, configuration
 from litellm.rust_bridge import token_counter as rust_token_counter
+from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 TOKEN_COUNTING_ROUTES: Final = (
@@ -238,6 +239,22 @@ class _FakeUpstream(Exception):
     pass
 
 
+class _FakeTokenizer:
+    """Stands in for one shared native `Tokenizer`; only its name identifies it."""
+
+    def __init__(self, name: str, json: str | None = None) -> None:
+        self.name = name
+        self.json = json
+
+
+def _fake_native_tokenizers(monkeypatch: pytest.MonkeyPatch, anthropic_json: str | None = None) -> None:
+    """Point the counter's tokenizer lookups at fakes; the codec path keeps falling back to Python."""
+    fakes: Final = {name: _FakeTokenizer(name) for name in ("cl100k_base", "o200k_base")}
+    anthropic: Final = _FakeTokenizer("anthropic", anthropic_json)
+    monkeypatch.setattr(tokenizer_dispatch, "native_encoding", fakes.__getitem__)
+    monkeypatch.setattr(tokenizer_dispatch, "native_anthropic", lambda: anthropic)
+
+
 class _FakeNative:
     RustBridgeDeclined = _FakeDeclined
     RustUpstreamError = _FakeUpstream
@@ -256,19 +273,13 @@ class _RecordingCounter:
 
 
 class _RecordingFactory:
-    """Stands in for the native `TokenCounter` class: called with tokenizer JSON, or `from_*_ranks`."""
+    """Stands in for the native `TokenCounter` class, built over a loaded `Tokenizer`."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[rust_token_counter.RustTokenizer, bytes]] = []
 
-    def __call__(self, tokenizer_json: str) -> _RecordingCounter:
-        return _RecordingCounter(self, "anthropic")
-
-    def from_cl100k_ranks(self, rank_file: str) -> _RecordingCounter:
-        return _RecordingCounter(self, "cl100k_base")
-
-    def from_o200k_ranks(self, rank_file: str) -> _RecordingCounter:
-        return _RecordingCounter(self, "o200k_base")
+    def from_tokenizer(self, tokenizer: _FakeTokenizer, fast: bool = False) -> _RecordingCounter:
+        return _RecordingCounter(self, cast(rust_token_counter.RustTokenizer, tokenizer.name))
 
 
 class _DecliningCounter:
@@ -277,19 +288,14 @@ class _DecliningCounter:
 
 
 class _DecliningFactory:
-    def __call__(self, tokenizer_json: str) -> _DecliningCounter:
-        return _DecliningCounter()
-
-    def from_cl100k_ranks(self, rank_file: str) -> _DecliningCounter:
-        return _DecliningCounter()
-
-    def from_o200k_ranks(self, rank_file: str) -> _DecliningCounter:
+    def from_tokenizer(self, tokenizer: _FakeTokenizer, fast: bool = False) -> _DecliningCounter:
         return _DecliningCounter()
 
 
 @pytest.fixture
 def rust_counter(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: _FakeNative())
+    _fake_native_tokenizers(monkeypatch)
     rust_token_counter._counter.cache_clear()
     configuration.reset_rust_configuration()
     yield

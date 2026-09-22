@@ -1,10 +1,6 @@
 use std::sync::Arc;
-
-#[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
 use std::{num::NonZero, thread::available_parallelism};
 
-#[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
-use litellm_host_python::release_gil;
 use litellm_host_python::run_async;
 use litellm_token_counter::{
     CountableRequest, Error, InputTokenCount, TokenCounter as CoreTokenCounter,
@@ -17,6 +13,9 @@ use pyo3::{
 use tokio::sync::Semaphore;
 
 use crate::errors::RustBridgeDeclined;
+#[cfg(feature = "fast")]
+use crate::tokenizer::SharedFast;
+use crate::tokenizer::{SharedCodec, Tokenizer};
 
 /// Counts the input tokens of a raw request body off the Python event loop with
 /// the GIL released. Python owns which requests get here and what to do with
@@ -31,69 +30,31 @@ pub(crate) struct TokenCounter {
 
 #[pymethods]
 impl TokenCounter {
-    #[new]
-    fn new(py: Python<'_>, tokenizer_json: &str) -> PyResult<Self> {
-        #[cfg(feature = "fast")]
-        {
-            Self::load(py, || CoreTokenCounter::from_json_fast(tokenizer_json))
-        }
-        #[cfg(all(not(feature = "fast"), feature = "huggingface"))]
-        {
-            Self::load(py, || CoreTokenCounter::from_json(tokenizer_json))
-        }
-        #[cfg(not(any(feature = "fast", feature = "huggingface")))]
-        {
-            let _ = (py, tokenizer_json);
-            Err(RustBridgeDeclined::new_err(
-                "tokenizer backend requires the fast or huggingface feature",
-            ))
-        }
-    }
-
+    /// A counter over an already loaded `Tokenizer`, sharing its model. `fast` opts into
+    /// the count-only counter derived from that model; it declines when the build lacks
+    /// the `fast` feature.
     #[staticmethod]
-    fn from_cl100k_ranks(py: Python<'_>, rank_file: &str) -> PyResult<Self> {
-        #[cfg(feature = "fast")]
-        {
-            Self::load(py, || CoreTokenCounter::from_cl100k_ranks(rank_file))
-        }
-        #[cfg(not(feature = "fast"))]
-        {
-            let _ = (py, rank_file);
-            Err(RustBridgeDeclined::new_err(
-                "tokenizer backend requires the fast feature",
-            ))
-        }
-    }
-
-    #[staticmethod]
-    fn from_o200k_ranks(py: Python<'_>, rank_file: &str) -> PyResult<Self> {
-        #[cfg(feature = "fast")]
-        {
-            Self::load(py, || CoreTokenCounter::from_o200k_ranks(rank_file))
-        }
-        #[cfg(not(feature = "fast"))]
-        {
-            let _ = (py, rank_file);
-            Err(RustBridgeDeclined::new_err(
-                "tokenizer backend requires the fast feature",
-            ))
-        }
-    }
-
-    #[staticmethod]
-    fn from_tiktoken(py: Python<'_>, encoding: &str) -> PyResult<Self> {
-        #[cfg(feature = "tiktoken")]
-        {
-            let tokenizer = crate::tokenizer::load_tiktoken(py, encoding)?;
-            Self::load(py, || Ok(CoreTokenCounter::new(tokenizer)))
-        }
-        #[cfg(not(feature = "tiktoken"))]
-        {
-            let _ = (py, encoding);
-            Err(RustBridgeDeclined::new_err(
-                "tokenizer backend requires the tiktoken feature",
-            ))
-        }
+    #[pyo3(signature = (tokenizer, fast = false))]
+    fn from_tokenizer(py: Python<'_>, tokenizer: &Tokenizer, fast: bool) -> PyResult<Self> {
+        let inner = if fast {
+            #[cfg(feature = "fast")]
+            {
+                CoreTokenCounter::new(SharedFast(tokenizer.fast_counter(py)?))
+            }
+            #[cfg(not(feature = "fast"))]
+            {
+                let _ = py;
+                return Err(RustBridgeDeclined::new_err(
+                    "fast token counting requires the fast feature",
+                ));
+            }
+        } else {
+            CoreTokenCounter::new(SharedCodec(tokenizer.codec()))
+        };
+        Ok(Self {
+            inner: Arc::new(inner),
+            encode_slots: Arc::new(Semaphore::new(encode_parallelism())),
+        })
     }
 
     fn acount_request<'py>(&self, py: Python<'py>, body: &[u8]) -> PyResult<Bound<'py, PyAny>> {
@@ -116,21 +77,6 @@ impl TokenCounter {
     }
 }
 
-impl TokenCounter {
-    #[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
-    fn load(
-        py: Python<'_>,
-        load: impl FnOnce() -> Result<CoreTokenCounter, Error> + Send,
-    ) -> PyResult<Self> {
-        let inner = release_gil(py, load).map_err(token_count_error_to_pyerr)?;
-        Ok(Self {
-            inner: Arc::new(inner),
-            encode_slots: Arc::new(Semaphore::new(encode_parallelism())),
-        })
-    }
-}
-
-#[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
 fn encode_parallelism() -> usize {
     available_parallelism().map_or(1, NonZero::get)
 }

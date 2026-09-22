@@ -2331,7 +2331,7 @@ def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind, backend: Decisio
         case "cohere":
             return tokenizer_dispatch.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
         case "anthropic":
-            return tokenizer_dispatch.from_str(claude_json_str)
+            return tokenizer_dispatch.anthropic()
         case "llama2":
             return tokenizer_dispatch.from_pretrained("hf-internal-testing/llama-tokenizer")
         case "llama3":

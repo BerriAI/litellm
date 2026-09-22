@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding
 from litellm.proxy.spend_tracking.input_tokens import count_input_tokens, count_input_tokens_for_model
 from litellm.rust_bridge import bindings, configuration
 from litellm.rust_bridge import token_counter as bridge
+from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge._native import Tokenizer
 from litellm.utils import claude_json_str
 
@@ -29,7 +30,6 @@ MODEL_BY_TOKENIZER: Final[MappingProxyType[bridge.RustTokenizer, str]] = Mapping
     {"anthropic": MODEL, "cl100k_base": CL100K_MODEL, "o200k_base": O200K_MODEL}
 )
 TOKENIZERS: Final[tuple[bridge.RustTokenizer, ...]] = ("anthropic", "cl100k_base", "o200k_base")
-RANK_FILE_LINES: Final = MappingProxyType({"cl100k_base": 100_256, "o200k_base": 199_998})
 BODY: Final = json.dumps({"model": MODEL, "messages": [{"role": "user", "content": "hello"}]}).encode()
 
 
@@ -46,14 +46,41 @@ class _FakeUpstream(Exception):
     pass
 
 
+class _FakeTokenizer:
+    """Stands in for one shared native `Tokenizer`; only its name identifies it."""
+
+    def __init__(self, name: str, json: str | None = None) -> None:
+        self.name = name
+        self.json = json
+
+
+def _fake_native_tokenizers(monkeypatch: pytest.MonkeyPatch, anthropic_json: str | None = None) -> None:
+    """Point the counter's tokenizer lookups at fakes while the bridge is faked; the codec path
+    keeps falling back to Python. Parity tests that restore the real extension get the real
+    lookups back."""
+    fakes: Final = {name: _FakeTokenizer(name) for name in ("cl100k_base", "o200k_base")}
+    anthropic: Final = _FakeTokenizer("anthropic", anthropic_json)
+    real_encoding: Final = tokenizer_dispatch.native_encoding
+    real_anthropic: Final = tokenizer_dispatch.native_anthropic
+
+    def faked() -> bool:
+        return isinstance(bindings.get_native_bridge(), _FakeNative)
+
+    monkeypatch.setattr(
+        tokenizer_dispatch, "native_encoding", lambda name: fakes[name] if faked() else real_encoding(name)
+    )
+    monkeypatch.setattr(tokenizer_dispatch, "native_anthropic", lambda: anthropic if faked() else real_anthropic())
+
+
 class _FakeNative:
     RustBridgeDeclined = _FakeDeclined
     RustUpstreamError = _FakeUpstream
 
 
 class _RecordingCounter:
-    def __init__(self, tokenizer_json: str) -> None:
-        self.tokenizer_json = tokenizer_json
+    def __init__(self, tokenizer: _FakeTokenizer, fast: bool) -> None:
+        self.tokenizer = tokenizer
+        self.fast = fast
         self.bodies: list[bytes] = []
 
     async def acount_request(self, body: bytes) -> object:
@@ -62,24 +89,15 @@ class _RecordingCounter:
 
 
 class _RecordingFactory:
-    """Stands in for the native `TokenCounter` class: callable for tokenizer JSON, `from_*_ranks` for rank files."""
+    """Stands in for the native `TokenCounter` class, built over a loaded `Tokenizer`."""
 
     def __init__(self) -> None:
         self.counters: list[_RecordingCounter] = []
-        self.rank_files: list[str] = []
 
-    def __call__(self, tokenizer_json: str) -> _RecordingCounter:
-        counter = _RecordingCounter(tokenizer_json)
+    def from_tokenizer(self, tokenizer: _FakeTokenizer, fast: bool = False) -> _RecordingCounter:
+        counter = _RecordingCounter(tokenizer, fast)
         self.counters.append(counter)
         return counter
-
-    def from_cl100k_ranks(self, rank_file: str) -> _RecordingCounter:
-        self.rank_files.append(rank_file)
-        return self("cl100k_base")
-
-    def from_o200k_ranks(self, rank_file: str) -> _RecordingCounter:
-        self.rank_files.append(rank_file)
-        return self("o200k_base")
 
 
 class _RaisingCounter:
@@ -96,13 +114,7 @@ class _RaisingFactory:
     def __init__(self, error: Exception) -> None:
         self.error = error
 
-    def __call__(self, tokenizer_json: str) -> _RaisingCounter:
-        return _RaisingCounter(self.error)
-
-    def from_cl100k_ranks(self, rank_file: str) -> _RaisingCounter:
-        return _RaisingCounter(self.error)
-
-    def from_o200k_ranks(self, rank_file: str) -> _RaisingCounter:
+    def from_tokenizer(self, tokenizer: _FakeTokenizer, fast: bool = False) -> _RaisingCounter:
         return _RaisingCounter(self.error)
 
 
@@ -112,6 +124,7 @@ def _reset_bridge(monkeypatch: pytest.MonkeyPatch):
     bridge._counter.cache_clear()
     configuration.reset_rust_configuration()
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: _FakeNative())
+    _fake_native_tokenizers(monkeypatch, anthropic_json=claude_json_str)
     yield
     bridge.TOKEN_COUNTER.reset()
     bridge._counter.cache_clear()
@@ -146,12 +159,14 @@ async def test_enabled_bridge_returns_typed_count_and_reuses_one_counter() -> No
     assert second == first
     assert len(factory.counters) == 1
     assert factory.counters[0].bodies == [BODY, BODY]
-    assert json.loads(factory.counters[0].tokenizer_json)["model"]["type"] == "BPE"
+    assert factory.counters[0].fast is True
+    assert factory.counters[0].tokenizer is tokenizer_dispatch.native_anthropic()
+    assert json.loads(factory.counters[0].tokenizer.json or "")["model"]["type"] == "BPE"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tokenizer", ("cl100k_base", "o200k_base"))
-async def test_tiktoken_counter_is_built_from_the_vendored_rank_file_once(tokenizer: bridge.RustTokenizer) -> None:
+async def test_tiktoken_counter_is_built_over_the_shared_encoding_once(tokenizer: bridge.RustTokenizer) -> None:
     factory: Final = _RecordingFactory()
     litellm.rust(True)
     bridge.TOKEN_COUNTER.override(factory)
@@ -160,10 +175,10 @@ async def test_tiktoken_counter_is_built_from_the_vendored_rank_file_once(tokeni
     second: Final = await bridge.native_count(factory, tokenizer, BODY)
 
     assert first == second == bridge.InputTokenCount(model=MODEL, input_tokens=42)
-    assert len(factory.rank_files) == 1
-    assert factory.rank_files[0].startswith("IQ== 0\n")
-    assert factory.rank_files[0].count("\n") == RANK_FILE_LINES[tokenizer]
-    assert factory.counters[0].tokenizer_json == tokenizer
+    assert len(factory.counters) == 1
+    assert factory.counters[0].tokenizer.name == tokenizer
+    assert factory.counters[0].tokenizer is tokenizer_dispatch.native_encoding(tokenizer)
+    assert factory.counters[0].fast is True
     assert factory.counters[0].bodies == [BODY, BODY]
 
 
@@ -179,7 +194,7 @@ async def test_each_tokenizer_gets_its_own_cached_counter() -> None:
     await bridge.native_count(factory, "anthropic", BODY)
     await bridge.native_count(factory, "o200k_base", BODY)
 
-    assert [counter.tokenizer_json for counter in factory.counters][1:] == ["cl100k_base", "o200k_base"]
+    assert [counter.tokenizer.name for counter in factory.counters] == ["anthropic", "cl100k_base", "o200k_base"]
     assert [len(counter.bodies) for counter in factory.counters] == [2, 1, 2]
 
 

@@ -57,6 +57,13 @@ impl Vocabulary {
         self.max_token_value
     }
 
+    /// Every mergeable token with its rank, for building other tables from one parse.
+    pub fn ranks(&self) -> impl Iterator<Item = (&[u8], Rank)> + '_ {
+        self.ranks
+            .iter()
+            .map(|(bytes, rank)| (bytes.as_slice(), *rank))
+    }
+
     /// The special tokens with their ranks, tiktoken's `_special_tokens`.
     pub fn special_tokens(&self) -> impl Iterator<Item = (&str, Rank)> + '_ {
         self.special_tokens

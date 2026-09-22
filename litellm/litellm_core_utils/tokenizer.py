@@ -149,8 +149,9 @@ class OpenAIEncoding:
         piece: Final = text_or_bytes.encode("utf-8") if isinstance(text_or_bytes, str) else text_or_bytes
         return self._native.encode_single_token(piece)
 
-    def count(self, text: str) -> int:
-        return self._native.count(text)
+    def count(self, text: str, fast: bool = False) -> int:
+        """Token count of `text`; `fast` opts into the count-only counter over this encoding's ranks."""
+        return self._native.count(text, fast)
 
     # ---- decoding -------------------------------------------------------------------------
 
@@ -343,8 +344,9 @@ class HuggingFaceTokenizer:
         sequences: Final = tuple(_batch_input(item, is_pretokenized) for item in input)
         return self._native.encode_batch_huggingface(sequences, is_pretokenized, add_special_tokens, fast)
 
-    def count(self, text: str) -> int:
-        return self._native.count(text)
+    def count(self, text: str, fast: bool = False) -> int:
+        """Token count of `text`; `fast` opts into the count-only counter over this tokenizer's model."""
+        return self._native.count(text, fast)
 
     def decode(self, ids: Sequence[int], skip_special_tokens: bool = True) -> str:
         return self._native.decode(ids, skip_special_tokens=skip_special_tokens)

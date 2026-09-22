@@ -3,6 +3,7 @@
 mod error;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 pub use error::Error;
 use tokenizers::PostProcessor;
@@ -20,7 +21,7 @@ pub fn encoding_to_json(encoding: &Encoding) -> Result<String, Error> {
 }
 
 pub struct HuggingFaceTokenizer {
-    tokenizer: Box<tokenizers::Tokenizer>,
+    tokenizer: Arc<tokenizers::Tokenizer>,
     special_token_ids: HashSet<u32>,
 }
 
@@ -38,9 +39,14 @@ impl HuggingFaceTokenizer {
             .filter_map(|(id, token)| token.special.then_some(id))
             .collect();
         Self {
-            tokenizer: Box::new(tokenizer),
+            tokenizer: Arc::new(tokenizer),
             special_token_ids,
         }
+    }
+
+    /// The parsed model, for a count-only counter to share instead of parsing it again.
+    pub fn shared(&self) -> Arc<tokenizers::Tokenizer> {
+        Arc::clone(&self.tokenizer)
     }
 
     pub fn count_tokens(&self, text: &str) -> Result<usize, Error> {

@@ -32,8 +32,33 @@ HUGGINGFACE_CONTEXT: Final = Context(Route.TOKENIZER, provider="huggingface")
 
 
 @lru_cache(maxsize=8)
+def _native_tiktoken(factory: type[NativeTokenizer], name: str) -> NativeTokenizer:
+    return factory.from_tiktoken(name)
+
+
+@lru_cache(maxsize=1)
+def _native_anthropic(factory: type[NativeTokenizer]) -> NativeTokenizer:
+    from litellm.utils import claude_json_str
+
+    return factory.from_json(claude_json_str)
+
+
+@lru_cache(maxsize=8)
 def _native_encoding(factory: type[NativeTokenizer], name: str) -> OpenAIEncoding:
-    return OpenAIEncoding.wrap(factory.from_tiktoken(name))
+    return OpenAIEncoding.wrap(_native_tiktoken(factory, name))
+
+
+def native_encoding(name: str) -> NativeTokenizer | None:
+    """The native tiktoken encoding behind `get_encoding(name)`, for a Rust route that counts
+    with the same loaded model; `None` without the extension."""
+    factory: Final = TOKENIZER.load()
+    return None if factory is None else _native_tiktoken(factory, name)
+
+
+def native_anthropic() -> NativeTokenizer | None:
+    """The native packaged Anthropic tokenizer behind `anthropic()`, parsed once per process."""
+    factory: Final = TOKENIZER.load()
+    return None if factory is None else _native_anthropic(factory)
 
 
 def _python_encoding(name: str) -> tiktoken.Encoding:
@@ -48,6 +73,18 @@ def get_encoding(name: str) -> Encoding:
         binding=TOKENIZER,
         native=lambda factory: _native_encoding(factory, name),
         python=lambda: _python_encoding(name),
+    )
+
+
+def anthropic() -> HuggingFace:
+    """The packaged Anthropic tokenizer on the selected backend."""
+    from litellm.utils import claude_json_str
+
+    return runtime.run(
+        HUGGINGFACE_CONTEXT,
+        binding=TOKENIZER,
+        native=lambda factory: HuggingFaceTokenizer(_native_anthropic(factory)),
+        python=lambda: PythonHuggingFaceTokenizer.from_str(claude_json_str),
     )
 
 

@@ -4,11 +4,14 @@
 use std::borrow::Cow;
 #[cfg(any(feature = "tiktoken", feature = "huggingface"))]
 use std::collections::HashMap;
+use std::sync::Arc;
+#[cfg(feature = "fast")]
+use std::sync::OnceLock;
 
 use litellm_host_python::{enter_native, release_gil};
-#[cfg(feature = "huggingface")]
-use litellm_token_counter::Error;
-use litellm_token_counter::TextCodec;
+#[cfg(feature = "fast")]
+use litellm_token_counter::fast::{FastCounter, FastTokenizer};
+use litellm_token_counter::{Error, TextCodec};
 use pyo3::{exceptions::PyUnicodeEncodeError, prelude::*, types::PyString};
 
 #[cfg(any(feature = "tiktoken", feature = "huggingface"))]
@@ -48,7 +51,7 @@ pub(crate) fn load_tiktoken(py: Python<'_>, encoding: &str) -> PyResult<Tiktoken
     .map_err(|error| token_count_error_to_pyerr(error.into()))
 }
 
-enum Codec {
+pub(crate) enum Codec {
     #[cfg(feature = "tiktoken")]
     Tiktoken(TiktokenTokenizer),
     #[cfg(feature = "huggingface")]
@@ -56,7 +59,7 @@ enum Codec {
 }
 
 impl Codec {
-    fn codec(&self) -> &dyn TextCodec {
+    pub(crate) fn codec(&self) -> &dyn TextCodec {
         match *self {
             #[cfg(feature = "tiktoken")]
             Self::Tiktoken(ref tokenizer) => tokenizer,
@@ -64,11 +67,25 @@ impl Codec {
             Self::HuggingFace(ref tokenizer) => tokenizer,
         }
     }
+
+    #[cfg(feature = "fast")]
+    fn fast_counter(&self) -> Result<FastTokenizer, Error> {
+        match *self {
+            #[cfg(feature = "tiktoken")]
+            Self::Tiktoken(ref tokenizer) => tokenizer.fast_counter(),
+            #[cfg(feature = "huggingface")]
+            Self::HuggingFace(ref tokenizer) => tokenizer.fast_counter(),
+        }
+    }
 }
 
+/// The loaded model is shared: `TokenCounter::from_tokenizer` counts with the same parse,
+/// and the opt-in count-only counter is derived from it once, on first use.
 #[pyclass(frozen, module = "litellm.rust_bridge._native")]
 pub(crate) struct Tokenizer {
-    inner: Codec,
+    inner: Arc<Codec>,
+    #[cfg(feature = "fast")]
+    fast: OnceLock<Arc<FastTokenizer>>,
 }
 
 #[pymethods]
@@ -78,9 +95,7 @@ impl Tokenizer {
         #[cfg(feature = "tiktoken")]
         {
             let tokenizer = load_tiktoken(py, encoding)?;
-            Ok(Self {
-                inner: Codec::Tiktoken(tokenizer),
-            })
+            Ok(Self::new(Codec::Tiktoken(tokenizer)))
         }
         #[cfg(not(feature = "tiktoken"))]
         {
@@ -98,9 +113,7 @@ impl Tokenizer {
             enter_native()?;
             let tokenizer = release_gil(py, || HuggingFaceTokenizer::from_json(tokenizer_json))
                 .map_err(|error| token_count_error_to_pyerr(error.into()))?;
-            Ok(Self {
-                inner: Codec::HuggingFace(tokenizer),
-            })
+            Ok(Self::new(Codec::HuggingFace(tokenizer)))
         }
         #[cfg(not(feature = "huggingface"))]
         {
@@ -157,9 +170,17 @@ impl Tokenizer {
             .map_err(token_count_error_to_pyerr)
     }
 
-    fn count(&self, py: Python<'_>, text: &Bound<'_, PyString>) -> PyResult<usize> {
+    /// Token count of `text`. `fast` opts into the count-only counter, which shares this
+    /// tokenizer's model; it declines when the build lacks the `fast` feature.
+    #[pyo3(signature = (text, fast = false))]
+    fn count(&self, py: Python<'_>, text: &Bound<'_, PyString>, fast: bool) -> PyResult<usize> {
         enter_native()?;
         let text = self.text(text)?;
+        if fast {
+            let counter = self.fast_counter(py)?;
+            return release_gil(py, || counter.count_tokens(&text))
+                .map_err(|error| token_count_error_to_pyerr(error.into()));
+        }
         release_gil(py, || self.inner.codec().count_tokens(&text))
             .map_err(token_count_error_to_pyerr)
     }
@@ -414,12 +435,43 @@ impl Tokenizer {
 type AddedTokenFields = (String, bool, bool, bool, bool, bool);
 
 impl Tokenizer {
+    fn new(inner: Codec) -> Self {
+        Self {
+            inner: Arc::new(inner),
+            #[cfg(feature = "fast")]
+            fast: OnceLock::new(),
+        }
+    }
+
+    pub(crate) fn codec(&self) -> Arc<Codec> {
+        Arc::clone(&self.inner)
+    }
+
+    /// The count-only counter over this tokenizer's model, built on first use. Two first
+    /// uses racing may both build it; one result is kept, and a failure is never cached.
+    #[cfg(feature = "fast")]
+    pub(crate) fn fast_counter(&self, py: Python<'_>) -> PyResult<Arc<FastTokenizer>> {
+        if let Some(counter) = self.fast.get() {
+            return Ok(Arc::clone(counter));
+        }
+        let built = release_gil(py, || self.inner.fast_counter().map(Arc::new))
+            .map_err(token_count_error_to_pyerr)?;
+        Ok(Arc::clone(self.fast.get_or_init(|| built)))
+    }
+
+    #[cfg(not(feature = "fast"))]
+    pub(crate) fn fast_counter(&self, _py: Python<'_>) -> PyResult<Arc<SharedCodec>> {
+        Err(RustBridgeDeclined::new_err(
+            "fast token counting requires the fast feature",
+        ))
+    }
+
     /// A Python `str` as UTF-8. tiktoken replaces lone surrogates the way its Python `encode`
     /// does; `tokenizers` rejects them, so that backend keeps the encode error.
     fn text<'a>(&self, text: &'a Bound<'_, PyString>) -> PyResult<Cow<'a, str>> {
         match text.to_cow() {
             Ok(text) => Ok(text),
-            Err(error) => match self.inner {
+            Err(error) => match *self.inner {
                 #[cfg(feature = "tiktoken")]
                 Codec::Tiktoken(_) if error.is_instance_of::<PyUnicodeEncodeError>(text.py()) => {
                     text.call_method1("encode", ("utf-16", "surrogatepass"))?
@@ -434,7 +486,7 @@ impl Tokenizer {
 
     #[cfg(feature = "tiktoken")]
     fn tiktoken(&self) -> PyResult<&TiktokenTokenizer> {
-        match self.inner {
+        match *self.inner {
             Codec::Tiktoken(ref tokenizer) => Ok(tokenizer),
             #[cfg(feature = "huggingface")]
             Codec::HuggingFace(_) => Err(PyValueError::new_err("requires a tiktoken encoding")),
@@ -450,11 +502,31 @@ impl Tokenizer {
 
     #[cfg(feature = "huggingface")]
     fn huggingface(&self) -> PyResult<&HuggingFaceTokenizer> {
-        match self.inner {
+        match *self.inner {
             Codec::HuggingFace(ref tokenizer) => Ok(tokenizer),
             #[cfg(feature = "tiktoken")]
             Codec::Tiktoken(_) => Err(PyValueError::new_err("requires a Hugging Face tokenizer")),
         }
+    }
+}
+
+/// A codec shared with a `TokenCounter`, counting through the exact encode path.
+pub(crate) struct SharedCodec(pub(crate) Arc<Codec>);
+
+impl litellm_token_counter::Tokenizer for SharedCodec {
+    fn count_tokens(&self, text: &str) -> Result<usize, Error> {
+        self.0.codec().count_tokens(text)
+    }
+}
+
+/// A count-only counter shared with a `TokenCounter`.
+#[cfg(feature = "fast")]
+pub(crate) struct SharedFast(pub(crate) Arc<FastTokenizer>);
+
+#[cfg(feature = "fast")]
+impl litellm_token_counter::Tokenizer for SharedFast {
+    fn count_tokens(&self, text: &str) -> Result<usize, Error> {
+        self.0.count_tokens(text).map_err(Error::from)
     }
 }
 

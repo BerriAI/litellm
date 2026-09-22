@@ -837,10 +837,10 @@ class TestTokenizerSelection(unittest.TestCase):
         self.assertEqual(result["type"], "openai_tokenizer")
         self.assertEqual(result["tokenizer"], encoding)
 
-    @patch("litellm.utils.tokenizer_dispatch.from_str")
-    def test_claude_tokenizer_api_failure(self, mock_from_str):
+    @patch("litellm.utils.tokenizer_dispatch.anthropic")
+    def test_claude_tokenizer_api_failure(self, mock_anthropic):
         # Setup mock to raise an error
-        mock_from_str.side_effect = Exception("Failed to load tokenizer")
+        mock_anthropic.side_effect = Exception("Failed to load tokenizer")
 
         # Add Claude model to the list for testing
         litellm.anthropic_models = ["claude-2"]
@@ -849,7 +849,7 @@ class TestTokenizerSelection(unittest.TestCase):
         result = _select_tokenizer_helper("claude-2")
 
         # Verify the attempt to load Claude tokenizer
-        mock_from_str.assert_called_once_with(claude_json_str)
+        mock_anthropic.assert_called_once_with()
 
         # Verify fallback to OpenAI tokenizer
         self.assertEqual(result["type"], "openai_tokenizer")
