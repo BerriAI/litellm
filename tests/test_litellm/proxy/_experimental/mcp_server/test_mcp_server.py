@@ -10258,6 +10258,7 @@ async def test_tool_listing_preserves_permission_denial_when_failure_logging_fai
 async def test_legacy_sse_mount_emits_message_endpoint(prefix: str, suffix: str) -> None:
     from starlette.applications import Starlette
     from starlette.routing import Mount
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
     from litellm.proxy._experimental.mcp_server import server as mcp_server
 
     app: Final = Starlette(routes=[Mount("/mcp", app=mcp_server.app)])
@@ -10335,17 +10336,15 @@ async def test_legacy_sse_mount_emits_message_endpoint(prefix: str, suffix: str)
             assert initialized["id"] == 1
             assert initialized["result"]["serverInfo"]["name"] == "litellm-mcp-server"
 
-            from mcp.types import ListToolsResult
-
             assert await post(b'{"jsonrpc":"2.0","method":"notifications/initialized"}') == 202
             for request_id, marker in ((2, "first-post"), (3, "second-post")):
                 post_auth: Final = UserAPIKeyAuth(api_key="test-owner", user_id=marker)
-                listing: Final = AsyncMock(return_value=ListToolsResult(tools=[]))
+                listing: Final = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
                 with (
                     patch.object(
                         mcp_server,
                         "extract_mcp_auth_context",
-                        AsyncMock(return_value=(post_auth, None, None, None, None, {"x-request-marker": marker})),
+                        AsyncMock(return_value=(post_auth, None, [marker], {marker: {"Authorization": marker}}, {"Authorization": marker}, {"x-request-marker": marker})),
                     ),
                     patch.object(mcp_server.operations, "_get_tools_from_mcp_servers", listing),
                 ):
@@ -10359,6 +10358,9 @@ async def test_legacy_sse_mount_emits_message_endpoint(prefix: str, suffix: str)
                     assert listed["result"]["tools"] == []
                     listing.assert_awaited_once()
                     assert listing.await_args.kwargs["user_api_key_auth"].user_id == marker
+                    assert listing.await_args.kwargs["mcp_servers"] == [marker]
+                    assert listing.await_args.kwargs["mcp_server_auth_headers"] == {marker: {"Authorization": marker}}
+                    assert listing.await_args.kwargs["oauth2_headers"] == {"Authorization": marker}
                     assert listing.await_args.kwargs["raw_headers"] == {"x-request-marker": marker}
 
             stranger: Final = UserAPIKeyAuth(api_key="different-owner")

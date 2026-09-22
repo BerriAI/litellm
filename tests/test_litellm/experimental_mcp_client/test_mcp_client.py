@@ -652,6 +652,22 @@ class TestExecuteSessionOperationSurfacesTransportError:
         transport.__aexit__.assert_awaited_once()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("signal_type", (SystemExit, KeyboardInterrupt))
+    @pytest.mark.parametrize("phase", ("session", "transport"))
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_cleanup_preserves_process_exit(self, session_class, phase, signal_type):
+        self._make_session(session_class, AsyncMock(return_value=None))
+        signal: Final = signal_type("process stopping")
+        if phase == "session":
+            session_class.return_value.__aexit__ = AsyncMock(side_effect=signal)
+        transport: Final = self._make_transport(signal if phase == "transport" else None)
+        client: Final = MCPClient(server_url="https://example.com/mcp")
+        with pytest.raises(signal_type) as caught:
+            await client._execute_session_operation(transport, AsyncMock(return_value="done"))
+        assert caught.value is signal
+        transport.__aexit__.assert_awaited_once()
+
+    @pytest.mark.asyncio
     @patch("litellm.experimental_mcp_client.client.ClientSession")
     async def test_session_and_termination_share_one_cleanup_deadline(self, session_class):
         self._make_session(session_class, AsyncMock(return_value=None))
@@ -2768,7 +2784,10 @@ async def test_cancellation_delivers_termination_over_tcp(
                 ),
                 0,
             )
-            body: Final = await reader.readexactly(length)
+            try:
+                body: Final = await reader.readexactly(length)
+            except asyncio.IncompleteReadError:
+                return
             if method == b"DELETE":
                 terminations.append(body)
                 if termination != "ok":
@@ -2818,7 +2837,7 @@ async def test_cancellation_delivers_termination_over_tcp(
     listener: Final = await asyncio.start_server(handle_connection, "127.0.0.1", 0)
     port: Final = listener.sockets[0].getsockname()[1]
     client: Final = MCPClient(
-        server_url=f"http://127.0.0.1:{port}/mcp", timeout=0.2 if cancel_mode == "read_timeout" else 0.5 if termination != "ok" else 30
+        server_url=f"http://127.0.0.1:{port}/mcp", timeout=2 if cancel_mode == "read_timeout" else 0.5 if termination != "ok" else 30
     )
 
     async def calls():
@@ -2855,6 +2874,8 @@ async def test_cancellation_delivers_termination_over_tcp(
             else TimeoutError
         )
         if cancel_mode == "read_timeout":
+            done, _ = await asyncio.wait((task,), timeout=8)
+            assert task in done, "Read timeout and bounded cleanup must complete without external cancellation"
             await task
         elif cancel_mode == "wait_for":
             with pytest.raises(expected_error):
@@ -2866,6 +2887,9 @@ async def test_cancellation_delivers_termination_over_tcp(
         assert len(terminations) == concurrency, "Each cancelled call must send DELETE over a fresh TCP connection"
     finally:
         stop.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.wait((task,), timeout=8)
         listener.close()
         await listener.wait_closed()
         await asyncio.wait_for(asyncio.gather(*connections), 2)

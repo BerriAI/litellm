@@ -594,7 +594,7 @@ class MCPClient:
                         cleanup_scope.deadline = anyio.current_time() + 5
                         try:
                             await session_ctx.__aexit__(None, None, None)
-                        except BaseException as e:
+                        except (Exception, asyncio.CancelledError) as e:
                             verbose_logger.debug("Error during session context exit: %s", e)
                             if in_flight_error is None and isinstance(e, asyncio.CancelledError):
                                 raise
@@ -606,7 +606,7 @@ class MCPClient:
                     cleanup_scope.deadline = min(cleanup_scope.deadline, anyio.current_time() + 5)
                     try:
                         await transport_ctx.__aexit__(None, None, None)
-                    except BaseException as exit_error:
+                    except (Exception, asyncio.CancelledError) as exit_error:
                         verbose_logger.debug("Error during transport context exit: %s", exit_error)
                         if in_flight_error is None and isinstance(exit_error, asyncio.CancelledError):
                             raise
@@ -662,7 +662,7 @@ class MCPClient:
             if http_client is not None:
                 try:
                     await _run_bounded_cleanup(http_client.aclose, anyio.current_time() + 1)
-                except BaseException as e:
+                except (Exception, asyncio.CancelledError) as e:
                     verbose_logger.debug("Error during http_client cleanup: %s", e)
                     if isinstance(e, asyncio.CancelledError):
                         close_cancellation = e
