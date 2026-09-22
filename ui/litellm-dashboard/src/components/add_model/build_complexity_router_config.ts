@@ -54,6 +54,10 @@ import {
 
 export type ClassifierVisionConfig = { enabled?: boolean; max_images?: number };
 export type ClassifierLLMConfigWire = ClassifierLLMConfig & { vision?: ClassifierVisionConfig };
+export interface ReminderMarkerPair {
+  open: string;
+  close: string;
+}
 
 /**
  * Drop an empty system_prompt so the payload carries an override only when there is one. The
@@ -181,6 +185,16 @@ export interface StoredComplexityRouterConfig {
   stall_escalation_enabled?: unknown;
   stall_escalation_window?: unknown;
   stall_escalation_repeat_threshold?: unknown;
+  code_keywords?: unknown;
+  reasoning_keywords?: unknown;
+  technical_keywords?: unknown;
+  simple_keywords?: unknown;
+  plan_mode_patterns?: unknown;
+  route_housekeeping_to_cheapest_tier?: unknown;
+  housekeeping_patterns?: unknown;
+  reminder_markers?: unknown;
+  max_tokens_from_tier_model?: unknown;
+  classifier_plugin_timeout_ms?: unknown;
 }
 
 export interface BuildComplexityRouterConfigParams {
@@ -233,6 +247,16 @@ export interface BuildComplexityRouterConfigParams {
   enableContextWindowEscalation?: boolean;
   contextWindowEscalationBuffer?: number;
   sessionAffinityTtlSeconds?: number;
+  codeKeywords?: string[];
+  reasoningKeywords?: string[];
+  technicalKeywords?: string[];
+  simpleKeywords?: string[];
+  planModePatterns?: string[];
+  routeHousekeepingToCheapestTier?: boolean;
+  housekeepingPatterns?: string[];
+  reminderMarkers?: ReminderMarkerPair[];
+  maxTokensFromTierModel?: boolean;
+  classifierPluginTimeoutMs?: number;
 }
 
 /**
@@ -302,6 +326,16 @@ export interface ComplexityRouterConfigPayload {
   enable_context_window_escalation?: boolean;
   context_window_escalation_buffer?: number;
   tier_model_configs?: Record<string, { model_name: string; litellm_params: TierModelParams }[]>;
+  code_keywords?: string[];
+  reasoning_keywords?: string[];
+  technical_keywords?: string[];
+  simple_keywords?: string[];
+  plan_mode_patterns?: string[];
+  route_housekeeping_to_cheapest_tier?: boolean;
+  housekeeping_patterns?: string[];
+  reminder_markers?: ReminderMarkerPair[];
+  max_tokens_from_tier_model?: boolean;
+  classifier_plugin_timeout_ms?: number;
 }
 
 export const serializeTierLabels = (tierLabels: ComplexityTierLabels | undefined): ComplexityTierLabels | undefined => {
@@ -374,6 +408,26 @@ export const getHeuristicV2SuccessThresholdError = (threshold: number | undefine
   if (threshold === undefined) return null;
   const validProbability = Number.isFinite(threshold) && threshold >= 0 && threshold <= 1;
   return validProbability ? null : "Success threshold must be a number between 0 and 1";
+};
+
+export const getReminderMarkersError = (pairs: ReminderMarkerPair[] | undefined): string | null => {
+  for (const [index, pair] of (pairs ?? []).entries()) {
+    const open = pair.open.trim().toLowerCase();
+    const close = pair.close.trim().toLowerCase();
+    if (!open || !close) return `Reminder marker pair ${index + 1} needs both an opening and a closing delimiter`;
+    if (open === close) return `Reminder marker pair ${index + 1} must use different opening and closing delimiters`;
+  }
+  return null;
+};
+
+export const getClassifierPluginTimeoutError = (
+  classifierType: ClassifierType,
+  timeoutMs: number | undefined,
+): string | null => {
+  if (classifierType !== "custom" || timeoutMs === undefined) return null;
+  return Number.isInteger(timeoutMs) && timeoutMs > 0
+    ? null
+    : "Classifier plugin timeout must be a whole number of milliseconds greater than 0";
 };
 
 export const getClassifierModelError = (
@@ -640,6 +694,16 @@ export const buildComplexityRouterConfig = ({
   enableContextWindowEscalation,
   contextWindowEscalationBuffer,
   sessionAffinityTtlSeconds,
+  codeKeywords,
+  reasoningKeywords,
+  technicalKeywords,
+  simpleKeywords,
+  planModePatterns,
+  routeHousekeepingToCheapestTier,
+  housekeepingPatterns,
+  reminderMarkers,
+  maxTokensFromTierModel,
+  classifierPluginTimeoutMs,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   const serializedTierModelConfigs = customTierSet
     ? serializeTierModelConfigs(
@@ -672,6 +736,29 @@ export const buildComplexityRouterConfig = ({
   };
   const effectiveType = effectiveClassifierType({ custom_tier_set: customTierSet, classifier_type: classifierType });
   const forecast = isForecastClassifier(effectiveType);
+  const preserveContextWindowBuffer = !forecast || enableContextWindowEscalation === true;
+  const cleanList = (items: string[] | undefined): string[] | undefined => {
+    const cleaned = (items ?? []).map((item) => item.trim()).filter(Boolean);
+    return cleaned.length > 0 ? cleaned : undefined;
+  };
+  const cleanedReminderMarkers = reminderMarkers?.map(({ open, close }) => ({
+    open: open.trim().toLowerCase(),
+    close: close.trim().toLowerCase(),
+  }));
+  const cleanedListValues = {
+    code_keywords: cleanList(codeKeywords),
+    reasoning_keywords: cleanList(reasoningKeywords),
+    technical_keywords: cleanList(technicalKeywords),
+    simple_keywords: cleanList(simpleKeywords),
+    plan_mode_patterns: cleanList(planModePatterns),
+    housekeeping_patterns: cleanList(housekeepingPatterns),
+  };
+  const cleanedLists = Object.fromEntries(Object.entries(cleanedListValues).filter(([, list]) => list !== undefined));
+  const hasValidCustomClassifierTimeout =
+    classifierType === "custom" &&
+    classifierPluginTimeoutMs !== undefined &&
+    Number.isInteger(classifierPluginTimeoutMs) &&
+    classifierPluginTimeoutMs > 0;
 
   const supportsOpeningPrompt = !customTierSet && !forecast && usesLlmClassifier(effectiveType);
   const payload: ComplexityRouterConfigPayload = {
@@ -729,17 +816,21 @@ export const buildComplexityRouterConfig = ({
         adaptive_eligible: adaptiveEligible,
       }),
     ...(returnRawModelName && { return_raw_model_name: true }),
-    // Omission enables the backend default, so hidden forecast controls need an explicit opt-out.
     ...((forecast || enableContextWindowEscalation !== undefined) && {
-      enable_context_window_escalation: forecast ? false : enableContextWindowEscalation,
+      enable_context_window_escalation: enableContextWindowEscalation ?? false,
     }),
-    ...(!forecast &&
+    ...(preserveContextWindowBuffer &&
       contextWindowEscalationBuffer !== undefined && {
         context_window_escalation_buffer: contextWindowEscalationBuffer,
       }),
     ...(sessionAffinityTtlSeconds !== undefined && {
       session_affinity_ttl_seconds: sessionAffinityTtlSeconds,
     }),
+    ...cleanedLists,
+    ...(routeHousekeepingToCheapestTier === false && { route_housekeeping_to_cheapest_tier: false }),
+    ...(cleanedReminderMarkers && cleanedReminderMarkers.length > 0 && { reminder_markers: cleanedReminderMarkers }),
+    ...(maxTokensFromTierModel === false && { max_tokens_from_tier_model: false }),
+    ...(hasValidCustomClassifierTimeout && { classifier_plugin_timeout_ms: classifierPluginTimeoutMs }),
     ...scorerKnobs,
   };
   if (!customTierSet) return payload;

@@ -23,3 +23,5 @@ pub use litellm_secrets_azure as azure;
 pub use litellm_secrets_cyberark as cyberark;
 #[cfg(feature = "google")]
 pub use litellm_secrets_google as google;
+#[cfg(feature = "hashicorp")]
+pub use litellm_secrets_hashicorp as hashicorp;

@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.agents import AgentCaller
 
 AddLiteLLMData = Callable[..., Awaitable[dict[str, object]]]
 
@@ -509,6 +510,24 @@ async def test_message_methods_forward_caller_identity_headers(method: str):
     forwarded_headers = captured.agent_extra_headers or {}
     assert forwarded_headers.get("X-LiteLLM-User-Id") == "user-abc"
     assert forwarded_headers.get("X-LiteLLM-Team-Id") == "team-xyz"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_agent_calling_another_agent_forwards_the_human_who_invoked_it(method: str):
+    """LIT-8014: an agent acting for alice calls a second agent through the proxy. That hop must
+    carry alice, not the first agent's owner, so the chain stays capped at what alice may reach."""
+    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
+    agent_key = UserAPIKeyAuth(api_key="sk-agent", user_id="agent-owner", team_id="agent-team", agent_id="agent-1")
+    agent_key.agent_caller = AgentCaller(user_id="alice", team_id="callers")
+
+    captured = await _invoke_message_method(method, mock_request, agent_key)
+
+    forwarded_headers = captured.agent_extra_headers or {}
+    assert (forwarded_headers.get("X-LiteLLM-User-Id"), forwarded_headers.get("X-LiteLLM-Team-Id")) == (
+        "alice",
+        "callers",
+    )
 
 
 @pytest.mark.asyncio
