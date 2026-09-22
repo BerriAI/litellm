@@ -5,7 +5,7 @@ A2A Streaming Iterator with token tracking and logging support.
 import asyncio
 from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -15,7 +15,7 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 if TYPE_CHECKING:
-    from a2a.types import SendStreamingMessageRequest, SendStreamingMessageResponse
+    from a2a.compat.v0_3.types import SendStreamingMessageRequest, SendStreamingMessageResponse
 
 
 class A2AStreamingIterator:
@@ -39,9 +39,9 @@ class A2AStreamingIterator:
         self.start_time = datetime.now()
 
         # Collect chunks for token counting
-        self.chunks: list[Any] = []
+        self.chunks: list[SendStreamingMessageResponse] = []
         self.collected_text_parts: list[str] = []
-        self.final_chunk: Any | None = None
+        self.final_chunk: SendStreamingMessageResponse | None = None
 
     def __aiter__(self):
         return self
@@ -69,7 +69,7 @@ class A2AStreamingIterator:
             await self._handle_stream_complete()
             raise
 
-    def _collect_text_from_chunk(self, chunk: Any) -> None:
+    def _collect_text_from_chunk(self, chunk: "SendStreamingMessageResponse") -> None:
         """Extract text from a streaming chunk and add to collected parts."""
         try:
             chunk_dict: Final = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
@@ -79,7 +79,7 @@ class A2AStreamingIterator:
         except Exception:
             verbose_logger.debug("Failed to extract text from A2A streaming chunk")
 
-    def _is_completed_chunk(self, chunk: Any) -> bool:
+    def _is_completed_chunk(self, chunk: "SendStreamingMessageResponse") -> bool:
         """Check if chunk indicates stream completion."""
         try:
             chunk_dict: Final = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}

@@ -7,17 +7,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
-use crate::{
-    base_llm::ocr::{
-        document::InlineDocument,
-        error::Error,
-        transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES, OcrConnection, OcrDocument,
-            OcrPage, OcrPageImage, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
-            credential_env, decode_and_normalize_response, decode_response_value,
-        },
+use crate::base_llm::ocr::{
+    document::InlineDocument,
+    error::Error,
+    handler::OcrClient,
+    transformation::{
+        BaseOcrConfig, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES, OcrConnection, OcrDocument,
+        OcrPage, OcrPageImage, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        decode_and_normalize_response, decode_response_value,
     },
-    custom_httpx::llm_http_handler::OcrClient,
 };
 
 const COHERE_PARSE_API_BASE: &str = "https://api.cohere.com";
@@ -124,7 +122,9 @@ impl BaseOcrConfig for CohereParseConfig {
         request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
-        self.resolve_headers(&request.connection, &credential_env)
+        self.resolve_headers(&request.connection, &|name: &str| {
+            request.connection.secret(name)
+        })
     }
 
     fn get_complete_url(
@@ -163,7 +163,7 @@ impl BaseOcrConfig for CohereParseConfig {
     }
 
     fn validate_request_body(&self, body: &Value) -> Result<(), Error> {
-        validate_document(&crate::custom_httpx::llm_http_handler::body_document(body)?)
+        validate_document(&crate::base_llm::ocr::handler::body_document(body)?)
     }
 }
 
@@ -173,14 +173,13 @@ impl CohereParseConfig {
         connection: &OcrConnection,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Vec<(String, String)>, Error> {
-        if crate::custom_httpx::http_handler::has_header(&connection.extra_headers, "authorization")
-        {
+        if litellm_http::request::has_header(&connection.extra_headers, "authorization") {
             return Ok(connection.extra_headers.clone());
         }
         let key = connection
             .api_key
-            .as_deref()
-            .map(str::trim)
+            .as_ref()
+            .map(|key| key.expose().trim())
             .filter(|key| !key.is_empty())
             .map(str::to_string)
             .or_else(|| {
@@ -718,7 +717,7 @@ mod tests {
         assert!(matches!(
             CohereParseConfig.resolve_headers(
                 &OcrConnection {
-                    api_key: Some("  ".into()),
+                    api_key: Some(litellm_auth::SecretValue::new("  ")),
                     ..Default::default()
                 },
                 &|_| None,
