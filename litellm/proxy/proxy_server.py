@@ -7090,6 +7090,13 @@ class ProxyConfig:
         if "ui_access_mode" in _general_settings:
             general_settings["ui_access_mode"] = _general_settings["ui_access_mode"]
 
+        if "disable_env_credential_login" in _general_settings:
+            value = _general_settings["disable_env_credential_login"]
+            if isinstance(value, str):
+                general_settings["disable_env_credential_login"] = value.lower() == "true"
+            else:
+                general_settings["disable_env_credential_login"] = value if value is None else bool(value)
+
         ## STORE PROMPTS IN SPEND LOGS ##
         if "store_prompts_in_spend_logs" in _general_settings:
             # If the YAML config explicitly set this key, prefer the YAML value
@@ -17067,6 +17074,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "mcp_required_fields": "List",
         "cancel_on_disconnect": "Boolean",
         "disable_auto_add_proxy_admin_to_teams": "Boolean",
+        "disable_env_credential_login": "Boolean",
         "apply_user_budget_to_team_keys": "Boolean",
         "user_api_key_cache_max_size": "Integer",
     }

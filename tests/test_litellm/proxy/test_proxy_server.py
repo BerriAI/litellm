@@ -7509,6 +7509,26 @@ async def test_update_general_settings_disable_auto_add_proxy_admin_to_teams(db_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "db_value,expected",
+    [(True, True), (False, False), ("true", True), ("false", False), (None, None)],
+)
+async def test_update_general_settings_disable_env_credential_login(db_value, expected):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(
+            db_general_settings={"disable_env_credential_login": db_value}
+        )
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["disable_env_credential_login"] is expected
+
+
+@pytest.mark.asyncio
 async def test_update_general_settings_store_model_in_db_string_normalization():
     """
     Verify _update_general_settings normalizes string values for store_model_in_db.
