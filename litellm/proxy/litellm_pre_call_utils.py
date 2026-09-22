@@ -2029,7 +2029,14 @@ async def add_litellm_data_to_request(
         _headers,
         allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
     )
-    _logging_safe_headers: Final = redact_credential_headers(_headers)
+    from litellm.proxy._experimental.mcp_server.utils import upstream_credential_headers
+
+    _mcp_credential_headers: Final = upstream_credential_headers(_headers)
+    _logging_safe_headers: Final = redact_credential_headers(
+        MappingProxyType(
+            {name: value for name, value in _headers.items() if name.lower() not in _mcp_credential_headers}
+        )
+    )
     verbose_proxy_logger.debug("Request Headers: %s", _logging_safe_headers)
     verbose_proxy_logger.debug("Raw Headers: %s", _raw_headers)
 

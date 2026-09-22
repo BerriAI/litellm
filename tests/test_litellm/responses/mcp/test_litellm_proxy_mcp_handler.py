@@ -15,7 +15,7 @@ from litellm.responses.mcp import litellm_proxy_mcp_handler as mcp_handler_modul
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
-from typing import Any, cast
+from typing import Any, Final, cast
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import ModelResponse
 from litellm.types.responses.main import OutputFunctionToolCall
@@ -1074,6 +1074,7 @@ async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
         )
 
     async def fake_process(**kwargs: Any) -> tuple[list[Any], dict[str, str]]:
+        assert kwargs["raw_headers"] == {"x-app-id": "follow-up-caller"}
         return ([], {"foo": "litellm_proxy"})
 
     async def fake_execute(**kwargs: Any) -> list[dict[str, Any]]:
@@ -1093,6 +1094,7 @@ async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
         model="gpt-5",
         tools=[{"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}],
         litellm_metadata={"guardrails": ["block-all"]},
+        secret_fields={"raw_headers": {"x-app-id": "follow-up-caller"}},
         store=store,
         previous_response_id=caller_previous_response_id,
     )
@@ -1105,3 +1107,39 @@ async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
         item for item in follow_up_call["input"] if isinstance(item, dict) and item.get("type") == "reasoning"
     ]
     assert bool(reasoning_items) is (store is False)
+
+
+@pytest.mark.asyncio
+async def test_responses_discovery_logs_sanitized_caller_headers(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+
+    headers: Final = {
+        "x-app-id": "app-a", "x-nuid": "user-a", "x-user-id": "identity-a",
+        "x-mcp-deepwiki-authorization": "upstream-sentinel", "authorization": "proxy-sentinel",
+    }
+    manager: Final = types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
+        get_allowed_mcp_servers=AsyncMock(return_value=[]),
+        get_mcp_servers_from_ids=MagicMock(return_value=[]),
+    )
+    logger: Final = MagicMock(model_call_details={})
+    logger.async_success_handler = AsyncMock()
+    setup: Final = MagicMock(return_value=(logger, None))
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[]))
+    monkeypatch.setattr(operations, "function_setup", setup)
+    response: Final = ResponsesAPIResponse(
+        id="resp_test", created_at=1234567891, model="test-model", object="response",
+        status="completed", output=[], parallel_tool_calls=False, tool_choice="auto", tools=[],
+    )
+    monkeypatch.setattr(responses_main, "aresponses", AsyncMock(return_value=response))
+    result: Final = await responses_main.aresponses_api_with_mcp(
+        input="hi", model="test-model", tools=[{"type": "mcp", "server_url": "litellm_proxy"}],
+        secret_fields={"raw_headers": headers},
+    )
+    assert result is response
+    logger.async_success_handler.assert_awaited_once()
+    logged: Final = setup.call_args.kwargs["metadata"]["headers"]
+    assert logged == {"x-app-id": "app-a", "x-nuid": "user-a", "x-user-id": "identity-a"}
+    assert headers["x-mcp-deepwiki-authorization"] == "upstream-sentinel"
