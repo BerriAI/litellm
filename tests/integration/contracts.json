@@ -1764,6 +1764,9 @@
     ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[bearer]": [
       "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
+    ],
+    "tests/integration/spend/test_batch_observability.py::test_batch_retrieval_row_sums_reasoning_tokens_and_counts_output_and_error_file_failures": [
+      "spend.batches.retrieval_row_aggregates_reasoning_tokens_and_per_request_counts"
     ]
   },
   "browser": {
