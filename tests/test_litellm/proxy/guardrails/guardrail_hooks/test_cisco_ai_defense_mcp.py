@@ -861,3 +861,4 @@ async def test_cisco_native_hook_through_logging_preserves_sanitized_result(acti
     assert "SECRET-1234" not in returned.model_dump_json()
     assert returned.is_error is (action == "block")
     assert ("Blocked by Cisco AI Defense" if action == "block" else "[REDACTED]") in returned.content[0].text
+    assert returned.structured_content == {"result": returned.content[0].text}

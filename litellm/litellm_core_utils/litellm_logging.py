@@ -1651,6 +1651,7 @@ class Logging(LiteLLMLoggingBaseClass):
             try:
                 if isinstance(callback, CustomLogger):
                     original_content = copy.deepcopy(response_obj.content)
+                    original_structured_content = copy.deepcopy(response_obj.structured_content)
                     callback_response = MCPPostCallResponseObject(
                         mcp_tool_call_response=copy.deepcopy(original_content), hidden_params=hidden_params
                     )
@@ -1664,8 +1665,12 @@ class Logging(LiteLLMLoggingBaseClass):
                     if response is not None:
                         hidden_params = response.hidden_params
                     if hook_content is not None and hook_content != original_content:
+                        structured_replacement_matches = (
+                            response_obj.structured_content != original_structured_content
+                            and response_obj.content == hook_content
+                        )
                         response_obj.content[:] = hook_content
-                        if response_obj.structured_content is not None:
+                        if response_obj.structured_content is not None and not structured_replacement_matches:
                             response_obj.structured_content = None
                             response_obj.is_error = True
             except Exception as e:
