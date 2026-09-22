@@ -1664,15 +1664,23 @@ class Logging(LiteLLMLoggingBaseClass):
                     hook_content = self._parse_post_mcp_call_hook_response(response=response)
                     if response is not None:
                         hidden_params = response.hidden_params
-                    if hook_content is not None and hook_content != original_content:
-                        structured_replacement_matches = (
-                            response_obj.structured_content != original_structured_content
-                            and response_obj.content == hook_content
+                    structured_replacement_matches = (
+                        response_obj.structured_content != original_structured_content
+                        and (
+                            hook_content is None
+                            or hook_content == original_content
+                            or response_obj.content == hook_content
                         )
+                    )
+                    if hook_content is not None and hook_content != original_content:
                         response_obj.content[:] = hook_content
-                        if response_obj.structured_content is not None and not structured_replacement_matches:
-                            response_obj.structured_content = None
-                            response_obj.is_error = True
+                    if (
+                        response_obj.content != original_content
+                        and response_obj.structured_content is not None
+                        and not structured_replacement_matches
+                    ):
+                        response_obj.structured_content = None
+                        response_obj.is_error = True
             except Exception as e:
                 verbose_logger.exception("LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e)
         return response_obj

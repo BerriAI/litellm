@@ -8936,7 +8936,7 @@ async def test_fire_mcp_tool_call_logging_success_path_unchanged():
         )
 
     logging_obj.async_success_handler.assert_awaited_once()
-    assert logging_obj.async_success_handler.await_args.kwargs["result"] == result
+    assert logging_obj.async_success_handler.await_args.kwargs["result"] is result
     logging_obj.async_failure_handler.assert_not_awaited()
     logging_obj.failure_handler.assert_not_called()
     proxy_logging_mock.post_call_failure_hook.assert_not_awaited()
