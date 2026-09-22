@@ -94,6 +94,7 @@ _PROXY_ERROR_TYPE_MAP: Final[Mapping[str, str]] = MappingProxyType(
         "user_model_access_denied": MODEL_ACCESS_DENIED,
         "org_model_access_denied": MODEL_ACCESS_DENIED,
         "project_model_access_denied": MODEL_ACCESS_DENIED,
+        "agent_model_access_denied": MODEL_ACCESS_DENIED,
         "key_vector_store_access_denied": PERMISSION_DENIED,
         "team_vector_store_access_denied": PERMISSION_DENIED,
         "org_vector_store_access_denied": PERMISSION_DENIED,
@@ -170,7 +171,8 @@ def normalize_error(exc: Exception | None, status_code: str, message: str) -> st
     """
     if exc is None:
         return None
-    by_proxy_type: Final = _PROXY_ERROR_TYPE_MAP.get(exc.type) if isinstance(exc, _HasProxyErrorType) else None
+    proxy_type: Final = exc.type if isinstance(exc, _HasProxyErrorType) else None
+    by_proxy_type: Final = _PROXY_ERROR_TYPE_MAP.get(proxy_type) if isinstance(proxy_type, str) else None
     if by_proxy_type is not None:
         return by_proxy_type
     by_message: Final = _classify_by_message(message)

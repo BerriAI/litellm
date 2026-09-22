@@ -170,6 +170,20 @@ def test_unknown_exception_falls_back_to_status_then_unclassified() -> None:
     assert normalize_error(Exception("x"), "", "x") == "UNCLASSIFIED"
 
 
+def test_every_model_access_denied_proxy_type_shares_one_cluster() -> None:
+    access_denied_types = tuple(t for t in ProxyErrorTypes if t.value.endswith("_model_access_denied"))
+    assert len(access_denied_types) >= 6, access_denied_types
+    codes = {normalize_error(_proxy_exc("denied", t.value, 403), "403", "denied") for t in access_denied_types}
+    assert codes == {"403_MODEL_ACCESS_DENIED"}, codes
+
+
+def test_non_string_type_attribute_falls_through_to_status() -> None:
+    class _OddType(Exception):
+        type = {"kind": "odd"}
+
+    assert normalize_error(_OddType("odd"), "500", "odd") == "500_PROVIDER_INTERNAL_ERROR"
+
+
 def test_normalized_error_never_embeds_dynamic_parts() -> None:
     exc = _proxy_exc(
         "No team has access to anthropic.claude-sonnet-4-5", ProxyErrorTypes.team_model_access_denied.value, 401
