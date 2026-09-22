@@ -236,6 +236,26 @@ class PassthroughBatchList(BaseModel):
     data: list[PassthroughListEntry]
 
 
+class FalQueueSubmitBody(BaseModel):
+    """Input for a Fal queue submission. `resolution` is typed loosely on purpose: the
+    proxy prices the request off this field and must treat 512 and "512" alike."""
+
+    image_url: str
+    prompt: str | None = None
+    resolution: int | str | None = None
+
+
+class FalQueueSubmission(BaseModel):
+    request_id: str
+    status: str
+
+
+def fal_queue_submission(result: StreamingResponse) -> FalQueueSubmission | None:
+    if not result.ok:
+        return None
+    return FalQueueSubmission.model_validate_json(result.body)
+
+
 def _tags_header(tags: list[str] | None) -> str | None:
     return ",".join(tags) if tags else None
 
@@ -390,6 +410,15 @@ class PassthroughClient:
                 max_completion_tokens=max_completion_tokens,
                 messages=[ChatMessage(role="user", content=text)],
             ),
+        )
+
+    # ---- Fal AI queue passthrough (/fal_ai/{endpoint}) ------------------
+
+    def fal_submit(self, key: str, endpoint: str, body: FalQueueSubmitBody) -> StreamingResponse:
+        return self.proxy.transport.send(
+            f"/fal_ai/{endpoint}",
+            headers=self.proxy.transport.bearer(key),
+            json=body,
         )
 
     # ---- OpenAI websocket passthrough ----------------------------------

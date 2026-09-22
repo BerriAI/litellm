@@ -4,7 +4,11 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
-from litellm.llms.fal_ai.cost_calculator import cost_calculator, fal_ai_passthrough_cost
+from litellm.llms.fal_ai.cost_calculator import (
+    cost_calculator,
+    fal_ai_passthrough_cost,
+    fal_ai_passthrough_is_priceable,
+)
 from litellm.types.utils import ImageObject, ImageResponse
 
 @pytest.fixture(autouse=True)
@@ -203,3 +207,25 @@ def test_passthrough_trellis_2_without_resolution_falls_back_to_default_rate():
 
 def test_passthrough_unknown_model_returns_none():
     assert fal_ai_passthrough_cost("fal-ai/no-such-model", {"resolution": 512}) is None
+
+
+@pytest.mark.parametrize("resolution", [512, 1024, 1536])
+def test_passthrough_string_resolution_is_priced_like_the_integer(resolution: int):
+    keyed_cost: Final = fal_ai_passthrough_cost("fal-ai/trellis-2", {"resolution": resolution})
+    assert keyed_cost is not None
+    assert fal_ai_passthrough_cost("fal-ai/trellis-2", {"resolution": str(resolution)}) == keyed_cost
+    assert keyed_cost == litellm.model_cost["fal_ai/fal-ai/trellis-2"][f"output_cost_per_image_{resolution}"]
+
+
+def test_passthrough_priceable_set_matches_the_pricer_over_the_whole_catalog():
+    fal_models: Final[tuple[str, ...]] = tuple(
+        key.removeprefix("fal_ai/")
+        for key in litellm.model_cost  # pyright: ignore[reportUnknownVariableType]  # global catalog is untyped
+        if isinstance(key, str) and key.startswith("fal_ai/")
+    )
+    assert fal_models
+    unpriceable = tuple(model for model in fal_models if fal_ai_passthrough_cost(model, {}) is None)
+    assert unpriceable, "catalog has no fal_ai entry without a per-image price, the gate parity case is untested"
+    for model in fal_models:
+        assert fal_ai_passthrough_is_priceable(model) is (fal_ai_passthrough_cost(model, {}) is not None), model
+    assert fal_ai_passthrough_is_priceable("fal-ai/no-such-model") is False
