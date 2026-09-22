@@ -507,6 +507,7 @@ async def test_execute_tool_calls_applies_post_call_hook_content(monkeypatch):
         isError=False,
     )
     fake_manager = types.SimpleNamespace(
+        catalog=types.SimpleNamespace(operation=nullcontext),
         get_registry=MagicMock(return_value={}),
         call_tool=AsyncMock(return_value=result),
         _get_mcp_server_from_tool_name=MagicMock(return_value=None),
@@ -546,6 +547,7 @@ async def test_execute_tool_calls_returns_proxy_result_without_logging(monkeypat
     )
 
     fake_manager = types.SimpleNamespace(
+        catalog=types.SimpleNamespace(operation=nullcontext),
         get_registry=MagicMock(return_value={}),
         call_tool=AsyncMock(return_value=result),
         _get_mcp_server_from_tool_name=MagicMock(return_value=None),
@@ -579,6 +581,7 @@ async def test_execute_tool_calls_passes_logging_details_to_proxy_hook(monkeypat
     )
 
     fake_manager = types.SimpleNamespace(
+        catalog=types.SimpleNamespace(operation=nullcontext),
         get_registry=MagicMock(return_value={}),
         call_tool=AsyncMock(return_value=result),
         _get_mcp_server_from_tool_name=MagicMock(return_value=None),
@@ -614,6 +617,7 @@ async def test_execute_tool_calls_continues_when_post_call_logging_fails(monkeyp
 
     result = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
     fake_manager = types.SimpleNamespace(
+        catalog=types.SimpleNamespace(operation=nullcontext),
         get_registry=MagicMock(return_value={}),
         call_tool=AsyncMock(return_value=result),
         _get_mcp_server_from_tool_name=MagicMock(return_value=None),
