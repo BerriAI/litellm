@@ -1889,18 +1889,8 @@ class JWTAuthManager:
         raise HTTPException(
             status_code=403,
             detail=(
-                f"x-litellm-team-id '{header_value}' matches no team id or team alias in your JWT's allowed teams. "
-                f"Allowed team ids: {sorted(allowed_team_ids)}"
-            ),
-        )
-
-    @staticmethod
-    def _raise_header_team_alias_ambiguous(header_value: str) -> NoReturn:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"x-litellm-team-id '{header_value}' is a team alias shared by more than one team. "
-                "Send the team id instead."
+                f"x-litellm-team-id '{header_value}' does not resolve to a team id or a unique team alias in your "
+                f"JWT's allowed teams. Allowed team ids: {sorted(allowed_team_ids)}"
             ),
         )
 
@@ -1925,8 +1915,6 @@ class JWTAuthManager:
         except HTTPException as exc:
             if exc.status_code >= 500:
                 raise
-            if exc.status_code == 400:
-                JWTAuthManager._raise_header_team_alias_ambiguous(team_alias)
             return None
         return team.team_id
 
@@ -1952,9 +1940,9 @@ class JWTAuthManager:
         Raises:
             HTTPException: 403 when neither the value nor the team it aliases is
                 an allowed team, or the DB fallback's membership denial when the
-                value names no team at all, or a 403 naming the value as an alias
-                more than one team shares; a 5xx from the alias lookup itself is
-                re-raised rather than reported as a denial
+                value names no team at all; an alias several teams share resolves
+                to no team and is denied like an unknown value; a 5xx from the
+                alias lookup itself is re-raised rather than reported as a denial
         """
         header_value: Final = JWTAuthManager._team_header_value(request_headers)
         if not header_value:
@@ -2352,7 +2340,10 @@ class JWTAuthManager:
         """
         raise HTTPException(
             status_code=403,
-            detail=f"x-litellm-team-id '{header_value}' matches no team id or team alias among your team memberships.",
+            detail=(
+                f"x-litellm-team-id '{header_value}' does not resolve to a team id or a unique team alias among your "
+                "team memberships."
+            ),
         )
 
     @staticmethod
