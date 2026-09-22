@@ -949,6 +949,7 @@ class SpendLogRow(BaseModel):
     completion_tokens: int | None = None
     total_tokens: int | None = None
     request_tags: list[str] | None = None
+    session_id: str | None = None
     metadata: SpendLogMetadata | None = None
     proxy_server_request: JsonValue = None
     response: JsonValue = None
@@ -983,6 +984,15 @@ class SpendLogsPageParams(BaseModel):
     page: int
     page_size: int
     api_key: str | None = None
+
+
+class SessionSpendLogsParams(BaseModel):
+    """Query for /spend/logs/session/ui, the session view the Admin UI logs page
+    opens: every row whose session_id equals the given one, newest first."""
+
+    session_id: str
+    page: int = 1
+    page_size: int = 100
 
 
 class SpendLogsPage(BaseModel):
