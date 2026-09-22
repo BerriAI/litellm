@@ -7,68 +7,43 @@ import base64
 import hashlib
 import json
 import os
-from collections.abc import Awaitable, Callable, Generator
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from contextlib import AbstractAsyncContextManager
-from datetime import timedelta
 from functools import partial
-from importlib import metadata
 from types import MappingProxyType
-from typing import Any, Final, Protocol, TypeAlias, TypeVar
+from typing import Any, Final, TypeAlias, TypeVar
 
-import httpx
-from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
-from mcp import ClientSession, McpError, ReadResourceResult, Resource, StdioServerParameters
+import anyio
+import httpx2
+from httpx2._client import UseClientDefault
+from httpx2._types import AuthTypes
+from mcp import ClientSession, MCPError, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared._stream_protocols import ReadStream, WriteStream
 from mcp.shared.message import SessionMessage
-from mcp.shared.session import RequestResponder
-from typing_extensions import Unpack
 
 _TransportStreams: TypeAlias = tuple[
-    MemoryObjectReceiveStream[SessionMessage | Exception],
-    MemoryObjectSendStream[SessionMessage],
-    Unpack[tuple[object, ...]],
+    ReadStream[SessionMessage | Exception],
+    WriteStream[SessionMessage],
 ]
 _TransportContext: TypeAlias = AbstractAsyncContextManager[_TransportStreams]
 
 
-class _StreamableHttpClientFactory(Protocol):
-    """The ``streamable_http_client`` entry point this module calls on the installed MCP SDK."""
-
-    def __call__(self, *, url: str, http_client: httpx.AsyncClient | None) -> _TransportContext: ...
-
-
-streamable_http_client: _StreamableHttpClientFactory | None = None
-try:
-    import mcp.client.streamable_http as streamable_http_module
-
-    streamable_http_client = getattr(streamable_http_module, "streamable_http_client", None)
-except ImportError:
-    pass
-
-MCP_STREAMABLE_HTTP_REQUIREMENT: Final = "mcp>=1.28.1"
-
-
-def missing_streamable_http_client_error() -> ImportError:
-    return ImportError(
-        f"MCP streamable HTTP transport requires {MCP_STREAMABLE_HTTP_REQUIREMENT}, but the installed "
-        f"mcp {metadata.version('mcp')} does not provide streamable_http_client. "
-        "Fix with: pip install 'litellm[mcp]' (or upgrade mcp directly: pip install -U mcp)"
-    )
-
-
 from mcp.types import (
     METHOD_NOT_FOUND,
-    ClientResult,
+    REQUEST_TIMEOUT,
     GetPromptRequestParams,
     GetPromptResult,
     ListPromptsResult,
     ListResourcesResult,
     ListResourceTemplatesResult,
+    PaginatedRequestParams,
+    PaginatedResult,
     Prompt,
     ResourceTemplate,
     ServerNotification,
-    ServerRequest,
     TextContent,
 )
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
@@ -77,7 +52,12 @@ from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
 
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR, MCP_TOOL_LISTING_TIMEOUT
+from litellm.constants import (
+    MCP_CLIENT_TIMEOUT,
+    MCP_NPM_CACHE_DIR,
+    MCP_TOOL_LISTING_MAX_PAGES,
+    MCP_TOOL_LISTING_TIMEOUT,
+)
 from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
@@ -153,23 +133,21 @@ def _first_non_cancelled_cause(exc: BaseException) -> BaseException | None:
     return None
 
 
-_SDK_READ_TIMEOUT_CODE: Final = int(httpx.codes.REQUEST_TIMEOUT)
-"""The code the MCP SDK puts on its own elapsed read timeout, an HTTP status in a field that
-otherwise carries JSON-RPC error codes."""
+_SDK_READ_TIMEOUT_CODE: Final = REQUEST_TIMEOUT
+"""The code the MCP SDK puts on its own elapsed read timeout."""
 
 
 def as_mcp_read_timeout(exc: BaseException) -> TimeoutError | None:
     """Normalize an MCP SDK read timeout for client and gateway diagnostics, or return ``None``.
 
-    The SDK reports its own elapsed read timeout as ``McpError`` carrying an HTTP status code in a
-    field that otherwise holds JSON-RPC error codes, and it relays an upstream's JSON-RPC error
-    through that same class and field. The numeric code alone therefore cannot separate the two, and
-    an upstream answering with application code 408 would be reported as a gateway timeout it never
-    caused. The SDK raises its own from inside an ``except TimeoutError``, so the elapsed timeout is
+    The SDK reports its own elapsed read timeout as ``MCPError`` carrying ``REQUEST_TIMEOUT`` in a
+    field that also carries relayed upstream JSON-RPC errors. The numeric code alone therefore
+    cannot separate the two, and an upstream answering with the same application code would be
+    reported as a gateway timeout it never caused. The SDK raises its own from inside an ``except TimeoutError``, so the elapsed timeout is
     on the context chain, while a relayed error is built from a received message and has no such
     chain; that is the discriminator.
     """
-    if not isinstance(exc, McpError) or exc.error.code != _SDK_READ_TIMEOUT_CODE:
+    if not isinstance(exc, MCPError) or exc.error.code != _SDK_READ_TIMEOUT_CODE:
         return None
     if not isinstance(exc.__context__, TimeoutError):
         return None
@@ -177,11 +155,29 @@ def as_mcp_read_timeout(exc: BaseException) -> TimeoutError | None:
 
 
 TSessionResult = TypeVar("TSessionResult")
+_ListPage = TypeVar("_ListPage", bound=PaginatedResult)
+_ListItem = TypeVar("_ListItem")
 
 
-class MCPSigV4Auth(httpx.Auth):
+class _MCPHTTPClient(httpx2.AsyncClient):
+    async def send(
+        self,
+        request: httpx2.Request,
+        *,
+        stream: bool = False,
+        auth: AuthTypes | UseClientDefault | None = httpx2.USE_CLIENT_DEFAULT,
+        follow_redirects: bool | UseClientDefault = httpx2.USE_CLIENT_DEFAULT,
+    ) -> httpx2.Response:
+        response: Final = await super().send(request, stream=stream, auth=auth, follow_redirects=follow_redirects)
+        if request.method == "POST" and response.is_error and response.status_code != 404:
+            await response.aclose()
+            response.raise_for_status()
+        return response
+
+
+class MCPSigV4Auth(httpx2.Auth):
     """
-    httpx Auth class that signs each request with AWS SigV4.
+    httpx2 Auth class that signs each request with AWS SigV4.
     This is used for MCP servers that require AWS SigV4 authentication,
     such as AWS Bedrock AgentCore MCP servers. httpx calls auth_flow()
     for every outgoing request, enabling per-request signature computation.
@@ -270,7 +266,7 @@ class MCPSigV4Auth(httpx.Auth):
             token=sts_creds["SessionToken"],
         )
 
-    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+    def auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response, None]:
         from botocore.auth import SigV4Auth
         from botocore.awsrequest import AWSRequest
 
@@ -314,8 +310,8 @@ class MCPClient:
         stdio_config: MCPStdioConfig | None = None,
         extra_headers: dict[str, str] | None = None,
         ssl_verify: VerifyTypes | None = None,
-        aws_auth: httpx.Auth | None = None,
-        resolved_auth: httpx.Auth | None = None,
+        aws_auth: httpx2.Auth | None = None,
+        resolved_auth: httpx2.Auth | None = None,
         sampling_callback: Callable | None = None,
         elicitation_callback: Callable | None = None,
         logging_callback: Callable | None = None,
@@ -333,10 +329,10 @@ class MCPClient:
         self.stdio_config: MCPStdioConfig | None = stdio_config
         self.extra_headers: dict[str, str] | None = extra_headers
         self.ssl_verify: VerifyTypes | None = ssl_verify
-        self._aws_auth: httpx.Auth | None = aws_auth
-        # A pre-resolved httpx.Auth (e.g. from the v2 credential resolver) attached to the
+        self._aws_auth: httpx2.Auth | None = aws_auth
+        # A pre-resolved httpx2.Auth (e.g. from the v2 credential resolver) attached to the
         # upstream client's auth= slot, taking precedence over the SigV4 aws_auth.
-        self._resolved_auth: httpx.Auth | None = resolved_auth
+        self._resolved_auth: httpx2.Auth | None = resolved_auth
         self._last_initialize_instructions: str | None = None
         self._sampling_callback: Callable | None = sampling_callback
         self._elicitation_callback: Callable | None = elicitation_callback
@@ -346,31 +342,37 @@ class MCPClient:
             self.update_auth_value(auth_value)
 
     async def discovery_auth_fingerprint(self) -> str:
-        request: Final = httpx.Request("POST", self.server_url or "http://localhost/", headers=self._get_auth_headers())
+        return self._hash_discovery_auth(await self.prepare_request_auth())
+
+    async def prepare_request_auth(self) -> httpx2.Request:
+        """Preview the authenticated request without sending it, closing the auth flow afterwards."""
+        request: Final = httpx2.Request(
+            "POST", self.server_url or "http://localhost/", headers=self._get_auth_headers()
+        )
         if self._resolved_auth is None:
-            return self._hash_discovery_auth(request)
+            return request
         flow: Final = self._resolved_auth.async_auth_flow(request)
         try:
             authenticated: Final = await flow.__anext__()
-            return self._hash_discovery_auth(authenticated)
+            return authenticated
         finally:
             await flow.aclose()
 
     @staticmethod
-    def _hash_discovery_auth(request: httpx.Request) -> str:
+    def _hash_discovery_auth(request: httpx2.Request) -> str:
         material: Final = json.dumps((str(request.url), tuple(sorted(request.headers.multi_items()))))
         return hashlib.sha256(material.encode()).hexdigest()
 
     def _create_transport_context(
         self,
-    ) -> tuple[_TransportContext, httpx.AsyncClient | None]:
+    ) -> tuple[_TransportContext, httpx2.AsyncClient | None]:
         """
         Create the appropriate transport context based on transport type.
         Returns:
             Tuple of (transport_context, http_client).
             http_client is only set for HTTP transport and needs cleanup.
         """
-        http_client: httpx.AsyncClient | None = None
+        http_client: httpx2.AsyncClient | None = None
         if self.transport_type == MCPTransport.stdio:
             if not self.stdio_config:
                 raise ValueError("stdio_config is required for stdio transport")
@@ -393,14 +395,12 @@ class MCPClient:
                 None,
             )
         # HTTP transport (default)
-        if streamable_http_client is None:
-            raise missing_streamable_http_client_error()
         headers = self._get_auth_headers()
         httpx_client_factory = self._create_httpx_client_factory()
         verbose_logger.debug("litellm headers for streamable_http_client: %s", headers)
         http_client = httpx_client_factory(
             headers=headers,
-            timeout=httpx.Timeout(self.timeout),
+            timeout=httpx2.Timeout(self.timeout),
         )
         transport_ctx: Final = streamable_http_client(
             url=self.server_url,
@@ -469,13 +469,14 @@ class MCPClient:
         transport: Final = await transport_ctx.__aenter__()
         in_flight_error: BaseException | None = None
         try:
-            read_stream, write_stream = transport[0], transport[1]
+            read_stream: Final = transport[0]
+            write_stream: Final = transport[1]
             stream_error: Final[asyncio.Future[Exception]] = asyncio.get_running_loop().create_future()
 
             async def receive_message(
-                message: RequestResponder[ServerRequest, ClientResult] | ServerNotification | Exception,
+                message: ServerNotification | Exception,
             ) -> None:
-                if not isinstance(message, (ValueError, httpx.RequestError, OSError)):
+                if not isinstance(message, (ValueError, httpx2.HTTPError, OSError)):
                     return
                 if not stream_error.done():
                     stream_error.set_result(message)
@@ -495,7 +496,7 @@ class MCPClient:
             session_ctx: Final = ClientSession(
                 read_stream,
                 write_stream,
-                read_timeout_seconds=timedelta(seconds=self.timeout),
+                read_timeout_seconds=self.timeout,
                 message_handler=receive_message,
                 **session_kwargs,
             )
@@ -508,7 +509,7 @@ class MCPClient:
                     if isinstance(ins, str) and ins.strip():
                         self._last_initialize_instructions = ins.strip()
                 return await operation(session)
-            except McpError:
+            except MCPError:
                 if stream_error.done():
                     raise stream_error.result()
                 raise
@@ -540,7 +541,7 @@ class MCPClient:
         quiet_on_error demotes the failure line to debug for callers that own the exception
         (call_tool / list_tools under raise_on_error), so an expected pass-through re-auth does
         not emit a warning per call; every other caller keeps the operator-visible warning."""
-        http_client: httpx.AsyncClient | None = None
+        http_client: httpx2.AsyncClient | None = None
         try:
             self._last_initialize_instructions = None
             transport_ctx, http_client = self._create_transport_context()
@@ -605,7 +606,7 @@ class MCPClient:
             elif isinstance(self._mcp_auth_value, dict):
                 headers.update(self._mcp_auth_value)
         # Note: aws_sigv4 auth is not handled here — SigV4 requires per-request
-        # signing (including the body hash), so it uses httpx.Auth flow instead
+        # signing (including the body hash), so it uses httpx2.Auth flow instead
         # of static headers. See MCPSigV4Auth and _create_httpx_client_factory().
         # update the headers with the extra headers
         if self.extra_headers:
@@ -619,9 +620,11 @@ class MCPClient:
             headers.update(injected or {})
         return _strip_header_whitespace(headers)
 
-    def _create_httpx_client_factory(self) -> Callable[..., httpx.AsyncClient]:
+    def _create_httpx_client_factory(
+        self, *, transport: httpx2.AsyncBaseTransport | None = None
+    ) -> Callable[..., httpx2.AsyncClient]:
         """
-        Create a custom httpx client factory that uses LiteLLM's SSL configuration.
+        Create a custom httpx2 client factory that uses LiteLLM's SSL configuration.
         This factory follows the same CA bundle path logic as http_handler.py:
         1. Check ssl_verify parameter (can be SSLContext, bool, or path to CA bundle)
         2. Check SSL_VERIFY environment variable
@@ -632,10 +635,10 @@ class MCPClient:
         def factory(
             *,
             headers: dict[str, str] | None = None,
-            timeout: httpx.Timeout | None = None,
-            auth: httpx.Auth | None = None,
-        ) -> httpx.AsyncClient:
-            """Create an httpx.AsyncClient with LiteLLM's SSL configuration."""
+            timeout: httpx2.Timeout | None = None,
+            auth: httpx2.Auth | None = None,
+        ) -> httpx2.AsyncClient:
+            """Create an httpx2.AsyncClient with LiteLLM's SSL configuration."""
             # Get unified SSL configuration using the same logic as http_handler.py
             ssl_config: Final = get_ssl_configuration(self.ssl_verify)
             verbose_logger.debug("MCP client using SSL configuration: %s", type(ssl_config).__name__)
@@ -645,7 +648,8 @@ class MCPClient:
             fallback_auth: Final = self._resolved_auth if self._resolved_auth is not None else self._aws_auth
             effective_auth: Final = auth if auth is not None else fallback_auth
             guard: Final = credential_redirect_hook(self.server_url, self._credential_slot)
-            return httpx.AsyncClient(
+            return _MCPHTTPClient(
+                transport=transport,
                 headers=headers,
                 timeout=timeout,
                 auth=effective_auth,
@@ -719,7 +723,7 @@ class MCPClient:
         """The error result ``call_tool`` returns when it swallows a failure (no re-execution)."""
         return MCPCallToolResult(
             content=[TextContent(type="text", text=f"{type(exc).__name__}: {exc}")],
-            isError=True,
+            is_error=True,
         )
 
     async def call_tool(
@@ -799,17 +803,48 @@ class MCPClient:
             # Return a default error result instead of raising
             return self.error_tool_result(e)
 
+    async def _list_optional_pages(
+        self,
+        fetch_page: Callable[[PaginatedRequestParams | None], Awaitable[_ListPage]],
+        items_of: Callable[[_ListPage], Sequence[_ListItem]],
+    ) -> list[_ListItem]:  # mutable-ok: existing list discovery API
+        items: Final[list[_ListItem]] = []  # mutable-ok: bounded iterative page accumulation
+        cursors: Final[set[str]] = set()  # mutable-ok: constant-time detection of cursor cycles
+        cursor: str | None = None  # rebind-ok: iterative traversal avoids recursion at the existing page cap
+        with anyio.fail_after(max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)):
+            for page_index in range(MCP_TOOL_LISTING_MAX_PAGES):
+                try:
+                    page = await fetch_page(  # rebind-ok: each SDK page replaces the previous one
+                        None if cursor is None else PaginatedRequestParams(cursor=cursor)
+                    )
+                except MCPError as error:
+                    if page_index > 0 and error.error.code == METHOD_NOT_FOUND:
+                        raise RuntimeError("MCP list operation became unavailable during pagination") from error
+                    raise
+                items.extend(items_of(page))
+                if not page.next_cursor:
+                    return items
+                if page.next_cursor in cursors:
+                    raise RuntimeError("MCP list pagination repeated a cursor")
+                cursors.add(page.next_cursor)
+                cursor = page.next_cursor
+        raise RuntimeError(f"MCP list pagination exceeded {MCP_TOOL_LISTING_MAX_PAGES} pages")
+
     async def list_prompts(self, *, raise_on_error: bool = False) -> list[Prompt]:
         """List available prompts from the server."""
         verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
 
         async def _list_prompts_operation(session: ClientSession) -> ListPromptsResult:
-            capabilities: Final = session.get_server_capabilities()
+            capabilities: Final = session.server_capabilities
             if capabilities is not None and capabilities.prompts is None:
                 return ListPromptsResult(prompts=[])
             try:
-                return await session.list_prompts()
-            except McpError as error:
+                return ListPromptsResult(
+                    prompts=await self._list_optional_pages(
+                        lambda params: session.list_prompts(params=params), lambda page: page.prompts
+                    )
+                )
+            except MCPError as error:
                 if error.error.code != METHOD_NOT_FOUND:
                     raise
                 verbose_logger.debug(
@@ -894,12 +929,16 @@ class MCPClient:
         verbose_logger.debug("MCP client listing resources from %s", self.server_url or "stdio")
 
         async def _list_resources_operation(session: ClientSession) -> ListResourcesResult:
-            capabilities: Final = session.get_server_capabilities()
+            capabilities: Final = session.server_capabilities
             if capabilities is not None and capabilities.resources is None:
                 return ListResourcesResult(resources=[])
             try:
-                return await session.list_resources()
-            except McpError as error:
+                return ListResourcesResult(
+                    resources=await self._list_optional_pages(
+                        lambda params: session.list_resources(params=params), lambda page: page.resources
+                    )
+                )
+            except MCPError as error:
                 if error.error.code != METHOD_NOT_FOUND:
                     raise
                 verbose_logger.debug(
@@ -943,30 +982,35 @@ class MCPClient:
         verbose_logger.debug("MCP client listing resource templates from %s", self.server_url or "stdio")
 
         async def _list_resource_templates_operation(session: ClientSession) -> ListResourceTemplatesResult:
-            capabilities: Final = session.get_server_capabilities()
+            capabilities: Final = session.server_capabilities
             if capabilities is not None and capabilities.resources is None:
-                return ListResourceTemplatesResult(resourceTemplates=[])
+                return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
             try:
-                return await session.list_resource_templates()
-            except McpError as error:
+                return ListResourceTemplatesResult(
+                    resource_templates=await self._list_optional_pages(
+                        lambda params: session.list_resource_templates(params=params),
+                        lambda page: page.resource_templates,
+                    )
+                )
+            except MCPError as error:
                 if error.error.code != METHOD_NOT_FOUND:
                     raise
                 verbose_logger.debug(
                     "MCP client list_resource_templates is unsupported by %s: %s", self.server_url or "stdio", error
                 )
-                return ListResourceTemplatesResult(resourceTemplates=[])
+                return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
 
         try:
             result: Final = await self.run_with_session(_list_resource_templates_operation)
-            resource_template_count: Final = len(result.resourceTemplates)
-            resource_template_names: Final = [resourceTemplate.name for resourceTemplate in result.resourceTemplates]
+            resource_template_count: Final = len(result.resource_templates)
+            resource_template_names: Final = [resource_template.name for resource_template in result.resource_templates]
             verbose_logger.info(
                 "MCP client listed %s resource templates from %s: %s",
                 resource_template_count,
                 self.server_url or "stdio",
                 resource_template_names,
             )
-            return result.resourceTemplates
+            return result.resource_templates
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client list_resource_templates was cancelled")
             raise
@@ -996,7 +1040,7 @@ class MCPClient:
 
         async def _read_resource_operation(session: ClientSession):
             verbose_logger.debug("MCP client sending read_resource request to session")
-            return await session.read_resource(url)
+            return await session.read_resource(str(url))
 
         try:
             read_resource_result: Final = await self.run_with_session(_read_resource_operation)

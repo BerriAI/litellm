@@ -106,7 +106,7 @@ async def create_container(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response: Final = await processor.base_process_llm_request(
+        response: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -216,7 +216,7 @@ async def list_containers(
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
-    data: Final[dict[str, Any]] = {
+    data: Final[dict[str, object]] = {
         "query_params": query_params,
         "model": query_params.get("model"),
         "order": order,
@@ -341,7 +341,7 @@ async def retrieve_container(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        container: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -366,6 +366,7 @@ async def retrieve_container(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    return container
 
 
 @router.delete(
@@ -446,7 +447,7 @@ async def delete_container(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        deleted_container: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -471,6 +472,7 @@ async def delete_container(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    return deleted_container
 
 
 # Register JSON-configured container file endpoints

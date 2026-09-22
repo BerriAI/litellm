@@ -1,16 +1,18 @@
+import RoutingOptions from "./RoutingOptions";
+import type { JevClassifierConfig } from "./jev_classifier_config";
+import { type ClassifierType } from "./classifier_types";
+export { type ClassifierType, usesLlmClassifier, usesClassifierContext } from "./classifier_types";
+import ForecastClassifierConfig, { ForecastSolverModels } from "./ForecastClassifierConfig";
+import { isForecastClassifier, type CapabilitySettings, type FuseSettings } from "./forecast_classifier_config";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
-import { SearchSelect } from "@/components/shared/SearchSelect";
-import { ChevronRight, Info, Plus, Trash2, X } from "lucide-react";
-import { Switch } from "@/components/ui/switch";
+import DefaultModelField from "./DefaultModelField";
+import { Info, Plus, Trash2, X } from "lucide-react";
 
-import { AffinityControls } from "./AffinityControls";
 import NonReasoningTierToggle from "./NonReasoningTierToggle";
 import TierConfigIntro from "./TierConfigIntro";
 import TierRowSelect from "./TierRowSelect";
-import { ModalityRoutingControls } from "./ModalityRoutingControls";
 import { Card, CardContent } from "@/components/ui/card";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
@@ -33,12 +35,8 @@ import {
 } from "./tier_rows";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
-import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
-import ClassificationMethodConfig from "./ClassificationMethodConfig";
-import ContextWindowEscalationConfig from "./ContextWindowEscalationConfig";
-import ResponseFormatControls from "./ResponseFormatControls";
-import StallEscalationConfig from "./StallEscalationConfig";
-import { Restricted, restrictedBy } from "./TierRestrictions";
+import { InactiveHeuristicV2Threshold } from "./ClassificationMethodConfig";
+import ComplexityRouterAdvancedSections from "./ComplexityRouterAdvancedSections";
 import { type TierSetAction, applyTierSetAction, setFallbackTier } from "./tier_set_actions";
 import {
   ReasoningEffort,
@@ -50,16 +48,15 @@ import {
   tierRowLabel,
 } from "./complexity_router_tiers";
 import TierModelEffortRows from "./TierModelEffortRows";
-import EscalationKeywords from "./EscalationKeywords";
-import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
-import SemanticKeywordMatching from "./SemanticKeywordMatching";
+import { KeywordTierRule } from "./KeywordTierRules";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
 import { type CustomDimensionRow } from "./custom_dimensions";
-import CompressionControls from "./CompressionControls";
 import { type AutoRouterCompressionState, DEFAULT_AUTO_ROUTER_COMPRESSION } from "./buildAutoRouterCompression";
+import { type ReminderMarkerPair } from "./build_complexity_router_config";
 
 export type { DimensionWeights, TierBoundaries, TokenThresholds };
 export type { CustomTierSet, TierRow } from "./tier_rows";
+export type { ReminderMarkerPair } from "./build_complexity_router_config";
 
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
 export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
@@ -144,23 +141,6 @@ export interface ClassifierLLMConfig {
   system_prompt?: string;
 }
 
-export type ClassifierType =
-  | "heuristic"
-  | "heuristic_v2"
-  | "llm"
-  | "heuristic_first"
-  | "hybrid"
-  | "capability"
-  | "llm_v2";
-
-/**
- * Whether this router can call classifier_llm_config.model. Mirrors the backend's
- * ComplexityRouterConfig.uses_llm_classifier, and is the single gate for every classifier-only
- * control and payload key, so a new chaining type cannot strip knobs the operator set.
- */
-export const usesLlmClassifier = (classifierType: ClassifierType): boolean =>
-  (["llm", "heuristic_first", "hybrid", "capability", "llm_v2"] as const).some((type) => type === classifierType);
-
 export type ClassifierFallback = "heuristic" | "default_model";
 
 export const DEFAULT_CLASSIFIER_FALLBACK: ClassifierFallback = "heuristic";
@@ -197,16 +177,11 @@ export const heuristicScoringRole = (value: ComplexityRouterConfigValue): Heuris
 // Derived, never written into the value, so undoing a tier edit reverts the form with nothing left behind.
 export const effectiveClassifierType = (
   value: Pick<ComplexityRouterConfigValue, "custom_tier_set" | "classifier_type">,
-): ClassifierType => (value.custom_tier_set ? "llm" : value.classifier_type);
+): ClassifierType => (value.custom_tier_set && value.classifier_type !== "jev" ? "llm" : value.classifier_type);
 
 const rowOrigin = (row: TierRow, editing: boolean): string => {
   if (!editing) return row.id;
   return isBuiltInTierName(row.name) ? "built-in" : "custom";
-};
-
-const defaultModelPlaceholderFor = (derivedDefaultModel: string | undefined, isCustomSet: boolean): string => {
-  if (derivedDefaultModel) return `Derived from tiers: ${derivedDefaultModel}`;
-  return isCustomSet ? "Add a model to your fallback tier" : "Add a model to the Simple or Medium tier";
 };
 
 const builtInTierInfo = (rowId: string): { label: string; description: string; examples: string } | undefined => {
@@ -253,8 +228,8 @@ const TierSetToolbar: React.FC<{
     </div>
     {editing && (
       <span className="block mt-1 text-xs text-muted-foreground">
-        Add or remove tiers to define your own set. Every custom tier needs a definition the LLM classifier routes on,
-        and an edited set requires the LLM classification method
+        Add or remove tiers to define your own set. Every custom tier needs a definition the classifier routes on, and
+        an edited set requires the LLM or JEV classification method
       </span>
     )}
     {editing && keywordRulesError && (
@@ -273,7 +248,7 @@ const FallbackTierField: React.FC<{
   <div className="mt-4">
     <div className="flex items-center gap-2 mb-2">
       <strong className="text-base font-semibold">Fallback Tier</strong>
-      <SimpleTooltip content="Where requests route when the LLM classifier errors, times out, or returns an unparseable reply. Required for an edited tier set: the heuristic scorer cannot produce your tiers.">
+      <SimpleTooltip content="Where requests route when the classifier errors, times out, or returns an unparseable reply. Required for an edited tier set: the heuristic scorer cannot produce your tiers">
         <Info className="size-4 text-muted-foreground" />
       </SimpleTooltip>
     </div>
@@ -376,7 +351,11 @@ export interface ComplexityRouterConfigValue {
   /** An explicit pin. Unset means the default tracks the tiers - see resolveComplexityDefaultModel. */
   default_model?: string;
   classifier_type: ClassifierType;
+  heuristic_v2_success_threshold?: number;
+  capability_classifier_config?: CapabilitySettings;
+  llm_v2_config?: FuseSettings;
   classifier_llm_config?: ClassifierLLMConfig;
+  jev_classifier_config?: JevClassifierConfig;
   classifier_context_window_size?: number;
   classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
@@ -441,6 +420,16 @@ export interface ComplexityRouterConfigValue {
    * edit round-trip.
    */
   tier_model_params?: TierModelParamsByTier;
+  code_keywords?: string[];
+  reasoning_keywords?: string[];
+  technical_keywords?: string[];
+  simple_keywords?: string[];
+  plan_mode_patterns?: string[];
+  route_housekeeping_to_cheapest_tier?: boolean;
+  housekeeping_patterns?: string[];
+  reminder_markers?: ReminderMarkerPair[];
+  max_tokens_from_tier_model?: boolean;
+  classifier_plugin_timeout_ms?: number;
 }
 
 /** Session affinity wins where a hand-authored config sets both, matching the backend's own `or`. */
@@ -535,44 +524,6 @@ export const DEFAULT_HYBRID_BOUNDARY_MARGIN = 0.03;
  */
 export const HEURISTIC_FIRST_MAX_TIER_KEYS = TIER_ORDER.slice(0, -1);
 
-const PlanModeOverrideControls: React.FC<{
-  value: ComplexityRouterConfigValue;
-  onChange: (value: ComplexityRouterConfigValue) => void;
-  planModeTierOptions: { value: string; label: string }[];
-}> = ({ value, onChange, planModeTierOptions }) => (
-  <>
-    <div className="flex items-center gap-2 mb-2">
-      <Switch
-        checked={value.plan_mode_min_tier !== undefined}
-        disabled={planModeTierOptions.length === 0}
-        onCheckedChange={(enabled) =>
-          onChange({
-            ...value,
-            plan_mode_min_tier: enabled ? planModeTierOptions.at(-1)?.value : undefined,
-          })
-        }
-        aria-label="Route plan-mode requests to a minimum tier"
-      />
-      <strong className="font-semibold">Route plan-mode requests to a minimum tier</strong>
-    </div>
-    <span className="block text-xs mb-3 text-muted-foreground">
-      Requests from coding agents in plan mode (Claude Code, GitHub Copilot) route to at least this tier. The classifier
-      still wins when it picks higher, and the override only lasts while plan mode is active.
-      {planModeTierOptions.length === 0 && " Add models to a tier to enable this."}
-    </span>
-    {value.plan_mode_min_tier !== undefined && (
-      <div style={{ maxWidth: 320 }}>
-        <TierRowSelect
-          label="Plan-mode minimum tier"
-          options={planModeTierOptions}
-          value={value.plan_mode_min_tier ?? null}
-          onValueChange={(tier) => onChange({ ...value, plan_mode_min_tier: tier })}
-        />
-      </div>
-    )}
-  </>
-);
-
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   modelInfo,
   value,
@@ -596,6 +547,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onAutoRouterCompressionChange,
   showValidationErrors = false,
 }) => {
+  const forecast = isForecastClassifier(value.classifier_type);
   const customTierSet = value.custom_tier_set;
   const tierRows = activeTierRows(value);
   const tierRowsError = customTierSet ? getCustomTierRowsError(customTierSet) : null;
@@ -605,8 +557,6 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
     value: row.id,
     label: tierRowLabel(row, value.tier_labels),
   }));
-  const derivedDefaultModel = resolveComplexityDefaultModel(value);
-  const defaultModelPlaceholder = defaultModelPlaceholderFor(derivedDefaultModel, Boolean(customTierSet));
   const defaultModel = resolveComplexityDefaultModel(value, value.default_model);
 
   const dispatch = (action: TierSetAction) => {
@@ -641,298 +591,212 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       tier_model_params: setTierModelParam(value.tier_model_params, tier, model, change),
     });
 
-  // Clearing the select drops the key entirely rather than storing "", so an emptied pin reads as
-  // "track the tiers" everywhere downstream instead of as a blank model name.
-  const handleDefaultModelChange = (model: string | null | undefined) => {
-    onChange({ ...value, default_model: model || undefined });
-  };
-
-  const handleTierLabelChange = (tier: keyof ComplexityTiers, label: string) => {
-    onChange({
-      ...value,
-      tier_labels: { ...value.tier_labels, [tier]: label },
-    });
-  };
+  const handleTierLabelChange = (tier: keyof ComplexityTiers, label: string) =>
+    onChange({ ...value, tier_labels: { ...value.tier_labels, [tier]: label } });
 
   return (
     <div className="w-full max-w-none">
       <div className="inline-flex items-center gap-2 mb-4">
-        <h4 className="m-0 text-xl font-semibold text-foreground">Complexity Tier Configuration</h4>
-        <SimpleTooltip content="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
-          <Info className="size-4 text-muted-foreground" />
-        </SimpleTooltip>
+        <h4 className="m-0 text-xl font-semibold text-foreground">
+          {forecast ? "Solver models" : "Complexity Tier Configuration"}
+        </h4>
+        {!forecast && (
+          <SimpleTooltip content="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
+            <Info className="size-4 text-muted-foreground" />
+          </SimpleTooltip>
+        )}
       </div>
 
-      <TierConfigIntro value={value} />
+      <InactiveHeuristicV2Threshold value={value} onChange={onChange} />
 
-      <Card>
-        <CardContent>
-          {!customTierSet && (
-            <NonReasoningTierToggle value={value} onChange={onChange} available={value.classifier_type === "llm"} />
-          )}
-
-          {tierRows.map((row, index) => {
-            const tierInfo = builtInTierInfo(row.id);
-            const label = tierRowLabel(row, value.tier_labels);
-            const tierMissing = showValidationErrors && row.models.length === 0;
-            const needsDefinition = Boolean(customTierSet) && !row.definition.trim() && !isBuiltInTierName(row.name);
-            const definitionMissing = showValidationErrors && needsDefinition;
-            const showsDisplayName = !customTierSet && !editingTiers;
-            return (
-              <div key={row.id}>
-                {index > 0 && <Separator className="my-4" />}
-                <div className="mb-4">
-                  <TierRowHeader
-                    row={row}
-                    index={index}
-                    rowCount={tierRows.length}
-                    label={label}
-                    description={tierInfo?.description}
-                    editing={editingTiers}
-                    isCustomSet={Boolean(customTierSet)}
-                    onRemove={() => removeTierRow(row.id)}
-                  />
-                  {tierInfo && !customTierSet && (
-                    <span className="block mb-2 text-xs text-muted-foreground">Examples: {tierInfo.examples}</span>
-                  )}
-                  {editingTiers && (
-                    <TierRowEditFields
-                      row={row}
-                      index={index}
-                      definitionMissing={definitionMissing}
-                      onPatch={(patch) => updateTierRow(row.id, patch)}
-                    />
-                  )}
-                  {showsDisplayName && tierInfo && (
-                    <InputGroup className="mb-2">
-                      <InputGroupInput
-                        value={value.tier_labels?.[row.id as keyof ComplexityTiers] ?? ""}
-                        onChange={(event) => handleTierLabelChange(row.id as keyof ComplexityTiers, event.target.value)}
-                        placeholder={`Display name (default: ${tierInfo.label})`}
-                        aria-label={`Display name for the ${tierInfo.label} tier`}
-                      />
-                      {value.tier_labels?.[row.id as keyof ComplexityTiers] && (
-                        <InputGroupAddon align="inline-end">
-                          <InputGroupButton
-                            size="icon-xs"
-                            aria-label={`Clear display name for the ${tierInfo.label} tier`}
-                            onClick={() => handleTierLabelChange(row.id as keyof ComplexityTiers, "")}
-                          >
-                            <X />
-                          </InputGroupButton>
-                        </InputGroupAddon>
-                      )}
-                    </InputGroup>
-                  )}
-                  <MultiSelect
-                    options={modelOptions}
-                    value={row.models}
-                    onValueChange={(models: string[]) => setRowModels(row, models)}
-                    placeholder={`Select model(s) for ${label.toLowerCase()} queries`}
-                    emptyText="No models found"
-                    className={tierMissing ? "w-full border-destructive" : "w-full"}
-                  />
-                  <TierModelEffortRows
-                    tierLabel={label}
-                    models={row.models}
-                    effortOptionsByModel={tierEffortOptionsByModel}
-                    paramsByModel={row.params}
-                    fastModeByModel={fastModeByModel}
-                    onEffortChange={(model, effort) =>
-                      handleTierModelParamChange(row.id, model, ["reasoning_effort", effort])
-                    }
-                    onFastModeChange={(model, enabled) =>
-                      handleTierModelParamChange(row.id, model, ["speed", enabled ? "fast" : undefined])
-                    }
-                  />
-                  {row.models.length > 1 && (
-                    <span className="text-xs text-muted-foreground">
-                      Multiple models selected: the router randomly picks among them per request (or Thompson-samples
-                      within the pool when adaptive routing is on).
-                    </span>
-                  )}
-                  {tierMissing && <span className="text-xs text-destructive">The {label} tier is required</span>}
-                </div>
-              </div>
-            );
-          })}
-
-          <TierSetToolbar
-            editing={editingTiers}
-            isCustomSet={Boolean(customTierSet)}
-            rowCount={tierRows.length}
-            rowsError={tierRowsError}
-            keywordRulesError={keywordRulesError}
-            onEditingChange={onEditingTiersChange}
-            onAdd={addCustomTier}
-            onRestore={exitToBuiltInTiers}
+      {forecast ? (
+        <>
+          <ForecastSolverModels
+            value={value}
+            onChange={onChange}
+            modelOptions={modelOptions}
+            effortOptionsByModel={tierEffortOptionsByModel}
+            fastModeByModel={fastModeByModel}
           />
+          <ForecastClassifierConfig
+            value={value}
+            onChange={onChange}
+            modelOptions={modelOptions}
+            effortOptionsByModel={classifierEffortOptionsByModel}
+          />
+        </>
+      ) : (
+        <>
+          <TierConfigIntro value={value} />
 
-          {customTierSet && (
-            <FallbackTierField
-              rows={tierRows}
-              fallbackTierId={customTierSet.fallback_tier_id}
-              onValueChange={(fallbackTierId) => onChange(setFallbackTier(value, fallbackTierId))}
-            />
-          )}
+          <Card>
+            <CardContent>
+              {!customTierSet && (
+                <NonReasoningTierToggle
+                  value={value}
+                  onChange={onChange}
+                  available={value.classifier_type === "llm" || value.classifier_type === "jev"}
+                />
+              )}
 
-          <Separator className="my-4" />
+              {tierRows.map((row, index) => {
+                const tierInfo = builtInTierInfo(row.id);
+                const label = tierRowLabel(row, value.tier_labels);
+                const tierMissing = showValidationErrors && row.models.length === 0;
+                const needsDefinition =
+                  Boolean(customTierSet) && !row.definition.trim() && !isBuiltInTierName(row.name);
+                const definitionMissing = showValidationErrors && needsDefinition;
+                const showsDisplayName = !customTierSet && !editingTiers;
+                return (
+                  <div key={row.id}>
+                    {index > 0 && <Separator className="my-4" />}
+                    <div className="mb-4">
+                      <TierRowHeader
+                        row={row}
+                        index={index}
+                        rowCount={tierRows.length}
+                        label={label}
+                        description={tierInfo?.description}
+                        editing={editingTiers}
+                        isCustomSet={Boolean(customTierSet)}
+                        onRemove={() => removeTierRow(row.id)}
+                      />
+                      {tierInfo && !customTierSet && (
+                        <span className="block mb-2 text-xs text-muted-foreground">Examples: {tierInfo.examples}</span>
+                      )}
+                      {editingTiers && (
+                        <TierRowEditFields
+                          row={row}
+                          index={index}
+                          definitionMissing={definitionMissing}
+                          onPatch={(patch) => updateTierRow(row.id, patch)}
+                        />
+                      )}
+                      {showsDisplayName && tierInfo && (
+                        <InputGroup className="mb-2">
+                          <InputGroupInput
+                            value={value.tier_labels?.[row.id as keyof ComplexityTiers] ?? ""}
+                            onChange={(event) =>
+                              handleTierLabelChange(row.id as keyof ComplexityTiers, event.target.value)
+                            }
+                            placeholder={`Display name (default: ${tierInfo.label})`}
+                            aria-label={`Display name for the ${tierInfo.label} tier`}
+                          />
+                          {value.tier_labels?.[row.id as keyof ComplexityTiers] && (
+                            <InputGroupAddon align="inline-end">
+                              <InputGroupButton
+                                size="icon-xs"
+                                aria-label={`Clear display name for the ${tierInfo.label} tier`}
+                                onClick={() => handleTierLabelChange(row.id as keyof ComplexityTiers, "")}
+                              >
+                                <X />
+                              </InputGroupButton>
+                            </InputGroupAddon>
+                          )}
+                        </InputGroup>
+                      )}
+                      <MultiSelect
+                        options={modelOptions}
+                        value={row.models}
+                        onValueChange={(models: string[]) => setRowModels(row, models)}
+                        placeholder={`Select model(s) for ${label.toLowerCase()} queries`}
+                        emptyText="No models found"
+                        className={tierMissing ? "w-full border-destructive" : "w-full"}
+                      />
+                      <TierModelEffortRows
+                        tierLabel={label}
+                        models={row.models}
+                        effortOptionsByModel={tierEffortOptionsByModel}
+                        paramsByModel={row.params}
+                        fastModeByModel={fastModeByModel}
+                        onEffortChange={(model, effort) =>
+                          handleTierModelParamChange(row.id, model, ["reasoning_effort", effort])
+                        }
+                        onFastModeChange={(model, enabled) =>
+                          handleTierModelParamChange(row.id, model, ["speed", enabled ? "fast" : undefined])
+                        }
+                      />
+                      {row.models.length > 1 && (
+                        <span className="text-xs text-muted-foreground">
+                          Multiple models selected: the router randomly picks among them per request (or
+                          Thompson-samples within the pool when adaptive routing is on).
+                        </span>
+                      )}
+                      {tierMissing && <span className="text-xs text-destructive">The {label} tier is required</span>}
+                    </div>
+                  </div>
+                );
+              })}
 
-          <div className="mb-2">
-            <div className="flex items-center gap-2 mb-2">
-              <strong className="text-base font-semibold">Default Model</strong>
-              <SimpleTooltip content="Leave empty to follow the tiers. A model chosen here is pinned: it stays the default however the tiers change.">
-                <Info className="size-4 text-muted-foreground" />
-              </SimpleTooltip>
-            </div>
-            <SearchSelect
-              options={modelOptions}
-              value={value.default_model ?? ""}
-              onValueChange={handleDefaultModelChange}
-              placeholder={defaultModelPlaceholder}
-              emptyText="No models found"
-              aria-label="Default model"
-            />
-            <span className="block mt-1 text-xs text-muted-foreground">
-              Used when the tier the request lands in has no model, and when the classifier fails with &quot;Route to
-              the default model&quot; selected.
-            </span>
-          </div>
-        </CardContent>
-      </Card>
+              <TierSetToolbar
+                editing={editingTiers}
+                isCustomSet={Boolean(customTierSet)}
+                rowCount={tierRows.length}
+                rowsError={tierRowsError}
+                keywordRulesError={keywordRulesError}
+                onEditingChange={onEditingTiersChange}
+                onAdd={addCustomTier}
+                onRestore={exitToBuiltInTiers}
+              />
 
+              {customTierSet && (
+                <FallbackTierField
+                  rows={tierRows}
+                  fallbackTierId={customTierSet.fallback_tier_id}
+                  onValueChange={(fallbackTierId) => onChange(setFallbackTier(value, fallbackTierId))}
+                />
+              )}
+            </CardContent>
+          </Card>
+        </>
+      )}
+      {!forecast && <DefaultModelField value={value} onChange={onChange} modelOptions={modelOptions} />}
       <Separator className="my-6" />
 
-      <div className="rounded-lg border border-border bg-muted">
-        {[
-          {
-            key: "classifier",
-            label: <strong className="text-foreground font-semibold">Advanced: Classification Method</strong>,
-            children: (
-              <ClassificationMethodConfig
-                value={value}
-                onChange={onChange}
-                modelOptions={modelOptions}
-                effortOptionsByModel={classifierEffortOptionsByModel}
-                customTechnicalKeywords={customTechnicalKeywords}
-                onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
-                showValidationErrors={showValidationErrors}
-                defaultModel={defaultModel}
-              />
-            ),
-          },
-          {
-            key: "adaptive",
-            label: <strong className="text-foreground font-semibold">Advanced: Adaptive Routing</strong>,
-            children: (
-              <Restricted by={restrictedBy(value, "adaptive")}>
-                <AdaptiveRoutingConfig value={value} onChange={onChange} />
-              </Restricted>
-            ),
-          },
-          {
-            key: "affinity",
-            label: <strong className="text-foreground font-semibold">Advanced: Affinity</strong>,
-            children: <AffinityControls value={value} onChange={onChange} />,
-          },
-          {
-            key: "modality",
-            label: <strong className="text-foreground font-semibold">Advanced: Modality Routing</strong>,
-            children: <ModalityRoutingControls value={value} onChange={onChange} />,
-          },
-          {
-            key: "plan-mode",
-            label: <strong className="text-foreground font-semibold">Advanced: Plan-Mode Override</strong>,
-            children: (
-              <PlanModeOverrideControls value={value} onChange={onChange} planModeTierOptions={planModeTierOptions} />
-            ),
-          },
-          {
-            key: "context-window",
-            label: <strong className="text-foreground font-semibold">Advanced: Context Window Escalation</strong>,
-            children: <ContextWindowEscalationConfig value={value} onChange={onChange} />,
-          },
-          {
-            key: "stall-escalation",
-            label: <strong className="text-foreground font-semibold">Advanced: Stalled Task Escalation</strong>,
-            children: (
-              <Restricted by={restrictedBy(value, "stallEscalation")}>
-                <StallEscalationConfig value={value} onChange={onChange} />
-              </Restricted>
-            ),
-          },
-          {
-            key: "response",
-            label: <strong className="text-foreground font-semibold">Advanced: Response Format</strong>,
-            children: <ResponseFormatControls value={value} onChange={onChange} />,
-          },
-          ...(onEscalationKeywordsChange
-            ? [
-                {
-                  key: "escalation",
-                  label: <strong className="text-foreground font-semibold">Advanced: Escalation Keywords</strong>,
-                  children: (
-                    <Restricted by={restrictedBy(value, "escalation")}>
-                      <EscalationKeywords keywords={escalationKeywords} onChange={onEscalationKeywordsChange} />
-                    </Restricted>
-                  ),
-                },
-              ]
-            : []),
-          ...(onAutoRouterCompressionChange
-            ? [
-                {
-                  key: "compression",
-                  label: <strong className="text-foreground font-semibold">Advanced: Compression</strong>,
-                  children: (
-                    <CompressionControls value={autoRouterCompression} onChange={onAutoRouterCompressionChange} />
-                  ),
-                },
-              ]
-            : []),
-          ...(onKeywordTierRulesChange || onSemanticMatchingEnabledChange
-            ? [
-                {
-                  key: "keyword-semantic",
-                  label: <strong className="text-foreground font-semibold">Advanced: Keyword/Semantic Matching</strong>,
-                  children: (
-                    <>
-                      {onKeywordTierRulesChange && (
-                        <KeywordTierRules
-                          rules={keywordTierRules}
-                          onChange={onKeywordTierRulesChange}
-                          tierLabels={value.tier_labels}
-                          tierNames={customTierSet && tierRows.map(activeTierName).filter(Boolean)}
-                        />
-                      )}
-                      {onKeywordTierRulesChange && onSemanticMatchingEnabledChange && <Separator className="my-4" />}
-                      {onSemanticMatchingEnabledChange && (
-                        <SemanticKeywordMatching
-                          enabled={semanticMatchingEnabled}
-                          onEnabledChange={onSemanticMatchingEnabledChange}
-                          embeddingModel={embeddingModel}
-                          onEmbeddingModelChange={onEmbeddingModelChange}
-                          matchThreshold={matchThreshold}
-                          onMatchThresholdChange={onMatchThresholdChange}
-                          modelInfo={modelInfo}
-                          showValidationErrors={showValidationErrors}
-                        />
-                      )}
-                    </>
-                  ),
-                },
-              ]
-            : []),
-        ].map(({ key, label, children }) => (
-          <Collapsible key={key} className="border-b border-border last:border-b-0">
-            <CollapsibleTrigger className="group flex w-full items-center gap-2 px-4 py-3 text-left">
-              <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
-              {label}
-            </CollapsibleTrigger>
-            <CollapsibleContent className="px-4 pb-4">{children}</CollapsibleContent>
-          </Collapsible>
-        ))}
-      </div>
+      <RoutingOptions forecast={forecast}>
+        {forecast && (
+          <>
+            <DefaultModelField value={value} onChange={onChange} modelOptions={modelOptions} />
+            <ForecastSolverModels
+              additionalPoolsOnly
+              value={value}
+              onChange={onChange}
+              modelOptions={modelOptions}
+              effortOptionsByModel={tierEffortOptionsByModel}
+              fastModeByModel={fastModeByModel}
+            />
+          </>
+        )}
+        <div className="rounded-lg border border-border bg-muted">
+          <ComplexityRouterAdvancedSections
+            value={value}
+            onChange={onChange}
+            forecast={forecast}
+            modelOptions={modelOptions}
+            classifierEffortOptionsByModel={classifierEffortOptionsByModel}
+            customTechnicalKeywords={customTechnicalKeywords}
+            onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
+            showValidationErrors={showValidationErrors}
+            defaultModel={defaultModel}
+            planModeTierOptions={planModeTierOptions}
+            keywordTierRules={keywordTierRules}
+            onKeywordTierRulesChange={onKeywordTierRulesChange}
+            semanticMatchingEnabled={semanticMatchingEnabled}
+            onSemanticMatchingEnabledChange={onSemanticMatchingEnabledChange}
+            embeddingModel={embeddingModel}
+            onEmbeddingModelChange={onEmbeddingModelChange}
+            matchThreshold={matchThreshold}
+            onMatchThresholdChange={onMatchThresholdChange}
+            escalationKeywords={escalationKeywords}
+            onEscalationKeywordsChange={onEscalationKeywordsChange}
+            autoRouterCompression={autoRouterCompression}
+            onAutoRouterCompressionChange={onAutoRouterCompressionChange}
+            modelInfo={modelInfo}
+            tierRows={tierRows}
+            customTierSet={customTierSet}
+          />
+        </div>
+      </RoutingOptions>
     </div>
   );
 };

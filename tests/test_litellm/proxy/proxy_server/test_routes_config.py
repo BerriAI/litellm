@@ -22,6 +22,18 @@ import pytest
 from .conftest import VOLATILE_KEYS, normalize
 
 
+def _seed_settings_store(monkeypatch, db_row: dict, yaml_values: dict | None = None) -> None:
+    """Point proxy_config.settings at a store holding the same row the mocked table returns,
+    the way a booted proxy does, so the read routes resolve against it."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.config_resolvers import SettingsStore
+
+    store = SettingsStore("general_settings")
+    store.load_yaml(yaml_values or {})
+    store.apply_db_row("general_settings", db_row)
+    monkeypatch.setattr(ps.proxy_config, "settings", store)
+
+
 def _install_litellm_config(mock_prisma: MagicMock) -> MagicMock:
     """Ensure mock_prisma.db.litellm_config exists with async methods (the
     conftest only stubs ``litellm_configtable`` — this is a different table)."""
@@ -125,6 +137,108 @@ def test_config_update_persists_disable_cooldowns(client, auth_as, mock_prisma, 
     assert response.status_code == 200
     persisted = json.loads(table.upsert.call_args.kwargs["data"]["create"]["param_value"])
     assert persisted["disable_cooldowns"] is True
+
+
+@pytest.mark.parametrize(
+    ("section", "store_attr", "yaml_values", "changed_values"),
+    [
+        ("general_settings", "settings", {"alerting": ["slack"]}, {"alerting": ["email"]}),
+        ("litellm_settings", "litellm_settings", {"success_callback": ["langfuse"]}, {"success_callback": ["otel"]}),
+        ("router_settings", "router_settings", {"num_retries": 0}, {"num_retries": 2}),
+    ],
+)
+def test_config_update_rejects_config_owned_keys_and_accepts_the_same_value(
+    client, auth_as, mock_prisma, monkeypatch, section, store_attr, yaml_values, changed_values
+):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps.proxy_config, "add_deployment", AsyncMock())
+    store = getattr(ps.proxy_config, store_attr)
+    store.load_yaml(yaml_values)
+    try:
+        with auth_as(LitellmUserRoles.PROXY_ADMIN):
+            rejected = client.post("/config/update", json={section: changed_values})
+            rejected_message = rejected.json()["error"]["message"]
+            table.upsert.assert_not_called()
+            accepted = client.post("/config/update", json={section: yaml_values})
+    finally:
+        store.load_yaml({})
+
+    assert rejected.status_code == 400
+    assert f"{section} key '{next(iter(yaml_values))}' is set in the config file and cannot be changed here" in (
+        rejected_message
+    )
+    assert accepted.status_code == 200
+    persisted = json.loads(table.upsert.call_args.kwargs["data"]["create"]["param_value"])
+    assert persisted[next(iter(yaml_values))] == yaml_values[next(iter(yaml_values))]
+
+
+def test_config_update_persists_only_the_general_settings_keys_the_request_set(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps.proxy_config, "add_deployment", AsyncMock())
+    ps.proxy_config.settings.load_yaml({"health_check_interval": 60})
+    try:
+        with auth_as(LitellmUserRoles.PROXY_ADMIN):
+            response = client.post("/config/update", json={"general_settings": {"alerting_threshold": 600}})
+    finally:
+        ps.proxy_config.settings.load_yaml({})
+
+    assert response.status_code == 200
+    persisted = json.loads(table.upsert.call_args.kwargs["data"]["create"]["param_value"])
+    assert persisted == {"alerting_threshold": 600}
+
+
+def test_config_update_persists_only_the_router_settings_keys_the_request_set(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps.proxy_config, "add_deployment", AsyncMock())
+    ps.proxy_config.router_settings.load_yaml({"model_group_alias": {"opus": "claude-opus-5"}})
+    try:
+        with auth_as(LitellmUserRoles.PROXY_ADMIN):
+            response = client.post(
+                "/config/update", json={"router_settings": {"retry_policy": {"TimeoutErrorRetries": 3}}}
+            )
+    finally:
+        ps.proxy_config.router_settings.load_yaml({})
+
+    assert response.status_code == 200, response.text
+    persisted = json.loads(table.upsert.call_args.kwargs["data"]["create"]["param_value"])
+    assert persisted == {"retry_policy": {"TimeoutErrorRetries": 3}}
+
+
+def test_config_update_accepts_a_config_owned_success_callback_the_file_spells_in_mixed_case(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps.proxy_config, "add_deployment", AsyncMock())
+    ps.proxy_config.litellm_settings.load_yaml({"success_callback": ["Langfuse"]})
+    try:
+        with auth_as(LitellmUserRoles.PROXY_ADMIN):
+            response = client.post("/config/update", json={"litellm_settings": {"success_callback": ["Langfuse"]}})
+    finally:
+        ps.proxy_config.litellm_settings.load_yaml({})
+
+    assert response.status_code == 200
+    persisted = json.loads(table.upsert.call_args.kwargs["data"]["create"]["param_value"])
+    assert persisted["success_callback"] == ["langfuse"]
 
 
 def test_config_update_rejects_assistants_config(client, auth_as, mock_prisma, monkeypatch):
@@ -322,7 +436,7 @@ def test_config_field_update_invalid_field(client, auth_as, mock_prisma, monkeyp
 
 
 def test_config_field_info_happy_admin(client, auth_as, mock_prisma, monkeypatch):
-    """Admin gets back ConfigFieldInfo with the stored value pulled from DB."""
+    """Admin gets back ConfigFieldInfo with the value the proxy resolved, tagged with where it came from."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -331,6 +445,7 @@ def test_config_field_info_happy_admin(client, auth_as, mock_prisma, monkeypatch
     row.param_value = {"max_parallel_requests": 7}
     table.find_first = AsyncMock(return_value=row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _seed_settings_store(monkeypatch, row.param_value)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/config/field/info", params={"field_name": "max_parallel_requests"})
@@ -338,6 +453,8 @@ def test_config_field_info_happy_admin(client, auth_as, mock_prisma, monkeypatch
     assert normalize(response.json()) == {
         "field_name": "max_parallel_requests",
         "field_value": 7,
+        "source": "db",
+        "editable": True,
     }
 
 
@@ -356,7 +473,7 @@ def test_config_field_info_non_admin_rejected(client, auth_as, mock_prisma, monk
 
 
 def test_config_field_info_field_not_in_db(client, auth_as, mock_prisma, monkeypatch):
-    """When the field is missing from the DB row, returns 400 'not in DB'."""
+    """When nothing sets the field, neither the config file nor the DB row, it 400s."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -365,11 +482,12 @@ def test_config_field_info_field_not_in_db(client, auth_as, mock_prisma, monkeyp
     row.param_value = {"some_other_field": "value"}
     table.find_first = AsyncMock(return_value=row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _seed_settings_store(monkeypatch, row.param_value)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/config/field/info", params={"field_name": "max_parallel_requests"})
     assert response.status_code == 400
-    assert "not in DB" in response.json().get("detail", {}).get("error", "")
+    assert "is not set" in response.json().get("detail", {}).get("error", "")
 
 
 def test_config_field_info_redacts_nested_secret_for_view_only_admin(client, auth_as, mock_prisma, monkeypatch):
@@ -391,6 +509,7 @@ def test_config_field_info_redacts_nested_secret_for_view_only_admin(client, aut
     }
     table.find_first = AsyncMock(return_value=row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _seed_settings_store(monkeypatch, row.param_value)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
         response = client.get("/config/field/info", params={"field_name": "database_args"})
@@ -417,6 +536,7 @@ def test_config_field_info_full_admin_sees_nested_secret(client, auth_as, mock_p
     }
     table.find_first = AsyncMock(return_value=row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _seed_settings_store(monkeypatch, row.param_value)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/config/field/info", params={"field_name": "database_args"})
@@ -438,6 +558,7 @@ def test_config_field_info_redacts_top_level_scalar_for_view_only(client, auth_a
     row.param_value = {"database_url": "postgresql://admin:p4ss@db:5432/litellm"}
     table.find_first = AsyncMock(return_value=row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _seed_settings_store(monkeypatch, row.param_value)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
         response = client.get("/config/field/info", params={"field_name": "database_url"})
@@ -1397,7 +1518,7 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
     from litellm.integrations.s3_v2 import S3Logger
     from litellm.integrations.sqs import SQSLogger
     from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import VectorStorePreCallHook
-    from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
+    from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
     from litellm.router import Router
 
     class _InventoryTestGuardrail(CustomGuardrail):
@@ -1425,7 +1546,7 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
         litellm,
         "callbacks",
         [
-            _PROXY_MaxBudgetLimiter(),
+            _PROXY_CacheControlCheck(),
             _PROXY_LiteLLMManagedFiles(internal_usage_cache=MagicMock(), prisma_client=MagicMock()),
             ServiceLogging(),
             VectorStorePreCallHook(),

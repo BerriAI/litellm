@@ -40,6 +40,8 @@ from ..utils import is_reasoning_auto_summary_enabled
 from .interceptors import get_messages_interceptors
 from .utils import AnthropicMessagesRequestUtils, mock_response
 
+__all__ = ("anthropic_messages", "anthropic_messages_handler")
+
 # Providers that are routed directly to the OpenAI Responses API instead of
 # going through chat/completions.
 _RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
@@ -578,7 +580,9 @@ def anthropic_messages_handler(
         )
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
-        if _should_route_to_responses_api(custom_llm_provider, original_model, model):
+        if kwargs.get("compaction") is None and _should_route_to_responses_api(
+            custom_llm_provider, original_model, model
+        ):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 max_tokens=max_tokens,
                 messages=messages,
@@ -649,6 +653,11 @@ def anthropic_messages_handler(
                 "display": "summarized",
             }
 
+    resolved_api_base: Final = (
+        dynamic_api_base
+        if dynamic_api_base is not None and anthropic_messages_provider_config.uses_get_llm_provider_api_base()
+        else api_base
+    )
     return base_llm_http_handler.anthropic_messages_handler(
         model=model,
         messages=strip_provider_specific_fields_from_anthropic_messages(messages),
@@ -660,7 +669,7 @@ def anthropic_messages_handler(
         litellm_params=litellm_params,
         logging_obj=litellm_logging_obj,
         api_key=api_key,
-        api_base=api_base,
+        api_base=resolved_api_base,
         stream=stream,
         kwargs=kwargs,
     )

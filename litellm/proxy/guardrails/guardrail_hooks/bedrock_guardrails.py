@@ -248,6 +248,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         streaming_buffer_until_moderated: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_end_of_stream_only: bool | None = None,
+        streaming_buffer_release_on_scan: bool | None = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -258,6 +259,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         "streaming_buffer_until_moderated": streaming_buffer_until_moderated,
                         "streaming_sampling_rate": streaming_sampling_rate,
                         "streaming_end_of_stream_only": streaming_end_of_stream_only,
+                        "streaming_buffer_release_on_scan": streaming_buffer_release_on_scan,
                     }
                 )
             )
@@ -321,13 +323,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.streaming_buffer_until_moderated = streaming_params.streaming_buffer_until_moderated
         self.streaming_sampling_rate = streaming_params.streaming_sampling_rate
         self.streaming_end_of_stream_only = streaming_params.streaming_end_of_stream_only
+        self.streaming_buffer_release_on_scan = streaming_params.streaming_buffer_release_on_scan
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         super().update_in_memory_litellm_params(litellm_params)
         self._set_streaming_params(BedrockGuardrailStreamingParams.from_extras(litellm_params.model_extra))
 
     def _streams_incrementally(self) -> bool:
-        return not self.streaming_buffer_until_moderated and not self.mask_response_content
+        if self.mask_response_content:
+            return False
+        if not self.streaming_buffer_until_moderated:
+            return True
+        return self.streaming_buffer_release_on_scan and not self.streaming_end_of_stream_only
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:

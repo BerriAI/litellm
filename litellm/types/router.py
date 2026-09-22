@@ -110,6 +110,7 @@ class RetryPolicy(BaseModel):
     ContentPolicyViolationErrorRetries: int | None = None
     InternalServerErrorRetries: int | None = None
     ServiceUnavailableErrorRetries: int | None = None
+    NotFoundErrorRetries: int | None = None
     DefaultRetries: int | None = None
 
 
@@ -252,7 +253,7 @@ class ModelInfo(MirroredPricingParams):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -303,8 +304,12 @@ class CredentialLiteLLMParams(BaseModel):
     aws_bedrock_runtime_endpoint: str | None = None
     aws_bedrock_project_id: str | None = None
     s3_bucket_name: str | None = None
+    s3_endpoint_url: str | None = None
     s3_region_name: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
     s3_encryption_key_id: str | None = None
+    s3_bucket_owner: str | None = None
     aws_batch_role_arn: str | None = None
     s3_output_bucket_name: str | None = None
     bedrock_tags: list | None = None
@@ -363,7 +368,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
     model_info: dict | None = None
-    mock_response: str | ModelResponse | Exception | Any | None = None
+    mock_response: str | ModelResponse | Exception | object | None = None
 
     # tag-based routing
     tags: list[str] | None = None
@@ -447,7 +452,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -472,7 +477,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -547,6 +552,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
+    output_cost_per_second_768p: ReadOnly[float | None]
+    output_cost_per_second_2k: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
     output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None
@@ -634,6 +641,12 @@ class Deployment(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
+class DiscoveredDeploymentModelInfo:
+    deployment: Mapping[str, object]
+    limits: Mapping[str, int]
+
+
+@dataclass(frozen=True, slots=True)
 class DeploymentModelListingInfo:
     """What the deployments behind a model name contribute to its OpenAI-compatible listing entry.
 
@@ -657,6 +670,7 @@ class RouterErrors(enum.Enum):
     """
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
+    max_parallel_requests_exceeded = "Deployment has all max_parallel_requests slots in use."
     no_deployments_available = "No deployments available for selected model"
     all_deployments_in_cooldown = "All deployments for selected model are in cooldown"
     no_deployments_with_tag_routing = "Not allowed to access model due to tags configuration"
@@ -973,6 +987,19 @@ class FallbackAccessCheck(Protocol):
     async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
 
 
+class FallbackBudgetCheck(Protocol):
+    """
+    Decides whether the caller behind `request_kwargs` is still within budget for fallback `model`.
+
+    Budget is enforced once during auth, against the *requested* model group. A fallback target is
+    chosen later, inside the router, so a zero-cost group that falls back to a priced one bills
+    without any budget gate. The router runs this before every cross-model-group fallback attempt
+    and skips targets it rejects, leaving the free attempt itself untouched.
+    """
+
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+
+
 class AutoRouterCapabilityLimit(Protocol):
     """
     Resolves how many complexity routers may claim each licensed capability right now; None means unlimited.
@@ -1047,6 +1074,13 @@ class TaggedPreRoutingStrategy(Generic[_PreRoutingStrategyT_co]):
 
 
 @dataclass(frozen=True, slots=True)
+class BaselineRouteStamp:
+    router_name: str
+    baseline_model: str
+    baseline_deployment_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class ConsumedRequestTagsStamp:
     """The model group a tagged router rewrote to, plus the request tags spent selecting it."""
 
@@ -1084,11 +1118,11 @@ class RoutingContext(BaseModel):
     plugins that need the exact original payload can read `raw_messages`.
     """
 
-    raw_messages: list[dict[str, Any]]
-    structured_messages: list[dict[str, Any]]
+    raw_messages: list[dict[str, object]]
+    structured_messages: list[dict[str, object]]
     candidate_models: list[str]
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    signals: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, object] = Field(default_factory=dict)
+    signals: dict[str, object] = Field(default_factory=dict)
 
 
 @runtime_checkable

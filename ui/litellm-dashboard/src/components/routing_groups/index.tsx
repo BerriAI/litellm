@@ -14,6 +14,7 @@ import RoutingGroupsTable from "./RoutingGroupsTable";
 import RoutingGroupModal from "./RoutingGroupModal";
 import { toast } from "@/lib/toast";
 import type { RoutingGroup } from "./types";
+import { groupNameByModel } from "./modelOwnership";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const RoutingGroups: React.FC = () => {
@@ -30,7 +31,7 @@ const RoutingGroups: React.FC = () => {
   const [editingGroup, setEditingGroup] = useState<RoutingGroup | null>(null);
   const [deletingGroup, setDeletingGroup] = useState<RoutingGroup | null>(null);
 
-  const groups = data?.routingGroups ?? [];
+  const groups = useMemo(() => data?.routingGroups ?? [], [data?.routingGroups]);
 
   const filteredGroups = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -50,6 +51,11 @@ const RoutingGroups: React.FC = () => {
   }, [data?.availableStrategies, routerFields]);
 
   const strategyDescriptions = routerFields?.routing_strategy_descriptions ?? {};
+
+  const ownerByModel = useMemo(
+    () => groupNameByModel(groups, drawerMode === "edit" ? editingGroup?.group_name : undefined),
+    [groups, drawerMode, editingGroup],
+  );
 
   const modelOptions = useMemo<string[]>(() => {
     const records = (modelHub?.data ?? []) as Array<{ model_group?: string }>;
@@ -160,6 +166,7 @@ const RoutingGroups: React.FC = () => {
         strategyDescriptions={strategyDescriptions}
         modelOptions={modelOptions}
         existingGroupNames={groups.map((g) => g.group_name)}
+        groupNameByModel={ownerByModel}
         onClose={() => setDrawerOpen(false)}
         onSubmit={handleSubmit}
         saving={saveMutation.isPending}
