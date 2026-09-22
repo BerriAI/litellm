@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Any, Final, Literal, Optional, Union
 
 from pydantic import BaseModel
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 
 class LiteLLMCacheType(str, Enum):
@@ -137,6 +137,9 @@ class HealthCheckCacheParams(BaseModel):
     redis_version: str | int | float | None = None
 
 
+EMBEDDING_CACHE_FORMAT_VERSION: Final = 2
+
+
 class CachedEmbedding(TypedDict):
     """Type definition for cached embedding objects"""
 
@@ -146,3 +149,4 @@ class CachedEmbedding(TypedDict):
     model: str | None
     prompt_tokens: int | None
     prompt_tokens_details: dict | None
+    format_version: ReadOnly[int]

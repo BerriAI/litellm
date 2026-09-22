@@ -21,7 +21,7 @@ import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -34,7 +34,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
-from litellm.types.caching import CachedEmbedding
+from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
 from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
@@ -167,6 +167,17 @@ def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "as
 def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
     """Read the caller-supplied ``cache_key`` off the request kwargs."""
     return request_kwargs.get("cache_key", None)
+
+
+_CACHED_EMBEDDING_ADAPTER: Final = TypeAdapter(CachedEmbedding)
+
+
+def _current_format_embedding_entry(entry: object) -> CachedEmbedding | None:
+    try:
+        cached: Final = _CACHED_EMBEDDING_ADAPTER.validate_python(entry)
+    except ValidationError:
+        return None
+    return cached if cached["format_version"] == EMBEDDING_CACHE_FORMAT_VERSION else None
 
 
 class LLMCachingHandler:
@@ -770,7 +781,7 @@ class LLMCachingHandler:
                         dynamic_cache_object=self.dual_cache,
                     )
                 )
-            cached_result = await asyncio.gather(*tasks)
+            cached_result = [_current_format_embedding_entry(entry) for entry in await asyncio.gather(*tasks)]
             ## check if cached result is None ##
             if cached_result is not None and isinstance(cached_result, list):
                 # set cached_result to None if all elements are None

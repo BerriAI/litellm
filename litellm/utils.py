@@ -1978,9 +1978,6 @@ def client(original_function):
                 elif _caching_handler_response.embedding_all_elements_cache_hit is True:
                     return _caching_handler_response.final_embedding_cached_response
 
-                elif _caching_handler_response.embedding_uncached_input is not None:
-                    kwargs["input"] = _caching_handler_response.embedding_uncached_input
-
             if _llm_caching_handler.preset_cache_key is not None:
                 logging_obj.litellm_params["preset_cache_key"] = _llm_caching_handler.preset_cache_key
 
@@ -2018,8 +2015,14 @@ def client(original_function):
                     print_verbose(f"Error while checking max token limit: {e}")
 
             # MODEL CALL
+            call_kwargs: Final = (
+                {**kwargs, "input": _caching_handler_response.embedding_uncached_input}
+                if _caching_handler_response is not None
+                and _caching_handler_response.embedding_uncached_input is not None
+                else kwargs
+            )
             try:
-                result = await original_function(*args, **kwargs)
+                result = await original_function(*args, **call_kwargs)
             except Exception as deployment_error:
                 _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
                 try:
@@ -2082,7 +2085,7 @@ def client(original_function):
             await _llm_caching_handler.async_set_cache(
                 result=result,
                 original_function=original_function,
-                kwargs=kwargs,
+                kwargs=call_kwargs,
                 args=args,
             )
 
