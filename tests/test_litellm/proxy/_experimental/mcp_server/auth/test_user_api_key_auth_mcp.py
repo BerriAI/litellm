@@ -2,6 +2,7 @@ import contextlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -4285,12 +4286,12 @@ class TestAgentMCPPermissions:
             assert await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=agent_key) == []
 
     @staticmethod
-    def _tool_grants(grants: dict[str, dict[str, list[str]]], keyed_by: str) -> AsyncMock:
+    def _tool_grants(grants: dict[str, dict[str, list[str]]], keyed_by: Literal["team_id", "user_id"]) -> AsyncMock:
         """Object permissions keyed by the ``team_id`` or ``user_id`` being asked about; anyone else has none."""
 
         async def by_principal(user_api_key_auth: UserAPIKeyAuth | None = None) -> LiteLLM_ObjectPermissionTable | None:
             assert user_api_key_auth is not None
-            principal = getattr(user_api_key_auth, keyed_by) or ""
+            principal = (user_api_key_auth.team_id if keyed_by == "team_id" else user_api_key_auth.user_id) or ""
             tools = grants.get(principal)
             if tools is None:
                 return None
