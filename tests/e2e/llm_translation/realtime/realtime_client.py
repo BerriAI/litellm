@@ -290,6 +290,9 @@ def _as_text(message: str | bytes) -> str:
     return message.decode("utf-8") if isinstance(message, bytes) else message
 
 
+as_text = _as_text
+
+
 @dataclass(frozen=True, slots=True)
 class RealtimeSession:
     connection: Connection

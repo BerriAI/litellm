@@ -9,11 +9,17 @@ frame itself fail, which is how a loud failure turns back into a silent one.
 """
 
 import json
-from typing import Final
+from typing import Final, Protocol
 
 from litellm.types.realtime import RealtimeErrorDetail, RealtimeErrorEvent
 
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
+
+
+class _ClientWebSocket(Protocol):
+    async def send_text(self, data: str) -> None: ...
+
+    async def close(self, code: int = ..., reason: str | None = ...) -> None: ...
 
 
 def realtime_error_event(message: str, error_type: str) -> str:
@@ -37,3 +43,27 @@ def client_close_code(upstream_code: int) -> int:
     if upstream_code in EXTERNAL_CLOSE_CODES or 3000 <= upstream_code < 5000:
         return upstream_code
     return int(CloseCode.INTERNAL_ERROR)
+
+
+def upstream_handshake_close_code(status_code: int) -> int:
+    from websockets.frames import CloseCode
+
+    match status_code:
+        case 401 | 403:
+            return int(CloseCode.POLICY_VIOLATION)
+        case 429:
+            return int(CloseCode.TRY_AGAIN_LATER)
+        case _:
+            return int(CloseCode.INTERNAL_ERROR)
+
+
+async def close_after_upstream_handshake_refusal(websocket: _ClientWebSocket, status_code: int) -> None:
+    message: Final = f"Upstream realtime handshake rejected with HTTP {status_code}"
+    try:
+        await websocket.send_text(realtime_error_event(message, error_type="server_error"))
+    except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below
+        pass
+    await websocket.close(
+        code=upstream_handshake_close_code(status_code),
+        reason=websocket_close_reason(message, fallback="Upstream handshake rejected"),
+    )
