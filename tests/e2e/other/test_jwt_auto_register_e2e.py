@@ -112,6 +112,7 @@ def minting_gateway(idp: Keycloak, tmp_path_factory: pytest.TempPathFactory) -> 
         )
 
 
+@pytest.mark.owned_gateway
 class TestJwtAutoRegisterMapExistingKey:
     @pytest.mark.covers("other.auth.jwt.auto_register_maps_existing_key")
     def test_first_jwt_call_maps_to_the_users_existing_key_and_mints_none(

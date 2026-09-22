@@ -176,6 +176,7 @@ jobs:
           TESTS: ${{ needs.detect.outputs.tests }}
           E2E_FIXTURE_MODE: live
           E2E_PROVIDER_EDGE_HOST_REACHABLE: '1'
+          E2E_OWNED_GATEWAY: '1'
           COLUMNS: '400'
         run: |
           umask 077
