@@ -186,10 +186,12 @@ class CallSupervisor:
                 reader.cancel()
                 if lease_failed is not None:
                     lease_failed.cancel()
-                await asyncio.gather(
-                    *((reader, stopped, lease_failed) if lease_failed is not None else (reader, stopped)),
-                    return_exceptions=True,
-                )
+                # Branching rather than a conditional star-unpacked tuple: the overload solver cannot
+                # bind one result type across a tuple whose length depends on the branch.
+                if lease_failed is not None:
+                    await asyncio.gather(reader, stopped, lease_failed, return_exceptions=True)
+                else:
+                    await asyncio.gather(reader, stopped, return_exceptions=True)
                 with suppress(Exception):
                     await self._upstream.close()
                 if not self._usage_complete():

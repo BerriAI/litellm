@@ -50,6 +50,11 @@ def test_public_live_websockets_reach_live_auth_before_legacy_sideband(monkeypat
     authenticate = AsyncMock(side_effect=HTTPException(403, "Live authentication rejected"))
     monkeypatch.setattr(live, "_auth", authenticate)
     monkeypatch.setattr(proxy_server, "general_settings", {})
+    # TestClient runs the proxy lifespan, and the boot check refuses a weak or unset master key
+    # before the app serves anything. Set a safe key here instead of relying on the ambient one, so
+    # the request really reaches the routes: with a key in place the legacy sideband dependency
+    # would reject the "Bearer test" header, so awaiting _auth still proves which auth ran first.
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-live-route-registration-test-master-key")
     # A previous proxy test may leave the module scheduler bound to a closed loop.
     monkeypatch.setattr(proxy_server, "scheduler", None)
     with TestClient(proxy_server.app) as client:
