@@ -81,8 +81,9 @@ class RedisSemanticCache(BaseCache):
                 embedding; defaults to the Router deployment's configured max_input_tokens
             embedding_timeout: Seconds a cache lookup may spend embedding the prompt before it
                 gives up and lets the request continue to the LLM
-            ttl: Default time-to-live for cache entries in seconds
-            **kwargs: Additional arguments passed to the Redis client
+            **kwargs: Additional arguments passed to the Redis client. A `ttl` key sets
+                the default time-to-live for cache entries in seconds; it is read per
+                lookup by _get_ttl, not forwarded to the Redis client
 
         Raises:
             Exception: If similarity_threshold is not provided or required Redis
