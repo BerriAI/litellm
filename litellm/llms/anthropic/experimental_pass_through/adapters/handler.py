@@ -385,18 +385,18 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     completion_kwargs["reasoning_effort"] = updated_reasoning_effort
 
     @staticmethod
-    def _keep_plain_effort_for_chat_targets(
+    def _plain_effort_for_chat_target(
         completion_kwargs: _CompletionKwargs,
         *,
         thinking: Mapping[str, object] | None,
-    ) -> None:
+    ) -> str | None:
         reasoning_effort: Final = completion_kwargs.get("reasoning_effort")
         if not thinking or not isinstance(reasoning_effort, dict) or "summary" not in reasoning_effort:
-            return
+            return None
         effort: Final = reasoning_effort.get("effort")
         model: Final = completion_kwargs.get("model")
         if not isinstance(effort, str) or not isinstance(model, str) or not model:
-            return
+            return None
         custom_llm_provider: Final = completion_kwargs.get("custom_llm_provider")
         api_base: Final = completion_kwargs.get("api_base")
         api_key: Final = completion_kwargs.get("api_key")
@@ -408,9 +408,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 api_key=api_key if isinstance(api_key, str) else None,
             )
         except Exception:
-            return
+            return None
         if resolved_provider == "litellm_proxy":
-            return
+            return None
         from litellm.main import responses_api_bridge_check
 
         web_search_options: Final = completion_kwargs.get("web_search_options")
@@ -425,9 +425,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             reasoning_effort=reasoning_effort,
             api_base=resolved_api_base,
         )
-        if model_info.get("mode") == "responses":
-            return
-        completion_kwargs["reasoning_effort"] = effort
+        return None if model_info.get("mode") == "responses" else effort
 
     @staticmethod
     def _normalize_reasoning_effort(
@@ -593,10 +591,12 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             thinking=thinking,
         )
 
-        LiteLLMMessagesToCompletionTransformationHandler._keep_plain_effort_for_chat_targets(
+        plain_effort: Final = LiteLLMMessagesToCompletionTransformationHandler._plain_effort_for_chat_target(
             completion_kwargs,
             thinking=thinking,
         )
+        if plain_effort is not None:
+            completion_kwargs["reasoning_effort"] = plain_effort
 
         return completion_kwargs, tool_name_mapping
 
