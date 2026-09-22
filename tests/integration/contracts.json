@@ -172,11 +172,38 @@
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_generation_sends_quality_and_size_and_charges_keyed_row": [
       "other.provider_wire.fal_ai.gpt_image_generation_quality_size_wire_and_keyed_pricing"
     ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_generation_prices_non_canonical_size_from_nearest_row": [
+      "other.provider_wire.fal_ai.gpt_image_generation_noncanonical_size_uses_nearest_keyed_row"
+    ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_sdk_response_honors_dump_options": [
+      "other.provider_wire.fal_ai.sdk_image_response_dump_options"
+    ],
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_flux_dev_generation_targets_dev_endpoint_and_charges_per_image": [
       "other.provider_wire.fal_ai.flux_dev_endpoint_and_per_image_pricing"
     ],
+    "tests/integration/providers/test_fal_ai_passthrough_wire.py::test_fal_queue_submit_charges_and_polls_pass_through_free": [
+      "other.provider_wire.fal_ai.passthrough_queue_submit_charges_and_polls_do_not"
+    ],
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_edit_inlines_upload_as_data_url_and_charges_keyed_row": [
       "other.provider_wire.fal_ai.image_edit_json_data_urls_and_keyed_pricing"
+    ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_flux_lora_depth_edit_sends_single_image_url_and_charges_flat_row": [
+      "other.provider_wire.fal_ai.flux_lora_depth_edit_single_image_url_and_flat_pricing"
+    ],
+    "tests/integration/providers/test_fal_ai_chat_wire.py::test_fal_moondream3_chat_sends_prompt_image_and_reasoning": [
+      "other.provider_wire.fal_ai.moondream3_chat_query_wire_and_token_pricing"
+    ],
+    "tests/integration/providers/test_xiaomi_mimo_wire.py::test_xiaomi_mimo_nonstream_surfaces_reasoning_and_charges_registry_price[mimo-v2.6-pro]": [
+      "other.provider_wire.xiaomi_mimo.reasoning_content_and_registry_pricing"
+    ],
+    "tests/integration/providers/test_xiaomi_mimo_wire.py::test_xiaomi_mimo_nonstream_surfaces_reasoning_and_charges_registry_price[mimo-v2.6-flash]": [
+      "other.provider_wire.xiaomi_mimo.reasoning_content_and_registry_pricing"
+    ],
+    "tests/integration/providers/test_xiaomi_mimo_wire.py::test_xiaomi_mimo_stream_delivers_reasoning_then_answer_deltas": [
+      "other.provider_wire.xiaomi_mimo.reasoning_and_answer_stream_as_deltas"
+    ],
+    "tests/integration/providers/test_xiaomi_mimo_wire.py::test_xiaomi_mimo_tool_call_is_forwarded_and_returned": [
+      "other.provider_wire.xiaomi_mimo.tool_call_survives_translation"
     ],
     "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_h3_video_create_uses_canonical_body_and_status_path": [
       "other.provider_wire.fal_ai.video_queue_create_status_and_content_download"

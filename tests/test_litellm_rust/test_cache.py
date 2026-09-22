@@ -2,6 +2,7 @@ import asyncio
 import contextvars
 import gc
 import hashlib
+import http.server
 import json
 import math
 import os
@@ -37,6 +38,9 @@ from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.caching.redis_semantic_cache import RedisSemanticCache
 from litellm.caching.s3_cache import S3Cache
 from litellm.rust_bridge import _native
+from litellm.rust_bridge.catalog import CacheRule, Route, RouteRule, SecretManagerRule
+from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.response_cache import ResponseCacheRuntime, resolve_response_cache
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.llms.custom_llm import CustomLLMItem
 from litellm.types.utils import EmbeddingResponse
@@ -57,6 +61,71 @@ class CacheLookup(Protocol):
 
 def request(key: str = "key") -> dict[str, object]:
     return {"key": {"preset": key}}
+
+
+def qdrant_request(
+    key: str,
+    messages: list[dict[str, object]],
+    **kwargs: object,
+) -> dict[str, object]:
+    return {**request(key), "messages": messages, **kwargs}
+
+
+def embedding_vector(text: str) -> list[float]:
+    raw: Final = hashlib.sha256(text.encode()).digest()[:8]
+    values: Final = [byte / 127.5 - 1 for byte in raw]
+    norm: Final = math.sqrt(sum(value * value for value in values))
+    return [value / norm for value in values]
+
+
+@pytest.fixture
+def qdrant_url() -> str:
+    value: Final[str | None] = os.environ.get("QDRANT_URL")
+    if not value:
+        pytest.skip("QDRANT_URL is required for Qdrant semantic cache tests")
+    return value.rstrip("/")
+
+
+@pytest.fixture
+def fake_embedding_endpoint(monkeypatch: pytest.MonkeyPatch) -> Generator[str]:
+    class EmbeddingHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            length: Final = int(self.headers["Content-Length"])
+            body: Final = json.loads(self.rfile.read(length))
+            text: Final = body["input"]
+            response: Final = {
+                "object": "list",
+                "data": [
+                    {
+                        "object": "embedding",
+                        "index": 0,
+                        "embedding": embedding_vector(text),
+                    }
+                ],
+                "model": body["model"],
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            }
+            encoded: Final = json.dumps(response).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, *_args: object) -> None:
+            return
+
+    server: Final = http.server.ThreadingHTTPServer(("127.0.0.1", 0), EmbeddingHandler)
+    worker: Final = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    monkeypatch.setenv("OPENAI_API_BASE", f"http://127.0.0.1:{server.server_address[1]}")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
 
 
 @pytest.fixture
@@ -123,11 +192,48 @@ def test_existing_constructor_and_global_are_unchanged() -> None:
     facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
     assert type(facade.cache) is InMemoryCache
     assert "_native_cache_handle" not in vars(facade)
+    assert resolve_response_cache(facade) is None
     with rebound(litellm, "cache", facade):
         resolver: Final = _CacheTestResolver(litellm)
         assert resolver.resolve().kind == "python_callback"
         resolver.resolve().store(None, {"answer": 7}, callback_kwargs={"cache_key": "key"})
         assert cast(CacheLookup, facade).get_cache(cache_key="key") == {"answer": 7}
+
+
+async def test_catalog_constructs_native_runtime_from_public_cache_configuration() -> None:
+    rules: Final = (
+        RouteRule(Route.OCR, Rollout.PYTHON_ONLY),
+        SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({"local"})),
+        CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({"local"})),
+    )
+    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    runtime: Final = resolve_response_cache(facade, rules)
+    assert isinstance(runtime, ResponseCacheRuntime)
+    assert runtime.kind == "native"
+
+    sync_request: Final = runtime.request(facade, {"cache_key": "sync"})
+    assert sync_request is not None
+    runtime.store(sync_request, {"answer": 1})
+    assert runtime.lookup(sync_request) == {"answer": 1}
+    assert facade.cache.get_cache("sync") is None
+
+    async_request: Final = runtime.request(facade, {"cache_key": "async"})
+    assert async_request is not None
+    await runtime.async_store(async_request, {"answer": 2})
+    assert await runtime.async_lookup(async_request) == {"answer": 2}
+    assert await facade.cache.async_get_cache("async") is None
+
+    requests: Final = (sync_request, async_request)
+    expected: Final = {
+        "values": [{"answer": 1}, {"answer": 2}],
+        "missing_indices": [],
+    }
+    assert runtime.lookup_batch(requests) == expected
+    assert await runtime.async_lookup_batch(requests) == expected
+
+    await runtime.async_flush()
+    assert runtime.lookup(sync_request) is None
+    assert await runtime.async_lookup(async_request) is None
 
 
 def test_existing_global_lifecycle_remains_the_resolver_source_of_truth() -> None:
@@ -344,9 +450,7 @@ async def test_memory_size_policy_is_applied_by_the_native_host() -> None:
     await binding.async_store(request("large"), {"answer": "x" * 256})
     assert binding.lookup(request("large")) is None
     assert binding.lookup(request("small")) == small
-    disabled: Final = _CacheTestResolver(
-        SimpleNamespace(cache=_CacheTestHandle.memory(capacity=0))
-    ).resolve()
+    disabled: Final = _CacheTestResolver(SimpleNamespace(cache=_CacheTestHandle.memory(capacity=0))).resolve()
     await disabled.async_store(request(), small)
     assert await disabled.async_lookup(request()) is None
 
@@ -390,9 +494,7 @@ async def test_python_batch_callbacks_use_the_builtin_cache_api() -> None:
         ) -> object:
             return result, kwargs
 
-    binding: Final = _CacheTestResolver(
-        SimpleNamespace(cache=CustomCache(type=LiteLLMCacheType.LOCAL))
-    ).resolve()
+    binding: Final = _CacheTestResolver(SimpleNamespace(cache=CustomCache(type=LiteLLMCacheType.LOCAL))).resolve()
     assert binding.kind == "python_callback"
     requests: Final = [request("first"), request("second")]
     kwargs: Final = [{"cache_key": "first"}, {"cache_key": "second"}]
@@ -1146,10 +1248,7 @@ def _semantic_embedding(prompt: str) -> list[float]:
     base: Final = _base_embedding(prompt.replace(PARAPHRASE_MARKER, "").strip())
     pivot: Final = min(range(8), key=lambda index: abs(base[index]))
     direction: Final = _normalized(
-        [
-            (1.0 - base[pivot] * base[pivot]) if index == pivot else -base[index] * base[pivot]
-            for index in range(8)
-        ]
+        [(1.0 - base[pivot] * base[pivot]) if index == pivot else -base[index] * base[pivot] for index in range(8)]
     )
     # Rotating an orthogonal unit direction by 0.329 produces ~0.05 cosine distance
     return _normalized([base[index] + 0.329 * direction[index] for index in range(8)])
@@ -1245,9 +1344,7 @@ def semantic_embedding() -> Generator[DeterministicEmbedding]:
                 [*litellm._custom_providers, "semantic-test"],  # pyright: ignore[reportPrivateUsage]  # no public provider-registration hook
             )
         )
-        stack.enter_context(
-            rebound(litellm, "provider_list", [*litellm.provider_list, "semantic-test"])
-        )
+        stack.enter_context(rebound(litellm, "provider_list", [*litellm.provider_list, "semantic-test"]))
         yield handler
 
 
@@ -1375,9 +1472,7 @@ async def test_redis_semantic_async_paths_and_store_batch_share_one_layout(
     binding: Final = _CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
     client: Final = redis.Redis.from_url(url)
 
-    await binding.async_store(
-        semantic_request("async", "name a primary color"), {"answer": "blue"}
-    )
+    await binding.async_store(semantic_request("async", "name a primary color"), {"answer": "blue"})
     hash_key: Final = f"{index}:{semantic_entry_id('name a primary color', 'async')}"
     decoded: Final = cast(dict[str, object], json.loads(cast(bytes, client.hget(hash_key, "response"))))
     python_read: Final = await cast(RedisSemanticCache, facade.cache).async_get_cache(  # pyright: ignore[reportUnknownMemberType]  # **kwargs stays unknown on the backend class
@@ -1393,9 +1488,7 @@ async def test_redis_semantic_async_paths_and_store_batch_share_one_layout(
         [{"answer": 1}, {"answer": 2}],
     )
     expected: Final = {
-        key: json.loads(
-            cast(bytes, client.hget(f"{index}:{semantic_entry_id(prompt, key)}", "response"))
-        )
+        key: json.loads(cast(bytes, client.hget(f"{index}:{semantic_entry_id(prompt, key)}", "response")))
         for key, prompt in (
             ("batch-one", "first batch prompt"),
             ("batch-two", "second batch prompt"),
@@ -1405,18 +1498,19 @@ async def test_redis_semantic_async_paths_and_store_batch_share_one_layout(
         ("batch-one", "first batch prompt"),
         ("batch-two", "second batch prompt"),
     ):
-        assert cast(RedisSemanticCache, facade.cache).get_cache(  # pyright: ignore[reportUnknownMemberType]  # **kwargs stays unknown on the backend class
-            key, messages=semantic_messages(prompt)
-        ) == expected[key], key
+        assert (
+            cast(RedisSemanticCache, facade.cache).get_cache(  # pyright: ignore[reportUnknownMemberType]  # **kwargs stays unknown on the backend class
+                key, messages=semantic_messages(prompt)
+            )
+            == expected[key]
+        ), key
 
     cast(RedisSemanticCache, facade.cache).set_cache(  # pyright: ignore[reportUnknownMemberType]  # **kwargs stays unknown on the backend class
         "async-python",
         json.dumps({"timestamp": 1700000000.0, "response": {"answer": "python"}}),
         messages=semantic_messages("python written prompt"),
     )
-    assert await binding.async_lookup(
-        semantic_request("async-python", "python written prompt")
-    ) == {"answer": "python"}
+    assert await binding.async_lookup(semantic_request("async-python", "python written prompt")) == {"answer": "python"}
     client.close()
 
 
@@ -1431,13 +1525,9 @@ async def test_native_semantic_async_embedding_runs_inline_in_the_callers_task(
     SEMANTIC_CONTEXT.set("caller-sentinel")
     response: Final = {"choices": [{"text": "paris"}]}
 
-    await binding.async_store(
-        semantic_request("inline", "what is the capital of france"), response
-    )
+    await binding.async_store(semantic_request("inline", "what is the capital of france"), response)
     assert (
-        await binding.async_lookup(
-            semantic_request("inline", f"what is the capital of france{PARAPHRASE_MARKER}")
-        )
+        await binding.async_lookup(semantic_request("inline", f"what is the capital of france{PARAPHRASE_MARKER}"))
         == response
     )
     assert await binding.async_lookup(semantic_request("inline", "python written prompt")) is None
@@ -1474,9 +1564,7 @@ async def test_native_semantic_cancellation_during_embedding_skips_the_backend(
     semantic_embedding.gate = asyncio.Event()
 
     async def lookup() -> object:
-        return await binding.async_lookup(
-            semantic_request("cancel", "cancelled prompt")
-        )
+        return await binding.async_lookup(semantic_request("cancel", "cancelled prompt"))
 
     task: Final = asyncio.create_task(lookup())
     await semantic_embedding.entered.wait()
@@ -1521,9 +1609,7 @@ def test_redis_semantic_ttl_is_written_only_when_requested(
     binding: Final = _CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
     client: Final = redis.Redis.from_url(url)
 
-    binding.store(
-        {**semantic_request("ttl", "ttl prompt"), "ttl_seconds": 12.0}, {"answer": 1}
-    )
+    binding.store({**semantic_request("ttl", "ttl prompt"), "ttl_seconds": 12.0}, {"answer": 1})
     expiring: Final = f"{index}:{semantic_entry_id('ttl prompt', 'ttl')}"
     assert 0 < client.ttl(expiring) <= 12
 
@@ -1671,16 +1757,13 @@ def test_redis_semantic_handle_rejects_wrong_backends(
         redis_semantic_cache_index_name=index,
     )
     subclassed_facade.cache = CustomSemanticCache(  # pyright: ignore[reportAttributeAccessIssue]  # facade backend slot is not declared
-
         redis_url=url,
         similarity_threshold=0.8,
         embedding_model=SEMANTIC_EMBEDDING_MODEL,
         index_name=index,
     )
     with pytest.raises(TypeError):
-        _CacheTestHandle.redis_semantic(
-            subclassed_facade.cache
-        )._bind_facade(subclassed_facade)
+        _CacheTestHandle.redis_semantic(subclassed_facade.cache)._bind_facade(subclassed_facade)
 
     replacement_facade: Final = Cache(
         type=LiteLLMCacheType.REDIS_SEMANTIC,
@@ -1691,3 +1774,191 @@ def test_redis_semantic_handle_rejects_wrong_backends(
     )
     with pytest.raises(TypeError, match="must be the native embedder"):
         _CacheTestHandle.redis_semantic(facade.cache)._bind_facade(replacement_facade)
+
+
+def qdrant_facade(qdrant_url: str, collection_name: str) -> Cache:
+    return Cache(
+        type=LiteLLMCacheType.QDRANT_SEMANTIC,
+        qdrant_api_base=qdrant_url,
+        qdrant_collection_name=collection_name,
+        similarity_threshold=0.99,
+        qdrant_semantic_cache_embedding_model="text-embedding-3-small",
+        qdrant_semantic_cache_vector_size=8,
+    )
+
+
+def test_qdrant_semantic_facade_binds_native_and_shares_entries(qdrant_url: str, fake_embedding_endpoint: str) -> None:
+    del fake_embedding_endpoint
+    messages: Final = [{"role": "user", "content": "shared prompt"}]
+    collection: Final = f"cache_{uuid4().hex}"
+    facade: Final = qdrant_facade(qdrant_url, collection)
+    facade.cache.set_cache(
+        "python-key",
+        {"timestamp": time.time(), "response": json.dumps({"id": "py"})},
+        messages=messages,
+    )
+    handle: Final = _native._CacheTestHandle.qdrant_semantic(
+        qdrant_url,
+        collection_name=collection,
+        similarity_threshold=0.99,
+        vector_size=8,
+    )
+    handle._bind_facade(facade)
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
+    assert binding.kind == "native"
+    assert binding.lookup(qdrant_request("python-key", messages)) == {"id": "py"}
+    binding.store(qdrant_request("native-key", messages), {"id": "native"})
+    python_value: Final = facade.cache.get_cache("native-key", messages=messages)
+    assert isinstance(python_value, dict)
+    assert python_value["response"] == {"id": "native"}
+    unrelated: Final = [{"role": "user", "content": "unrelated prompt"}]
+    assert binding.lookup(qdrant_request("native-key", unrelated)) is None
+    assert facade.cache.get_cache("native-key", messages=unrelated) is None
+    assert binding.lookup(qdrant_request("different-key", messages)) is None
+    assert facade.cache.get_cache("different-key", messages=messages) is None
+
+
+async def test_qdrant_semantic_async_parity(qdrant_url: str, fake_embedding_endpoint: str) -> None:
+    del fake_embedding_endpoint
+    messages: Final = [{"role": "user", "content": "async prompt"}]
+    collection: Final = f"cache_{uuid4().hex}"
+    facade: Final = qdrant_facade(qdrant_url, collection)
+    handle: Final = _native._CacheTestHandle.qdrant_semantic(
+        qdrant_url,
+        collection_name=collection,
+        similarity_threshold=0.99,
+        vector_size=8,
+    )
+    handle._bind_facade(facade)
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
+    await facade.cache.async_set_cache(
+        "python-key",
+        {"timestamp": time.time(), "response": json.dumps({"id": "py"})},
+        messages=messages,
+    )
+    assert await binding.async_lookup(qdrant_request("python-key", messages)) == {"id": "py"}
+    await binding.async_store(qdrant_request("native-key", messages), {"id": "native"})
+    python_value: Final = await facade.cache.async_get_cache("native-key", messages=messages)
+    assert isinstance(python_value, dict)
+    assert python_value["response"] == {"id": "native"}
+
+
+async def test_qdrant_semantic_async_store_batch_shares_entries(
+    qdrant_url: str, fake_embedding_endpoint: str
+) -> None:
+    del fake_embedding_endpoint
+    collection: Final = f"cache_{uuid4().hex}"
+    facade: Final = qdrant_facade(qdrant_url, collection)
+    handle: Final = _native._CacheTestHandle.qdrant_semantic(
+        qdrant_url,
+        collection_name=collection,
+        similarity_threshold=0.99,
+        vector_size=8,
+    )
+    handle._bind_facade(facade)
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
+    entries: Final = [
+        qdrant_request("batch-one", [{"role": "user", "content": "first batch prompt"}]),
+        qdrant_request("batch-two", [{"role": "user", "content": "second batch prompt"}]),
+    ]
+    await binding.async_store_batch(entries, [{"id": "one"}, {"id": "two"}])
+
+    assert binding.lookup(entries[0]) == {"id": "one"}
+    assert binding.lookup(entries[1]) == {"id": "two"}
+    assert (
+        (await facade.cache.async_get_cache("batch-one", messages=entries[0]["messages"]))["response"]
+        == {"id": "one"}
+    )
+    assert (
+        (await facade.cache.async_get_cache("batch-two", messages=entries[1]["messages"]))["response"]
+        == {"id": "two"}
+    )
+
+
+async def test_qdrant_semantic_malformed_entries_and_unsupported_operations(
+    qdrant_url: str, fake_embedding_endpoint: str
+) -> None:
+    del fake_embedding_endpoint
+    messages: Final = [{"role": "user", "content": "malformed prompt"}]
+    collection: Final = f"cache_{uuid4().hex}"
+    facade: Final = qdrant_facade(qdrant_url, collection)
+    handle: Final = _native._CacheTestHandle.qdrant_semantic(
+        qdrant_url,
+        collection_name=collection,
+        similarity_threshold=0.99,
+        vector_size=8,
+    )
+    handle._bind_facade(facade)
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
+    key: Final = "malformed-key"
+    response: Final = {
+        "points": [
+            {
+                "id": str(uuid4()),
+                "vector": embedding_vector("malformed prompt"),
+                "payload": {
+                    "litellm_cache_key": key,
+                    "text": "malformed prompt",
+                    "response": "not json",
+                },
+            }
+        ]
+    }
+    facade.cache.sync_client.put(
+        url=f"{qdrant_url}/collections/{collection}/points",
+        headers=facade.cache.headers,
+        json=response,
+    )
+    assert binding.lookup(qdrant_request(key, messages)) is None
+    with pytest.raises(RuntimeError, match="operation is not supported"):
+        binding.lookup_batch([qdrant_request(key, messages)])
+    with pytest.raises(RuntimeError, match="operation is not supported"):
+        await binding.async_flush()
+    with pytest.raises(RuntimeError, match="operation is not supported"):
+        await binding.ping()
+
+
+def test_qdrant_semantic_ignores_request_expiry(qdrant_url: str, fake_embedding_endpoint: str) -> None:
+    del fake_embedding_endpoint
+    messages: Final = [{"role": "user", "content": "persistent prompt"}]
+    collection: Final = f"cache_{uuid4().hex}"
+    facade: Final = qdrant_facade(qdrant_url, collection)
+    handle: Final = _native._CacheTestHandle.qdrant_semantic(
+        qdrant_url,
+        collection_name=collection,
+        similarity_threshold=0.99,
+        vector_size=8,
+    )
+    handle._bind_facade(facade)
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
+    binding.store(qdrant_request("persistent-key", messages, ttl_seconds=1.0), {"id": "persistent"})
+    time.sleep(1.2)
+    assert binding.lookup(qdrant_request("persistent-key", messages)) == {"id": "persistent"}
+    python_value: Final = facade.cache.get_cache("persistent-key", messages=messages)
+    assert isinstance(python_value, dict)
+    assert python_value["response"] == {"id": "persistent"}
+
+
+def test_qdrant_semantic_mutation_and_projection_fallback(qdrant_url: str, fake_embedding_endpoint: str) -> None:
+    del fake_embedding_endpoint
+    collection: Final = f"cache_{uuid4().hex}"
+    facade: Final = qdrant_facade(qdrant_url, collection)
+    handle: Final = _native._CacheTestHandle.qdrant_semantic(
+        qdrant_url,
+        collection_name=collection,
+        similarity_threshold=0.99,
+        vector_size=8,
+    )
+    handle._bind_facade(facade)
+    facade.cache.qdrant_api_key = "rotated"
+    assert _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve().kind == "python_callback"
+    facade.cache.similarity_threshold = 0.5
+    assert _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve().kind == "python_callback"
+    unsupported: Final = qdrant_facade(qdrant_url, f"cache_{uuid4().hex}")
+    unsupported.cache.embedding_max_input_tokens = 100
+    with pytest.raises(TypeError, match="requires Python"):
+        handle._bind_facade(unsupported)
+    unsupported.cache.embedding_max_input_tokens = None
+    unsupported.cache.qdrant_api_base = "http://127.0.0.1:7777"
+    with pytest.raises(TypeError, match="gRPC"):
+        handle._bind_facade(unsupported)
