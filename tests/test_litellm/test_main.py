@@ -4209,3 +4209,27 @@ def test_completion_rejects_untranslatable_tool_choice_with_a_400(tool_choice):
         )
     assert exc_info.value.status_code == 400
     assert f"tool_choice={tool_choice}" in str(exc_info.value)
+
+
+def test_completion_puts_control_in_litellm_params_seen_by_pre_call_hook():
+    from litellm.types.utils import LiteLLMControlParams
+
+    recorded: Final = {}
+
+    class _ControlRecorder(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            recorded["control"] = kwargs["litellm_params"]["control"]
+
+    logger: Final = _ControlRecorder()
+    litellm.callbacks.append(logger)
+    try:
+        litellm.completion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="ok",
+            stream_chunk_size=64,
+        )
+    finally:
+        litellm.callbacks.remove(logger)
+
+    assert recorded["control"] == LiteLLMControlParams(stream_chunk_size=64)

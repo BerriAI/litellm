@@ -1,6 +1,7 @@
 import copy
 import json
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast, get_args
 
 import httpx
@@ -452,6 +453,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         client: AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> CustomStreamWrapper:
         completion_stream, response_headers = await make_call(
             client=client,
@@ -487,6 +490,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> CustomStreamWrapper:
         sync_client: Final = (
             _get_httpx_client(params={}) if client is None or isinstance(client, AsyncHTTPHandler) else client

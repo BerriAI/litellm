@@ -317,6 +317,7 @@ class TestSagemakerChatBackwardsCompatibility:
                 data={},
                 messages=[],
                 client=mock_client,
+                litellm_params={},
             )
             mock_csw.assert_called_once()
             call_kwargs = mock_csw.call_args[1]
@@ -356,6 +357,7 @@ class TestSagemakerChatBackwardsCompatibility:
                     data={},
                     messages=[],
                     client=mock_client,
+                    litellm_params={},
                 )
             )
             mock_csw.assert_called_once()

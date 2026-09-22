@@ -249,3 +249,12 @@ def test_drop_params_strings_reach_litellm_params_as_flags(value, expected):
 def test_get_litellm_params_forwards_stream_chunk_size_only_when_passed():
     assert get_litellm_params(stream_chunk_size=64)["stream_chunk_size"] == 64
     assert "stream_chunk_size" not in get_litellm_params()
+
+
+def test_get_litellm_params_carries_control():
+    from litellm.types.utils import LiteLLMControlParams
+
+    assert get_litellm_params(control=LiteLLMControlParams(stream_chunk_size=64))["control"] == LiteLLMControlParams(
+        stream_chunk_size=64
+    )
+    assert get_litellm_params()["control"] is None

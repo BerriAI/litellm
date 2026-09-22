@@ -2,6 +2,7 @@ import json
 import re
 import time
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass, fields
 from enum import Enum
 from types import MappingProxyType
 from typing import (
@@ -3950,6 +3951,23 @@ bedrock_batch_litellm_params: Final = (
     "bedrock_tags",
 )
 
+
+@dataclass(frozen=True, slots=True)
+class LiteLLMControlParams:
+    stream_chunk_size: int | None
+
+    @classmethod
+    def from_kwargs(cls, kwargs: Mapping[str, object]) -> "LiteLLMControlParams":
+        stream_chunk_size: Final = kwargs.get("stream_chunk_size")
+        return cls(
+            stream_chunk_size=stream_chunk_size
+            if isinstance(stream_chunk_size, int) and not isinstance(stream_chunk_size, bool)
+            else None
+        )
+
+
+LITELLM_CONTROL_PARAM_NAMES: Final = tuple(field.name for field in fields(LiteLLMControlParams))
+
 all_litellm_params = (
     agentic_loop_internal_litellm_params
     + [TRUSTED_CALLBACK_VARS_FIELD, ADDRESSED_RESPONSE_ID_FIELD, *bedrock_batch_litellm_params]
@@ -4042,7 +4060,8 @@ all_litellm_params = (
         "no-log",
         "base_model",
         "stream_timeout",
-        "stream_chunk_size",
+        "control",
+        *LITELLM_CONTROL_PARAM_NAMES,
         "supports_system_message",
         "region_name",
         "allowed_model_region",
