@@ -268,6 +268,9 @@
     "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_provider_hanging_up_on_the_result_probe_keeps_the_completed_status": [
       "other.provider_wire.fal_ai.video_result_probe_hangup_stays_completed"
     ],
+    "tests/integration/providers/test_databricks_oauth_wire.py::test_databricks_ai_gateway_api_base_requests_oauth_token_from_workspace_origin": [
+      "other.provider_wire.databricks.oauth_token_url_uses_workspace_origin_for_ai_gateway_api_base"
+    ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_saved_headers_reach_real_mcp_tool_and_survive_unrelated_edit": [
       "mcp.call_tool.saved_headers.reach_actual_transport"
     ],
