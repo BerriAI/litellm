@@ -4,6 +4,7 @@ import datetime
 import json
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Optional, Sequence
+from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -13,6 +14,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.bug_report import (
+    DISABLE_ENV_VAR,
+    ISSUE_URL_BASE,
+    bug_report_notice,
+    build_bug_report,
+)
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -4289,6 +4296,21 @@ class TestHandleLLMApiExceptionRetryAfter:
     async def test_handle_llm_api_exception_no_retry_after_for_plain_exception(self):
         proxy_exc = await self._invoke(ValueError("some other failure"))
         assert "retry-after" not in proxy_exc.headers
+
+    async def test_handle_llm_api_exception_strips_bug_report_notice_from_client_message(self, caplog):
+        report = build_bug_report(RuntimeError("boom"), surface="sdk")
+        notice = bug_report_notice(report)
+        exc = litellm.APIConnectionError(
+            message=f"boom\n{notice}",
+            model="gpt-4o",
+            llm_provider="openai",
+        )
+
+        with caplog.at_level("ERROR"):
+            proxy_exc = await self._invoke(exc)
+
+        assert ISSUE_URL_BASE not in proxy_exc.message
+        assert ISSUE_URL_BASE in caplog.text
 
     async def test_handle_llm_api_exception_retry_after_survives_callback_headers(self):
         from litellm.types.router import RouterRateLimitError
@@ -9372,6 +9394,92 @@ async def test_handle_llm_api_exception_forwards_litellm_response_headers_when_r
     assert exc_info.value.code == "400"
     assert "max_tokens is too large: 999999999." in exc_info.value.message
     assert exc_info.value.headers["llm_provider-x-request-id"] == "req_openai_400"
+
+
+@pytest.mark.asyncio
+async def test_handle_llm_api_exception_logs_bug_report_for_unmapped_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    monkeypatch.delenv(DISABLE_ENV_VAR, raising=False)
+    processor = ProxyBaseLLMRequestProcessing(
+        data={
+            "proxy_server_request": {"url": "https://example.test/v1/chat/completions?debug=true"},
+            "model": "acme-prod-gpt4",
+            "custom_llm_provider": "openai",
+        }
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+        with pytest.raises(ProxyException):
+            await processor._handle_llm_api_exception(
+                e=RuntimeError("unmapped for user@example.com"),
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    issue_url = next(word for word in caplog.text.split() if word.startswith(ISSUE_URL_BASE))
+    assert "Endpoint / call: /v1/chat/completions" in unquote_plus(issue_url)
+    assert "Provider: openai" in unquote_plus(issue_url)
+    assert "acme-prod-gpt4" not in unquote_plus(issue_url)
+    assert "user@example.com" not in unquote_plus(issue_url)
+
+
+@pytest.mark.asyncio
+async def test_handle_llm_api_exception_bug_report_drops_unknown_route(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    monkeypatch.delenv(DISABLE_ENV_VAR, raising=False)
+    processor = ProxyBaseLLMRequestProcessing(
+        data={"proxy_server_request": {"url": "https://example.test/v1/files/file-customer-123/content"}}
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+        with pytest.raises(ProxyException):
+            await processor._handle_llm_api_exception(
+                e=RuntimeError("unmapped"),
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    issue_url = next(word for word in caplog.text.split() if word.startswith(ISSUE_URL_BASE))
+    assert "Endpoint / call: unknown" in unquote_plus(issue_url)
+    assert "file-customer-123" not in unquote_plus(issue_url)
+
+
+@pytest.mark.asyncio
+async def test_handle_llm_api_exception_skips_bug_report_for_provider_status(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    monkeypatch.delenv(DISABLE_ENV_VAR, raising=False)
+
+    class ProviderRateLimitError(Exception):
+        def __init__(self, message: str):
+            super().__init__(message)
+            self.status_code = 429
+
+    processor = ProxyBaseLLMRequestProcessing(data={})
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+        with pytest.raises(ProxyException):
+            await processor._handle_llm_api_exception(
+                e=ProviderRateLimitError("rate limited"),
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    assert ISSUE_URL_BASE not in caplog.text
 
 
 class TestBackgroundResponseRetrievalGovernance:

@@ -19,6 +19,7 @@ from typing import (
     overload,
     runtime_checkable,
 )
+from urllib.parse import urlparse
 
 import anyio
 import httpx
@@ -45,6 +46,13 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.bug_report import (
+    allowlisted,
+    bug_report_notice,
+    build_bug_report,
+    should_report_bug,
+    strip_bug_report_notice,
+)
 from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     independent_snapshot,
@@ -64,7 +72,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
-from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
     request_skips_budget_checks,
@@ -106,6 +114,10 @@ from litellm.types.router_weights import validate_router_weights
 
 _LateResponseT = TypeVar("_LateResponseT", bound=Response)
 _LlmCallT = TypeVar("_LlmCallT")
+
+KNOWN_PROXY_ROUTES: Final = frozenset(
+    route for member in LiteLLMRoutes for route in member.value if route.startswith("/")
+)
 
 ProxyRouteType: TypeAlias = Literal[
     "acompletion",
@@ -3669,8 +3681,27 @@ class ProxyBaseLLMRequestProcessing:
             _code = _exc_status_code
         else:
             _code = status.HTTP_500_INTERNAL_SERVER_ERROR
+            if should_report_bug(e):
+                proxy_server_request: Final = self.data.get("proxy_server_request")
+                request_url: Final = (
+                    proxy_server_request.get("url") if isinstance(proxy_server_request, Mapping) else None
+                )
+                request_path: Final = urlparse(str(request_url)).path if request_url is not None else None
+                verbose_proxy_logger.error(
+                    bug_report_notice(
+                        build_bug_report(
+                            e,
+                            surface="proxy",
+                            call_type=allowlisted(request_path, KNOWN_PROXY_ROUTES),
+                            custom_llm_provider=self.data.get("custom_llm_provider"),
+                        )
+                    )
+                )
+        client_message: Final = getattr(e, "message", error_msg)
         raise ProxyException(
-            message=redact_internal_details_from_client_message(getattr(e, "message", error_msg)),
+            message=redact_internal_details_from_client_message(
+                strip_bug_report_notice(client_message) if isinstance(client_message, str) else error_msg
+            ),
             type=openai_error_type(e, _code),
             param=openai_error_param(e),
             openai_code=getattr(e, "code", None),
