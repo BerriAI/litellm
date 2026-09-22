@@ -30,6 +30,7 @@ from e2e_config import (
     FIXTURE_MODE_RAW,
     MANAGED_FILES_OPT_IN_ENV,
     MCP_OAUTH_LIVE_OPT_IN_ENV,
+    OTEL_V2_OPT_IN_ENV,
     PROMPT_CACHING_OPT_IN_ENV,
     PROVIDER_EDGE_HOST_OPT_IN_ENV,
     PROXY_BASE_URL,
@@ -61,6 +62,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "cli_determinism": CLI_DETERMINISM_OPT_IN_ENV,
         "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
         "provider_edge_host": PROVIDER_EDGE_HOST_OPT_IN_ENV,
+        "otel_v2": OTEL_V2_OPT_IN_ENV,
     }
 )
 
@@ -149,6 +151,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "provider_edge_host: routes provider traffic through the pytest host's edge in every fixture mode, so the "
         "gateway must reach the pytest host; deselected unless E2E_PROVIDER_EDGE_HOST_REACHABLE is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "otel_v2: needs a proxy running with LITELLM_OTEL_V2=true; deselected unless E2E_OTEL_V2 is set",
     )
 
 

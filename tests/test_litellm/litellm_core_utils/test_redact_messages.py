@@ -304,6 +304,26 @@ class TestPerformRedaction:
         assert delta["thinking_blocks"] is None
         assert delta["audio"] is None
 
+    def test_redacts_text_completion_choices_in_standard_logging_object(self):
+        details = {
+            "standard_logging_object": {
+                "response": {
+                    "object": "text_completion",
+                    "choices": [
+                        {"text": " Paris.", "finish_reason": "stop", "index": 0},
+                        {"text": "\n\nBlue", "finish_reason": "length", "index": 1},
+                    ],
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        assert details["standard_logging_object"]["response"]["choices"] == [
+            {"text": "redacted-by-litellm", "finish_reason": "stop", "index": 0},
+            {"text": "redacted-by-litellm", "finish_reason": "length", "index": 1},
+        ]
+
     def test_redacts_object_choices_inside_model_response_dict(self):
         result = {
             "choices": [
