@@ -29,7 +29,6 @@ class BugReport:
     litellm_frames: tuple[str, ...]
     litellm_version: str
     python_version: str
-    os_platform: str
     call_type: str | None
     custom_llm_provider: str | None
 
@@ -81,7 +80,6 @@ def build_bug_report(
         litellm_frames=_get_litellm_frames(exc),
         litellm_version=litellm_version,
         python_version=platform.python_version(),
-        os_platform=f"{platform.system()} {platform.machine()}".strip(),
         call_type=call_type,
         custom_llm_provider=allowlisted(custom_llm_provider, KNOWN_PROVIDERS),
     )
@@ -114,7 +112,6 @@ def _description(report: BugReport, frames: tuple[str, ...]) -> str:
         f"Provider: {report.custom_llm_provider or 'unknown'}\n"
         f"LiteLLM: {report.litellm_version}\n"
         f"Python: {report.python_version}\n"
-        f"OS: {report.os_platform}\n"
     )
 
 
