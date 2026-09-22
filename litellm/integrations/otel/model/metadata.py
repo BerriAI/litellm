@@ -277,7 +277,8 @@ def caller_session_id(
     explicit: Final = as_str(params.get("litellm_session_id"))
     if not explicit and not from_body:
         replayed: Final = as_str(payload.get("session_id")) if payload is not None else None
-        return trace.session_id or replayed or None
+        echoes_payload_trace_id: Final = payload is not None and replayed == as_str(payload.get("trace_id"))
+        return trace.session_id or (None if echoes_payload_trace_id else replayed) or None
     echoes_trace_id: Final = explicit is not None and any(as_str(body.get("trace_id")) == explicit for body in bodies)
     return (None if echoes_trace_id else explicit) or trace.session_id or None
 

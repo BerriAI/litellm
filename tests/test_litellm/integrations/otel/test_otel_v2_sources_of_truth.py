@@ -1417,29 +1417,45 @@ def test_llm_call_event_resolves_the_callers_conversation_id(litellm_params, exp
 
 
 @pytest.mark.parametrize(
-    ("litellm_params", "payload_session_id", "expected"),
+    ("litellm_params", "payload", "expected"),
     [
-        ({"metadata": {"user_api_key_hash": "hsh"}}, "conv-replayed", "conv-replayed"),
-        ({"metadata": {"user_api_key_hash": "hsh"}}, "", None),
-        ({"litellm_session_id": "conv-live"}, "conv-replayed", "conv-live"),
+        (
+            {"metadata": {"user_api_key_hash": "hsh"}},
+            {"session_id": "conv-replayed", "trace_id": "0af7651916cd43dd8448eb211c80319c"},
+            "conv-replayed",
+        ),
+        ({"metadata": {"user_api_key_hash": "hsh"}}, {"session_id": ""}, None),
+        (
+            {"metadata": {"user_api_key_hash": "hsh"}},
+            {"session_id": "0af7651916cd43dd8448eb211c80319c", "trace_id": "0af7651916cd43dd8448eb211c80319c"},
+            None,
+        ),
+        ({"litellm_session_id": "conv-live"}, {"session_id": "conv-replayed"}, "conv-live"),
         (
             {
                 "litellm_session_id": "minted-by-proxy",
                 "metadata": {"session_id": "minted-by-proxy", SESSION_ID_GENERATED_METADATA_KEY: True},
             },
-            "minted-by-proxy",
+            {"session_id": "minted-by-proxy"},
             None,
         ),
     ],
-    ids=["replayed-payload", "replayed-payload-without-a-session", "live-params-win", "generated-stays-hidden"],
+    ids=[
+        "replayed-payload",
+        "replayed-payload-without-a-session",
+        "replayed-payload-whose-session-is-the-trace-id-stays-hidden",
+        "live-params-win",
+        "generated-stays-hidden",
+    ],
 )
-def test_llm_call_event_falls_back_to_the_replayed_payloads_session_id(litellm_params, payload_session_id, expected):
+def test_llm_call_event_falls_back_to_the_replayed_payloads_session_id(litellm_params, payload, expected):
     """``/callback_logs`` replays a finished ``StandardLoggingPayload`` whose
     ``litellm_params`` carry only key metadata; the conversation survives on
-    ``payload.session_id``."""
+    ``payload.session_id`` unless it is the trace id the proxy back-filled or
+    minted, which both leave ``session_id == trace_id`` behind."""
     kwargs: Final = {
         "litellm_params": litellm_params,
-        "standard_logging_object": _sample_payload(session_id=payload_session_id),
+        "standard_logging_object": _sample_payload(**payload),
     }
     assert LLMCallEvent.from_dict(kwargs).session_id == expected
 
