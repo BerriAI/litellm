@@ -2181,6 +2181,7 @@ class MCPServerManager:
                 incomplete metadata for a server whose OAuth flow the gateway
                 runs itself.
         """
+        self.catalog.assert_current(server)
         acquisition: Final = self._get_or_start_oauth_discovery_task(server)
         if acquisition is None:
             return self._registered_server(server)
@@ -2193,11 +2194,13 @@ class MCPServerManager:
             raise
         match outcome:
             case _OAuthDiscoveryResolved(resolved_server):
+                self.catalog.assert_current(resolved_server)
                 return resolved_server
             case _OAuthDiscoveryStale():
                 return await self._rejoin_oauth_metadata_discovery(server, retry_stale=_retry_stale)
             case _OAuthDiscoveryFailed(timed_out=timed_out):
                 current: Final = self._registered_server(server)
+                self.catalog.assert_current(current)
                 if current.is_client_forwarded_token:
                     return current
                 server_ref: Final = current.alias or current.server_name or current.name or current.server_id
@@ -5544,6 +5547,7 @@ class MCPServerManager:
         # Registration used add_server_prefix_to_name(base, get_server_prefix(server)),
         # and tool_name is the bare base name by the time call_tool reaches here, so
         # rebuilding the key the same way reproduces it exactly
+        self.catalog.assert_current(server)
         registry_key: Final = add_server_prefix_to_name(tool_name, get_server_prefix(server))
         tool: Final = global_mcp_tool_registry.get_tool(registry_key)
         if tool is None:
@@ -6599,9 +6603,9 @@ class MCPServerManager:
                 # prefix that lookups will use.
                 if not reuse_unchanged or new_server is not previous_registry.get(server_id):
                     await self._maybe_register_openapi_tools(new_server, initialize_mapping=False)
+                    if new_server.spec_path:
+                        registered_openapi_tools = True
                 registered_registry[server_id] = new_server
-                if new_server.spec_path:
-                    registered_openapi_tools = True
             except Exception as e:
                 verbose_logger.exception(
                     "Skipping MCP server %s (%s) during DB reload: %s",

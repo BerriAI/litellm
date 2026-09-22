@@ -37,7 +37,31 @@ class TargetCatalog:
 
     async def refresh(self) -> None:
         async with self._reload_lock:
-            await self._manager._reload_servers_from_database()  # pyright: ignore[reportPrivateUsage]  # existing staged loader
+            await self._reload()
+
+    async def _reload(self, *, reuse_unchanged: bool = False) -> None:
+        token: Final = self._scope.set(None)
+        try:
+            await self._manager._reload_servers_from_database(reuse_unchanged=reuse_unchanged)  # pyright: ignore[reportPrivateUsage]  # existing staged loader
+        finally:
+            self._scope.reset(token)
+
+    def assert_current(self, server: MCPServer) -> None:
+        snapshot: Final = self.current
+        if snapshot is None or server.server_id not in snapshot:
+            return
+        expected: Final = snapshot[server.server_id]
+        registered: Final = self._manager.registry.get(server.server_id) or self._manager.config_mcp_servers.get(
+            server.server_id
+        )
+        if (
+            registered is None
+            or registered.updated_at != expected.updated_at
+            or server.updated_at != expected.updated_at
+        ):
+            from fastapi import HTTPException  # noqa: PLC0415  # optional proxy dependency
+
+            raise HTTPException(status_code=503, detail="MCP server configuration changed; retry the operation")
 
     async def list(self) -> Mapping[str, MCPServer]:
         from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime proxy dependency
@@ -48,7 +72,7 @@ class TargetCatalog:
         async with self._reload_lock:
             if prisma_client is not None:
                 try:
-                    await self._manager._reload_servers_from_database(reuse_unchanged=True)  # pyright: ignore[reportPrivateUsage]  # existing staged loader
+                    await self._reload(reuse_unchanged=True)
                 except Exception as exc:  # noqa: BLE001  # never serve an unverified database snapshot
                     from fastapi import HTTPException  # noqa: PLC0415  # optional proxy dependency
 

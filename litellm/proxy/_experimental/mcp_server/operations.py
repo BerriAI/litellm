@@ -2552,6 +2552,9 @@ async def _handle_local_mcp_tool(name: str, arguments: dict[str, object]) -> Cal
     """
     import inspect
 
+    server: Final = global_mcp_server_manager.server_owning_tool_name_prefix(name)
+    if server is not None:
+        global_mcp_server_manager.catalog.assert_current(server)
     tool: Final = global_mcp_tool_registry.get_tool(name)
     if not tool:
         raise HTTPException(status_code=404, detail=f"Tool '{name}' not found")

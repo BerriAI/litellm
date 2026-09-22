@@ -14722,3 +14722,109 @@ async def test_catalog_reuses_openapi_tools_until_configuration_or_background_re
         read_rows.return_value = []
         await manager.catalog.list()
         assert registry.list_tools() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["edit", "delete"])
+async def test_catalog_rejects_configuration_switch_before_client_creation(monkeypatch, change):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    async with manager.catalog.operation():
+        admitted = manager.get_mcp_server_by_id("catalog-server")
+        read_rows.return_value = [_catalog_row("updated")] if change == "edit" else []
+        await asyncio.create_task(manager.reload_servers_from_database())
+        with patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient") as factory:
+            with pytest.raises(HTTPException) as exc:
+                await manager._create_mcp_client(admitted)
+            assert exc.value.status_code == 503
+            assert exc.value.detail == "MCP server configuration changed; retry the operation"
+            factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dispatch", ["managed", "local"])
+async def test_catalog_changed_openapi_handler_never_dispatches(monkeypatch, tmp_path, respx_mock, dispatch):
+    from litellm.proxy._experimental.mcp_server import operations, tool_registry
+    from litellm.proxy._experimental.mcp_server.utils import add_server_prefix_to_name, get_server_prefix
+
+    registry = tool_registry.MCPToolRegistry()
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    monkeypatch.setattr(operations, "global_mcp_tool_registry", registry)
+    spec_path = tmp_path / "catalog-race.json"
+    spec_path.write_text(json.dumps({
+        "openapi": "3.0.0", "info": {"title": "Catalog", "version": "1"},
+        "paths": {"/echo": {"get": {"operationId": "echo"}}},
+    }))
+    row = _catalog_row().model_copy(update={"spec_path": str(spec_path)})
+    read_rows = AsyncMock(return_value=[row])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    destination = respx_mock.get("https://changed.example/echo").respond(200, text="must not execute")
+    async with manager.catalog.operation():
+        admitted = manager.get_mcp_server_by_id("catalog-server")
+        read_rows.return_value = [row.model_copy(update={
+            "url": "https://changed.example", "updated_at": datetime(2026, 1, 2),
+        })]
+        await asyncio.create_task(manager.reload_servers_from_database())
+        with pytest.raises(HTTPException) as exc:
+            if dispatch == "managed":
+                await manager._call_openapi_tool_handler(admitted, "echo", {})
+            else:
+                await operations._handle_local_mcp_tool(
+                    add_server_prefix_to_name("echo", get_server_prefix(admitted)), {}
+                )
+        assert exc.value.status_code == 503
+        assert destination.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_catalog_rejects_old_admission_in_a_new_operation(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    original = (await manager.catalog.list())["catalog-server"]
+    read_rows.return_value = [_catalog_row("updated")]
+    async with manager.catalog.operation():
+        with pytest.raises(HTTPException) as exc:
+            await manager._create_mcp_client(original)
+        assert exc.value.detail == "MCP server configuration changed; retry the operation"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", [False, True])
+async def test_catalog_deferred_discovery_preserves_admitted_configuration(monkeypatch, change):
+    row = _catalog_row().model_copy(update={"auth_type": MCPAuth.true_passthrough})
+    read_rows = AsyncMock(return_value=[row])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    metadata = MCPOAuthMetadata(
+        authorization_url="https://issuer.example/authorize", token_url="https://issuer.example/token",
+    )
+
+    async def discover(server):
+        entered.set()
+        await release.wait()
+        return metadata
+
+    with patch.object(manager, "_discover_oauth_metadata_for_server", side_effect=discover):
+        async with manager.catalog.operation():
+            admitted = manager.get_mcp_server_by_id("catalog-server")
+            resolving = asyncio.create_task(manager.ensure_oauth_metadata_discovered(admitted))
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            if change:
+                read_rows.return_value = [row.model_copy(update={"updated_at": datetime(2026, 1, 2)})]
+                await manager.reload_servers_from_database()
+            release.set()
+            if change:
+                with pytest.raises(HTTPException) as exc:
+                    await asyncio.wait_for(resolving, timeout=1)
+                assert exc.value.detail == "MCP server configuration changed; retry the operation"
+            else:
+                resolved = await asyncio.wait_for(resolving, timeout=1)
+                assert resolved.authorization_url == metadata.authorization_url
+                assert resolved.token_url == metadata.token_url
+                assert resolved.updated_at == admitted.updated_at
