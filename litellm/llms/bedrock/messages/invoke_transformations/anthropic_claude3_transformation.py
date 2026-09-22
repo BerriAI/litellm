@@ -561,6 +561,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         if injected_thinking_for_clear_thinking:
             beta_set.add("interleaved-thinking-2025-05-14")
 
+        if anthropic_messages_optional_request_params.get("safeguards") is not None:
+            beta_set.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
+
         self._filter_context_management_for_bedrock_invoke(
             anthropic_messages_request=anthropic_messages_request,
             beta_set=beta_set,
