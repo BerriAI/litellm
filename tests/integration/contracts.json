@@ -272,6 +272,9 @@
     "tests/integration/spend/test_filtered_ledger.py::test_rotated_keys_users_and_model_groups_preserve_success_failure_cache_ledger": [
       "quota_management.spend_tracking.filtered_ledger_preserves_owner_identity_and_totals"
     ],
+    "tests/integration/spend/test_org_budget_cli_session_token.py::test_cli_session_token_without_org_id_charges_and_caps_the_team_organization": [
+      "quota_management.organization_budget.cli_session_token_without_org_id_charges_team_organization"
+    ],
     "tests/integration/management/test_partial_update_sequences.py::test_restricted_actor_cannot_detach_key_from_project": [
       "mgmt.key.update.project_detach_denied_to_restricted_actor"
     ],
