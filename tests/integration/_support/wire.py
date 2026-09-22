@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ssl
 import threading
+import time
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ class Reply:
     chunks: tuple[bytes, ...] | None = None
     abort_after: int | None = None
     gate_after_first: threading.Event | None = None
+    pause_between_chunks: float = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +83,8 @@ def wire_server(respond: Callable[[Request], Reply], tls: ssl.SSLContext | None 
                         self.wfile.flush()
                         if index == 0 and reply.gate_after_first is not None:
                             assert reply.gate_after_first.wait(timeout=5), "Stream barrier was never released"
+                        if reply.pause_between_chunks and index + 1 < len(reply.chunks):
+                            time.sleep(reply.pause_between_chunks)
                     else:
                         self.wfile.write(b"0\r\n\r\n")
                         self.wfile.flush()
