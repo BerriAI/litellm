@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import SimpleQueue
+from types import MappingProxyType
 from typing import Final
 
 
@@ -28,6 +29,7 @@ class Reply:
     abort_after: int | None = None
     gate_after_first: threading.Event | None = None
     pause_between_chunks: float = 0
+    headers: Mapping[str, str] = MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +68,8 @@ def wire_server(respond: Callable[[Request], Reply], tls: ssl.SSLContext | None 
                 reply = Reply(status=500)
             self.send_response(reply.status)
             self.send_header("content-type", reply.content_type)
+            for name, value in reply.headers.items():
+                self.send_header(name, value)
             if reply.chunks is None:
                 self.send_header("content-length", str(len(reply.body)))
             else:
