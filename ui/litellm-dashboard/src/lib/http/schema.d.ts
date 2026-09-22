@@ -33573,6 +33573,23 @@ export interface components {
                 [key: string]: string | string[];
             };
         };
+        /** ModelAccessWindow */
+        ModelAccessWindow: {
+            /**
+             * End
+             * Format: time
+             */
+            end: string;
+            /**
+             * Start
+             * Format: time
+             */
+            start: string;
+            /** Team Ids */
+            team_ids: string[];
+            /** Timezone */
+            timezone: string;
+        };
         /** ModelDeprecationInfo */
         ModelDeprecationInfo: {
             /**
@@ -41725,6 +41742,8 @@ export interface components {
         };
         /** ModelInfo */
         litellm__types__router__ModelInfo: {
+            /** Access Windows */
+            access_windows?: components["schemas"]["ModelAccessWindow"][] | null;
             /** Allow Fail Open */
             allow_fail_open?: boolean | null;
             /** Base Model */
