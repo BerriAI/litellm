@@ -21,6 +21,12 @@ def _input_cost_per_pixel(resolved: ModelInfo) -> float:
     return shared_entry.get("input_cost_per_pixel") or 0.0
 
 
+def _reference_cost(model_cost: Mapping[str, object], image_response: ImageResponse) -> float:
+    pixels: Final = image_response._hidden_params.get("reference_pixels")
+    rate: Final = model_cost.get("input_cost_per_reference_pixel") or 0.0
+    return float(rate) * pixels if isinstance(pixels, int) and isinstance(rate, (int, float)) else 0.0
+
+
 def cost_calculator(
     model: str,
     image_response: Any,
@@ -48,28 +54,32 @@ def cost_calculator(
         if token_based_cost is not None:
             return token_based_cost
 
+        from litellm.cost_calculator import default_image_cost_calculator
+
         num_images: Final = n if n is not None else len(image_response.data or ())
+        model_cost: Final = litellm.model_cost[_model_info["key"]]
         output_cost_per_image: Final[float] = _model_info.get("output_cost_per_image") or 0.0
-        if output_cost_per_image:
-            return output_cost_per_image * num_images
-
-        if _input_cost_per_pixel(_model_info):
-            from litellm.cost_calculator import default_image_cost_calculator
-
-            width: Final = optional_params.get("width") if optional_params else None
-            height: Final = optional_params.get("height") if optional_params else None
-            pixel_size: Final = (
-                f"{width}x{height}"
-                if type(width) is int and type(height) is int and width > 0 and height > 0
-                else size or image_response.size
-            )
-            return default_image_cost_calculator(
+        input_cost_per_pixel: Final[float] = _input_cost_per_pixel(_model_info)
+        width: Final = optional_params.get("width") if optional_params else None
+        height: Final = optional_params.get("height") if optional_params else None
+        pixel_size: Final = (
+            f"{width}x{height}"
+            if type(width) is int and type(height) is int and width > 0 and height > 0
+            else size or image_response.size
+        )
+        generated_cost: Final[float] = (
+            output_cost_per_image * num_images
+            if output_cost_per_image
+            else default_image_cost_calculator(
                 model=_model_info.get("key", model),
                 custom_llm_provider=litellm.LlmProviders.AZURE_AI.value,
                 size=pixel_size,
                 n=num_images,
                 model_info=model_info,
             )
-        return 0.0
+            if input_cost_per_pixel
+            else 0.0
+        )
+        return generated_cost + _reference_cost(model_cost, image_response)
 
     raise ValueError(f"image_response must be of type ImageResponse got type={type(image_response)}")

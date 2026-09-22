@@ -14,7 +14,7 @@ from litellm.llms.azure.image_generation.http_utils import azure_deployment_imag
 from litellm.llms.azure_ai.image_generation.flux_transformation import (
     AzureFoundryFluxImageGenerationConfig,
 )
-from litellm.types.utils import ImageObject, ImageResponse
+from litellm.types.utils import ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails
 from litellm.utils import _invalidate_model_cost_lowercase_map, get_optional_params_image_gen
 
 
@@ -149,6 +149,83 @@ def test_flux2_flex_cost_uses_generated_megapixels():
     )
 
     assert cost == pytest.approx(5e-08 * 2048 * 1024 * 2)
+
+
+def _patch_flux2_flex_pricing(monkeypatch: pytest.MonkeyPatch, **pricing: float) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure_ai/FLUX.2-flex",
+        {
+            **{
+                key: value
+                for key, value in litellm.model_cost["azure_ai/FLUX.2-flex"].items()
+                if not key.startswith(("input_cost_per", "output_cost_per"))
+            },
+            **pricing,
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    _invalidate_model_cost_lowercase_map()
+
+
+def _flux2_flex_cost(response: ImageResponse) -> float:
+    return CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="FLUX.2-flex",
+        completion_response=response,
+        custom_llm_provider="azure_ai",
+        size="1024x1024",
+        call_type="image_edit",
+    )
+
+
+def test_flux2_flex_cost_adds_reference_pixels_to_generated_pixels(monkeypatch: pytest.MonkeyPatch):
+    _patch_flux2_flex_pricing(monkeypatch, input_cost_per_pixel=5e-08, input_cost_per_reference_pixel=5e-08)
+    response: Final = ImageResponse(
+        data=[ImageObject(b64_json="aW1n")], hidden_params={"reference_pixels": 1048576}, size="1024x1024"
+    )
+
+    assert _flux2_flex_cost(response) == pytest.approx(5e-08 * 1048576 * 2)
+
+
+def test_flux2_cost_adds_reference_pixels_to_flat_price(monkeypatch: pytest.MonkeyPatch):
+    _patch_flux2_flex_pricing(monkeypatch, output_cost_per_image=0.04, input_cost_per_reference_pixel=1.5e-08)
+    response: Final = ImageResponse(
+        data=[ImageObject(b64_json="aW1n")], hidden_params={"reference_pixels": 1048576}, size="1024x1024"
+    )
+
+    assert _flux2_flex_cost(response) == pytest.approx(0.04 + 1.5e-08 * 1048576)
+
+
+def test_flux2_cost_ignores_reference_pixels_when_provider_reports_usage(monkeypatch: pytest.MonkeyPatch):
+    _patch_flux2_flex_pricing(
+        monkeypatch,
+        input_cost_per_pixel=5e-08,
+        input_cost_per_reference_pixel=5e-08,
+        input_cost_per_token=1e-05,
+        input_cost_per_image_token=2e-05,
+        output_cost_per_image_token=4e-05,
+        output_cost_per_token=4e-05,
+    )
+    response: Final = ImageResponse(
+        data=[ImageObject(b64_json="aW1n")],
+        hidden_params={"reference_pixels": 1048576},
+        size="1024x1024",
+        usage=ImageUsage(
+            input_tokens=150,
+            input_tokens_details=ImageUsageInputTokensDetails(image_tokens=100, text_tokens=50),
+            output_tokens=1000,
+            total_tokens=1150,
+        ),
+    )
+
+    assert _flux2_flex_cost(response) == pytest.approx(50 * 1e-05 + 100 * 2e-05 + 1000 * 4e-05)
+
+
+def test_flux2_cost_is_unchanged_without_reference_measurement(monkeypatch: pytest.MonkeyPatch):
+    _patch_flux2_flex_pricing(monkeypatch, input_cost_per_pixel=5e-08, input_cost_per_reference_pixel=5e-08)
+    response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n")], size="1024x1024")
+
+    assert _flux2_flex_cost(response) == pytest.approx(5e-08 * 1048576)
 
 
 @pytest.mark.parametrize("model", ("FLUX-1.1-pro", "FLUX.1-Kontext-pro"))

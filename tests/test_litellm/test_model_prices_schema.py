@@ -408,6 +408,44 @@ def test_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
     assert all(name in rows for name in DEEPSEEK_PRICED_ROWS)
 
 
+AZURE_AI_PER_PIXEL_EDIT_ROWS_WITHOUT_A_REFERENCE_METER: Final = frozenset[str]()
+
+
+def is_azure_ai_per_pixel_edit_row(name: str, entry: Mapping[str, object]) -> bool:
+    endpoints: Final = entry.get("supported_endpoints")
+    return (
+        entry.get("litellm_provider") == "azure_ai"
+        and "input_cost_per_pixel" in entry
+        and isinstance(endpoints, list)
+        and "/v1/images/edits" in endpoints
+        and name not in AZURE_AI_PER_PIXEL_EDIT_ROWS_WITHOUT_A_REFERENCE_METER
+    )
+
+
+def has_non_negative_reference_rate(entry: Mapping[str, object]) -> bool:
+    rate: Final = entry.get("input_cost_per_reference_pixel")
+    return isinstance(rate, (int, float)) and rate >= 0
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_azure_ai_per_pixel_edit_entries_declare_a_reference_rate(path: Path):
+    """The Azure AI image cost calculator bills reference images through input_cost_per_reference_pixel,
+    so every azure_ai row priced per generated pixel that serves /v1/images/edits carries that rate."""
+    rows: Mapping[str, object] = json.loads(path.read_text())
+    per_pixel_edit_rows: Final = {
+        name: entry
+        for name, entry in rows.items()
+        if isinstance(entry, dict) and is_azure_ai_per_pixel_edit_row(name, entry)
+    }
+    missing: Final = {
+        name: entry.get("input_cost_per_reference_pixel")
+        for name, entry in per_pixel_edit_rows.items()
+        if not has_non_negative_reference_rate(entry)
+    }
+    assert per_pixel_edit_rows != {}
+    assert missing == {}
+
+
 PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
 MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "evaluation"})
 VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST: Final = frozenset(

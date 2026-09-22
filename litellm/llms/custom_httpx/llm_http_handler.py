@@ -33,6 +33,7 @@ from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.files.types import FileContentStreamingResult
+from litellm.images.utils import measure_reference_pixels
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
@@ -380,6 +381,12 @@ def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
         for callback in callbacks
         if callable(getattr(callback, "enforce_project_io_token_quota_for_frame", None))
     )
+
+
+def _with_reference_pixels(response: ImageResponse, reference_pixels: int | None) -> ImageResponse:
+    if reference_pixels is not None:
+        response._hidden_params["reference_pixels"] = reference_pixels  # rebind-ok: cost calculators read hidden params
+    return response
 
 
 class BaseLLMHTTPHandler:
@@ -6881,6 +6888,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
+        reference_pixels: Final = measure_reference_pixels(image if isinstance(image, list) else [image])
         data, files = image_edit_provider_config.transform_image_edit_request(
             model=model,
             image=image,
@@ -6928,10 +6936,13 @@ class BaseLLMHTTPHandler:
                 provider_config=image_edit_provider_config,
             )
 
-        return image_edit_provider_config.transform_image_edit_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
+        return _with_reference_pixels(
+            image_edit_provider_config.transform_image_edit_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            ),
+            reference_pixels,
         )
 
     async def async_image_edit_handler(
@@ -6980,6 +6991,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
+        reference_pixels: Final = measure_reference_pixels(image if isinstance(image, list) else [image])
         data, files = await image_edit_provider_config.async_transform_image_edit_request(
             model=model,
             image=image,
@@ -7027,10 +7039,13 @@ class BaseLLMHTTPHandler:
                 provider_config=image_edit_provider_config,
             )
 
-        return image_edit_provider_config.transform_image_edit_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
+        return _with_reference_pixels(
+            image_edit_provider_config.transform_image_edit_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            ),
+            reference_pixels,
         )
 
     def image_generation_handler(

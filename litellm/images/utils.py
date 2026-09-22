@@ -1,12 +1,116 @@
-from collections.abc import Collection, Mapping
+import os
+import struct
+from collections.abc import Collection, Mapping, Sequence
 from io import BufferedReader, BytesIO
-from typing import Any, Final, cast, get_type_hints
+from typing import IO, Any, Final, cast, get_type_hints
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.token_counter import get_image_type
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.types.files import FILE_MIME_TYPES, FileType
 from litellm.types.images.main import ImageEditOptionalRequestParams
+from litellm.types.llms.openai import FileTypes
+
+_JPEG_SOF_MARKERS: Final = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
+_MAX_JPEG_SEGMENTS: Final = 64
+_JPEG_FIRST_SEGMENT_OFFSET: Final = 2
+_JPEG_SOF_PAYLOAD_SIZE: Final = 5
+_HEADER_READ_SIZE: Final = 32
+_MIN_PNG_HEADER_SIZE: Final = 24
+_MIN_WEBP_HEADER_SIZE: Final = 30
+
+
+def _content_stream(image: FileTypes) -> IO[bytes] | None:
+    content: Final = image[1] if isinstance(image, tuple) else image
+    if isinstance(content, bytes):
+        return BytesIO(content)
+    if isinstance(content, (str, os.PathLike)):
+        return None
+    return content if content.seekable() else None
+
+
+def _png_dimensions(head: bytes) -> tuple[int, int] | None:
+    if len(head) < _MIN_PNG_HEADER_SIZE:
+        return None
+    width, height = struct.unpack(">II", head[16:24])
+    return width, height
+
+
+def _webp_dimensions(head: bytes) -> tuple[int, int] | None:
+    if len(head) < _MIN_WEBP_HEADER_SIZE:
+        return None
+    match head[12:16]:
+        case b"VP8X":
+            return int.from_bytes(head[24:27], "little") + 1, int.from_bytes(head[27:30], "little") + 1
+        case b"VP8 ":
+            width, height = struct.unpack("<HH", head[26:30])
+            return width & 0x3FFF, height & 0x3FFF
+        case b"VP8L":
+            bits: Final = int.from_bytes(head[21:25], "little")
+            return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+        case _:
+            return None
+
+
+def _jpeg_sof_dimensions(stream: IO[bytes], start: int, offset: int, segments_left: int) -> tuple[int, int] | None:
+    if segments_left == 0:
+        return None
+    stream.seek(start + offset)
+    marker: Final = stream.read(4)
+    if len(marker) < 4 or marker[0] != 0xFF:
+        return None
+    if marker[1] == 0xFF:
+        return _jpeg_sof_dimensions(stream, start, offset + 1, segments_left - 1)
+    if marker[1] in _JPEG_SOF_MARKERS:
+        sof: Final = stream.read(_JPEG_SOF_PAYLOAD_SIZE)
+        if len(sof) < _JPEG_SOF_PAYLOAD_SIZE:
+            return None
+        _precision, height, width = struct.unpack(">BHH", sof)
+        return width, height
+    segment_length: Final = int.from_bytes(marker[2:4], "big")
+    if segment_length < 2:
+        return None
+    return _jpeg_sof_dimensions(stream, start, offset + 2 + segment_length, segments_left - 1)
+
+
+def _header_dimensions(stream: IO[bytes], position: int) -> tuple[int, int] | None:
+    stream.seek(position)
+    head: Final = stream.read(_HEADER_READ_SIZE)
+    match get_image_type(head):
+        case "png":
+            return _png_dimensions(head)
+        case "webp":
+            return _webp_dimensions(head)
+        case "jpeg":
+            return _jpeg_sof_dimensions(stream, position, _JPEG_FIRST_SEGMENT_OFFSET, _MAX_JPEG_SEGMENTS)
+        case _:
+            return None
+
+
+def measure_reference_image(image: FileTypes) -> tuple[int, int] | None:
+    stream: Final = _content_stream(image)
+    if stream is None:
+        return None
+    position: Final = stream.tell()
+    try:
+        return _header_dimensions(stream, position)
+    except (OSError, ValueError, struct.error):
+        return None
+    finally:
+        stream.seek(position)
+
+
+def measure_reference_pixels(images: Sequence[FileTypes]) -> int | None:
+    measured: Final = tuple(measure_reference_image(image) for image in images)
+    dimensions: Final = tuple(size for size in measured if size is not None)
+    if len(dimensions) != len(measured):
+        verbose_logger.debug(
+            "Reference image %d has no readable PNG, JPEG or WebP header; billing generated pixels only",
+            measured.index(None),
+        )
+        return None
+    return sum(width * height for width, height in dimensions)
 
 
 class ImageEditRequestUtils:
