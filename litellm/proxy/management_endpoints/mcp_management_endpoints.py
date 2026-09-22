@@ -983,7 +983,7 @@ if MCP_AVAILABLE:
             mcp_server_auth_headers=None,
         )
         tools: Final = listing.tools
-        dumped_tools: Final = [dict(tool) for tool in tools]
+        dumped_tools: Final = [tool.model_dump(by_alias=True) for tool in tools]
 
         return {"tools": dumped_tools}
 
