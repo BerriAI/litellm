@@ -14471,6 +14471,21 @@ async def test_request_selected_during_guardrail_runs_concurrently_with_tool(mon
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("in_config,in_db,expected", [(True, False, True), (False, True, False), (True, True, False)])
+async def test_server_response_identifies_read_only_config(in_config, in_db, expected):
+    manager = MCPServerManager()
+    server = MCPServer(server_id="source-server", name="source_server", transport=MCPTransport.http)
+    manager.config_mcp_servers = {server.server_id: server} if in_config else {}
+    manager.registry = {server.server_id: server} if in_db else {}
+
+    listed = await manager.get_all_mcp_servers_unfiltered()
+
+    assert len(listed) == 1
+    assert listed[0].model_dump().get("is_config") is expected
+    assert manager._build_mcp_server_table(server).model_dump().get("is_config") is expected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("with_caller,legacy_factory", [(True, False), (False, False), (True, True)])
 async def test_client_sampling_does_not_fill_explicit_context_from_another_ambient_caller(with_caller, legacy_factory):
     from mcp.server.auth.middleware.auth_context import auth_context_var

@@ -7081,6 +7081,7 @@ class MCPServerManager:
     def _build_mcp_server_table(self, server: MCPServer) -> LiteLLM_MCPServerTable:
         return LiteLLM_MCPServerTable(
             server_id=server.server_id,
+            is_config=self.is_config_declared_server(server.server_id) and server.server_id not in self.registry,
             server_name=server.server_name,
             alias=server.alias,
             description=(server.mcp_info.get("description") if server.mcp_info else None),
