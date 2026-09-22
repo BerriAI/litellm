@@ -3013,6 +3013,32 @@ def test_get_final_response_obj_with_empty_response_obj_and_list_init():
     assert result[1].name == "Object2"
 
 
+def test_get_final_response_obj_stores_the_text_a_post_call_guardrail_served():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+
+    raw = {
+        "id": "x",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "Card: 4111 1111 1111 1111"},
+            }
+        ],
+    }
+
+    logged = StandardLoggingPayloadSetup.get_final_response_obj(
+        response_obj=raw, init_response_obj=raw, kwargs={SERVED_OUTPUT_TEXTS_KEY: ("Card: <CREDIT_CARD>",)}
+    )
+    untouched = StandardLoggingPayloadSetup.get_final_response_obj(response_obj=raw, init_response_obj=raw, kwargs={})
+
+    assert isinstance(logged, dict)
+    assert logged["choices"][0]["message"]["content"] == "Card: <CREDIT_CARD>"
+    assert logged["choices"][0]["finish_reason"] == "stop"
+    assert untouched == raw
+
+
 def test_get_usage_as_dict():
     """
     Test get_usage_as_dict returns usage as plain dict from response_obj or combined_usage_object.

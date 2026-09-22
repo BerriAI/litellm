@@ -107,6 +107,10 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_streaming_responses_for_custom_logger,
     should_redact_message_logging,
 )
+from litellm.litellm_core_utils.served_output_texts import (
+    SERVED_OUTPUT_TEXTS_KEY,
+    overlay_served_output_texts,
+)
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -5851,7 +5855,7 @@ class StandardLoggingPayloadSetup:
         else:
             final_response_obj = modified_final_response_obj
 
-        return final_response_obj
+        return overlay_served_output_texts(final_response_obj, kwargs.get(SERVED_OUTPUT_TEXTS_KEY))
 
     @staticmethod
     def get_additional_headers(
