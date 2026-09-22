@@ -676,6 +676,35 @@ def send(
     return streaming_outcome(resp, stream, sent_at=sent_at)
 
 
+class AbandonedRequest(BaseModel):
+    """A non-streaming request whose socket the client closed ``after`` seconds in,
+    before the proxy had answered."""
+
+    kind: Literal["abandoned"] = "abandoned"
+    after: float
+
+
+def abandon(
+    url: URL, *, headers: BaseModel, json: BaseModel, after: float, connect_timeout: float = 10.0
+) -> AbandonedRequest | StreamingResponse:
+    """POST and close the connection ``after`` seconds if no response head has arrived
+    by then; returns the response instead when the proxy answered first."""
+    sent_at: Final = time.monotonic()
+    session: Final = requests.Session()
+    try:
+        resp = session.post(
+            str(url),
+            headers=_headers(headers),
+            json=wire_body(json),
+            timeout=(connect_timeout, after),
+        )
+    except requests.exceptions.ReadTimeout:
+        return AbandonedRequest(after=after)
+    finally:
+        session.close()
+    return streaming_outcome(resp, False, sent_at=sent_at)
+
+
 def stream(url: URL, *, headers: BaseModel, json: BaseModel, timeout: float = 60.0) -> StreamingResponse:
     """Streaming (SSE) call: consumes the stream counting events, and captures the
     x-litellm-call-id + content-type headers. Body is elided."""

@@ -32,6 +32,28 @@ impl CacheContext for ExactCacheContext {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SemanticCacheContext {
+    pub input: Option<serde_json::Value>,
+    pub messages: Option<serde_json::Value>,
+    pub metadata: Option<serde_json::Value>,
+    pub scope: Option<String>,
+    pub ttl: Option<Duration>,
+}
+
+impl CacheContext for SemanticCacheContext {
+    fn ttl(&self) -> Option<Duration> {
+        self.ttl
+    }
+
+    fn with_ttl(&self, ttl: Option<Duration>) -> Self {
+        Self {
+            ttl,
+            ..self.clone()
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CacheConnectionStatus {
@@ -104,4 +126,32 @@ pub trait BaseCache: Send + Sync {
     fn disconnect(&self) -> impl Future<Output = Result<(), Error>> + Send;
 
     fn test_connection(&self) -> impl Future<Output = Result<CacheConnectionResult, Error>> + Send;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use serde_json::json;
+
+    use super::{CacheContext, SemanticCacheContext};
+
+    #[test]
+    fn semantic_context_with_ttl_only_replaces_ttl() {
+        let context = SemanticCacheContext {
+            input: Some(json!({"input": "hello"})),
+            messages: Some(json!([{"role": "user", "content": "hello"}])),
+            metadata: Some(json!({"tenant": "team"})),
+            scope: Some("scope".into()),
+            ttl: Some(Duration::from_secs(10)),
+        };
+
+        let updated = context.with_ttl(Some(Duration::from_secs(20)));
+
+        assert_eq!(updated.ttl, Some(Duration::from_secs(20)));
+        assert_eq!(updated.input, context.input);
+        assert_eq!(updated.messages, context.messages);
+        assert_eq!(updated.metadata, context.metadata);
+        assert_eq!(updated.scope, context.scope);
+    }
 }

@@ -22,7 +22,7 @@ import json
 from unittest.mock import MagicMock
 
 import litellm
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import Choices, Message, ModelResponse, ModelResponseStream
 
 
 class TestEvent(BaseModel):
@@ -944,3 +944,48 @@ class TestOllamaToolCallTransformation:
         assert tool_msg["content"] == "Sunny, 72°F"
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
+
+
+class TestOllamaStreamingUsage:
+    @staticmethod
+    def _parse(chunk: dict) -> ModelResponseStream:
+        iterator = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        return iterator.chunk_parser(chunk)
+
+    def test_done_chunk_reports_the_counts_ollama_sent(self):
+        result = self._parse(
+            {
+                "model": "qwen3:0.6b",
+                "message": {"role": "assistant", "content": ""},
+                "done": True,
+                "done_reason": "stop",
+                "prompt_eval_count": 100,
+                "eval_count": 50,
+            }
+        )
+
+        assert result.usage is not None
+        assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (100, 50, 150)
+
+    def test_done_chunk_without_counts_reports_no_usage_instead_of_zeros(self):
+        result = self._parse(
+            {
+                "model": "qwen3:0.6b",
+                "message": {"role": "assistant", "content": ""},
+                "done": True,
+                "done_reason": "stop",
+            }
+        )
+
+        assert result.usage is None
+
+    def test_chunk_before_done_reports_no_usage(self):
+        result = self._parse(
+            {
+                "model": "qwen3:0.6b",
+                "message": {"role": "assistant", "content": "Hi"},
+                "done": False,
+            }
+        )
+
+        assert result.usage is None

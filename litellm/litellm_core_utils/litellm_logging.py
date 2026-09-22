@@ -69,7 +69,11 @@ from litellm.litellm_core_utils.classifier_logging import (
     classifier_input_snapshot,
     is_classifier_call,
 )
-from litellm.litellm_core_utils.core_helpers import is_expected_client_error, reconstruct_model_name
+from litellm.litellm_core_utils.core_helpers import (
+    is_expected_client_error,
+    reconstruct_model_name,
+    set_response_cost_in_hidden_params,
+)
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
@@ -1753,13 +1757,21 @@ class Logging(LiteLLMLoggingBaseClass):
         if transformed_result is not None:
             result = transformed_result
 
-        result_hidden_params: Final = getattr(result, "_hidden_params", None) or MappingProxyType({})
+        priced_result: Final = (
+            result.response
+            if isinstance(result, (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent))
+            else result
+        )
+
+        result_hidden_params: Final = getattr(priced_result, "_hidden_params", None) or MappingProxyType({})
         result_additional_headers: Final = (
             result_hidden_params.get("additional_headers")
             if isinstance(result_hidden_params, dict)
             else getattr(result_hidden_params, "additional_headers", None)
         )
-        if isinstance(result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(result, "_hidden_params"):
+        if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(
+            priced_result, "_hidden_params"
+        ):
             hidden_params: Final = result_hidden_params
             if (
                 "response_cost" in hidden_params and hidden_params["response_cost"] is not None
@@ -1795,7 +1807,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         try:
             response_cost_calculator_kwargs: Final = {
-                "response_object": result,
+                "response_object": priced_result,
                 "model": litellm_model_name or self.model,
                 "cache_hit": cache_hit,
                 "custom_llm_provider": self.model_call_details.get("custom_llm_provider", None),
@@ -3918,6 +3930,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             ## return unified Usage object
             if isinstance(result.response.usage, ResponseAPIUsage):
+                set_response_cost_in_hidden_params(result.response, result.response.usage.cost)
                 transformed_usage: Final = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
                     result.response.usage
                 )

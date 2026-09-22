@@ -1,3 +1,4 @@
+from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 import json
 from datetime import datetime
 
@@ -27,8 +28,8 @@ def proxy_mode():
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("proxy_mode")
 async def test_proxy_call_rejects_non_proxy_tool_names() -> None:
-    result = await server._dispatch_virtual_mcp_tool(
-        name="math_stdio-add", arguments={"a": 1, "b": 2}, user_api_key_auth=AUTH, client_ip=None
+    result = await mcp_operations._dispatch_virtual_mcp_tool(
+        name="math_stdio-add", arguments={"a": 1, "b": 2}, user_api_key_auth=AUTH, client_ip=None, mcp_proxy_mode=True
     )
 
     assert result is not None
@@ -105,12 +106,13 @@ async def test_proxy_scope_exception_emits_failure_log(monkeypatch: pytest.Monke
     arguments = {"tool_id": "denied-scope", "arguments": {}}
 
     with pytest.raises(HTTPException) as denied:
-        await server._dispatch_virtual_mcp_tool(
+        await mcp_operations._dispatch_virtual_mcp_tool(
             name="call_tool",
             arguments=arguments,
             user_api_key_auth=auth,
             client_ip=None,
             mcp_servers=["ungranted"],
+            mcp_proxy_mode=True,
             raw_headers={"authorization": "Bearer raw-scope-secret", "x-litellm-call-id": "scope-denial"},
         )
 
