@@ -353,9 +353,8 @@ class TestOtelV2LangfuseGenerationOutput:
         assert response.pages and response.pages[0].markdown, f"/v1/ocr returned no page markdown: {response!r}"
 
         text: Final = _input_text(_generation(client, langfuse_creds, alias=alias, started=started))
-        assert len(text) <= BOUNDED_OUTPUT_CHARS, f"OCR upload input is not bounded ({len(text)} chars)"
-        assert base64.b64encode(pdf).decode()[:64] not in text, "OCR upload input leaks the raw base64 document"
-        assert text.startswith("data:application/pdf;base64,[base64_data truncated: "), (
+        encoded: Final = base64.b64encode(pdf).decode()
+        assert text == f"data:application/pdf;base64 ({len(encoded)} chars)", (
             f"OCR upload input is not the bounded document summary: {text!r}"
         )
 

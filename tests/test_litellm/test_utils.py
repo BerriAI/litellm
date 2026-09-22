@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import contextlib
 import contextvars
 import io
@@ -21,9 +22,6 @@ from jsonschema import validate
 
 import litellm
 from litellm._internal_context import is_internal_call
-from litellm.caching.caching import Cache
-from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
-from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm._logging import (
     CorrelationContextFilter,
     JsonFormatter,
@@ -31,14 +29,18 @@ from litellm._logging import (
     trace_id_var,
     verbose_logger,
 )
+from litellm.caching.caching import Cache
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy.utils import is_valid_api_key
-from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
+from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.types.utils import (
+    ADDRESSED_RESPONSE_ID_FIELD,
     CallTypes,
     Choices,
     Delta,
@@ -48,7 +50,6 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     StreamingChoices,
     Usage,
-    ADDRESSED_RESPONSE_ID_FIELD,
     all_litellm_params,
     bedrock_batch_litellm_params,
 )
@@ -6037,9 +6038,22 @@ def _logged_request_messages(original_function: str, *args: object, **kwargs: ob
         (
             "aocr",
             (),
+            {"document": {"type": "document_url", "document_url": "data:application/pdf;base64,JVBERi0xLjQ="}},
+            "data:application/pdf;base64 (12 chars)",
+        ),
+        (
+            "aocr",
+            (),
+            {"document": {"type": "image_url", "image_url": "https://x.test/a,b.png"}},
+            "https://x.test/a,b.png",
+        ),
+        (
+            "aocr",
+            (),
             {"document": {"type": "file", "file": PurePath("/tmp/hello.pdf"), "mime_type": "application/pdf"}},
             "file (application/pdf) hello.pdf",
         ),
+        ("aocr", (), {"document": {"type": "document_url", "document_url": ""}}, ""),
         ("aocr", (), {"document": {"type": "file", "file": b"%PDF"}}, "file 4 bytes"),
         ("aocr", (), {"document": {"type": "file", "file": io.BytesIO(b"%PDF")}}, "file"),
         ("aocr", (), {"document": "not-a-document"}, "default-message-value"),
@@ -6056,3 +6070,13 @@ def test_function_setup_never_logs_the_ocr_file_bytes() -> None:
     logged: Final = _logged_request_messages("aocr", document={"type": "file", "file": content})
 
     assert logged == [{"role": "user", "content": "file 29 bytes"}]
+
+
+def test_function_setup_never_logs_the_ocr_data_uri_payload() -> None:
+    payload: Final = base64.b64encode(b"%PDF-1.4 secret document body").decode()
+    logged: Final = _logged_request_messages(
+        "aocr", document={"type": "document_url", "document_url": f"data:application/pdf;base64,{payload}"}
+    )
+
+    assert logged == [{"role": "user", "content": f"data:application/pdf;base64 ({len(payload)} chars)"}]
+    assert payload not in str(logged)

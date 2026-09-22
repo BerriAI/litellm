@@ -862,8 +862,9 @@ class ProxyClient:
         )
 
     def create_search_tool(self, body: SearchToolCreateBody) -> str:
-        """POST /search_tools: register a search tool on the running proxy and return its id."""
-        return unwrap(
+        """POST /search_tools: register a search tool on the running proxy and return its id
+        once every worker has had a config-reload window to pick it up from the DB."""
+        search_tool_id: Final = unwrap(
             self.transport.post(
                 "/search_tools",
                 headers=self.management_headers(),
@@ -871,6 +872,8 @@ class ProxyClient:
                 response_type=SearchToolCreateResponse,
             )
         ).search_tool_id
+        settle_propagation(time.monotonic())
+        return search_tool_id
 
     def delete_search_tool(self, search_tool_id: str) -> None:
         result = self.transport.delete(

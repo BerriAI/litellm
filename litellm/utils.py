@@ -892,9 +892,10 @@ def _ocr_document_summary(document: object) -> str:
     if not isinstance(document, Mapping):
         return "default-message-value"
     doc: Final = cast(Mapping[str, object], document)  # cast-ok: ocr()/aocr() type the document as Mapping[str, object]
-    location: Final = doc.get("document_url") or doc.get("image_url")
+    location: Final = doc.get("document_url", doc.get("image_url"))
     if isinstance(location, str):
-        return location
+        header, separator, payload = location.partition(",")
+        return f"{header} ({len(payload)} chars)" if separator and header.startswith("data:") else location
     file_input: Final = doc.get("file")
     mime_type: Final = doc.get("mime_type")
     kind: Final = f"file ({mime_type})" if isinstance(mime_type, str) else "file"
