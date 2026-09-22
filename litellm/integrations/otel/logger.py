@@ -240,7 +240,7 @@ class OpenTelemetryV2(CustomLogger):
         provider: Final = resolve_logger_provider(self.config, logger_provider)
         if provider is None:
             return None
-        return GenAIEventRecorder(get_event_logger(provider, LITELLM_TRACER_NAME))
+        return GenAIEventRecorder(get_event_logger(provider, LITELLM_TRACER_NAME), provider.resource)
 
     # ====================================================================== #
     #  Proxy global registration
