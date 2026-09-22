@@ -183,7 +183,17 @@ def get_supported_openai_params(
             return litellm.DatabricksConfig().get_supported_openai_params(model=model)
         elif request_type == "embeddings":
             return litellm.DatabricksEmbeddingConfig().get_supported_openai_params()
-    elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
+    elif custom_llm_provider == "palm":
+        return litellm.GoogleAIStudioGeminiConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "gemini":
+        if request_type == "transcription":
+            transcription_provider_config = litellm.ProviderConfigManager.get_provider_audio_transcription_config(
+                model=model,
+                provider=LlmProviders.GEMINI,
+            )
+            if transcription_provider_config:
+                return transcription_provider_config.get_supported_openai_params(model=model)
+            return None
         return litellm.GoogleAIStudioGeminiConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "novita":
         return litellm.NovitaConfig().get_supported_openai_params(model=model)

@@ -7846,6 +7846,7 @@ def transcription(
     response_format: Literal["json", "text", "srt", "verbose_json", "vtt"] | None = None,
     timestamp_granularities: list[Literal["word", "segment"]] | None = None,
     temperature: int | None = None,  # openai defaults this to 0
+    keywords: list[str] | None = None,
     ## LITELLM PARAMS ##
     user: str | None = None,
     timeout=600,  # default to 10 minutes
@@ -7896,6 +7897,7 @@ def transcription(
     optional_params: Final = get_optional_params_transcription(
         model=model,
         language=language,
+        keywords=keywords,
         prompt=prompt,
         response_format=response_format,
         timestamp_granularities=timestamp_granularities,
