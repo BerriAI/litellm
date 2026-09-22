@@ -3899,7 +3899,7 @@ async def test_load_environment_variables_direct_and_os_environ():
     with patch("litellm.proxy.proxy_server.get_secret_str", return_value=mock_secret_value) as mock_get_secret:
         with patch.dict(os.environ, {}, clear=False):  # Don't clear existing env vars, just track changes
             # Call the method under test
-            proxy_config._load_environment_variables(test_config)
+            proxy_config._load_environment_variables(ProxyRuntimeConfig.from_resolved(test_config))
 
             # Verify direct environment variables were set correctly
             assert os.environ["DIRECT_VAR"] == "direct_value"
@@ -3939,7 +3939,7 @@ async def test_load_environment_variables_litellm_license_and_edge_cases():
     with patch("litellm.proxy.proxy_server._license_check", mock_license_check):
         with patch.dict(os.environ, {}, clear=False):
             # Call the method under test
-            proxy_config._load_environment_variables(test_config_with_license)
+            proxy_config._load_environment_variables(ProxyRuntimeConfig.from_resolved(test_config_with_license))
 
             # Verify LITELLM_LICENSE was set in environment
             assert os.environ["LITELLM_LICENSE"] == "test_license_key"
@@ -3952,14 +3952,14 @@ async def test_load_environment_variables_litellm_license_and_edge_cases():
     test_config_no_env_vars = {}
 
     # This should not raise any errors and should return without doing anything
-    result = proxy_config._load_environment_variables(test_config_no_env_vars)
+    result = proxy_config._load_environment_variables(ProxyRuntimeConfig.from_resolved(test_config_no_env_vars))
     assert result is None  # Method returns None
 
     # Test Case 3: environment_variables is None
     test_config_none_env_vars = {"environment_variables": None}
 
     # This should not raise any errors and should return without doing anything
-    result = proxy_config._load_environment_variables(test_config_none_env_vars)
+    result = proxy_config._load_environment_variables(ProxyRuntimeConfig.from_resolved(test_config_none_env_vars))
     assert result is None  # Method returns None
 
     # Test Case 4: os.environ/ prefix but get_secret_str returns None
@@ -3968,7 +3968,7 @@ async def test_load_environment_variables_litellm_license_and_edge_cases():
     with patch("litellm.proxy.proxy_server.get_secret_str", return_value=None):
         with patch.dict(os.environ, {}, clear=False):
             # Call the method under test
-            proxy_config._load_environment_variables(test_config_secret_none)
+            proxy_config._load_environment_variables(ProxyRuntimeConfig.from_resolved(test_config_secret_none))
 
             # Verify that the environment variable was not set when secret resolution fails
             assert "FAILED_SECRET" not in os.environ
@@ -3998,7 +3998,7 @@ async def test_load_environment_variables_blocks_dangerous_keys():
     }
 
     with patch.dict(os.environ, {}, clear=False):
-        proxy_config._load_environment_variables(test_config)
+        proxy_config._load_environment_variables(ProxyRuntimeConfig.from_resolved(test_config))
 
         # Blocked keys should not be set to the attacker value
         assert os.environ.get("PATH") != "/tmp/evil"
@@ -4027,7 +4027,7 @@ async def test_load_environment_variables_allows_proxy_keys():
     }
 
     with patch.dict(os.environ, {}, clear=False):
-        proxy_config._load_environment_variables(test_config)
+        proxy_config._load_environment_variables(ProxyRuntimeConfig.from_resolved(test_config))
 
         assert os.environ["HTTP_PROXY"] == "http://corp-proxy:8080"
         assert os.environ["HTTPS_PROXY"] == "http://corp-proxy:8080"
@@ -4051,7 +4051,7 @@ async def test_load_environment_variables_blocks_no_proxy():
     }
 
     with patch.dict(os.environ, {}, clear=False):
-        proxy_config._load_environment_variables(test_config)
+        proxy_config._load_environment_variables(ProxyRuntimeConfig.from_resolved(test_config))
 
         assert os.environ.get("NO_PROXY") != "internal-service"
         assert os.environ.get("no_proxy") != "internal-service"
@@ -11797,7 +11797,7 @@ async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(mon
     }
     pc = ps.ProxyConfig()
     pc._apply_litellm_settings_db_values(pc._prepared_db_settings_values("litellm_settings", db_row))
-    pc._add_callbacks_from_db_config({"litellm_settings": db_row})
+    pc._add_callbacks_from_db_config(ProxyRuntimeConfig.from_resolved({"litellm_settings": db_row}))
 
     datadog_loggers = [cb for cb in litellm.success_callback if isinstance(cb, DataDogLogger)]
     assert len(datadog_loggers) == 1
@@ -13007,7 +13007,9 @@ def _run_init_coordination_redis(config, env=None):
         _patched_coordination_redis_module_state(spend_cache=fresh_spend_cache, config_cache=fresh_config_cache),
         mock.patch.dict(os.environ, env or {}, clear=False),
     ):
-        built = proxy_server_module.ProxyConfig()._init_coordination_redis(config=config)
+        built = proxy_server_module.ProxyConfig()._init_coordination_redis(
+            config=ProxyRuntimeConfig.from_resolved(config)
+        )
         return (
             built,
             fresh_spend_cache.redis_cache,
@@ -13098,7 +13100,9 @@ def test_explicit_coordination_redis_takes_precedence_over_cache_backend():
         litellm.cache = None
         proxy_config = proxy_server_module.ProxyConfig()
         built = proxy_config._init_coordination_redis(
-            config={"general_settings": {"coordination_redis": {"host": "explicit-coord-host"}}}
+            config=ProxyRuntimeConfig.from_resolved(
+                {"general_settings": {"coordination_redis": {"host": "explicit-coord-host"}}}
+            )
         )
         assert built is not None
         proxy_server_module.redis_usage_cache = built
