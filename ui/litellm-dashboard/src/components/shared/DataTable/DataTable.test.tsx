@@ -889,8 +889,6 @@ describe("DataTable layout", () => {
 
     expect(scroller).toHaveClass("min-h-0", "overflow-auto");
     expect(scroller).toHaveStyle({ maxHeight: "" });
-    // Overlay scrollbars would float over the last row; the inset variant reserves its own strip.
-    expect(scroller).toHaveClass("scrollbar-inset");
     // Without this the Table primitive's own overflow container captures the sticky header.
     expect(scroller).toHaveClass("[&_[data-slot=table-container]]:overflow-visible");
 

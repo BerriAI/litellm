@@ -27,23 +27,24 @@
   }
 }
 
-/* Classic (non-overlay) scrollbars that reserve their own strip instead of floating over content */
 @utility scrollbar-inset {
-  /* Chromium ignores ::-webkit-scrollbar once scrollbar-width or scrollbar-color is set, so those stay Firefox-only */
+  /* Chromium drops ::-webkit-scrollbar styling once scrollbar-width or scrollbar-color is set */
   @supports not selector(::-webkit-scrollbar) {
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
   }
   &::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 14px;
+    height: 14px;
   }
   &::-webkit-scrollbar-track {
     background: transparent;
   }
   &::-webkit-scrollbar-thumb {
     background: var(--border);
+    border: 3px solid transparent;
     border-radius: 9999px;
+    background-clip: padding-box;
   }
 }
 
