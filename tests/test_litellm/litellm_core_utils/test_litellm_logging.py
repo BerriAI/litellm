@@ -3896,6 +3896,43 @@ def test_process_hidden_params_explicit_zero_cost_overrides_earlier_cost():
     assert slo.get("response_cost") == 0.0
 
 
+def test_process_hidden_params_none_cost_on_fal_poll_stays_unbilled():
+    """A Fal result poll hands back image URLs with hidden response_cost=None; the fallthrough must not price them."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.fal_ai_passthrough_logging_handler import (
+        FalAIPassthroughLoggingHandler,
+    )
+
+    logging_obj = LiteLLMLoggingObj(
+        model="fal-ai/flux-pro/v1.1",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="test-fal-poll-unbilled",
+        function_id="test-fal-poll-unbilled",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"model": "fal-ai/flux-pro/v1.1"}
+    logging_obj.optional_params = {}
+
+    poll = FalAIPassthroughLoggingHandler().fal_ai_passthrough_handler(
+        response_body={"images": [{"url": "https://example.invalid/out.png"}]},
+        request_body={"prompt": "a cat"},
+        logging_obj=logging_obj,
+        url_route="https://queue.fal.run/fal-ai/flux-pro/v1.1/requests/req-1",
+        kwargs={},
+    )
+    assert poll["result"]._hidden_params["response_cost"] is None
+
+    logging_obj._process_hidden_params_and_response_cost(poll["result"], datetime.now(), datetime.now())
+
+    assert not logging_obj.model_call_details.get("response_cost")
+    slo = logging_obj.model_call_details.get("standard_logging_object") or {}
+    assert not slo.get("response_cost")
+
+
 def test_function_setup_litellm_metadata_populates_metadata():
     """
     Test that function_setup() properly handles litellm_metadata (used by /v1/messages,

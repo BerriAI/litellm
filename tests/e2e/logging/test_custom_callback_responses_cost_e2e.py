@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 import pytest
-from callback_cost_capture import CAPTURE_FILE_ENV, CapturedCost
+from callback_cost_record import CAPTURE_FILE_ENV, CapturedCost
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from lifecycle import ResourceManager
 from logging_client import LoggingClient, first_ok

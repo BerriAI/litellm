@@ -16,17 +16,7 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict
 
 from litellm.integrations.custom_logger import CustomLogger
-
-CAPTURE_FILE_ENV: Final = "E2E_CALLBACK_COST_CAPTURE_FILE"
-
-
-class CapturedCost(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    request_id: str
-    call_type: str | None
-    hook: str
-    response_cost: float | None
+from tests.e2e.logging.callback_cost_record import CAPTURE_FILE_ENV, CapturedCost
 
 
 class _StandardLoggingCostFields(BaseModel):
