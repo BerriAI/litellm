@@ -28,7 +28,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
-from ..common_utils import OllamaError
+from ..common_utils import OllamaError, think_from_reasoning_effort
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -170,13 +170,11 @@ class OllamaChatConfig(BaseConfig):
             if param == "response_format" and isinstance(value, dict) and value.get("type") == "json_schema":
                 if value.get("json_schema") and value["json_schema"].get("schema"):
                     optional_params["format"] = value["json_schema"]["schema"]
-            if param == "reasoning_effort" and value is not None:
-                effort: Final = value.get("effort") if isinstance(value, Mapping) else value
-                if effort is not None:
-                    if model.startswith("gpt-oss"):
-                        optional_params["think"] = effort
-                    else:
-                        optional_params["think"] = effort in {"low", "medium", "high"}
+            if (
+                param == "reasoning_effort"
+                and (think := think_from_reasoning_effort(model, cast(object, value))) is not None
+            ):
+                optional_params["think"] = think
             ### FUNCTION CALLING LOGIC ###
             # Ollama 0.4+ supports native tool calling - pass tools directly
             # and let Ollama handle model capability detection

@@ -1,7 +1,7 @@
 import json
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from httpx._models import Headers, Response
 
@@ -32,7 +32,7 @@ from litellm.types.utils import (
     StreamingChoices,
 )
 
-from ..common_utils import OllamaError, OllamaModelInfo, _convert_image
+from ..common_utils import OllamaError, OllamaModelInfo, _convert_image, think_from_reasoning_effort
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -182,13 +182,11 @@ class OllamaConfig(BaseConfig):
                 optional_params["frequency_penalty"] = value
             elif param == "stop":
                 optional_params["stop"] = value
-            elif param == "reasoning_effort" and value is not None:
-                effort: Final = value.get("effort") if isinstance(value, Mapping) else value
-                if effort is not None:
-                    if model.startswith("gpt-oss"):
-                        optional_params["think"] = effort
-                    else:
-                        optional_params["think"] = effort in {"low", "medium", "high"}
+            elif (
+                param == "reasoning_effort"
+                and (think := think_from_reasoning_effort(model, cast(object, value))) is not None
+            ):
+                optional_params["think"] = think
             elif param == "response_format" and isinstance(value, dict):
                 if value["type"] == "json_object":
                     optional_params["format"] = "json"
