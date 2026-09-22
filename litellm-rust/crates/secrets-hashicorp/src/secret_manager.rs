@@ -100,7 +100,7 @@ impl HashicorpVault {
         context: &SecretOperationContext,
     ) -> Result<SecretLocation, Error> {
         validate_secret_name(secret_name).map_err(Error::InvalidSecretName)?;
-        let operation: Option<&HashicorpOperationContext> = hashicorp_context(context);
+        let operation: Option<&HashicorpOperationContext> = hashicorp_context(context)?;
         let path: String = [
             operation
                 .and_then(|operation| operation.path_prefix.as_deref())
@@ -137,7 +137,7 @@ impl HashicorpVault {
         context: &SecretOperationContext,
     ) -> Result<Option<SecretValue>, Error> {
         let location: SecretLocation = self.secret_location_with_context(secret_name, context)?;
-        let data_key: String = data_key(context);
+        let data_key: String = data_key(context)?;
         let cache_key = CacheKey {
             location: location.clone(),
             data_key: data_key.clone(),
@@ -191,7 +191,7 @@ impl HashicorpVault {
     ) -> Result<Value, Error> {
         let location: SecretLocation =
             self.secret_location_with_context(secret_name, &context.operation)?;
-        let data_key: String = data_key(&context.operation);
+        let data_key: String = data_key(&context.operation)?;
         let data: HashMap<String, Value> = match context.description.as_deref() {
             Some(description) => [
                 (data_key, Value::String(value.expose().to_owned())),
@@ -262,11 +262,7 @@ impl HashicorpVault {
         value: &SecretValue,
         context: &SecretOperationContext,
     ) -> Result<Value, Error> {
-        with_timeout(
-            context,
-            async_rotate_secret(self, current_name, new_name, value, context),
-        )
-        .await
+        async_rotate_secret(self, current_name, new_name, value, context).await
     }
 
     async fn vault_client(&self) -> Result<Arc<VaultClient>, Error> {
@@ -381,12 +377,15 @@ enum ErrorContext {
     Secret,
 }
 
-fn hashicorp_context(context: &SecretOperationContext) -> Option<&HashicorpOperationContext> {
+fn hashicorp_context(
+    context: &SecretOperationContext,
+) -> Result<Option<&HashicorpOperationContext>, Error> {
     match context {
-        SecretOperationContext::Hashicorp(context) => Some(context),
-        SecretOperationContext::Default
-        | SecretOperationContext::Aws(_)
-        | SecretOperationContext::Cyberark(_) => None,
+        SecretOperationContext::Hashicorp(context) => Ok(Some(context)),
+        SecretOperationContext::Default => Ok(None),
+        SecretOperationContext::Aws(_) | SecretOperationContext::Cyberark(_) => {
+            Err(Error::InvalidOperationContext)
+        }
     }
 }
 
@@ -395,13 +394,13 @@ fn path_component(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-fn data_key(context: &SecretOperationContext) -> String {
-    hashicorp_context(context)
+fn data_key(context: &SecretOperationContext) -> Result<String, Error> {
+    Ok(hashicorp_context(context)?
         .and_then(|context| context.data_key.as_deref())
         .map(str::trim)
         .filter(|data_key| !data_key.is_empty())
         .map(str::to_owned)
-        .unwrap_or_else(|| "key".to_owned())
+        .unwrap_or_else(|| "key".to_owned()))
 }
 
 async fn with_timeout<T>(
