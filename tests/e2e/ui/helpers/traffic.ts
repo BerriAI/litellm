@@ -139,7 +139,7 @@ export async function waitForSpendLog(
     lastStatus = res.status();
     if (res.ok()) {
       const body = await res.json();
-      const rows = Array.isArray(body) ? body : (body?.data ?? []);
+      const rows = Array.isArray(body) ? body : body?.data ?? [];
       if (rows.length > 0) {
         return;
       }

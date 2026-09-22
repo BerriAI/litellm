@@ -102,7 +102,9 @@ test.describe("Logs page", () => {
       model: CHAT_MODEL_A,
       prompt,
     });
-    expect(callId, "call id must differ from the provider response id for this check to mean anything").not.toBe(requestId);
+    expect(callId, "call id must differ from the provider response id for this check to mean anything").not.toBe(
+      requestId,
+    );
     await waitForSpendLog(request, requestId);
 
     await navigateToPage(page, Page.Logs);
@@ -113,12 +115,17 @@ test.describe("Logs page", () => {
 
     const row = requestLogsRows(page).filter({ hasText: requestId });
     await expect(row, `no logs row for call id ${callId}`).toHaveCount(1, { timeout: 30_000 });
-    await expect(row, `Logs row for ${requestId} does not display its x-litellm-call-id ${callId}`).toContainText(callId);
+    await expect(row, `Logs row for ${requestId} does not display its x-litellm-call-id ${callId}`).toContainText(
+      callId,
+    );
 
     await row.click();
     const drawer = page.getByRole("dialog").first();
     await expect(drawer.getByText("Request & Response")).toBeVisible({ timeout: 20_000 });
-    await expect(drawer.getByText(callId, { exact: false }).first(), `drawer does not show x-litellm-call-id ${callId}`).toBeVisible({ timeout: 10_000 });
+    await expect(
+      drawer.getByText(callId, { exact: false }).first(),
+      `drawer does not show x-litellm-call-id ${callId}`,
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   // Split out because only the copy path needs a secure context; folding it in would
