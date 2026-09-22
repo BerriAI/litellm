@@ -165,6 +165,7 @@ class HttpJevClassifierClient:
             end_time=end_time,
             cache_hit=False,
             request_body=MappingProxyType({"model": request.model}),
+            custom_llm_provider="typesafe",
             litellm_params=params,
         )
         success_handlers: Final = logging_obj.dispatch_success_handlers(

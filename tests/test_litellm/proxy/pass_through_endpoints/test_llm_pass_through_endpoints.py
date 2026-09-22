@@ -47,6 +47,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     mistral_proxy_route,
     relay_nvidia_nim_request,
     openai_proxy_route,
+    openrouter_proxy_route,
     typesafe_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
@@ -7114,3 +7115,144 @@ class TestTypeSafePassthroughRoute:
             custom_llm_provider="typesafe",
             is_streaming_request=False,
         )
+
+
+class TestOpenRouterPassthroughRoute:
+    @staticmethod
+    def _request(body: object, query_params: Mapping[str, str] | None = None) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.query_params = query_params or {}
+        request.json = AsyncMock(return_value=body)
+        return request
+
+    @pytest.fixture
+    def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+        from litellm.proxy.proxy_server import app
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-test-key")
+        monkeypatch.setenv("OPENROUTER_API_BASE", "https://openrouter.example/base")
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+        yield TestClient(app)
+
+    @pytest.mark.parametrize(
+        "method, body",
+        [
+            ("GET", None),
+            ("POST", {"state": "The sky is blue."}),
+            ("PUT", {"state": "The sky is blue."}),
+            ("DELETE", None),
+            ("PATCH", {"state": "The sky is blue."}),
+        ],
+    )
+    def test_forwards_every_method_and_body_upstream(
+        self, client: TestClient, method: str, body: dict[str, str] | None
+    ) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.request(method, "https://openrouter.example/base/alpha/decisions").mock(
+                return_value=httpx.Response(200, json={"id": "upstream_123"})
+            )
+            response = client.request(method, "/openrouter/alpha/decisions", json=body)
+
+            assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
+            sent: Final = route.calls.last.request
+            assert sent.headers["authorization"] == "Bearer openrouter-test-key"
+            assert json.loads(sent.content or b"{}") == (body or {})
+
+    @pytest.mark.asyncio
+    async def test_forwards_target_auth_provider_and_query(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-test-key")
+        monkeypatch.setenv("OPENROUTER_API_BASE", "https://openrouter.example/base")
+
+        async def fake_upstream(request, *_args):
+            target: Final = create_route.call_args.kwargs["target"]
+            upstream_url: Final = httpx.URL(target).copy_merge_params(request.query_params)
+            return {"upstream_query": parse_qs(upstream_url.query.decode())}
+
+        endpoint_func = AsyncMock(side_effect=fake_upstream)
+        create_route = Mock(return_value=endpoint_func)
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            create_route,
+        )
+
+        request = self._request({"state": "The sky is blue."}, {"trace": "yes"})
+        result = await openrouter_proxy_route(
+            endpoint="alpha/decisions",
+            request=request,
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
+        )
+
+        assert result == {"upstream_query": {"trace": ["yes"]}}
+        endpoint_func.assert_awaited_once()
+        create_route.assert_called_once_with(
+            endpoint="alpha/decisions",
+            target="https://openrouter.example/base/alpha/decisions",
+            custom_headers={
+                "Authorization": "Bearer openrouter-test-key",
+                "Content-Type": "application/json",
+            },
+            custom_llm_provider="openrouter",
+            is_streaming_request=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_uses_default_target_when_base_is_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-test-key")
+        monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
+
+        endpoint_func = AsyncMock(return_value={"ok": True})
+        create_route = Mock(return_value=endpoint_func)
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            create_route,
+        )
+
+        await openrouter_proxy_route(
+            endpoint="alpha/decisions",
+            request=self._request({"state": "The sky is blue."}),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
+        )
+
+        assert create_route.call_args.kwargs["target"] == "https://openrouter.ai/api/alpha/decisions"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["alpha/decisions", "v1/chat/completions"])
+    @pytest.mark.parametrize(
+        "base_env, expected_root",
+        [
+            (None, "https://openrouter.ai/api"),
+            ("https://openrouter.ai/api/v1", "https://openrouter.ai/api"),
+            ("https://openrouter.example/base", "https://openrouter.example/base"),
+            ("https://openrouter.example/base/v1/", "https://openrouter.example/base"),
+        ],
+    )
+    async def test_derives_api_root_from_configured_base(
+        self, monkeypatch: pytest.MonkeyPatch, base_env: str | None, expected_root: str, endpoint: str
+    ) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-test-key")
+        if base_env is None:
+            monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
+        else:
+            monkeypatch.setenv("OPENROUTER_API_BASE", base_env)
+
+        endpoint_func = AsyncMock(return_value={"ok": True})
+        create_route = Mock(return_value=endpoint_func)
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            create_route,
+        )
+
+        await openrouter_proxy_route(
+            endpoint=endpoint,
+            request=self._request({"state": "The sky is blue."}),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
+        )
+
+        assert create_route.call_args.kwargs["target"] == f"{expected_root}/{endpoint}"
