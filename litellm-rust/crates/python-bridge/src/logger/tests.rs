@@ -134,7 +134,10 @@ fn native_events_reach_python_with_levels_context_reentry_and_http_deduplication
     Python::attach(|py| {
         let locals = PyDict::new(py);
         locals
-            .set_item("repo_root", concat!(env!("CARGO_MANIFEST_DIR"), "/../../.."))
+            .set_item(
+                "repo_root",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../.."),
+            )
             .unwrap();
         locals
             .set_item(
