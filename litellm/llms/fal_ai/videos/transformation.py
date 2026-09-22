@@ -482,7 +482,10 @@ class FalAIVideoConfig(BaseVideoConfig):
         result_url, result_headers = result_request
         result_client: Final[HTTPHandler] = client if client is not None else self._sync_client_factory()
         try:
-            result_response: Final[httpx.Response] = result_client.get(url=result_url, headers=dict(result_headers))
+            result_response: Final[httpx.Response] = result_client.get(
+                url=result_url,
+                headers=dict(result_headers),  # mutable-ok: HTTPHandler.get only accepts a dict
+            )
         except httpx.TransportError:
             return None
         return _terminal_result_error(result_response)
@@ -516,7 +519,8 @@ class FalAIVideoConfig(BaseVideoConfig):
         result_client: Final[AsyncHTTPHandler] = client if client is not None else self._async_client_factory()
         try:
             result_response: Final[httpx.Response] = await result_client.get(
-                url=result_url, headers=dict(result_headers)
+                url=result_url,
+                headers=dict(result_headers),  # mutable-ok: AsyncHTTPHandler.get only accepts a dict
             )
         except httpx.TransportError:
             return None
