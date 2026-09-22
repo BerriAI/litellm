@@ -2146,6 +2146,10 @@ if TYPE_CHECKING:
     from .llms.edenai.videos.transformation import (
         EdenAIVideoConfig as EdenAIVideoConfig,
     )
+    from .llms.fal_ai.chat.transformation import (
+        FalAIChatConfig as FalAIChatConfig,
+        FalAIError as FalAIError,
+    )
     from .llms.ovhcloud.chat.transformation import (
         OVHCloudChatConfig as OVHCloudChatConfig,
     )
