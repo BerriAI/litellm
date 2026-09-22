@@ -5319,20 +5319,25 @@ def test_completion_cost_is_zero_when_explicit_rates_are_zero(monkeypatch: pytes
     )
 
     assert cost == 0.0
-def test_dated_provider_slug_does_not_bill_the_turn_at_zero():
-    """A provider reporting a build the price map does not carry must not zero the turn.
 
-    Anthropic names the dated build in `message_start`, so a streamed turn carries
-    `provider_response_model="claude-opus-5-20250930"` while the map holds
-    `claude-opus-5`. `_select_model_name_for_cost_calc` prefers the reported name, and
-    `get_model_info` answers an unknown model with zero rates rather than raising, so the
-    turn was billed 0.0 with nothing in the logs to explain it.
 
-    Unstreamed turns carry no `provider_response_model` and were unaffected, which is why
-    this looked like a streaming bug. Regression test for #42161.
+def test_an_unpriced_provider_slug_does_not_bill_the_turn_at_zero():
+    """Regression test for #42161.
+
+    `_select_model_name_for_cost_calc` prefers `provider_response_model` over
+    `response.model`, and `get_model_info` answers a model it has never heard of with
+    zero rates instead of raising, so a turn reporting an unregistered slug was billed
+    0.0 with nothing in the logs to explain it. Anthropic hits this by naming the dated
+    build in `message_start` while the map carries the family.
+
+    The invariant: what the provider reports must not change the price of a turn the
+    price map cannot quote it by.
     """
     from litellm.cost_calculator import completion_cost
     from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+    unpriced = "claude-test-42161"
+    assert unpriced not in litellm.model_cost
 
     def _response(reported: str | None) -> ModelResponse:
         response = ModelResponse(
@@ -5340,51 +5345,46 @@ def test_dated_provider_slug_does_not_bill_the_turn_at_zero():
             choices=[Choices(message=Message(content="x"))],
         )
         response.usage = Usage(prompt_tokens=38, completion_tokens=24, total_tokens=62)
-        response._hidden_params = (
-            {} if reported is None else {"provider_response_model": reported}
-        )
+        response._hidden_params = {} if reported is None else {"provider_response_model": reported}
         return response
 
-    assert "claude-opus-5" in litellm.model_cost
-    assert "claude-opus-5-20250930" not in litellm.model_cost
-
-    baseline = completion_cost(
-        completion_response=_response(None), custom_llm_provider="anthropic"
-    )
+    baseline = completion_cost(completion_response=_response(None), custom_llm_provider="anthropic")
     assert baseline > 0
 
-    dated = completion_cost(
-        completion_response=_response("claude-opus-5-20250930"),
-        custom_llm_provider="anthropic",
-    )
-    assert dated == baseline
+    reported_unpriced = completion_cost(completion_response=_response(unpriced), custom_llm_provider="anthropic")
+    assert reported_unpriced == baseline
 
 
-def test_a_priced_provider_slug_still_wins_over_the_response_model():
+def test_a_priced_provider_slug_still_decides_the_rate():
     """The fallback must not cost the reported name its precedence.
 
-    When the provider names something the map *does* price, that is the most specific
+    When the provider names something the map does price, that is the most specific
     truth about what served the turn and it still decides the rate.
     """
     from litellm.cost_calculator import completion_cost
     from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
+    priced = "test-model-priced-42161"
+    litellm.register_model(
+        model_cost={
+            priced: {
+                "input_cost_per_token": 1e-05,
+                "output_cost_per_token": 2e-05,
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+            }
+        }
+    )
+
     def _response(reported: str | None, model: str) -> ModelResponse:
-        response = ModelResponse(
-            model=model, choices=[Choices(message=Message(content="x"))]
-        )
+        response = ModelResponse(model=model, choices=[Choices(message=Message(content="x"))])
         response.usage = Usage(prompt_tokens=38, completion_tokens=24, total_tokens=62)
-        response._hidden_params = (
-            {} if reported is None else {"provider_response_model": reported}
-        )
+        response._hidden_params = {} if reported is None else {"provider_response_model": reported}
         return response
 
-    reported_haiku = completion_cost(
-        completion_response=_response("claude-haiku-4-5", "anthropic/claude-opus-5"),
+    reported = completion_cost(
+        completion_response=_response(priced, "anthropic/claude-opus-5"),
         custom_llm_provider="anthropic",
     )
-    haiku_directly = completion_cost(
-        completion_response=_response(None, "anthropic/claude-haiku-4-5"),
-        custom_llm_provider="anthropic",
-    )
-    assert reported_haiku == haiku_directly
+    expected = 38 * 1e-05 + 24 * 2e-05
+    assert reported == pytest.approx(expected)
