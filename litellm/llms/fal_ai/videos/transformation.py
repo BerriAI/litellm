@@ -354,10 +354,9 @@ class FalAIVideoConfig(BaseVideoConfig):
         duration: Final[str | None] = _duration_value(seconds)
         if duration is None:
             raise ValueError("fal.ai seconds must be a numeric value")
-        provider_duration: Final[str | int] = (
-            int(duration) if profile.integer_duration and duration != "auto" else duration
-        )
-        return MappingProxyType({"duration": provider_duration})
+        if duration == "auto":
+            return MappingProxyType({}) if profile.integer_duration else MappingProxyType({"duration": duration})
+        return MappingProxyType({"duration": int(duration) if profile.integer_duration else duration})
 
     def validate_environment(
         self,

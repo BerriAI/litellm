@@ -87,8 +87,9 @@ class TestFalAIVideoTransformation:
         assert mapped["reference_image_urls"] == [url]
         assert "image_url" not in mapped
 
-    def test_map_openai_params_h3_keeps_auto_duration_literal(self):
-        assert self.config.map_openai_params({"seconds": "auto"}, H3_TEXT_MODEL, False) == {"duration": "auto"}
+    def test_map_openai_params_h3_omits_auto_duration(self):
+        assert self.config.map_openai_params({"seconds": "auto"}, H3_TEXT_MODEL, False) == {}
+        assert self.config.map_openai_params({"seconds": "auto"}, MODEL, False) == {"duration": "auto"}
 
     def test_map_openai_params_h3_size_beyond_tiers_uses_top_resolution(self):
         side = str(sys.maxsize + 1)
