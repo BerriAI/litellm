@@ -17678,6 +17678,22 @@ def test_access_windows_raise_when_only_reserved_deployments_remain():
     assert [d["model_info"]["id"] for d in deployments] == ["reserved-deployment"]
 
 
+def test_reserved_deployments_drop_strategy_markers_before_filtering():
+    router = Router(model_list=_reserved_model_list()[:1])
+    marker = {"model_name": "gpt-4o-ptu", "litellm_params": {"model": "auto_router/semantic"}}
+    reserved = {
+        "model_name": "gpt-4o-ptu",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"access_windows": [_access_window_offsets(-1, 1, ["team-a"])]},
+    }
+    with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+        router._filter_reserved_deployments(
+            model="gpt-4o-ptu",
+            healthy_deployments=[marker, reserved],
+            request_team_id="team-b",
+        )
+
+
 def test_access_windows_invalid_timezone_fails_router_construction():
     with pytest.raises(ValueError, match=r"gpt-4o-ptu.*access_windows"):
         Router(

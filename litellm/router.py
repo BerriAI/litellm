@@ -12713,7 +12713,7 @@ class Router:
         request_team_id: str | None,
     ) -> tuple[DeploymentTypedDict, ...]:
         result: Final = filter_reserved_deployments(
-            healthy_deployments, request_team_id, now=datetime.now(timezone.utc)
+            self._drop_strategy_markers(model, healthy_deployments), request_team_id, now=datetime.now(timezone.utc)
         )
         if result.blocking_window is not None and len(result.deployments) == 0:
             raise litellm.BadRequestError(
