@@ -1,3 +1,4 @@
+import asyncio
 import json
 from unittest.mock import MagicMock, patch
 
@@ -113,7 +114,9 @@ def test_initialize_bedrock_forwards_contextual_grounding_from_messages():
         if isinstance(callback, BedrockGuardrail) and callback.guardrail_name == "test_bedrock_grounding_from_messages"
     ]
     assert initialized, "bedrock guardrail was not registered as a callback"
-    actual_request = initialized[-1].convert_to_bedrock_format(source="OUTPUT", response=response, messages=messages)
+    actual_request = asyncio.run(
+        initialized[-1].convert_to_bedrock_format(source="OUTPUT", response=response, messages=messages)
+    )
     assert json.loads(json.dumps(actual_request)) == expected_request
 
 
