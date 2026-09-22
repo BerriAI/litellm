@@ -1,7 +1,7 @@
 import inspect
 import os
 import sys
-from typing import cast
+from typing import Final, cast
 
 import pytest
 from pydantic import BaseModel
@@ -989,3 +989,43 @@ class TestOllamaStreamingUsage:
         )
 
         assert result.usage is None
+
+
+class TestOllamaChatReasoningEffort:
+    @pytest.mark.parametrize(
+        "reasoning_effort, expected_think",
+        [
+            ("low", True),
+            ("high", True),
+            ("none", False),
+            ({"effort": "medium"}, True),
+            ({"effort": "medium", "summary": "auto"}, True),
+            ({"effort": "none", "summary": "detailed"}, False),
+        ],
+    )
+    def test_reasoning_effort_string_or_dict_maps_to_think(
+        self, reasoning_effort: str | dict[str, str], expected_think: bool
+    ) -> None:
+        optional_params: Final = get_optional_params(
+            model="ollama_chat/qwen3:8b",
+            custom_llm_provider="ollama_chat",
+            reasoning_effort=reasoning_effort,
+        )
+        assert optional_params["think"] is expected_think
+
+    def test_reasoning_dict_without_effort_sets_nothing(self) -> None:
+        optional_params: Final = get_optional_params(
+            model="ollama_chat/qwen3:8b",
+            custom_llm_provider="ollama_chat",
+            reasoning_effort={"summary": "auto"},
+        )
+        assert "think" not in optional_params
+
+    def test_reasoning_dict_gpt_oss_forwards_effort_string(self) -> None:
+        optional_params: Final = OllamaChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": {"effort": "high", "summary": "auto"}},
+            optional_params={},
+            model="gpt-oss:20b",
+            drop_params=False,
+        )
+        assert optional_params["think"] == "high"

@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import sys
+from typing import Final
 from litellm._uuid import uuid
 from unittest.mock import MagicMock, patch
 
@@ -775,3 +776,42 @@ def test_transform_request_leaves_unreadable_images_untouched(payload: str) -> N
     data = _transform_image_request(payload, "png")
 
     assert data["images"] == [payload]
+
+
+class TestOllamaConfigReasoningEffort:
+    @pytest.mark.parametrize(
+        "reasoning_effort, expected_think",
+        [
+            ("medium", True),
+            ({"effort": "medium", "summary": "auto"}, True),
+            ({"effort": "none"}, False),
+        ],
+    )
+    def test_reasoning_effort_string_or_dict_maps_to_think(
+        self, reasoning_effort: str | dict[str, str], expected_think: bool
+    ) -> None:
+        optional_params: Final = OllamaConfig().map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort},
+            optional_params={},
+            model="qwen3:8b",
+            drop_params=False,
+        )
+        assert optional_params["think"] is expected_think
+
+    def test_reasoning_dict_gpt_oss_forwards_effort_string(self) -> None:
+        optional_params: Final = OllamaConfig().map_openai_params(
+            non_default_params={"reasoning_effort": {"effort": "high", "summary": "auto"}},
+            optional_params={},
+            model="gpt-oss:20b",
+            drop_params=False,
+        )
+        assert optional_params["think"] == "high"
+
+    def test_reasoning_dict_without_effort_sets_nothing(self) -> None:
+        optional_params: Final = OllamaConfig().map_openai_params(
+            non_default_params={"reasoning_effort": {"summary": "auto"}},
+            optional_params={},
+            model="qwen3:8b",
+            drop_params=False,
+        )
+        assert "think" not in optional_params
