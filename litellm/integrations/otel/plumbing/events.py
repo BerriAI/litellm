@@ -44,25 +44,35 @@ class GenAIEventRecorder:
         # pair and always ride the event; only the recommended stacktrace is
         # conditional on the payload carrying one.
         stacktrace: Final = ((ExceptionEvent.STACKTRACE, stack_trace),) if stack_trace else ()
-        fields: Final = {
-            "timestamp": timestamp_ns or time_ns(),
-            "trace_id": span_context.trace_id,
-            "span_id": span_context.span_id,
-            "trace_flags": span_context.trace_flags,
-            "severity_number": SeverityNumber.WARN,
-            "body": message,
-            "attributes": dict(
-                (
-                    (GenAIEvent.NAME_KEY, GenAIEvent.OPERATION_EXCEPTION),
-                    (ExceptionEvent.TYPE, error_type),
-                    (ExceptionEvent.MESSAGE, message),
-                    *stacktrace,
-                )
-            ),
-        }
+        attributes: Final = dict(
+            (
+                (GenAIEvent.NAME_KEY, GenAIEvent.OPERATION_EXCEPTION),
+                (ExceptionEvent.TYPE, error_type),
+                (ExceptionEvent.MESSAGE, message),
+                *stacktrace,
+            )
+        )
         record: Final[LogRecord] = (
-            SDK_LOG_RECORD(**fields, resource=self.resource)
+            SDK_LOG_RECORD(
+                timestamp=timestamp_ns or time_ns(),
+                trace_id=span_context.trace_id,
+                span_id=span_context.span_id,
+                trace_flags=span_context.trace_flags,
+                severity_number=SeverityNumber.WARN,
+                body=message,
+                attributes=attributes,
+                resource=self.resource,
+            )
             if SDK_LOG_RECORD is not None
-            else LogRecord(**fields, event_name=GenAIEvent.OPERATION_EXCEPTION)
+            else LogRecord(
+                timestamp=timestamp_ns or time_ns(),
+                trace_id=span_context.trace_id,
+                span_id=span_context.span_id,
+                trace_flags=span_context.trace_flags,
+                severity_number=SeverityNumber.WARN,
+                body=message,
+                attributes=attributes,
+                event_name=GenAIEvent.OPERATION_EXCEPTION,
+            )
         )
         self.event_logger.emit(record)
