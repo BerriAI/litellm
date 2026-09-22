@@ -3828,7 +3828,6 @@ def test_process_hidden_params_uses_hidden_params_cost_after_failure_handler_zer
 
 
 def test_process_hidden_params_falls_through_on_none_response_cost():
-    """A present-but-None hidden response_cost is priced by the calculator, not logged as 0 (issue #41976)."""
     from datetime import datetime
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -3863,7 +3862,6 @@ def test_process_hidden_params_falls_through_on_none_response_cost():
 
 
 def test_process_hidden_params_explicit_zero_cost_overrides_earlier_cost():
-    """An explicit hidden response_cost of 0 wins over a cost already on model_call_details; only None falls through."""
     from datetime import datetime
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -3897,7 +3895,6 @@ def test_process_hidden_params_explicit_zero_cost_overrides_earlier_cost():
 
 
 def test_process_hidden_params_none_cost_on_fal_poll_stays_unbilled():
-    """A Fal result poll hands back image URLs with hidden response_cost=None; the fallthrough must not price them."""
     from datetime import datetime
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

@@ -1,13 +1,3 @@
-"""The cost a logging callback sees must be the cost the spend row bills.
-
-GitHub issue #41976: a successful sync ``/v1/responses`` call reached callbacks with
-``StandardLoggingPayload.response_cost == 0`` while ``LiteLLM_SpendLogs.spend`` for the
-same request id was positive. Prometheus is the callback under test here because its
-``litellm_spend_metric`` counter is fed straight from ``standard_logging_object.response_cost``
-and is readable from the proxy itself, so no external sink is needed. A fresh key with one
-request makes the per-alias counter equal that request's callback-visible cost.
-"""
-
 from __future__ import annotations
 
 import json

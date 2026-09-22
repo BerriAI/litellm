@@ -1,5 +1,3 @@
-"""Capture row shared by callback_cost_capture (proxy side) and the test; must stay importable without litellm."""
-
 from __future__ import annotations
 
 from typing import Final

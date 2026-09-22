@@ -1,12 +1,3 @@
-"""The response_cost a config-registered CustomLogger receives must be the cost the spend row bills.
-
-GitHub issue #41976: a successful sync, non-streaming ``/v1/responses`` call reached callbacks with
-``kwargs["standard_logging_object"]["response_cost"] == 0`` while ``LiteLLM_SpendLogs.spend`` for the
-same request id was positive. The gateway registers ``callback_cost_capture.capture`` from this
-directory as a plain ``callbacks:`` entry, so this is the exact payload a Langfuse, Datadog, or
-customer CustomLogger is handed. The capture file path comes from ``E2E_CALLBACK_COST_CAPTURE_FILE``.
-"""
-
 from __future__ import annotations
 
 import json

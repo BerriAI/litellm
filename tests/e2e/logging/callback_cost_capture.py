@@ -1,11 +1,3 @@
-"""Config-registered CustomLogger that records the cost each success callback is handed.
-
-Registered on the e2e gateway as ``callbacks: ["tests.e2e.logging.callback_cost_capture.capture"]``.
-Every success event appends one JSON line to ``E2E_CALLBACK_COST_CAPTURE_FILE`` with the request id
-and ``standard_logging_object.response_cost`` exactly as a customer's Langfuse, Datadog, or custom
-CustomLogger would see it. Tests read the file back and compare against the SpendLogs row.
-"""
-
 from __future__ import annotations
 
 import json
