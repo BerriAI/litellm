@@ -226,7 +226,7 @@ class CustomStreamWrapper:
             dict(**self.logging_obj.model_call_details.get("litellm_params", {}))
         )
         self.merge_reasoning_content_in_choices: bool = litellm_params.merge_reasoning_content_in_choices or False
-        request_strict: Final = litellm_params.strict_stream_completion
+        request_strict: Final = getattr(litellm_params, "strict_stream_completion", None)
         self.strict_stream_completion: bool = (
             bool(litellm.strict_stream_completion) if request_strict is None else bool(request_strict)
         )
