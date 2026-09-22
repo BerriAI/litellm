@@ -1178,6 +1178,51 @@ async def test_during_call_hook_refuses_scoped_out_parts_without_decoding_images
 
 
 @pytest.mark.asyncio
+async def test_during_call_hook_refuses_oversized_image_in_scoped_out_message():
+    """The unscoped pass refuses an image over ApplyGuardrail's 4 MB limit without decoding it."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-scoped-out-oversized",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+        experimental_use_latest_role_message_only=True,
+    )
+    oversized_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * (4 * 1024 * 1024)).decode()
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{oversized_png}"}},
+                ],
+            },
+            {"role": "user", "content": "what is 2+2"},
+        ],
+    }
+
+    with (
+        patch(
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.process_image_async",
+            new_callable=AsyncMock,
+            side_effect=AssertionError("image decode reached the refusal pass"),
+        ) as mock_decode,
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_decode.assert_not_called()
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_make_apply_guardrail_request_skips_output_scan_without_response_text():
     """A tool-calls-only assistant response yields no OUTPUT content, so it must not be posted."""
     guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")

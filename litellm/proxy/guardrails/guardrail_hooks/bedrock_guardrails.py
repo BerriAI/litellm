@@ -641,6 +641,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             self._handle_unscannable_attachment(reason="image content could not be read: malformed data uri")
         if header.removeprefix("data:").split(";")[0] not in ("image/png", "image/jpeg"):
             self._handle_unscannable_attachment(reason="attachment is not a png/jpeg image")
+        self._refuse_oversized_image(decoded_size=_decoded_base64_length(payload))
+
+    def _refuse_oversized_image(self, decoded_size: int) -> None:
+        if decoded_size > _MAX_IMAGE_BYTES:
+            self._handle_unscannable_attachment(
+                reason=f"image is {decoded_size / 1024 / 1024:.1f} MB, over ApplyGuardrail's 4 MB limit"
+            )
 
     def _refuse_unscannable_part(self, part: object) -> None:
         """The refusal half of `_build_input_content_item`, without any image decode."""
@@ -694,11 +701,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if image_format is None or not image_bytes:
             self._handle_unscannable_attachment(reason="attachment is not a png/jpeg image")
 
-        decoded_size: Final = _decoded_base64_length(image_bytes)
-        if decoded_size > _MAX_IMAGE_BYTES:
-            self._handle_unscannable_attachment(
-                reason=f"image is {decoded_size / 1024 / 1024:.1f} MB, over ApplyGuardrail's 4 MB limit"
-            )
+        self._refuse_oversized_image(decoded_size=_decoded_base64_length(image_bytes))
 
         return BedrockContentItem(
             image=BedrockImageContent(
