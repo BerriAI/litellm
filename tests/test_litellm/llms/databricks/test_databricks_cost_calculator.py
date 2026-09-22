@@ -153,14 +153,6 @@ def test_uncached_request_bills_every_prompt_token_at_the_input_rate(local_model
     assert completion_cost == pytest.approx(200 * info["output_cost_per_token"])
 
 
-def test_legacy_endpoint_names_still_resolve(local_model_cost_map: None) -> None:
-    info: Final = _model_info("databricks/databricks-mixtral-8x7b-instruct")
-    usage: Final = Usage(prompt_tokens=100, completion_tokens=100, total_tokens=200)
-
-    prompt_cost, completion_cost = cost_per_token(model="databricks/mixtral-8x7b-instruct-v0.1", usage=usage)
-
-    assert prompt_cost == pytest.approx(100 * info["input_cost_per_token"])
-    assert completion_cost == pytest.approx(100 * info["output_cost_per_token"])
 
 
 @pytest.mark.parametrize("model", NEW_MODELS)

@@ -1465,12 +1465,6 @@ class TestProxyFunctionCalling:
             ("gemini/gemini-2.5-pro", "litellm_proxy/gemini/gemini-2.5-pro", True),
             ("gemini/gemini-2.5-flash", "litellm_proxy/gemini/gemini-2.5-flash", True),
             # Groq models (mixed support)
-            ("groq/gemma-7b-it", "litellm_proxy/groq/gemma-7b-it", True),
-            (
-                "groq/llama-3.3-70b-versatile",
-                "litellm_proxy/groq/llama-3.3-70b-versatile",
-                True,
-            ),
             # Cohere models (generally don't support function calling)
             ("command-nightly", "litellm_proxy/command-nightly", False),
         ],

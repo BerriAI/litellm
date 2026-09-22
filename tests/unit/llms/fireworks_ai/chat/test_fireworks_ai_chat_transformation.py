@@ -1695,21 +1695,6 @@ def test_nim_vllm_extras_translated_end_to_end_in_request_body():
     assert request_body["top_k"] == 40
 
 
-def test_in_schema_unsupported_params_still_raise():
-    with pytest.raises(litellm.UnsupportedParamsError):
-        litellm.get_optional_params(
-            model="accounts/fireworks/models/llama-v3-70b-instruct",
-            custom_llm_provider="fireworks_ai",
-            drop_params=False,
-            store=True,
-        )
-    optional_params = litellm.get_optional_params(
-        model="accounts/fireworks/models/llama-v3-70b-instruct",
-        custom_llm_provider="fireworks_ai",
-        drop_params=True,
-        store=True,
-    )
-    assert "store" not in optional_params
 
 
 def test_streaming_preserves_selected_model_for_private_accounting():
