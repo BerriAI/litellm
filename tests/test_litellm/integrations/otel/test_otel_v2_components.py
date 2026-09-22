@@ -1291,7 +1291,8 @@ def test_operation_exception_log_event_always_carries_required_pair():
 
 
 def test_operation_exception_log_event_records_without_the_events_api():
-    """Recording must not import the Events API modules (removed upstream in 1.44.0); the SDK record path still exports."""
+    """Recording must not import the Events API modules (removed upstream in 1.44.0);
+    the SDK record path still exports."""
     import importlib
     import sys
     from unittest.mock import patch
