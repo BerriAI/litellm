@@ -92,10 +92,6 @@ class AnthropicMessageBatchList(TypedDict, total=False):
 _ANTHROPIC_MESSAGE_BATCH_ADAPTER: Final = TypeAdapter(AnthropicMessageBatch)
 _ANTHROPIC_MESSAGE_BATCH_LIST_ADAPTER: Final = TypeAdapter(AnthropicMessageBatchList)
 _OBJECT_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
-_EMPTY_PARAMS: Final[
-    dict
-] = {}  # mutable-ok: shared empty mapping for signatures that declare dict; callees only read it
-_EMPTY_METADATA: Final[dict] = {}  # mutable-ok: shared empty LiteLLMBatch metadata; callers never mutate it
 
 
 _ANTHROPIC_PROCESSING_STATUS_TO_OPENAI_STATUS: Final[
@@ -150,13 +146,18 @@ def transform_anthropic_message_batch(response_data: AnthropicMessageBatch) -> L
     """Map an Anthropic MessageBatch object onto a LiteLLMBatch in OpenAI batch shape."""
     batch_id: Final = response_data.get("id", "")
     processing_status: Final = response_data.get("processing_status", "in_progress")
-    openai_status: Final = _ANTHROPIC_PROCESSING_STATUS_TO_OPENAI_STATUS.get(processing_status, "in_progress")
 
     created_at: Final = _parse_anthropic_timestamp(response_data.get("created_at"))
     ended_at: Final = _parse_anthropic_timestamp(response_data.get("ended_at"))
     expires_at: Final = _parse_anthropic_timestamp(response_data.get("expires_at"))
     cancel_initiated_at: Final = _parse_anthropic_timestamp(response_data.get("cancel_initiated_at"))
     archived_at: Final = _parse_anthropic_timestamp(response_data.get("archived_at"))
+
+    openai_status: Final = (
+        "cancelled"
+        if processing_status == "ended" and cancel_initiated_at is not None
+        else _ANTHROPIC_PROCESSING_STATUS_TO_OPENAI_STATUS.get(processing_status, "in_progress")
+    )
 
     request_counts_data: Final = response_data.get("request_counts", EMPTY_MAPPING)
     from openai.types.batch import BatchRequestCounts
@@ -186,16 +187,16 @@ def transform_anthropic_message_batch(response_data: AnthropicMessageBatch) -> L
         output_file_id=batch_id,
         error_file_id=None,
         created_at=created_at or int(time.time()),
-        in_progress_at=created_at if processing_status == "in_progress" else None,
+        in_progress_at=created_at if openai_status == "in_progress" else None,
         expires_at=expires_at,
         finalizing_at=None,
-        completed_at=ended_at if processing_status == "ended" else None,
+        completed_at=ended_at if openai_status == "completed" else None,
         failed_at=None,
         expired_at=archived_at if archived_at else None,
-        cancelling_at=(cancel_initiated_at if processing_status == "canceling" else None),
-        cancelled_at=(ended_at if processing_status == "canceling" and ended_at else None),
+        cancelling_at=(cancel_initiated_at if openai_status in ("cancelling", "cancelled") else None),
+        cancelled_at=(ended_at if openai_status == "cancelled" else None),
         request_counts=request_counts,
-        metadata=_EMPTY_METADATA,
+        metadata={},  # mutable-ok: LiteLLMBatch wants a fresh dict per instance
     )
 
 
@@ -227,7 +228,7 @@ def transform_openai_batch_lines_to_anthropic_requests(
         optional_params: Final = _OBJECT_DICT_ADAPTER.validate_python(
             anthropic_config.map_openai_params(
                 non_default_params=non_default_params,
-                optional_params=_EMPTY_PARAMS,
+                optional_params={},  # mutable-ok: map_openai_params writes into this per line
                 model=model,
                 drop_params=True,
             ),
@@ -237,8 +238,8 @@ def transform_openai_batch_lines_to_anthropic_requests(
                 model=model,
                 messages=messages,
                 optional_params=optional_params,
-                litellm_params=_EMPTY_PARAMS,
-                headers=_EMPTY_PARAMS,
+                litellm_params={},  # mutable-ok: transform_request may write into this per line
+                headers={},  # mutable-ok: transform_request writes headers entries per line
             ),
         )
         params["model"] = model

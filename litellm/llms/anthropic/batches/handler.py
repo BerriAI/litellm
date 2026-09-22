@@ -241,7 +241,7 @@ class AnthropicBatchesHandler:
             },
         )
         async_client: Final = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
-        response: Final = await async_client.get(url=list_url, headers=headers)
+        response: Final = await async_client.get(url=list_url, headers=headers, timeout=timeout)
         if response.status_code >= 400:
             raise self.provider_config.get_error_class(
                 error_message=response.text,
@@ -337,7 +337,7 @@ class AnthropicBatchesHandler:
             },
         )
         async_client: Final = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
-        response: Final = await async_client.post(url=cancel_url, headers=headers)
+        response: Final = await async_client.post(url=cancel_url, headers=headers, timeout=timeout)
         if response.status_code >= 400:
             raise self.provider_config.get_error_class(
                 error_message=response.text,

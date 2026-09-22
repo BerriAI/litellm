@@ -376,8 +376,8 @@ def test_transform_retrieve_response_canceling_maps_to_cancelling(config):
     # "canceling" -> OpenAI "cancelling".
     assert batch.status == "cancelling"
     assert batch.cancelling_at == 1727173800
-    # cancelled_at = ended_at when canceling and ended_at present.
-    assert batch.cancelled_at == 1727174700
+    # cancelled_at stays unset while the batch is still cancelling
+    assert batch.cancelled_at is None
     assert batch.completed_at is None
 
 

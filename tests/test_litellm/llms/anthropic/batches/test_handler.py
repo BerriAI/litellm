@@ -81,6 +81,7 @@ async def test_alist_batches_gets_list_url_with_pagination_and_headers(handler, 
     assert headers["x-api-key"] == "sk-ant-test"
     assert headers["anthropic-version"] == "2023-06-01"
     assert headers["anthropic-beta"] == "message-batches-2024-09-24"
+    assert call_kwargs["timeout"] == 60.0
 
     assert result["object"] == "list"
     assert result["has_more"] is False
@@ -102,6 +103,7 @@ async def test_acancel_batch_posts_to_cancel_url_and_maps_response(handler, patc
     _, call_kwargs = fake_client.post.call_args
     assert call_kwargs["url"] == "https://api.anthropic.com/v1/messages/batches/msgbatch_abc/cancel"
     assert call_kwargs["headers"]["x-api-key"] == "sk-ant-test"
+    assert call_kwargs["timeout"] == 60.0
 
     assert isinstance(batch, LiteLLMBatch)
     assert batch.id == "msgbatch_abc"

@@ -111,8 +111,42 @@ def test_openai_lines_translate_to_anthropic_params():
     assert first["params"]["system"]
     assert all(m["role"] != "system" for m in first["params"]["messages"])
     # max_tokens is required by Anthropic and defaulted even when absent
-    assert second["params"]["max_tokens"]
+    assert second["params"]["max_tokens"] == 64000
     assert second["params"]["model"] == "claude-sonnet-4-5"
+    # params are isolated per line: req-1's temperature must not leak into req-2
+    assert "temperature" not in second["params"]
+
+
+def test_openai_lines_params_do_not_leak_across_calls():
+    transform_openai_batch_lines_to_anthropic_requests(
+        [
+            {
+                "custom_id": "req-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "ignored",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "temperature": 0.2,
+                    "max_tokens": 7,
+                },
+            }
+        ],
+        model="claude-sonnet-4-5",
+    )
+    (second_run,) = transform_openai_batch_lines_to_anthropic_requests(
+        [
+            {
+                "custom_id": "req-2",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {"model": "ignored", "messages": [{"role": "user", "content": "Hello"}]},
+            }
+        ],
+        model="claude-sonnet-4-5",
+    )
+    assert "temperature" not in second_run["params"]
+    assert second_run["params"]["max_tokens"] == 64000
 
 
 def test_openai_line_missing_custom_id_raises():
@@ -232,6 +266,44 @@ def test_cancel_batch_response_canceling_maps_to_cancelling(config):
     )
     assert batch.status == "cancelling"
     assert batch.cancelling_at == 1727173800
+
+
+def test_ended_after_cancel_initiated_maps_to_cancelled(config):
+    raw = _response(
+        {
+            "id": "msgbatch_abc",
+            "processing_status": "ended",
+            "created_at": "2024-09-24T10:00:00Z",
+            "cancel_initiated_at": "2024-09-24T10:30:00Z",
+            "ended_at": "2024-09-24T10:35:00Z",
+            "request_counts": {"canceled": 1, "succeeded": 0},
+        }
+    )
+    batch = config.transform_retrieve_batch_response(
+        model=None, raw_response=raw, logging_obj=MagicMock(), litellm_params={}
+    )
+    assert batch.status == "cancelled"
+    assert batch.cancelled_at == 1727174100
+    assert batch.cancelling_at == 1727173800
+    assert batch.completed_at is None
+
+
+def test_ended_without_cancel_maps_to_completed(config):
+    raw = _response(
+        {
+            "id": "msgbatch_abc",
+            "processing_status": "ended",
+            "created_at": "2024-09-24T10:00:00Z",
+            "ended_at": "2024-09-24T10:35:00Z",
+            "request_counts": {"succeeded": 2},
+        }
+    )
+    batch = config.transform_retrieve_batch_response(
+        model=None, raw_response=raw, logging_obj=MagicMock(), litellm_params={}
+    )
+    assert batch.status == "completed"
+    assert batch.completed_at == 1727174100
+    assert batch.cancelled_at is None
 
 
 # =========================================================================== #
