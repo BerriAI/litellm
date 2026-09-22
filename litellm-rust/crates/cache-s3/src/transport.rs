@@ -8,8 +8,6 @@ use aws_smithy_runtime_api::client::{
 };
 use aws_smithy_types::body::SdkBody;
 
-/// Sends the SDK's requests through a host-supplied `reqwest::Client`, so proxy, TLS, timeout
-/// and pool settings come from the host instead of the SDK's own hyper client.
 #[derive(Clone, Debug)]
 pub(crate) struct ReqwestHttpClient(pub(crate) reqwest::Client);
 

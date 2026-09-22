@@ -7,8 +7,6 @@ use azure_core::{
 };
 use futures_util::TryStreamExt;
 
-/// Sends the SDK's requests through a host-supplied `reqwest::Client`, so proxy, TLS, timeout
-/// and pool settings come from the host instead of the SDK's own client.
 #[derive(Debug)]
 pub struct ReqwestTransport(pub reqwest::Client);
 

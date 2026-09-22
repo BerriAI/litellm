@@ -42,7 +42,6 @@ pub struct S3Cache<C: CacheCodec> {
 }
 
 impl<C: CacheCodec> S3Cache<C> {
-    /// `http` is the host's pooled client; the SDK sends every request through it.
     pub fn new(config: S3CacheConfig, http: reqwest::Client, codec: C, runtime: Handle) -> Self {
         let endpoint_url: Option<String> = config.endpoint.map(|endpoint| endpoint.url);
         let base = aws_sdk_s3::Config::builder()

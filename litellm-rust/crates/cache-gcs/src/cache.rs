@@ -53,8 +53,6 @@ pub struct GcsCache<S: CacheCodec> {
 }
 
 impl<S: CacheCodec> GcsCache<S> {
-    /// `client` is the host's pooled HTTP client, so proxy, TLS, timeout and pool settings are
-    /// the host's.
     pub fn new(config: GcsConfig, client: Client, codec: S) -> Self {
         let token = Arc::new(GcpTokenSource::new(config.path_service_account.clone()));
         Self::with_token_source(config, client, codec, token)

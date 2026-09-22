@@ -4,8 +4,6 @@ use aws_credential_types::{
 };
 use litellm_auth_aws::{AwsAuthConfig, resolve_credentials};
 
-/// The S3 cache's credential chain: explicit keys as given, otherwise the AWS resolution
-/// order read through `env`.
 #[derive(Clone)]
 pub struct S3Credentials {
     config: AwsAuthConfig,

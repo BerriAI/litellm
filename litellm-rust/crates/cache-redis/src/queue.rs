@@ -143,6 +143,15 @@ where
         if operations.is_empty() {
             return Ok(Vec::new());
         }
+        if operations.iter().any(|operation| operation.count.is_some())
+            && self.major_version().await < 7
+        {
+            let mut results = Vec::with_capacity(operations.len());
+            for operation in &operations {
+                results.push(self.async_lpop(&operation.key, operation.count).await?);
+            }
+            return Ok(results);
+        }
         let multiple = operations
             .iter()
             .map(|operation| operation.count.is_some())

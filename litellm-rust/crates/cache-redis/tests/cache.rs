@@ -748,6 +748,10 @@ async fn pipelines_preserve_operation_order() {
             rpush_pipeline,
             Ok(vec![redis::Value::Int(1), redis::Value::Int(2)]),
         ),
+        MockCmd::new(
+            redis::cmd("INFO"),
+            Ok("# Server\r\nredis_version:7.2.4\r\n"),
+        ),
         MockCmd::with_values(
             lpop_pipeline,
             Ok(vec![redis_test::redis_value!(["one"]), redis::Value::Nil]),
@@ -786,6 +790,54 @@ async fn pipelines_preserve_operation_order() {
             .unwrap(),
         [
             RedisLpopResult::Values(vec![b"one".to_vec()]),
+            RedisLpopResult::Missing,
+        ]
+    );
+}
+
+/// Below major version 7 a counted `LPOP` is unsupported, so a pipeline that mixes counted and
+/// plain pops runs each operation through `async_lpop`: `count` single-`LPOP` pipelines for the
+/// counted ones, a bare `LPOP` for the rest. No `LPOP key count` reaches the connection.
+#[rstest]
+#[tokio::test]
+async fn lpop_pipeline_pops_one_at_a_time_below_redis_7() {
+    let single_pop = |key: &str| {
+        let mut pipeline = redis::pipe();
+        pipeline.cmd("LPOP").arg(key);
+        pipeline
+    };
+    let cache = team(vec![
+        MockCmd::new(
+            redis::cmd("INFO"),
+            Ok("# Server\r\nredis_version:6.2.14\r\n"),
+        ),
+        MockCmd::with_values(
+            single_pop("team:a"),
+            Ok(vec![redis_test::redis_value!("one")]),
+        ),
+        MockCmd::with_values(
+            single_pop("team:a"),
+            Ok(vec![redis_test::redis_value!("two")]),
+        ),
+        MockCmd::new(redis::cmd("LPOP").arg("team:b"), Ok(redis::Value::Nil)),
+    ]);
+
+    assert_eq!(
+        cache
+            .async_lpop_pipeline(vec![
+                RedisLpopOperation {
+                    key: "a".into(),
+                    count: Some(2),
+                },
+                RedisLpopOperation {
+                    key: "b".into(),
+                    count: None,
+                },
+            ])
+            .await
+            .unwrap(),
+        [
+            RedisLpopResult::Values(vec![b"one".to_vec(), b"two".to_vec()]),
             RedisLpopResult::Missing,
         ]
     );
