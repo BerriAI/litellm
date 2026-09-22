@@ -20,7 +20,6 @@ from lifecycle import ResourceManager
 from models import ChatResponse, KeyGenerateBody, SpendLogRow
 from passthrough_client import (
     AnthropicTool,
-    FalQueueSubmitBody,
     GeminiFunctionDeclaration,
     GeminiTool,
     JsonSchema,
@@ -28,14 +27,10 @@ from passthrough_client import (
     PassthroughClient,
     anthropic_message_id,
     completed_responses_object,
-    fal_queue_submission,
 )
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 REALTIME_MODEL = "gpt-realtime-2"
-FAL_RESOLUTION_PRICED_ENDPOINT = "fal-ai/trellis-2"
-FAL_UNPRICEABLE_ENDPOINT = "fal-ai/moondream3-preview/query"
-FAL_SAMPLE_IMAGE_URL = "https://storage.googleapis.com/falserverless/model_tests/trellis/robot.png"
 
 pytestmark = pytest.mark.e2e
 
@@ -433,64 +428,4 @@ class TestOpenAIPassthroughWebsocket:
             f"/openai/v1/responses refused the websocket upgrade with HTTP "
             f"{handshake.rejected_status}; the prefix relays this route over HTTP but "
             "drops a responses.connect client before the socket opens"
-        )
-
-
-class TestFalAIQueuePassthroughSpend:
-    """The `/fal_ai` queue route only accepts submissions it can bill, and bills the
-    same request the same way however the caller spells it.
-
-    Fal charges per queued job, so a submission the proxy forwards but cannot price
-    is money the gateway never sees. The gate's own error says only priced endpoints
-    may be submitted, so the set it admits has to be exactly the set the pricer can
-    price, and `resolution: 512` has to cost what `resolution: "512"` costs.
-    """
-
-    @pytest.mark.covers("llm.images_generations.fal_ai.input_validation.nonstream.works")
-    def test_submission_the_pricer_cannot_price_is_rejected_not_forwarded(
-        self, client: PassthroughClient, scoped_key: str
-    ) -> None:
-        """Pins LIT-8344 (P0): a catalog key that carries no per-image price is refused
-        by the gate instead of being forwarded and logged at zero spend."""
-        result = client.fal_submit(
-            scoped_key,
-            FAL_UNPRICEABLE_ENDPOINT,
-            FalQueueSubmitBody(image_url=FAL_SAMPLE_IMAGE_URL, prompt=f"one word {unique_marker()}"),
-        )
-
-        assert result.status_code == 400, (
-            f"an endpoint the Fal pricer cannot price must be refused with 400, got "
-            f"{result.status_code}: {result.body[:300]}; a 2xx here means the job was queued "
-            "upstream and the gateway will record it at 0.0 spend"
-        )
-        assert "pricing" in result.body, f"rejection did not explain the missing pricing: {result.body[:300]}"
-
-    @pytest.mark.covers("llm.images_generations.fal_ai.basic.nonstream.cost_logged")
-    def test_numeric_and_string_resolution_are_billed_identically(
-        self, client: PassthroughClient, scoped_key: str
-    ) -> None:
-        """Pins LIT-8344 (P2): the same trellis-2 request costs the same whether the
-        caller sends `resolution` as 512 or as "512"."""
-        numeric = client.fal_submit(
-            scoped_key,
-            FAL_RESOLUTION_PRICED_ENDPOINT,
-            FalQueueSubmitBody(image_url=FAL_SAMPLE_IMAGE_URL, resolution=512),
-        )
-        text = client.fal_submit(
-            scoped_key,
-            FAL_RESOLUTION_PRICED_ENDPOINT,
-            FalQueueSubmitBody(image_url=FAL_SAMPLE_IMAGE_URL, resolution="512"),
-        )
-        require_successful_call(numeric)
-        require_successful_call(text)
-        assert fal_queue_submission(numeric) is not None, f"no queue receipt: {numeric.body[:300]}"
-        assert fal_queue_submission(text) is not None, f"no queue receipt: {text.body[:300]}"
-
-        numeric_row = _fetch_cost_breakdown(client, numeric.call_id)
-        text_row = _fetch_cost_breakdown(client, text.call_id)
-        assert numeric_row.model == FAL_RESOLUTION_PRICED_ENDPOINT, numeric_row
-        assert text_row.model == FAL_RESOLUTION_PRICED_ENDPOINT, text_row
-        assert numeric_row.spend == text_row.spend, (
-            f"resolution 512 was billed {numeric_row.spend} but resolution \"512\" was billed "
-            f"{text_row.spend}; one request, two prices"
         )

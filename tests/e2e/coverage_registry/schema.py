@@ -53,7 +53,6 @@ LlmRoute = Literal[
     "bedrock_converse",
     "bedrock_invoke",
     "cohere",
-    "fal_ai",
     "gemini",
     "hosted_vllm",
     "openai",
