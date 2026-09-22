@@ -1,7 +1,8 @@
-use std::future::Future;
-
 use futures_util::future::try_join_all;
-use litellm_cache::{BaseCache, CacheCodec, CacheConnectionResult, Error, SemanticCacheContext};
+use litellm_cache::{
+    BaseCache, CacheCodec, Error, SemanticCacheContext,
+    semantic::{Embedder, SemanticCache, SemanticLookup, prompt_from_messages},
+};
 use qdrant_client::{
     Payload, Qdrant,
     qdrant::{
@@ -14,26 +15,7 @@ use qdrant_client::{
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use crate::prompt_from_messages;
-
-pub trait Embedder: Send + Sync + 'static {
-    fn model(&self) -> &str;
-    fn embed(&self, input: &str) -> impl Future<Output = Result<Vec<f32>, Error>> + Send;
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Quantization {
-    Binary,
-    Scalar,
-    Product,
-}
-
-pub struct QdrantSemanticConfig {
-    pub collection_name: String,
-    pub similarity_threshold: f64,
-    pub vector_size: u64,
-    pub quantization: Quantization,
-}
+use crate::{QdrantSemanticConfig, Quantization};
 
 pub struct QdrantSemanticCache<E: Embedder, C: CacheCodec> {
     client: Qdrant,
@@ -100,14 +82,9 @@ impl<E: Embedder, C: CacheCodec> QdrantSemanticCache<E, C> {
         &self.embedder
     }
 
+    /// Python reads `kwargs["messages"]` unguarded, so a request without messages fails.
     fn prompt(context: &SemanticCacheContext) -> Result<String, Error> {
-        let Some(messages) = context.messages.as_ref().and_then(Value::as_array) else {
-            return Err(Error::MissingPrompt);
-        };
-        if messages.is_empty() {
-            return Err(Error::MissingPrompt);
-        }
-        Ok(prompt_from_messages(messages))
+        prompt_from_messages(context).ok_or(Error::MissingPrompt)
     }
 
     async fn set(
@@ -117,7 +94,10 @@ impl<E: Embedder, C: CacheCodec> QdrantSemanticCache<E, C> {
         context: &SemanticCacheContext,
     ) -> Result<(), Error> {
         let prompt = Self::prompt(context)?;
-        let vector = self.embedder.embed(&prompt).await?;
+        let vector = self
+            .embedder
+            .async_embed(&prompt, context.metadata.as_ref())
+            .await?;
         let response =
             String::from_utf8(self.codec.encode(&value)?).map_err(|_| Error::InvalidEntry)?;
         let payload = Payload::try_from(json!({
@@ -147,9 +127,12 @@ impl<E: Embedder, C: CacheCodec> QdrantSemanticCache<E, C> {
         &self,
         key: &str,
         context: &SemanticCacheContext,
-    ) -> Result<Option<C::Value>, Error> {
+    ) -> Result<SemanticLookup<C::Value>, Error> {
         let prompt = Self::prompt(context)?;
-        let vector = self.embedder.embed(&prompt).await?;
+        let vector = self
+            .embedder
+            .async_embed(&prompt, context.metadata.as_ref())
+            .await?;
         let result = self
             .client
             .search_points(
@@ -171,20 +154,27 @@ impl<E: Embedder, C: CacheCodec> QdrantSemanticCache<E, C> {
             .await
             .map_err(|_| Error::Unavailable)?;
         let Some(point) = result.result.into_iter().next() else {
-            return Ok(None);
+            return Ok(SemanticLookup::miss(Some(0.0)));
         };
         let payload: Map<String, Value> = Payload::from(point.payload).into();
-        if payload.get("litellm_cache_key").and_then(Value::as_str) != Some(key) {
-            return Ok(None);
+        if !payload
+            .get("litellm_cache_key")
+            .is_some_and(|cached| python_str(cached).as_deref() == Some(key))
+        {
+            return Ok(SemanticLookup::miss(Some(0.0)));
         }
-        if f64::from(point.score) < self.config.similarity_threshold {
-            return Ok(None);
+        let similarity = f64::from(point.score);
+        if similarity < self.config.similarity_threshold {
+            return Ok(SemanticLookup::miss(Some(similarity)));
         }
         let response = payload
             .get("response")
             .and_then(Value::as_str)
             .ok_or(Error::InvalidEntry)?;
-        self.codec.decode(response.as_bytes()).map(Some)
+        Ok(SemanticLookup {
+            value: Some(self.codec.decode(response.as_bytes())?),
+            similarity: Some(similarity),
+        })
     }
 }
 
@@ -219,7 +209,8 @@ impl<E: Embedder, C: CacheCodec> BaseCache for QdrantSemanticCache<E, C> {
     }
 
     fn get_cache(&self, key: &str, context: &Self::Context) -> Result<Option<Self::Value>, Error> {
-        self.runtime.block_on(self.get(key, context))
+        self.get_cache_with_similarity(key, context)
+            .map(|lookup| lookup.value)
     }
 
     async fn async_set_cache(
@@ -236,7 +227,7 @@ impl<E: Embedder, C: CacheCodec> BaseCache for QdrantSemanticCache<E, C> {
         key: &str,
         context: &Self::Context,
     ) -> Result<Option<Self::Value>, Error> {
-        self.get(key, context).await
+        self.get(key, context).await.map(|lookup| lookup.value)
     }
 
     async fn async_set_cache_pipeline(
@@ -251,12 +242,36 @@ impl<E: Embedder, C: CacheCodec> BaseCache for QdrantSemanticCache<E, C> {
         .await
         .map(|_| ())
     }
+}
 
-    async fn disconnect(&self) -> Result<(), Error> {
-        Ok(())
+/// Python stamps the top point's score, even below the threshold, and `0.0` when there is no
+/// point or it belongs to another key. A request without messages fails before any search.
+impl<E: Embedder, C: CacheCodec> SemanticCache for QdrantSemanticCache<E, C> {
+    fn get_cache_with_similarity(
+        &self,
+        key: &str,
+        context: &Self::Context,
+    ) -> Result<SemanticLookup<Self::Value>, Error> {
+        self.runtime.block_on(self.get(key, context))
     }
 
-    async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
-        Err(Error::UnsupportedOperation)
+    async fn async_get_cache_with_similarity(
+        &self,
+        key: &str,
+        context: &Self::Context,
+    ) -> Result<SemanticLookup<Self::Value>, Error> {
+        self.get(key, context).await
+    }
+}
+
+/// `str(value)` for the scalar payload values `_payload_matches_cache_key` compares; `None` for
+/// null (a pre-isolation point without a key) and for containers, which never equal a key.
+fn python_str(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(true) => Some("True".into()),
+        Value::Bool(false) => Some("False".into()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
     }
 }
