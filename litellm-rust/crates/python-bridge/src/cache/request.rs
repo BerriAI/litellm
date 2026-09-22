@@ -19,8 +19,10 @@ struct RequestInput {
     metadata: Option<Value>,
     litellm_metadata: Option<Value>,
     litellm_params: Option<Value>,
+    scope: Option<String>,
 }
 
+#[derive(Clone)]
 pub(super) struct NativeRequest {
     pub(super) key: CacheKeyInput,
     pub(super) controls: CacheControls,
@@ -31,6 +33,7 @@ pub(super) struct NativeRequest {
     pub(super) metadata: Option<Value>,
     pub(super) litellm_metadata: Option<Value>,
     pub(super) litellm_params: Option<Value>,
+    pub(super) scope: Option<String>,
 }
 
 pub(super) fn request(value: &Bound<'_, PyAny>) -> PyResult<NativeRequest> {
@@ -52,6 +55,7 @@ fn request_input(input: RequestInput) -> PyResult<NativeRequest> {
         metadata: input.metadata,
         litellm_metadata: input.litellm_metadata,
         litellm_params: input.litellm_params,
+        scope: input.scope,
     })
 }
 
