@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final, Protocol, cast
 
-from litellm._logging import _redact_string, verbose_proxy_logger
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.types.realtime import RealtimeQueryParams
 
@@ -16,7 +16,6 @@ from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_errors import (
     close_after_upstream_handshake_refusal,
     realtime_error_event,
-    websocket_close_reason,
 )
 from ....litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
@@ -191,17 +190,13 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         except websockets.exceptions.InvalidStatus as e:
             verbose_proxy_logger.exception("Error in AzureOpenAIRealtime.async_realtime")
             await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
-        except Exception as e:
+        except Exception:
             verbose_proxy_logger.exception("Error in AzureOpenAIRealtime.async_realtime")
-            redacted_error: Final = _redact_string(str(e))
             try:
-                await websocket.send_text(realtime_error_event(redacted_error, error_type="server_error"))
+                await websocket.send_text(realtime_error_event("Internal server error", error_type="server_error"))
             except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below
                 pass
             try:
-                await websocket.close(
-                    code=1011,
-                    reason=websocket_close_reason(redacted_error, fallback="Internal server error"),
-                )
+                await websocket.close(code=1011, reason="Internal server error")
             except Exception:  # noqa: BLE001  # the lower layer may have closed the socket already; closing twice is not an error
                 pass

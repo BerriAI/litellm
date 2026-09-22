@@ -420,10 +420,9 @@ async def test_async_realtime_ws_url_has_no_ssl():
 
 @pytest.mark.asyncio
 async def test_async_realtime_upstream_handshake_refusal_sends_error_event_then_policy_close():
-    """A 401 from the upstream realtime handshake must reach the client as an
-    error event plus a 1008 close; a silent return shows up as an abnormal 1006."""
-    import websockets
     from typing import cast
+
+    import websockets
 
     from litellm.llms.openai.realtime.handler import OpenAIRealtime
     from litellm.types.realtime import RealtimeErrorEvent

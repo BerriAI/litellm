@@ -21,9 +21,6 @@ class _RecordingClientWebSocket:
 
 @pytest.mark.asyncio
 async def test_async_realtime_upstream_handshake_refusal_sends_error_event_then_policy_close():
-    """A 401 from the upstream realtime handshake must reach the client as an
-    error event plus a 1008 close; on unfixed code the handler just logs and
-    returns, so the client sees an abnormal 1006 with no event."""
     import websockets
 
     from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
@@ -84,4 +81,6 @@ async def test_async_realtime_unexpected_error_sends_error_event_then_internal_c
     event = cast(RealtimeErrorEvent, json.loads(dummy_websocket.sent[0]))
     assert event["type"] == "error"
     assert event["error"]["type"] == "server_error"
-    assert dummy_websocket.closed and dummy_websocket.closed[0][0] == 1011
+    assert event["error"]["message"] == "Internal server error"
+    assert "connection reset" not in dummy_websocket.sent[0]
+    assert dummy_websocket.closed and dummy_websocket.closed[0] == (1011, "Internal server error")
