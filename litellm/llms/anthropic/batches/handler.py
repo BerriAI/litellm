@@ -18,6 +18,9 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_EMPTY_PARAMS: Final[dict] = {}  # mutable-ok: shared empty mapping for signatures that declare dict; every callee here only reads it
+_EMPTY_MESSAGES: Final[list] = []  # mutable-ok: shared empty list for the messages signature; callees only read it
+
 from ..common_utils import AnthropicModelInfo
 from .transformation import AnthropicBatchesConfig
 
@@ -35,6 +38,22 @@ class AnthropicBatchesHandler:
     def __init__(self):
         self.anthropic_model_info = AnthropicModelInfo()
         self.provider_config = AnthropicBatchesConfig()
+
+    @staticmethod
+    def _default_logging_obj(call_type: str, call_id: str) -> LiteLLMLoggingObj:
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObjClass,
+        )
+
+        return LiteLLMLoggingObjClass(
+            model="anthropic/unknown",
+            messages=_EMPTY_MESSAGES,
+            stream=False,
+            call_type=call_type,
+            start_time=None,
+            litellm_call_id=call_id,
+            function_id=call_type,
+        )
 
     async def aretrieve_batch(
         self,
@@ -182,52 +201,39 @@ class AnthropicBatchesHandler:
         """
         Async: List batches from Anthropic.
         """
-        api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
-        api_key = api_key or self.anthropic_model_info.get_api_key()
+        resolved_api_base: Final = api_base or self.anthropic_model_info.get_api_base(api_base)
+        resolved_api_key: Final = api_key or self.anthropic_model_info.get_api_key()
 
-        if not api_key:
+        if not resolved_api_key:
             raise ValueError("Missing Anthropic API Key")
 
-        if logging_obj is None:
-            from litellm.litellm_core_utils.litellm_logging import (
-                Logging as LiteLLMLoggingObjClass,
-            )
-
-            logging_obj = LiteLLMLoggingObjClass(
-                model="anthropic/unknown",
-                messages=[],
-                stream=False,
-                call_type="batch_list",
-                start_time=None,
-                litellm_call_id="batch_list",
-                function_id="batch_list",
-            )
+        resolved_logging_obj: Final = logging_obj or self._default_logging_obj(call_type="batch_list", call_id="batch_list")
 
         list_url: Final = self.provider_config.get_list_batches_url(
-            api_base=api_base,
+            api_base=resolved_api_base,
             after=after,
             limit=limit,
-            optional_params={},
-            litellm_params={},
+            optional_params=_EMPTY_PARAMS,
+            litellm_params=_EMPTY_PARAMS,
         )
 
         headers: Final = self.provider_config.validate_environment(
-            headers={},
+            headers={},  # mutable-ok: validate_environment fills this mapping in place
             model="",
-            messages=[],
-            optional_params={},
-            litellm_params={},
-            api_key=api_key,
-            api_base=api_base,
+            messages=_EMPTY_MESSAGES,
+            optional_params=_EMPTY_PARAMS,
+            litellm_params=_EMPTY_PARAMS,
+            api_key=resolved_api_key,
+            api_base=resolved_api_base,
         )
 
-        logging_obj.pre_call(
+        resolved_logging_obj.pre_call(
             input="",
-            api_key=api_key,
-            additional_args={
+            api_key=resolved_api_key,
+            additional_args={  # mutable-ok: pre_call logging contract takes a plain dict
                 "api_base": list_url,
                 "headers": headers,
-                "complete_input_dict": {},
+                "complete_input_dict": _EMPTY_PARAMS,
             },
         )
         async_client: Final = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
@@ -290,51 +296,40 @@ class AnthropicBatchesHandler:
         """
         Async: Cancel a batch on Anthropic.
         """
-        api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
-        api_key = api_key or self.anthropic_model_info.get_api_key()
+        resolved_api_base: Final = api_base or self.anthropic_model_info.get_api_base(api_base)
+        resolved_api_key: Final = api_key or self.anthropic_model_info.get_api_key()
 
-        if not api_key:
+        if not resolved_api_key:
             raise ValueError("Missing Anthropic API Key")
 
-        if logging_obj is None:
-            from litellm.litellm_core_utils.litellm_logging import (
-                Logging as LiteLLMLoggingObjClass,
-            )
-
-            logging_obj = LiteLLMLoggingObjClass(
-                model="anthropic/unknown",
-                messages=[],
-                stream=False,
-                call_type="batch_cancel",
-                start_time=None,
-                litellm_call_id=f"batch_cancel_{batch_id}",
-                function_id="batch_cancel",
-            )
+        resolved_logging_obj: Final = logging_obj or self._default_logging_obj(
+            call_type="batch_cancel", call_id=f"batch_cancel_{batch_id}"
+        )
 
         cancel_url: Final = self.provider_config.get_cancel_batch_url(
-            api_base=api_base,
+            api_base=resolved_api_base,
             batch_id=batch_id,
-            optional_params={},
-            litellm_params={},
+            optional_params=_EMPTY_PARAMS,
+            litellm_params=_EMPTY_PARAMS,
         )
 
         headers: Final = self.provider_config.validate_environment(
-            headers={},
+            headers={},  # mutable-ok: validate_environment fills this mapping in place
             model="",
-            messages=[],
-            optional_params={},
-            litellm_params={},
-            api_key=api_key,
-            api_base=api_base,
+            messages=_EMPTY_MESSAGES,
+            optional_params=_EMPTY_PARAMS,
+            litellm_params=_EMPTY_PARAMS,
+            api_key=resolved_api_key,
+            api_base=resolved_api_base,
         )
 
-        logging_obj.pre_call(
+        resolved_logging_obj.pre_call(
             input=batch_id,
-            api_key=api_key,
-            additional_args={
+            api_key=resolved_api_key,
+            additional_args={  # mutable-ok: pre_call logging contract takes a plain dict
                 "api_base": cancel_url,
                 "headers": headers,
-                "complete_input_dict": {},
+                "complete_input_dict": _EMPTY_PARAMS,
             },
         )
         async_client: Final = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
@@ -349,8 +344,8 @@ class AnthropicBatchesHandler:
         return self.provider_config.transform_cancel_batch_response(
             model=None,
             raw_response=response,
-            logging_obj=logging_obj,
-            litellm_params={},
+            logging_obj=resolved_logging_obj,
+            litellm_params=_EMPTY_PARAMS,
         )
 
     def cancel_batch(

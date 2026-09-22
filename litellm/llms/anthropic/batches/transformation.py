@@ -10,6 +10,7 @@ from httpx import Headers, Response
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.constants import EMPTY_MAPPING
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -55,13 +56,28 @@ class AnthropicBatchRequest(TypedDict):
     params: ReadOnly[dict[str, object]]
 
 
+class _OpenAIBatchOutputResponse(TypedDict, total=False):
+    """The ``response`` object of one OpenAI batch output JSONL line."""
+
+    status_code: ReadOnly[int]
+    request_id: ReadOnly[str | None]
+    body: ReadOnly[object]
+
+
+class _OpenAIBatchOutputError(TypedDict, total=False):
+    """The ``error`` object of one OpenAI batch output JSONL line."""
+
+    code: ReadOnly[object]
+    message: ReadOnly[object]
+
+
 class OpenAIBatchOutputLine(TypedDict, total=False):
     """One line of an OpenAI batch output JSONL file."""
 
     id: ReadOnly[str]
     custom_id: ReadOnly[str]
-    response: ReadOnly[dict[str, object] | None]
-    error: ReadOnly[dict[str, object] | None]
+    response: ReadOnly[_OpenAIBatchOutputResponse | None]
+    error: ReadOnly[_OpenAIBatchOutputError | None]
 
 
 class AnthropicMessageBatchList(TypedDict, total=False):
@@ -75,6 +91,9 @@ class AnthropicMessageBatchList(TypedDict, total=False):
 
 _ANTHROPIC_MESSAGE_BATCH_ADAPTER: Final = TypeAdapter(AnthropicMessageBatch)
 _ANTHROPIC_MESSAGE_BATCH_LIST_ADAPTER: Final = TypeAdapter(AnthropicMessageBatchList)
+_OBJECT_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_EMPTY_PARAMS: Final[dict] = {}  # mutable-ok: shared empty mapping for signatures that declare dict; callees only read it
+_EMPTY_METADATA: Final[dict] = {}  # mutable-ok: shared empty LiteLLMBatch metadata; callers never mutate it
 
 
 _ANTHROPIC_PROCESSING_STATUS_TO_OPENAI_STATUS: Final[
@@ -137,18 +156,18 @@ def transform_anthropic_message_batch(response_data: AnthropicMessageBatch) -> L
     cancel_initiated_at: Final = _parse_anthropic_timestamp(response_data.get("cancel_initiated_at"))
     archived_at: Final = _parse_anthropic_timestamp(response_data.get("archived_at"))
 
-    request_counts_data: Final = response_data.get("request_counts", {})
+    request_counts_data: Final = response_data.get("request_counts", EMPTY_MAPPING)
     from openai.types.batch import BatchRequestCounts
 
     request_counts: Final = BatchRequestCounts(
         total=sum(
-            [
+            (
                 request_counts_data.get("processing", 0),
                 request_counts_data.get("succeeded", 0),
                 request_counts_data.get("errored", 0),
                 request_counts_data.get("canceled", 0),
                 request_counts_data.get("expired", 0),
-            ]
+            )
         ),
         completed=request_counts_data.get("succeeded", 0),
         failed=request_counts_data.get("errored", 0),
@@ -174,7 +193,7 @@ def transform_anthropic_message_batch(response_data: AnthropicMessageBatch) -> L
         cancelling_at=(cancel_initiated_at if processing_status == "canceling" else None),
         cancelled_at=(ended_at if processing_status == "canceling" and ended_at else None),
         request_counts=request_counts,
-        metadata={},
+        metadata=_EMPTY_METADATA,
     )
 
 
@@ -200,26 +219,24 @@ def transform_openai_batch_lines_to_anthropic_requests(
         messages: Final = body.get("messages")
         if not isinstance(messages, list):
             raise TypeError(f"OpenAI batch input line for custom_id={custom_id} is missing 'body.messages'")
-        non_default_params: Final[dict[str, object]] = {
-            str(k): v for k, v in cast(Mapping[str, object], body).items() if k not in ("model", "messages")
+        non_default_params: Final = {  # mutable-ok: map_openai_params takes a plain dict
+            str(k): v for k, v in body.items() if k not in ("model", "messages")
         }
-        optional_params: Final = cast(
-            dict[str, object],
+        optional_params: Final = _OBJECT_DICT_ADAPTER.validate_python(
             anthropic_config.map_openai_params(
                 non_default_params=non_default_params,
-                optional_params={},
+                optional_params=_EMPTY_PARAMS,
                 model=model,
                 drop_params=True,
             ),
         )
-        params: Final = cast(
-            dict[str, object],
+        params: Final = _OBJECT_DICT_ADAPTER.validate_python(
             anthropic_config.transform_request(
                 model=model,
                 messages=messages,
                 optional_params=optional_params,
-                litellm_params={},
-                headers={},
+                litellm_params=_EMPTY_PARAMS,
+                headers=_EMPTY_PARAMS,
             ),
         )
         params["model"] = model
@@ -237,14 +254,14 @@ def transform_anthropic_batch_result_line(
     raw_custom_id: Final = line.get("custom_id")
     custom_id: Final = raw_custom_id if isinstance(raw_custom_id, str) else ""
     raw_result: Final = line.get("result")
-    result: Final = cast(Mapping[str, object], raw_result) if isinstance(raw_result, Mapping) else {}
+    result: Final = raw_result if isinstance(raw_result, Mapping) else EMPTY_MAPPING
     result_type: Final = result.get("type")
 
     if result_type == "succeeded":
         raw_message: Final = result.get("message")
-        message: Final = cast(Mapping[str, object], raw_message) if isinstance(raw_message, Mapping) else {}
+        message: Final = raw_message if isinstance(raw_message, Mapping) else EMPTY_MAPPING
         transformed_response: Final = AnthropicConfig().transform_parsed_response(
-            completion_response=dict(message),
+            completion_response=_OBJECT_DICT_ADAPTER.validate_python(message),
             raw_response=raw_response,
             model_response=ModelResponse(),
         )
@@ -252,20 +269,18 @@ def transform_anthropic_batch_result_line(
         return OpenAIBatchOutputLine(
             id=f"batch_req_{uuid4().hex}",
             custom_id=custom_id,
-            response={
-                "status_code": 200,
-                "request_id": request_id if isinstance(request_id, str) else None,
-                "body": cast(dict[str, object], transformed_response.model_dump(exclude_none=True)),
-            },
+            response=_OpenAIBatchOutputResponse(
+                status_code=200,
+                request_id=request_id if isinstance(request_id, str) else None,
+                body=_OBJECT_DICT_ADAPTER.validate_python(transformed_response.model_dump(exclude_none=True)),
+            ),
             error=None,
         )
     if result_type == "errored":
         raw_error: Final = result.get("error")
-        error_candidate: Final = cast(Mapping[str, object], raw_error) if isinstance(raw_error, Mapping) else {}
+        error_candidate: Final = raw_error if isinstance(raw_error, Mapping) else EMPTY_MAPPING
         nested_error: Final = error_candidate.get("error")
-        error: Final = (
-            cast(Mapping[str, object], nested_error) if isinstance(nested_error, Mapping) else error_candidate
-        )
+        error: Final = nested_error if isinstance(nested_error, Mapping) else error_candidate
         error_type: Final = error.get("type")
         status_code: Final = _ANTHROPIC_BATCH_ERROR_TYPE_TO_STATUS_CODE.get(
             error_type if isinstance(error_type, str) else "", 500
@@ -273,8 +288,10 @@ def transform_anthropic_batch_result_line(
         return OpenAIBatchOutputLine(
             id=f"batch_req_{uuid4().hex}",
             custom_id=custom_id,
-            response={"status_code": status_code, "request_id": None, "body": dict(error)},
-            error={"code": error_type, "message": error.get("message")},
+            response=_OpenAIBatchOutputResponse(
+                status_code=status_code, request_id=None, body=_OBJECT_DICT_ADAPTER.validate_python(error)
+            ),
+            error=_OpenAIBatchOutputError(code=error_type, message=error.get("message")),
         )
     if result_type in ("canceled", "expired"):
         failure_message: Final = (
@@ -284,7 +301,7 @@ def transform_anthropic_batch_result_line(
             id=f"batch_req_{uuid4().hex}",
             custom_id=custom_id,
             response=None,
-            error={"code": result_type, "message": failure_message},
+            error=_OpenAIBatchOutputError(code=result_type, message=failure_message),
         )
     raise ValueError(f"Unknown Anthropic batch result type: {result_type}")
 
@@ -361,7 +378,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         ``extra_body["requests"]`` as ``[{"custom_id": ..., "params": {...}}]``.
         """
         raw_extra_body: Final = create_batch_data.get("extra_body")
-        extra_body: Final = cast(Mapping[str, object], raw_extra_body) if isinstance(raw_extra_body, Mapping) else {}
+        extra_body: Final = raw_extra_body if isinstance(raw_extra_body, Mapping) else EMPTY_MAPPING
         requests: Final = extra_body.get("requests")
         if not isinstance(requests, list) or len(requests) == 0:
             raise self.get_error_class(
@@ -373,7 +390,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
                 status_code=400,
                 headers=Headers(),
             )
-        return {**dict(extra_body), "requests": list(requests)}
+        return {**extra_body, "requests": list(requests)}  # mutable-ok: base contract returns a plain JSON dict payload
 
     def transform_create_batch_response(
         self,
@@ -407,11 +424,14 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     ) -> str:
         """Get the URL for listing Anthropic message batches, with pagination params."""
         resolved_api_base: Final = self.anthropic_model_info.get_api_base(api_base) or "https://api.anthropic.com"
-        params: Final[dict[str, str]] = {}
-        if limit is not None:
-            params["limit"] = str(limit)
-        if after:
-            params["after_id"] = after
+        params: Final = tuple(
+            param
+            for param in (
+                ("limit", str(limit)) if limit is not None else None,
+                ("after_id", after) if after else None,
+            )
+            if param is not None
+        )
         return str(httpx.URL(f"{resolved_api_base.rstrip('/')}/v1/messages/batches", params=params))
 
     def transform_list_batches_response(
@@ -420,7 +440,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     ) -> dict[str, object]:
         """Transform the Anthropic batch list response into the OpenAI list shape."""
         response_json: Final = _ANTHROPIC_MESSAGE_BATCH_LIST_ADAPTER.validate_python(raw_response.json())
-        data: Final = [transform_anthropic_message_batch(b) for b in response_json.get("data", [])]
+        data: Final = tuple(transform_anthropic_message_batch(b) for b in response_json.get("data", ()))
         return {
             "object": "list",
             "data": data,

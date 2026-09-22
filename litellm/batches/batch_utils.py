@@ -3,7 +3,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from enum import Enum
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
@@ -709,7 +709,7 @@ def _get_batch_job_usage_from_response_body(
             and "input_tokens" not in usage_object
             and "output_tokens" not in usage_object
         ):
-            return Usage(**cast(dict[str, object], usage_object))
+            return Usage.model_validate(usage_object)
         anthropic_usage: Final = AnthropicConfig().calculate_usage(
             usage_object=usage_object,
             reasoning_content=None,

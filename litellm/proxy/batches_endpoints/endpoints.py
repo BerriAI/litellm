@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import EMPTY_MAPPING
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
 from litellm.llms.anthropic.batches.transformation import (
     transform_openai_batch_lines_to_anthropic_requests,
@@ -259,11 +260,11 @@ async def _create_anthropic_batch_for_managed_file(
     extra_body: Final = (
         cast(  # cast-ok: extra_body is declared dict[str, str] but the Anthropic requests array is a list value
             "dict[str, str]",
-            {**(create_batch_data.get("extra_body") or {}), "requests": list(requests)},
+            {**(create_batch_data.get("extra_body") or EMPTY_MAPPING), "requests": list(requests)},  # mutable-ok: one-shot payload build; the requests contract requires list
         )
     )
     request: Final[LiteLLMBatchCreateRequest] = {
-        **{key: value for key, value in create_batch_data.items() if key != "model_file_id_mapping"},
+        **{key: value for key, value in create_batch_data.items() if key != "model_file_id_mapping"},  # mutable-ok: one-shot rebuild without the managed-files key; the request contract requires dict
         "model": model,
         "input_file_id": input_file_id,
         "disable_fallbacks": True,

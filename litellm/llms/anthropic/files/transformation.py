@@ -16,6 +16,7 @@ import calendar
 import json
 import time
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final, cast
 
 import httpx
@@ -281,7 +282,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         from ..batches.transformation import transform_anthropic_batch_result_line
 
         translated_lines: Final = tuple(
-            json.dumps(transform_anthropic_batch_result_line(cast(Mapping[str, object], parsed), raw_response))
+            json.dumps(transform_anthropic_batch_result_line(parsed, raw_response))
             for parsed in (json.loads(line) for line in raw_response.text.splitlines() if line.strip())
             if isinstance(parsed, Mapping)
         )
@@ -289,7 +290,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
             response=httpx.Response(
                 status_code=200,
                 content=("\n".join(translated_lines) + "\n" if translated_lines else "").encode("utf-8"),
-                headers={"content-type": "application/jsonl"},
+                headers=MappingProxyType({"content-type": "application/jsonl"}),
                 request=request,
             )
         )
