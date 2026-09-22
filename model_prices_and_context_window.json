@@ -44812,26 +44812,6 @@
         "max_tokens": 128000,
         "mode": "chat"
     },
-    "openrouter/stealth/union-alpha": {
-        "deprecation_date": "2098-12-31",
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 131072,
-        "max_tokens": 131072,
-        "mode": "chat",
-        "source": "https://openrouter.ai/api/v1/models",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_pdf_input": false,
-        "supports_prompt_caching": false,
-        "supports_reasoning": false,
-        "supports_tool_choice": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": false
-    },
     "ovhcloud/DeepSeek-R1-Distill-Llama-70B": {
         "input_cost_per_token": 6.7e-07,
         "litellm_provider": "ovhcloud",
