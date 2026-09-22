@@ -1559,9 +1559,8 @@ class TestListToolsRestAPI:
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "get_mcp_server_by_id",
-            lambda server_id: stub_server if server_id == "server-1" else None,
-            raising=False,
+            "registry",
+            {stub_server.server_id: stub_server},
         )
 
         request = _build_request(path="/mcp-rest/tools/list", method="GET")

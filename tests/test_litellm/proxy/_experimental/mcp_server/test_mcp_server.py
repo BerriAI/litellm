@@ -5535,7 +5535,7 @@ class TestMCPServerManagerReload:
         ):
             await manager.reload_servers_from_database()
 
-        mock_build.assert_awaited_once_with(db_row, env_vars_are_encrypted=True)
+        mock_build.assert_awaited_once_with(db_row, env_vars_are_encrypted=True, register_oauth_discovery=False)
         assert manager.registry["server-1"] is rebuilt_server
 
     @pytest.mark.asyncio
@@ -5587,7 +5587,7 @@ class TestMCPServerManagerReload:
                 "build_mcp_server_from_table",
                 AsyncMock(side_effect=build_server),
             ),
-            patch.object(manager, "_maybe_register_openapi_tools", AsyncMock()),
+            patch.object(manager, "maybe_register_openapi_tools", AsyncMock()),
             caplog.at_level("ERROR", logger="LiteLLM"),
         ):
             await manager.reload_servers_from_database()
@@ -5659,7 +5659,7 @@ class TestMCPServerManagerReload:
             ),
             patch.object(
                 manager,
-                "_maybe_register_openapi_tools",
+                "maybe_register_openapi_tools",
                 AsyncMock(side_effect=register_openapi_tools),
             ),
             caplog.at_level("ERROR", logger="LiteLLM"),
@@ -9534,7 +9534,7 @@ class TestPreemptive401ModeAware:
         assert resolved.authorization_url == "https://idp.example.com/authorize"
         assert resolved.token_url == "https://idp.example.com/token"
         assert resolved.registration_url == "https://idp.example.com/register"
-        assert manager._oauth_discovery_slot(server.server_id) is None
+        assert manager.oauth_discovery_slot(server.server_id) is None
         assert exc.value.status_code == 401
 
     @pytest.mark.asyncio

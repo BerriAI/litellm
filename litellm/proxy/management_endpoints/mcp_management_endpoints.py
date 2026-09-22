@@ -19,7 +19,8 @@ import functools
 import importlib
 import json
 import os
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import (
@@ -44,6 +45,8 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 from typing_extensions import ReadOnly, TypedDict
+
+from litellm.proxy._experimental.mcp_server.catalog import catalog_operation
 
 try:
     from prisma.errors import RecordNotFoundError, UniqueViolationError
@@ -1061,7 +1064,8 @@ if MCP_AVAILABLE:
         registry_servers.append({"server": _build_builtin_registry_entry(base_url)})
 
         # Centralized IP-based filtering: external callers only see public servers
-        registered_servers: Final = list(global_mcp_server_manager.get_filtered_registry(client_ip).values())
+        async with global_mcp_server_manager.catalog.operation():
+            registered_servers: Final = list(global_mcp_server_manager.get_filtered_registry(client_ip).values())
 
         registered_servers.sort(key=_build_mcp_registry_server_name)
 
@@ -1091,6 +1095,7 @@ if MCP_AVAILABLE:
             return "view_all"
         return "restricted"
 
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def _get_team_scoped_mcp_server_list(
         team_id: str,
     ) -> list[LiteLLM_MCPServerTable]:
@@ -1129,6 +1134,7 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials_list(servers)
 
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def _resolve_accessible_mcp_servers(
         user_api_key_dict: UserAPIKeyAuth,
     ) -> list[LiteLLM_MCPServerTable]:
@@ -1150,6 +1156,7 @@ if MCP_AVAILABLE:
                 aggregated.setdefault(server.server_id, server)
         return list(aggregated.values())
 
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def _connected_app_reachable_server_ids(user_api_key_dict: UserAPIKeyAuth) -> frozenset[str]:
         """Server ids a connected app authorized by this dashboard user is served on the aggregate
         MCP endpoint, resolved through the one owner of the admitted subject so the page and the
@@ -1284,6 +1291,7 @@ if MCP_AVAILABLE:
         description="Health check for MCP servers",
         dependencies=[Depends(user_api_key_auth)],
     )
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def health_check_servers(
         server_ids: list[str] | None = Query(
             None,
@@ -1592,6 +1600,7 @@ if MCP_AVAILABLE:
         dependencies=[Depends(user_api_key_auth)],
         response_model=LiteLLM_MCPServerTable,
     )
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def fetch_mcp_server(
         request: Request,
         server_id: str,
@@ -2016,9 +2025,7 @@ if MCP_AVAILABLE:
 
             server_id: Final[str] = request.path_params.get("server_id", "")
             if server_id:
-                _s = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-                if not _s:
-                    _s = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+                _s = await global_mcp_server_manager.catalog.resolve(server_id)
                 if (
                     _s
                     and getattr(_s, "auth_type", None) == MCPAuth.oauth2
@@ -2064,42 +2071,44 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth,
         request: Request | None = None,
     ) -> MCPServer:
-        server = await get_cached_temporary_mcp_server(server_id)
-        resolved_from_temp_cache: Final = server is not None
-        if server is None:
-            # Fall back to real DB/config server (e.g. for the user-side OAuth flow
-            # which calls these endpoints with a real server_id, not a temp session id).
-            from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+        async with _oauth_server_operation(server_id, user_api_key_dict, request=request) as server:
+            return server
 
-            client_ip: Final = IPAddressUtils.get_mcp_client_ip(request) if request else None
-            server = global_mcp_server_manager.get_mcp_server_by_id(
-                server_id
-            ) or global_mcp_server_manager.get_mcp_server_by_name(server_id, client_ip=client_ip)
-        if server is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"MCP server {server_id} not found"},
-            )
+    @asynccontextmanager
+    async def _oauth_server_operation(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+        request: Request | None = None,
+    ) -> AsyncIterator[MCPServer]:
+        temporary: Final = await get_cached_temporary_mcp_server(server_id)
+        if temporary is not None:
+            if not _user_has_admin_view(user_api_key_dict):
+                raise HTTPException(status_code=403, detail={"error": f"Access denied to MCP server {server_id}"})
+            yield temporary
+            return
+        async with global_mcp_server_manager.catalog.operation():
+            yield await _resolve_saved_oauth_server(server_id, user_api_key_dict, request)
 
-        # Per-server access policy mirrors `fetch_mcp_server`: admin-view
-        # callers are unrestricted; non-admins must have the server in their
-        # allowed-servers set. Temporary cached servers come from the
-        # admin-only `/server/oauth/session` setup flow and are not exposed
-        # to non-admins.
+    @catalog_operation(lambda: global_mcp_server_manager)
+    async def _resolve_saved_oauth_server(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+        request: Request | None,
+    ) -> MCPServer:
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
+        client_ip: Final = IPAddressUtils.get_mcp_client_ip(request) if request else None
+        server: Final = global_mcp_server_manager.get_mcp_server_by_id(
+            server_id
+        ) or global_mcp_server_manager.get_mcp_server_by_name(server_id, client_ip=client_ip)
+        if server is None:
+            raise HTTPException(status_code=404, detail={"error": f"MCP server {server_id} not found"})
         if not _user_has_admin_view(user_api_key_dict):
-            if resolved_from_temp_cache:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"error": f"Access denied to MCP server {server_id}"},
-                )
-            allowed_server_ids: Final[set[str]] = set()
-            for auth_context in await build_effective_auth_contexts(user_api_key_dict):
-                allowed_server_ids.update(await global_mcp_server_manager.get_allowed_mcp_servers(auth_context))
-            if server.server_id not in allowed_server_ids:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"error": f"Access denied to MCP server {server_id}"},
-                )
+            allowed_ids: Final[set[str]] = set()
+            for context in await build_effective_auth_contexts(user_api_key_dict):
+                allowed_ids.update(await global_mcp_server_manager.get_allowed_mcp_servers(context))
+            if server.server_id not in allowed_ids:
+                raise HTTPException(status_code=403, detail={"error": f"Access denied to MCP server {server_id}"})
         return server
 
     @router.get(
@@ -2119,47 +2128,47 @@ if MCP_AVAILABLE:
         response_type: str | None = None,
         scope: str | None = None,
     ):
-        mcp_server: Final = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
-        _raise_if_not_oauth2(mcp_server)
-        # Use the server's stored client_id when the caller doesn't supply one
-        stored_or_supplied_client_id: Final = mcp_server.client_id or client_id or ""
-        ephemeral_dcr_client: Final = (
-            await resolve_ephemeral_dcr_client(
+        async with _oauth_server_operation(server_id, user_api_key_dict, request=request) as mcp_server:
+            _raise_if_not_oauth2(mcp_server)
+            # Use the server's stored client_id when the caller doesn't supply one
+            stored_or_supplied_client_id: Final = mcp_server.client_id or client_id or ""
+            ephemeral_dcr_client: Final = (
+                await resolve_ephemeral_dcr_client(
+                    request=request,
+                    mcp_server=mcp_server,
+                    code_challenge=code_challenge,
+                    code_challenge_method=code_challenge_method,
+                    redirect_uri=redirect_uri,
+                )
+                if not stored_or_supplied_client_id
+                else None
+            )
+            resolved_client_id: Final = stored_or_supplied_client_id or (
+                ephemeral_dcr_client.client_id if ephemeral_dcr_client else ""
+            )
+            if not resolved_client_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "missing_client_id",
+                        "message": (
+                            "No client_id available for this MCP server. "
+                            "Either configure the server with a client_id or supply one in the request."
+                        ),
+                    },
+                )
+            return await authorize_with_server(
                 request=request,
                 mcp_server=mcp_server,
+                client_id=resolved_client_id,
+                redirect_uri=redirect_uri,
+                state=state,
                 code_challenge=code_challenge,
                 code_challenge_method=code_challenge_method,
-                redirect_uri=redirect_uri,
+                response_type=response_type,
+                scope=scope,
+                ephemeral_dcr_client=ephemeral_dcr_client,
             )
-            if not stored_or_supplied_client_id
-            else None
-        )
-        resolved_client_id: Final = stored_or_supplied_client_id or (
-            ephemeral_dcr_client.client_id if ephemeral_dcr_client else ""
-        )
-        if not resolved_client_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "missing_client_id",
-                    "message": (
-                        "No client_id available for this MCP server. "
-                        "Either configure the server with a client_id or supply one in the request."
-                    ),
-                },
-            )
-        return await authorize_with_server(
-            request=request,
-            mcp_server=mcp_server,
-            client_id=resolved_client_id,
-            redirect_uri=redirect_uri,
-            state=state,
-            code_challenge=code_challenge,
-            code_challenge_method=code_challenge_method,
-            response_type=response_type,
-            scope=scope,
-            ephemeral_dcr_client=ephemeral_dcr_client,
-        )
 
     @router.post(
         "/server/oauth/{server_id}/token",
@@ -2179,47 +2188,47 @@ if MCP_AVAILABLE:
         refresh_token: str | None = Form(None),
         scope: str | None = Form(None),
     ):
-        mcp_server: Final = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
-        _raise_if_not_oauth2(mcp_server)
-        # Sealed passthrough codes exist only for the authorization_code grant. A refresh_token
-        # grant must never open one: the minted client is unrecoverable after the single flow by
-        # contract, so an expired browser-held token re-runs authorize instead.
-        sealed_code: Final = (
-            redeem_passthrough_authorization_code(code=code, mcp_server=mcp_server, code_verifier=code_verifier)
-            if grant_type == "authorization_code"
-            else None
-        )
-        resolved_code: Final = sealed_code.upstream_code if sealed_code else code
-        # A sealed flow ran the gateway /callback as its upstream redirect (bridge short-circuit
-        # or plain flow alike), so the exchange must present that binding, not the browser page.
-        resolved_redirect_uri: Final = f"{get_request_base_url(request)}/callback" if sealed_code else redirect_uri
-        caller_client_id: Final = sealed_code.client_id if sealed_code else client_id
-        caller_client_secret: Final = sealed_code.client_secret if sealed_code else client_secret
-        resolved_client_id: Final = mcp_server.client_id or caller_client_id or ""
-        if not resolved_client_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "missing_client_id",
-                    "message": (
-                        "No client_id available for this MCP server. "
-                        "Either configure the server with a client_id or supply one in the request."
-                    ),
-                },
+        async with _oauth_server_operation(server_id, user_api_key_dict, request=request) as mcp_server:
+            _raise_if_not_oauth2(mcp_server)
+            # Sealed passthrough codes exist only for the authorization_code grant. A refresh_token
+            # grant must never open one: the minted client is unrecoverable after the single flow by
+            # contract, so an expired browser-held token re-runs authorize instead.
+            sealed_code: Final = (
+                redeem_passthrough_authorization_code(code=code, mcp_server=mcp_server, code_verifier=code_verifier)
+                if grant_type == "authorization_code"
+                else None
             )
-        return await exchange_token_with_server(
-            request=request,
-            mcp_server=mcp_server,
-            grant_type=grant_type,
-            code=resolved_code,
-            redirect_uri=resolved_redirect_uri,
-            client_id=resolved_client_id,
-            client_secret=caller_client_secret,
-            code_verifier=code_verifier,
-            refresh_token=refresh_token,
-            scope=scope,
-            client_token_endpoint_auth_method=sealed_code.token_endpoint_auth_method if sealed_code else None,
-        )
+            resolved_code: Final = sealed_code.upstream_code if sealed_code else code
+            # A sealed flow ran the gateway /callback as its upstream redirect (bridge short-circuit
+            # or plain flow alike), so the exchange must present that binding, not the browser page.
+            resolved_redirect_uri: Final = f"{get_request_base_url(request)}/callback" if sealed_code else redirect_uri
+            caller_client_id: Final = sealed_code.client_id if sealed_code else client_id
+            caller_client_secret: Final = sealed_code.client_secret if sealed_code else client_secret
+            resolved_client_id: Final = mcp_server.client_id or caller_client_id or ""
+            if not resolved_client_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "missing_client_id",
+                        "message": (
+                            "No client_id available for this MCP server. "
+                            "Either configure the server with a client_id or supply one in the request."
+                        ),
+                    },
+                )
+            return await exchange_token_with_server(
+                request=request,
+                mcp_server=mcp_server,
+                grant_type=grant_type,
+                code=resolved_code,
+                redirect_uri=resolved_redirect_uri,
+                client_id=resolved_client_id,
+                client_secret=caller_client_secret,
+                code_verifier=code_verifier,
+                refresh_token=refresh_token,
+                scope=scope,
+                client_token_endpoint_auth_method=sealed_code.token_endpoint_auth_method if sealed_code else None,
+            )
 
     @router.post(
         "/server/oauth/{server_id}/register",
@@ -2231,22 +2240,22 @@ if MCP_AVAILABLE:
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
-        mcp_server: Final = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
-        request_data: Final = await _read_request_body(request=request)
-        data: Final[dict] = {**request_data}
-        client_redirect_uris: Final = client_supplied_redirect_uris(data.get("redirect_uris"))
+        async with _oauth_server_operation(server_id, user_api_key_dict, request=request) as mcp_server:
+            request_data: Final = await _read_request_body(request=request)
+            data: Final[dict] = {**request_data}
+            client_redirect_uris: Final = client_supplied_redirect_uris(data.get("redirect_uris"))
 
-        return await register_client_with_server(
-            request=request,
-            mcp_server=mcp_server,
-            client_name=data.get("client_name", ""),
-            grant_types=data.get("grant_types", []),
-            response_types=data.get("response_types", []),
-            token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
-            fallback_client_id=server_id,
-            persist_credentials=_user_is_full_admin(user_api_key_dict),
-            client_redirect_uris=client_redirect_uris,
-        )
+            return await register_client_with_server(
+                request=request,
+                mcp_server=mcp_server,
+                client_name=data.get("client_name", ""),
+                grant_types=data.get("grant_types", []),
+                response_types=data.get("response_types", []),
+                token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
+                fallback_client_id=server_id,
+                persist_credentials=_user_is_full_admin(user_api_key_dict),
+                client_redirect_uris=client_redirect_uris,
+            )
 
     @router.delete(
         "/server/{server_id}",
@@ -2597,6 +2606,7 @@ if MCP_AVAILABLE:
 
     # ── Per-user MCP env var endpoints ────────────────────────────────────────
 
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def _authorize_and_fetch_mcp_server(
         prisma_client,
         user_api_key_dict: UserAPIKeyAuth,

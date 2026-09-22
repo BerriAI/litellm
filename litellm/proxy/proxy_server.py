@@ -19677,30 +19677,33 @@ async def _resolve_mcp_csv_tokens(csv_segment: str, client_ip: str | None) -> li
     all-unmatched server filter falls back to the full ``allowed_mcp_servers``
     list and silently broadens the request scope).
     """
-    from litellm.constants import DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
+    from litellm.proxy._experimental.mcp_server.catalog import global_manager
 
-    seen: Final[set] = set()
-    deduped: Final[list[str]] = []
-    for raw in csv_segment.split(","):
-        token = raw.strip()
-        if not token or token in seen:
-            continue
-        seen.add(token)
-        deduped.append(token)
-        if len(deduped) >= DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS:
-            break
+    async with global_manager().catalog.operation():
+        from litellm.constants import DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
 
-    resolved: Final[list[str]] = []
-    for token in deduped:
-        if global_mcp_server_manager.get_mcp_server_by_name(token, client_ip=client_ip):
-            resolved.append(token)
-            continue
-        if await _is_mcp_access_group_cached(token):
-            resolved.append(token)
-    return resolved
+        seen: Final[set] = set()
+        deduped: Final[list[str]] = []
+        for raw in csv_segment.split(","):
+            token = raw.strip()
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            deduped.append(token)
+            if len(deduped) >= DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS:
+                break
+
+        resolved: Final[list[str]] = []
+        for token in deduped:
+            if global_mcp_server_manager.get_mcp_server_by_name(token, client_ip=client_ip):
+                resolved.append(token)
+                continue
+            if await _is_mcp_access_group_cached(token):
+                resolved.append(token)
+        return resolved
 
 
 async def _is_mcp_access_group_cached(name: str) -> bool:
@@ -19755,7 +19758,9 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
 
         # 1. Registered MCP server alias
-        if global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name, client_ip=client_ip):
+        async with global_mcp_server_manager.catalog.operation():
+            server: Final = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name, client_ip=client_ip)
+        if server is not None:
             return await _mcp_forward_as_path(mcp_server_name, request)
 
         # 2. Comma-separated list — validate every token resolves to a known

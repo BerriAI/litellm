@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Final
 from litellm._logging import verbose_logger
 from litellm.exceptions import ContextWindowExceededError
 from litellm.litellm_core_utils.exception_mapping_utils import ExceptionCheckers
+from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.faults import iter_exception_tree
 from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
 
@@ -78,6 +79,7 @@ class SemanticMCPToolFilter:
         self._tool_map: dict[str, object] = {}  # MCPTool objects or OpenAI function dicts
         self._index_sync_lock = asyncio.Lock()
 
+    @catalog_operation(global_manager)
     async def build_router_from_mcp_registry(self) -> None:
         """Build semantic router from all MCP tools in the registry (no auth checks)."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (

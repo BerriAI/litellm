@@ -631,6 +631,7 @@ async def test_execute_byok_tool_missing_credential_advertises_api_key_flow(monk
     monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com/proxy")
     mcp_operations.byok_credential_cache.flush_cache()
     server = MCPServer(server_id="byok-discovery", name="byok-discovery", transport=MCPTransport.http, is_byok=True)
+    monkeypatch.setattr(proxy_server, "should_load_db_object", lambda _kind: False)
     prisma = MagicMock()
     prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)

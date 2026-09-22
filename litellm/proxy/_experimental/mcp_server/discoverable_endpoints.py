@@ -36,6 +36,7 @@ from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
     can_store_oauth_credential,
     oauth_authorization_uses_gateway_credential,
 )
+from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.faults import (
     CallerRejected,
     CredentialSource,
@@ -1769,7 +1770,7 @@ async def resolve_ephemeral_dcr_client(
 def _register_flow_needed_endpoint(mcp_server: MCPServer) -> str | None:
     """The register flow's deferred-discovery join gate. A DCR bridge with no admin-configured
     client can only register callers through the upstream's registration endpoint
-    (``_oauth_endpoints_unresolved`` keeps its discovery slot armed for exactly this shape), so
+    (``oauth_endpoints_unresolved`` keeps its discovery slot armed for exactly this shape), so
     the flow must keep joining discovery while registration is still missing instead of silently
     degrading to the dummy short-circuit. Every other shape only needs the authorization url."""
     if mcp_server.is_dcr_bridge and not mcp_server.client_id and mcp_server.effective_registration_url is None:
@@ -1900,6 +1901,7 @@ async def authorize_mcp_session(
 
 @router.get("/{mcp_server_name}/authorize")
 @router.get("/authorize")
+@catalog_operation(global_manager)
 async def authorize(
     request: Request,
     redirect_uri: str,
@@ -1974,6 +1976,7 @@ async def authorize(
 
 @router.post("/{mcp_server_name}/token")
 @router.post("/token")
+@catalog_operation(global_manager)
 async def token_endpoint(
     request: Request,
     grant_type: str = Form(...),
@@ -2078,6 +2081,7 @@ async def authorize_flow(request: Request, flow: str) -> Response:
 
 
 @router.post("/authorize/complete")
+@catalog_operation(global_manager)
 async def authorize_complete(
     request: Request,
     flow: str = Form(...),
@@ -2696,6 +2700,7 @@ async def oauth_authorization_server_aggregate(request: Request):
 # Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}
 # This is the pattern expected by standard MCP clients (mcp-inspector, VSCode Copilot)
 @router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp/{{mcp_server_name}}")
+@catalog_operation(global_manager)
 async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_name: str):
     """
     OAuth protected resource discovery endpoint using standard MCP URL pattern.
@@ -2716,6 +2721,7 @@ async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_nam
 # LiteLLM legacy pattern: /.well-known/oauth-protected-resource/{server_name}/mcp
 # Kept for backward compatibility with existing deployments
 @router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/{{mcp_server_name}}/mcp")
+@catalog_operation(global_manager)
 async def oauth_protected_resource_mcp(request: Request, mcp_server_name: str | None = None):
     """
     OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.
@@ -2792,6 +2798,7 @@ def _build_oauth_authorization_server_response(
 
 # Standard MCP pattern: /.well-known/oauth-authorization-server/mcp/{server_name}
 @router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/mcp/{{mcp_server_name}}")
+@catalog_operation(global_manager)
 async def oauth_authorization_server_mcp_standard(request: Request, mcp_server_name: str):
     """
     OAuth authorization server discovery endpoint using standard MCP URL pattern.
@@ -2809,6 +2816,7 @@ async def oauth_authorization_server_mcp_standard(request: Request, mcp_server_n
 # LiteLLM legacy pattern and root endpoint
 @router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/{{mcp_server_name}}")
 @router.get("/.well-known/oauth-authorization-server")
+@catalog_operation(global_manager)
 async def oauth_authorization_server_mcp(request: Request, mcp_server_name: str | None = None):
     """
     OAuth authorization server discovery endpoint.
@@ -2882,6 +2890,7 @@ async def jwks_json(request: Request):
 
 # Additional legacy pattern support
 @router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/{{mcp_server_name}}/mcp")
+@catalog_operation(global_manager)
 async def oauth_authorization_server_legacy(request: Request, mcp_server_name: str):
     """
     OAuth authorization server discovery for legacy /{server_name}/mcp pattern.
@@ -2895,6 +2904,7 @@ async def oauth_authorization_server_legacy(request: Request, mcp_server_name: s
 
 @router.post("/{mcp_server_name}/register")
 @router.post("/register")
+@catalog_operation(global_manager)
 async def register_client(request: Request, mcp_server_name: str | None = None):
     # Get the correct base URL considering X-Forwarded-* headers
     request_base_url: Final = get_request_base_url(request)

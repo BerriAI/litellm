@@ -9060,7 +9060,7 @@ async def test_load_servers_from_config_hydrates_dcr_clients():
     )
 
     hydrate_spy = AsyncMock()
-    with patch.object(global_mcp_server_manager, "_hydrate_config_servers_dcr_clients", new=hydrate_spy):
+    with patch.object(global_mcp_server_manager, "hydrate_config_servers_dcr_clients", new=hydrate_spy):
         await global_mcp_server_manager.load_servers_from_config({})
 
     hydrate_spy.assert_awaited_once()
@@ -9085,7 +9085,7 @@ async def test_reload_servers_from_database_hydrates_dcr_clients():
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=prisma,
         ),
-        patch.object(global_mcp_server_manager, "_hydrate_config_servers_dcr_clients", new=hydrate_spy),
+        patch.object(global_mcp_server_manager, "hydrate_config_servers_dcr_clients", new=hydrate_spy),
     ):
         await global_mcp_server_manager.reload_servers_from_database()
 
@@ -9618,7 +9618,7 @@ def test_oauth_endpoints_count_admin_entered_urls_as_resolved():
     """A leftover issuer empties the resolved authorize/token fields but must not keep the
     server on the deferred-discovery retry path when the admin already stored those URLs."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        _oauth_endpoints_unresolved,
+        oauth_endpoints_unresolved,
     )
     from litellm.types.mcp import MCPAuth, MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -9635,7 +9635,7 @@ def test_oauth_endpoints_count_admin_entered_urls_as_resolved():
         configured_authorization_url="https://github.com/login/oauth/authorize",
         configured_token_url="https://github.com/login/oauth/access_token",
     )
-    assert _oauth_endpoints_unresolved(server) is False
+    assert oauth_endpoints_unresolved(server) is False
 
 
 @pytest.mark.asyncio
@@ -11135,7 +11135,7 @@ def test_discovery_advertises_the_exchange_grant_only_where_the_gateway_can_serv
         litellm_jwtauth=LiteLLM_JWTAuth(virtual_key_claim_field=virtual_key_claim_field),
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.jwt_handler", handler)
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": jwt_auth_enabled})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": jwt_auth_enabled, "supported_db_objects": []})
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     exchange_grant = ["urn:ietf:params:oauth:grant-type:token-exchange"] if exchange_servable else []
