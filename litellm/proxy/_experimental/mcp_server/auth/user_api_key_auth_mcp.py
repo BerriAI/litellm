@@ -3200,7 +3200,7 @@ class MCPRequestHandler:
             verbose_logger.warning(
                 "MCP agent caller team tool ceiling unresolvable, denying tools on %r: %s", server_id, e
             )
-            return []
+            return ()
         team_direct_tools: Final = (
             global_mcp_server_manager.expand_tool_permissions(team_obj_perm.mcp_tool_permissions).get(server_id)
             if team_obj_perm
@@ -3210,9 +3210,9 @@ class MCPRequestHandler:
         team_capped: Final = (
             allowed_tools
             if team_tools is None
-            else list(team_tools)
+            else tuple(team_tools)
             if allowed_tools is None
-            else list(set(allowed_tools) & set(team_tools))
+            else tuple(frozenset(allowed_tools) & frozenset(team_tools))
         )
         return await MCPRequestHandler._apply_user_tool_ceiling(team_capped, server_id, caller_auth)
 
