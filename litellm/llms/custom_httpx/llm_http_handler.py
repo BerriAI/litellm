@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     synthesize_subtitle_document,
 )
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
+from litellm.litellm_core_utils.internal_key_emission_guard import observe_internal_keys
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.realtime_errors import realtime_error_event, websocket_close_reason
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
@@ -615,6 +616,7 @@ class BaseLLMHTTPHandler:
             transformed: dict[str, object],  # mutable-ok: async_completion takes dict
         ) -> tuple[dict[str, object], dict[str, object], bytes | None]:  # mutable-ok: async_completion takes dict
             data: Final = {**transformed, **extra_body} if extra_body is not None else transformed
+            observe_internal_keys(data, custom_llm_provider)
             signed: Final = cast(  # cast-ok: sign_request is declared as a bare dict
                 "tuple[dict[str, object], bytes | None]",
                 provider_config.sign_request(

@@ -7,6 +7,7 @@ import litellm
 from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
 )
+from litellm.litellm_core_utils.internal_key_emission_guard import observe_internal_keys
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -114,6 +115,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             litellm_params=litellm_params,
             headers=headers,
         )
+        observe_internal_keys(request_data, "bedrock")
         data: Final = json.dumps(request_data)
 
         prepped: Final = await run_aws_signing(
@@ -185,6 +187,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             litellm_params=litellm_params,
             headers=headers,
         )
+        observe_internal_keys(request_data, "bedrock")
         data: Final = json.dumps(request_data)
 
         prepped: Final = await run_aws_signing(
@@ -409,6 +412,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             litellm_params=litellm_params,
             headers=extra_headers,
         )
+        observe_internal_keys(_data, "bedrock")
         data: Final = json.dumps(_data)
 
         prepped: Final = self.get_request_headers(

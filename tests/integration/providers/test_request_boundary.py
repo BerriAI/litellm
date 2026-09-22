@@ -1,9 +1,13 @@
+import logging
 from typing import Final
 
 import httpx
 import pytest
 
-from tests.integration._support.client import Gateway, JSON_OBJECT, object_value
+import litellm
+from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.internal_key_emission_guard import internal_key_leak_counter
+from tests.integration._support.client import JSON_OBJECT, Gateway, object_value
 
 
 @pytest.mark.covers("other.provider_wire.internal_parameters_filtered")
@@ -38,6 +42,30 @@ def test_internal_request_state_does_not_reach_provider(gateway: Gateway) -> Non
         assert "litellm_params" not in body
         assert "timeout" not in body
         assert "tpm" not in body
+
+
+@pytest.mark.covers("other.provider_wire.internal_key_emission_observed")
+def test_internal_key_forced_into_body_is_observed_at_emission(gateway: Gateway, caplog: pytest.LogCaptureFixture) -> None:
+    with httpx.Client(base_url=gateway.upstream_url, trust_env=False) as upstream:
+        upstream.get("/__observations").raise_for_status()
+        before: Final = internal_key_leak_counter.value
+        verbose_logger.addHandler(caplog.handler)
+        try:
+            with caplog.at_level(logging.WARNING, logger="LiteLLM"), pytest.raises(litellm.BadRequestError):
+                litellm.completion(
+                    model="deepseek/synthetic-model",
+                    api_base=f"{gateway.upstream_url}/v1",
+                    api_key="sk-synthetic",
+                    messages=[{"role": "user", "content": "emission guard"}],
+                    extra_body={"litellm_call_id": "forced-through-extra-body"},
+                )
+        finally:
+            verbose_logger.removeHandler(caplog.handler)
+        observations: Final = JSON_OBJECT.validate_json(upstream.get("/__observations").content)["requests"]
+        assert isinstance(observations, list) and len(observations) == 1
+        assert object_value(object_value(observations[0])["body"])["litellm_call_id"] == "forced-through-extra-body"
+        assert internal_key_leak_counter.value == before + 1
+        assert any("litellm_call_id" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.covers("other.provider_wire.validator_rejects_corruption")
