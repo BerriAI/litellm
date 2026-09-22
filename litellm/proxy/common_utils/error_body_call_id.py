@@ -1,10 +1,3 @@
-"""Opt-in copy of the ``x-litellm-call-id`` response header inside JSON error bodies.
-
-``general_settings.include_call_id_in_error_body: true`` turns it on. Callers hand in the id they already
-set on the response header, so the body value and the header value are byte-identical. ``JSON_OBJECT``
-types the untyped error dicts the emission sites already hold before they reach ``with_call_id``.
-"""
-
 from collections.abc import Mapping
 from typing import Final
 
