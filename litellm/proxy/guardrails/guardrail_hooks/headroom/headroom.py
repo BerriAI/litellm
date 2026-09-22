@@ -890,11 +890,16 @@ class HeadroomGuardrail(CustomGuardrail):
             return base_result
         if not has_headroom_retrieve_tool(effective.get("tools")):
             return base_result
-        return {  # mutable-ok: the hook contract is a plain dict the router merges into the request kwargs
+        converted: Final = {  # mutable-ok: the hook contract is a plain dict the router merges into the request kwargs
             **effective,
             "stream": False,
             HEADROOM_CONVERTED_STREAM_KEY: True,
         }
+        # stream_options is only valid alongside stream=true; leaving it after the
+        # internal conversion makes strict providers (e.g. DeepSeek) reject the
+        # request with "stream_options should be set along with stream = true".
+        converted.pop("stream_options", None)
+        return converted
 
     async def async_should_run_agentic_loop(
         self,
