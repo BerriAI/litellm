@@ -27678,6 +27678,26 @@ export interface components {
              */
             pattern_type: "prebuilt" | "regex";
         };
+        /** ContextCompactionConfig */
+        ContextCompactionConfig: {
+            /**
+             * Max Tokens
+             * @default 4096
+             */
+            max_tokens: number;
+            /** Model */
+            model?: string | null;
+            /**
+             * Timeout Seconds
+             * @default 120
+             */
+            timeout_seconds: number;
+            /**
+             * Trigger Ratio
+             * @default 0.9
+             */
+            trigger_ratio: number;
+        };
         /**
          * CoordinationRedisNode
          * @description A single startup node of a cluster-mode Redis used for proxy coordination.
@@ -30660,6 +30680,12 @@ export interface components {
              * @default false
              */
             is_byok: boolean;
+            /**
+             * Is Config
+             * @description Whether this server is defined in config and is read-only.
+             * @default false
+             */
+            is_config: boolean;
             /** Issuer */
             issuer?: string | null;
             /** Last Health Check */
@@ -31160,10 +31186,14 @@ export interface components {
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens */
             cache_creation_input_token_cost_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Batches */
+            cache_creation_input_token_cost_above_272k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Flex */
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Batches */
+            cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
             cache_creation_input_token_cost_flex?: number | null;
             /** Cache Creation Input Token Cost Priority */
@@ -31182,12 +31212,16 @@ export interface components {
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens */
             cache_read_input_token_cost_above_272k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Batches */
+            cache_read_input_token_cost_above_272k_tokens_batches?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Flex */
             cache_read_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
+            /** Cache Read Input Token Cost Batches */
+            cache_read_input_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -31256,6 +31290,8 @@ export interface components {
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
             input_cost_per_token_above_272k_tokens?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Batches */
+            input_cost_per_token_above_272k_tokens_batches?: number | null;
             /** Input Cost Per Token Above 272K Tokens Flex */
             input_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
@@ -31377,6 +31413,8 @@ export interface components {
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
             output_cost_per_token_above_272k_tokens?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Batches */
+            output_cost_per_token_above_272k_tokens_batches?: number | null;
             /** Output Cost Per Token Above 272K Tokens Flex */
             output_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
@@ -36963,6 +37001,11 @@ export interface components {
              */
             code_keywords?: string[] | null;
             /**
+             * Context Compaction
+             * @description Compact full conversation history near the selected deployment's input limit for Chat, Responses and Messages. Uses a capable configured tier model unless model is specified. Set false or null to disable. Stored and client-managed native history keep their existing behavior.
+             */
+            context_compaction?: components["schemas"]["ContextCompactionConfig"] | false;
+            /**
              * Context Window Escalation Buffer
              * @description Fraction of a model's declared context window the estimated prompt must fit within. The token count is an estimate, so fitting against the full window would dispatch prompts that the provider's own tokenizer then rejects; 0.95 leaves room for that drift plus the response tokens.
              * @default 0.95
@@ -41995,10 +42038,14 @@ export interface components {
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens */
             cache_creation_input_token_cost_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Batches */
+            cache_creation_input_token_cost_above_272k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Flex */
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Batches */
+            cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
             cache_creation_input_token_cost_flex?: number | null;
             /** Cache Creation Input Token Cost Priority */
@@ -42017,12 +42064,16 @@ export interface components {
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens */
             cache_read_input_token_cost_above_272k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Batches */
+            cache_read_input_token_cost_above_272k_tokens_batches?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Flex */
             cache_read_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
+            /** Cache Read Input Token Cost Batches */
+            cache_read_input_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -42091,6 +42142,8 @@ export interface components {
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
             input_cost_per_token_above_272k_tokens?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Batches */
+            input_cost_per_token_above_272k_tokens_batches?: number | null;
             /** Input Cost Per Token Above 272K Tokens Flex */
             input_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
@@ -42212,6 +42265,8 @@ export interface components {
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
             output_cost_per_token_above_272k_tokens?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Batches */
+            output_cost_per_token_above_272k_tokens_batches?: number | null;
             /** Output Cost Per Token Above 272K Tokens Flex */
             output_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */

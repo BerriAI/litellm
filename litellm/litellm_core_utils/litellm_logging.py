@@ -107,6 +107,10 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_streaming_responses_for_custom_logger,
     should_redact_message_logging,
 )
+from litellm.litellm_core_utils.served_output_texts import (
+    SERVED_OUTPUT_TEXTS_KEY,
+    overlay_served_output_texts,
+)
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -383,11 +387,40 @@ _DEPLOYMENT_PRICING_KEYS: Final = (
     "output_cost_per_token",
     "input_cost_per_token_batches",
     "output_cost_per_token_batches",
+    "input_cost_per_token_above_272k_tokens_batches",
+    "output_cost_per_token_above_272k_tokens_batches",
+    "cache_read_input_token_cost_batches",
+    "cache_read_input_token_cost_above_272k_tokens_batches",
+    "cache_creation_input_token_cost_batches",
+    "cache_creation_input_token_cost_above_272k_tokens_batches",
     "ocr_cost_per_page",
     "ocr_cost_per_page_batches",
     "annotation_cost_per_page",
     "annotation_cost_per_page_batches",
 )
+_INPUT_PRICING_KEY_PREFIXES: Final = (
+    "input_cost_per_token",
+    "cache_read_input_token_cost",
+    "cache_creation_input_token_cost",
+)
+_OUTPUT_PRICING_KEY_PREFIXES: Final = ("output_cost_per_token",)
+_BATCH_PRICING_KEY_SUFFIX: Final = "_batches"
+
+
+_NO_CARRIED_RATES: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _published_direction(
+    published: ModelInfo, registered: Mapping[str, object], flat_key: str, prefixes: tuple[str, ...]
+) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in published.items()
+            if registered.get(key) is None
+            and (key == flat_key or (key.startswith(prefixes) and key.endswith(_BATCH_PRICING_KEY_SUFFIX)))
+        }
+    )
 
 
 def deployment_pricing_model_info(model_id: str | None, deployment_model: str | None) -> ModelInfo | None:
@@ -399,12 +432,15 @@ def deployment_pricing_model_info(model_id: str | None, deployment_model: str | 
     get_model_info fills absent costs with 0, so asking it directly cannot
     tell "configured as free" apart from "no pricing configured". A deployment
     may declare only one side of its pricing, so the side it leaves out keeps
-    the model's published rates instead of billing as zero. Ownership is per
-    token direction: declaring either rate for a direction takes that whole
-    direction, so a published batch rate can never displace a standard rate
-    the deployment configured itself. OCR per-page rates count as declared
-    pricing too; they pass through as registered and ``ocr_batch_cost`` layers
-    the published rate under each per-page family the deployment leaves out.
+    the model's published standard rate and every published batch rate for
+    that direction (flat, long-context tier, cached, cache write) instead of
+    billing as zero. Ownership is per token direction: declaring the flat
+    standard or flat batch rate for a direction takes that whole direction, so
+    a published batch rate can never displace a standard rate the deployment
+    configured itself. A tier-only override keeps every published rate it left
+    out. OCR per-page rates count as declared pricing too; they pass through as
+    registered and ``ocr_batch_cost`` layers the published rate under each
+    per-page family the deployment leaves out.
     """
     if model_id is None:
         return None
@@ -425,13 +461,22 @@ def deployment_pricing_model_info(model_id: str | None, deployment_model: str | 
         registered.get("output_cost_per_token") is not None
         or registered.get("output_cost_per_token_batches") is not None
     )
-    if not declares_input:
-        merged["input_cost_per_token"] = published.get("input_cost_per_token")
-        merged["input_cost_per_token_batches"] = published.get("input_cost_per_token_batches")
-    if not declares_output:
-        merged["output_cost_per_token"] = published.get("output_cost_per_token")
-        merged["output_cost_per_token_batches"] = published.get("output_cost_per_token_batches")
-    return merged
+    carried_input: Final = (
+        _NO_CARRIED_RATES
+        if declares_input
+        else _published_direction(published, registered, "input_cost_per_token", _INPUT_PRICING_KEY_PREFIXES)
+    )
+    carried_output: Final = (
+        _NO_CARRIED_RATES
+        if declares_output
+        else _published_direction(published, registered, "output_cost_per_token", _OUTPUT_PRICING_KEY_PREFIXES)
+    )
+    priced: Final[ModelInfo] = {  # pyright: ignore[reportAssignmentType]  # carried keys are ModelInfo rates
+        **merged,
+        **carried_input,
+        **carried_output,
+    }
+    return priced
 
 
 def _published_pricing(deployment_model: str | None) -> ModelInfo | None:
@@ -494,6 +539,14 @@ def mask_api_base_credentials(api_base: str) -> str:
         return api_base
     key_end: Final = api_base.find("key=") + 4
     return api_base[:key_end] + "*" * 5 + api_base[-4:]
+
+
+def _timestamp_seconds(moment: object) -> float | None:
+    if isinstance(moment, datetime.datetime):
+        return moment.timestamp()
+    if isinstance(moment, (int, float)):
+        return float(moment)
+    return None
 
 
 class Logging(LiteLLMLoggingBaseClass):
@@ -1634,10 +1687,12 @@ class Logging(LiteLLMLoggingBaseClass):
         return response.mcp_tool_call_response
 
     def get_response_ms(self) -> float:
-        return (
-            self.model_call_details.get("end_time", datetime.datetime.now())
-            - self.model_call_details.get("start_time", datetime.datetime.now())
-        ).total_seconds() * 1000
+        now: Final = datetime.datetime.now()
+        start_seconds: Final = _timestamp_seconds(self.model_call_details.get("start_time", now))
+        end_seconds: Final = _timestamp_seconds(self.model_call_details.get("end_time", now))
+        if start_seconds is None or end_seconds is None:
+            return 0.0
+        return (end_seconds - start_seconds) * 1000
 
     def set_cost_breakdown(
         self,
@@ -5833,15 +5888,12 @@ class StandardLoggingPayloadSetup:
 
         modified_final_response_obj: Final = redact_message_input_output_from_logging(
             model_call_details=kwargs,
-            result=final_response_obj,
+            result=overlay_served_output_texts(final_response_obj, kwargs.get(SERVED_OUTPUT_TEXTS_KEY)),
         )
 
         if modified_final_response_obj is not None and isinstance(modified_final_response_obj, BaseModel):
-            final_response_obj = modified_final_response_obj.model_dump()
-        else:
-            final_response_obj = modified_final_response_obj
-
-        return final_response_obj
+            return modified_final_response_obj.model_dump()
+        return modified_final_response_obj
 
     @staticmethod
     def get_additional_headers(
@@ -6277,6 +6329,8 @@ def _extract_response_obj_and_hidden_params(
         hidden_params = getattr(init_response_obj, "_hidden_params", None)
     elif isinstance(init_response_obj, dict):
         response_obj = init_response_obj
+    elif isinstance(init_response_obj, HttpxBinaryResponseContent):
+        response_obj = dict(init_response_obj.logging_summary())
     else:
         response_obj = {}
 
