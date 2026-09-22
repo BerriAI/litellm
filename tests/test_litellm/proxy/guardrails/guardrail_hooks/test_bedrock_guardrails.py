@@ -5772,6 +5772,19 @@ class TestBedrockGuardrailImageInput:
 
         assert "could not be read" in str(exc_info.value.detail) or "not a png/jpeg" in str(exc_info.value.detail)
 
+    @pytest.mark.asyncio
+    async def test_a_data_uri_without_a_subtype_is_refused_not_a_500(self):
+        """`data:image;base64,...` makes the processor raise IndexError, which must
+        still surface as the guardrail's 400, not a server error."""
+        with pytest.raises(HTTPException) as exc_info:
+            await self._guardrail().apply_guardrail(
+                inputs={"texts": [], "images": ["data:image;base64,AAAA"]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+
     @pytest.mark.parametrize(
         "url",
         [

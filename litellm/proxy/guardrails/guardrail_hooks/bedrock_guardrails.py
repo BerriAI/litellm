@@ -649,7 +649,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         try:
             block: Final = await BedrockImageProcessor.process_image_async(image_url=image_url, format=None)
-        except (ValueError, TypeError, KeyError, binascii.Error) as e:
+        except (ValueError, TypeError, KeyError, IndexError, binascii.Error) as e:
             self._handle_unscannable_attachment(reason=f"image content could not be read: {e}")
 
         image_block: Final = block.get("image")
