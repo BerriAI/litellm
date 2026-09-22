@@ -1,7 +1,11 @@
+import base64
+import struct
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import litellm
 from litellm.llms.ollama.completion.handler import ollama_aembeddings, ollama_embeddings
 from litellm.types.utils import EmbeddingResponse
 
@@ -31,7 +35,6 @@ def test_ollama_embeddings(mock_response_data, mock_embedding_response, mock_enc
         patch("litellm.module_level_client.post") as mock_post,
         patch("litellm.OllamaConfig.get_config", return_value={"truncate": 512}),
     ):
-
         mock_response = MagicMock()
         mock_response.json.return_value = mock_response_data
         mock_post.return_value = mock_response
@@ -53,19 +56,14 @@ def test_ollama_embeddings(mock_response_data, mock_embedding_response, mock_enc
 
 
 @pytest.mark.asyncio
-async def test_ollama_aembeddings(
-    mock_response_data, mock_embedding_response, mock_encoding
-):
+async def test_ollama_aembeddings(mock_response_data, mock_embedding_response, mock_encoding):
     mock_response = AsyncMock()
     # Make json() a regular synchronous method, not async
     mock_response.json = MagicMock(return_value=mock_response_data)
     with (
-        patch(
-            "litellm.module_level_aclient.post", return_value=mock_response
-        ) as mock_post,
+        patch("litellm.module_level_aclient.post", return_value=mock_response),
         patch("litellm.OllamaConfig.get_config", return_value={"truncate": 512}),
     ):
-
         response = await ollama_aembeddings(
             api_base="http://localhost:11434",
             model="test-model",
@@ -92,7 +90,6 @@ def test_prompt_eval_fallback_when_missing(mock_embedding_response, mock_encodin
         patch("litellm.module_level_client.post") as mock_post,
         patch("litellm.OllamaConfig.get_config", return_value={}),
     ):
-
         mock_response = MagicMock()
         mock_response.json.return_value = response_data
         mock_post.return_value = mock_response
@@ -112,3 +109,134 @@ def test_prompt_eval_fallback_when_missing(mock_embedding_response, mock_encodin
         assert response.usage.total_tokens == 5
         assert response.usage.completion_tokens == 0
         assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+def _embed(returned_vector: list[float], **kwargs) -> tuple[EmbeddingResponse, dict]:
+    """Drive the public ``litellm.embedding`` surface against a stubbed Ollama server.
+
+    Going through the public entrypoint (rather than calling the handler directly) is
+    deliberate: ``encoding_format`` used to be rejected by param mapping long before it
+    reached the handler, so a handler-level test would have passed against a code path
+    real callers cannot reach.
+    """
+    with patch("litellm.module_level_client.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "embeddings": [returned_vector],
+            "prompt_eval_count": 3,
+        }
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model="ollama/nomic-embed-text",
+            input=["hello world"],
+            api_base="http://localhost:11434",
+            **kwargs,
+        )
+
+        # litellm also POSTs to /api/show for model metadata, and that call lands last.
+        # Select the embed request explicitly so payload assertions cannot pass vacuously.
+        embed_payloads: Final = [
+            call.kwargs["json"]
+            for call in mock_post.call_args_list
+            if call.kwargs.get("url", "").endswith("/api/embed")
+        ]
+        assert len(embed_payloads) == 1
+
+    return response, embed_payloads[0]
+
+
+@pytest.mark.parametrize("encoding_format", ["float", "base64"])
+def test_encoding_format_is_accepted_without_drop_params(encoding_format):
+    """``encoding_format`` is a standard OpenAI embedding param and must not 500.
+
+    It used to raise ``UnsupportedParamsError`` for ollama unless the caller opted into
+    ``drop_params``, which reported a client-side param problem as a server error.
+    """
+    response, _ = _embed([0.1, 0.2, 0.3], encoding_format=encoding_format)
+
+    assert response.data[0]["embedding"] is not None
+
+
+def test_base64_request_returns_decodable_float32():
+    """A caller asking for base64 must get a base64 string of float32s back.
+
+    Regression test for the 768 -> 192 truncation. litellm returned a raw float list
+    regardless of ``encoding_format``; the openai SDK then ran its base64 decoder over
+    that list, reinterpreting each float as one byte and yielding len/4 dimensions.
+    """
+    vector: Final = [i / 1000 for i in range(768)]
+
+    response, _ = _embed(vector, encoding_format="base64")
+
+    encoded = response.data[0]["embedding"]
+    assert isinstance(encoded, str)
+
+    raw: Final = base64.b64decode(encoded)
+    decoded: Final = struct.unpack(f"<{len(raw) // 4}f", raw)
+
+    assert len(decoded) == len(vector)
+    assert decoded == pytest.approx(vector, abs=1e-6)
+
+
+def test_float_request_returns_plain_list():
+    vector: Final = [0.1, 0.2, 0.3]
+
+    response, _ = _embed(vector, encoding_format="float")
+
+    assert response.data[0]["embedding"] == pytest.approx(vector)
+
+
+def test_omitted_encoding_format_still_returns_plain_list():
+    vector: Final = [0.1, 0.2, 0.3]
+
+    response, _ = _embed(vector)
+
+    assert response.data[0]["embedding"] == pytest.approx(vector)
+
+
+@pytest.mark.parametrize("encoding_format", ["float", "base64"])
+def test_encoding_format_is_not_sent_to_ollama(encoding_format):
+    """``encoding_format`` is an OpenAI wire concern; Ollama has no such field.
+
+    Forwarding it would land in Ollama's ``options`` dict, which sets model runtime
+    options rather than selecting a response encoding.
+    """
+    _, sent = _embed([0.1, 0.2, 0.3], encoding_format=encoding_format)
+
+    assert "encoding_format" not in sent
+    assert "encoding_format" not in sent.get("options", {})
+
+
+def test_dimensions_mismatch_raises_instead_of_returning_wrong_width():
+    """A returned width that disagrees with requested ``dimensions`` must fail loudly.
+
+    Silently returning a differently sized vector is what made the original bug
+    expensive: callers got a 200 and only discovered the corruption downstream.
+    Asking for a width the model cannot produce is a caller error, so it must surface
+    as a 400-class failure rather than an internal server error.
+    """
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        _embed([0.1, 0.2, 0.3], dimensions=768)
+
+    message: Final = str(exc_info.value)
+    assert "768" in message
+    assert "3" in message
+
+
+def test_dimensions_match_is_accepted():
+    vector: Final = [0.1, 0.2, 0.3]
+
+    response, _ = _embed(vector, dimensions=3)
+
+    assert response.data[0]["embedding"] == pytest.approx(vector)
+
+
+def test_base64_and_dimensions_together_validate_true_width():
+    """The width check must run against the real vector, not the encoded string."""
+    vector: Final = [i / 1000 for i in range(768)]
+
+    response, _ = _embed(vector, encoding_format="base64", dimensions=768)
+
+    raw: Final = base64.b64decode(response.data[0]["embedding"])
+    assert len(raw) // 4 == 768
