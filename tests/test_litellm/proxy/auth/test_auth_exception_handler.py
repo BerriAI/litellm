@@ -29,8 +29,14 @@ from prisma.errors import (
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER
 from litellm.exceptions import BudgetExceededError
-from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
+from litellm.proxy._types import (
+    ModelAccessDeniedProxyException,
+    ProxyErrorTypes,
+    ProxyException,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler, _as_proxy_exception
+from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 
 
 class _EngineHttp500:
@@ -442,7 +448,7 @@ async def test_handle_authentication_error_budget_exceeded():
         )
 
     assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
-    assert int(exc_info.value.code) == status.HTTP_429_TOO_MANY_REQUESTS
+    assert int(exc_info.value.code) == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
 @pytest.mark.asyncio
@@ -681,7 +687,7 @@ def _http_request(client_host: str | None = "10.1.2.3", headers: dict[str, str] 
             {"allow_requests_on_db_unavailable": False},
             {},
             "10.1.2.3",
-            id="429_budget_exceeded",
+            id="422_budget_exceeded",
         ),
     ],
 )
@@ -691,7 +697,7 @@ async def test_auth_failure_logs_requester_ip_address(
     request_kwargs: dict[str, dict[str, str]],
     expected_ip: str,
 ) -> None:
-    """401s and budget 429s are rejected before `add_litellm_data_to_request` stamps
+    """401s and budget 422s are rejected before `add_litellm_data_to_request` stamps
     the caller IP, so without this the failure logs (spend logs, prometheus client_ip)
     had no IP, and a 401 rarely carries a key or user identity either."""
     with (
@@ -982,3 +988,80 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
     assert records[0].levelname == expect_level
     expected_logger_name = "LiteLLM Proxy.stdout" if expect_level == "WARNING" else "LiteLLM Proxy"
     assert records[0].name == expected_logger_name
+
+
+_DENIED_CLIENT_MESSAGE = (
+    "The requested model 'gpt-5.6' is not available for this API key, or the model name is invalid. "
+    "Check the models available to you and try again."
+)
+
+
+def _denied_proxy_exception() -> ModelAccessDeniedProxyException:
+    return ModelAccessDeniedProxyException(
+        message=_DENIED_CLIENT_MESSAGE,
+        internal_message="key not allowed to access model. This key can only access models=['internal-models']. "
+        "Tried to access gpt-5.6\r\nWARNING forged log line",
+        type=ProxyErrorTypes.key_model_access_denied,
+        param="model",
+        code=status.HTTP_403_FORBIDDEN,
+    )
+
+
+def _denied_jwt_exception() -> ModelAccessDeniedHTTPException:
+    return ModelAccessDeniedHTTPException(
+        internal_message="Role=engineer not allowed to call model=gpt-5.6\r\nWARNING forged log line. "
+        "Allowed models=['internal-models']",
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=_DENIED_CLIENT_MESSAGE,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "make_denial",
+    [
+        pytest.param(_denied_proxy_exception, id="proxy_exception"),
+        pytest.param(_denied_jwt_exception, id="jwt_http_exception"),
+    ],
+)
+async def test_handle_authentication_error_keeps_internal_message_on_model_access_denial(make_denial, caplog):
+    handler = UserAPIKeyAuthExceptionHandler()
+    denial = make_denial()
+
+    with (
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+        ),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+        caplog.at_level("WARNING", logger="LiteLLM Proxy"),
+        pytest.raises(ModelAccessDeniedProxyException) as exc_info,
+    ):
+        await handler._handle_authentication_error(denial, MagicMock(), {}, "/v1/chat/completions", None, "sk-bad-key")
+
+    assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+    assert "internal-models" not in str(exc_info.value.message)
+    assert exc_info.value.internal_message == denial.internal_message
+    assert [r for r in caplog.records if r.levelname == "WARNING" and "internal-models" in r.getMessage()] == []
+
+
+def test_as_proxy_exception_keeps_jwt_scope_denial_message_shape():
+    detail = {"error": _DENIED_CLIENT_MESSAGE}
+    denial = ModelAccessDeniedHTTPException(
+        internal_message="model=gpt-5.6 not allowed. Allowed_models=['internal-models']",
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=detail,
+    )
+    plain = _as_proxy_exception(HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail))
+
+    converted = _as_proxy_exception(denial)
+
+    assert converted.to_dict() == plain.to_dict()
+    assert converted.internal_message == denial.internal_message

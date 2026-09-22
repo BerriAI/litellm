@@ -5,7 +5,7 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 import json
 from collections.abc import Coroutine
 from copy import deepcopy
-from typing import Any, Final, Literal, cast, overload
+from typing import Final, Literal, cast, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
@@ -33,12 +33,12 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
-    def _convert_custom_tools_to_function_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _convert_custom_tools_to_function_tools(self, tools: list[dict[str, object]]) -> list[dict[str, object]]:
         """
         vLLM chat completions currently accepts only OpenAI function tools.
         Convert custom tools into function tools so request validation does not fail.
         """
-        converted_tools: Final[list[dict[str, Any]]] = []
+        converted_tools: Final[list[dict[str, object]]] = []
         for idx, tool in enumerate(tools):
             if not isinstance(tool, dict):
                 converted_tools.append(tool)
@@ -68,17 +68,14 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                     "required": ["input"],
                 }
 
-            function_tool: dict[str, Any] = {
-                "type": "function",
-                "function": {
-                    "name": str(tool_name),
-                    "parameters": tool_parameters,
-                },
+            function_definition: dict[str, object] = {
+                "name": str(tool_name),
+                "parameters": tool_parameters,
             }
             if isinstance(tool_description, str):
-                function_tool["function"]["description"] = tool_description
+                function_definition["description"] = tool_description
 
-            converted_tools.append(function_tool)
+            converted_tools.append({"type": "function", "function": function_definition})
 
         return converted_tools
 
@@ -182,7 +179,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -194,7 +191,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         Support translating:
         - video files from file_id or file_data to video_url

@@ -5,12 +5,15 @@ from typing import NamedTuple
 import pytest
 
 import litellm
+from litellm.cost_calculator import completion_cost
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.types.utils import (
     Choices,
     Message,
     ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
 )
 
 
@@ -152,3 +155,7 @@ def test_bedrock_gpt_5_6_offers_tools_and_reasoning_effort_but_not_thinking(prof
     assert "reasoning_effort" in supported
     assert "thinking" not in supported
     assert "output_config" not in supported
+
+
+# Cache-read prices are the `*-cache-read-input-tokens` usagetype rows of the AWS Price List API, us-east-1,
+# https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-east-1/index.json on 2026-09-15

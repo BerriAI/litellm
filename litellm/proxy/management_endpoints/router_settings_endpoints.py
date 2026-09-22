@@ -8,6 +8,8 @@ GET /router/fields - Get router settings field definitions without values (for U
 """
 
 import inspect
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final, get_args
 
 from fastapi import APIRouter, Depends
@@ -16,6 +18,7 @@ from pydantic import BaseModel, Field
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.config_resolvers import FieldSource, SettingsStore, source_for
 from litellm.router import Router
 from litellm.types.management_endpoints import (
     ROUTER_SETTINGS_FIELDS,
@@ -30,6 +33,7 @@ class RouterSettingsResponse(BaseModel):
     fields: list[RouterSettingsField] = Field(description="List of all configurable router settings with metadata")
     current_values: dict[str, Any] = Field(description="Current values of router settings")
     routing_strategy_descriptions: dict[str, str] = Field(description="Descriptions for each routing strategy option")
+    source: dict[str, FieldSource] = Field(description="Source of each current router setting")
 
 
 class RouterFieldsResponse(BaseModel):
@@ -37,6 +41,18 @@ class RouterFieldsResponse(BaseModel):
         description="List of all configurable router settings with metadata (without field values)"
     )
     routing_strategy_descriptions: dict[str, str] = Field(description="Descriptions for each routing strategy option")
+
+
+def _router_setting_source(
+    settings: SettingsStore,
+    key: str,
+    current_value: object,
+    field_default: object,
+) -> FieldSource:
+    source: Final = source_for(settings, key, field_default)
+    if source != "unset":
+        return source
+    return "default" if current_value is not None else "unset"
 
 
 def _get_routing_strategies_from_router_class() -> list[str]:
@@ -109,15 +125,29 @@ async def get_router_settings(
         # Merge with config values (config takes precedence)
         current_values.update(router_settings_from_config)
 
-        # Update field values with current values
         for field in router_fields:
             if field.field_name in current_values:
                 field.field_value = current_values[field.field_name]
 
+        field_defaults: Final[Mapping[str, object]] = MappingProxyType(
+            {field.field_name: field.field_default for field in router_fields}
+        )
+        source: Final[Mapping[str, FieldSource]] = MappingProxyType(
+            {
+                key: _router_setting_source(
+                    proxy_config.router_settings,
+                    key,
+                    current_values[key],
+                    field_defaults.get(key),
+                )
+                for key in current_values
+            }
+        )
         return RouterSettingsResponse(
             fields=router_fields,
             current_values=current_values,
             routing_strategy_descriptions=ROUTING_STRATEGY_DESCRIPTIONS,
+            source=source,
         )
     except Exception as e:
         verbose_proxy_logger.error("Error fetching router settings: %s", e)

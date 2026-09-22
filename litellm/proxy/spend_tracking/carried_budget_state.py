@@ -25,6 +25,7 @@ def carry_team_and_user_budget_state(
             budget_reset_at=team_object.budget_reset_at,
             max_budget=team_object.max_budget,
         )
+        valid_token.team_model_max_budget = team_object.model_max_budget  # rebind-ok: caller keeps this object
     if user_object is not None:
         valid_token.user_budget_snapshot = UserBudgetSnapshot(  # rebind-ok: same object the caller keeps using
             budget_reset_at=user_object.budget_reset_at,

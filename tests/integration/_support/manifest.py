@@ -19,6 +19,8 @@ OWNED_DIRECTORIES: Final = frozenset(
         "mcp",
         "observability",
         "compatibility",
+        "sdk",
+        "cost_calculation",
     }
 )
 
