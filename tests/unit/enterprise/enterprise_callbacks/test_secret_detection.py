@@ -10,9 +10,11 @@ Covers the three defects from the ticket:
   handling live only on the native path).
 """
 
+import sys
 import tempfile
 import time
 from collections.abc import Callable
+from types import FrameType
 from typing import Final
 
 import pytest
@@ -668,7 +670,7 @@ def test_scan_message_stays_linear_on_repeated_sk_separators():
 
 
 _SCALE: Final = 4
-_NOISE_FLOOR_SECONDS: Final = 0.5
+_COUNTED_PROFILE_EVENTS: Final = frozenset({"call", "c_call"})
 
 
 def _value_run(n: int) -> str:
@@ -691,10 +693,19 @@ def _assignment_flood(n: int) -> str:
     return f"api_key: '{OPENAI_KEY}'\n" + "\n".join(f"password{i}=aB3dE6gH9jK2mN5p{i}" for i in range(n))
 
 
-def _seconds_to_redact(guardrail: _ENTERPRISE_SecretDetection, content: str) -> float:
-    started: Final = time.perf_counter()
-    guardrail.redact_text(content)
-    return time.perf_counter() - started
+def _calls_to_redact(guardrail: _ENTERPRISE_SecretDetection, content: str) -> int:
+    calls: Final[list[None]] = []
+
+    def count(frame: FrameType, event: str, arg: object) -> None:
+        if event in _COUNTED_PROFILE_EVENTS:
+            calls.append(None)
+
+    sys.setprofile(count)
+    try:
+        guardrail.redact_text(content)
+    finally:
+        sys.setprofile(None)
+    return len(calls)
 
 
 @pytest.mark.parametrize(
@@ -718,12 +729,11 @@ def test_scan_message_stays_linear_on_adversarial_credential_lines(
     adversarial_content: Callable[[int], str], size: int
 ) -> None:
     guardrail: Final = _guardrail()
-    guardrail.redact_text(adversarial_content(size // 100))
 
-    small: Final = _seconds_to_redact(guardrail, adversarial_content(size // _SCALE))
-    large: Final = _seconds_to_redact(guardrail, adversarial_content(size))
+    small: Final = _calls_to_redact(guardrail, adversarial_content(size // _SCALE))
+    large: Final = _calls_to_redact(guardrail, adversarial_content(size))
 
-    assert large < 1.5 * _SCALE * max(small, _NOISE_FLOOR_SECONDS), (small, large)
+    assert large <= 1.5 * _SCALE * small, (small, large)
 
 
 def test_scan_message_redacts_whole_stripe_live_key():
