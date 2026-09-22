@@ -1,5 +1,6 @@
 import os
 import socket
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -143,6 +144,73 @@ class TestIsRunning:
         monkeypatch.setattr(process_module, "_is_running_win32", lambda pid: False)
 
         assert is_running(1234) is False
+
+
+class _FakeKernel32:
+    """Minimal kernel32 stand-in so the Win32 probe can be exercised functionally on any OS."""
+
+    def __init__(self, handle=1, exit_code=259, get_exit_ok=True):
+        self._handle = handle
+        self._exit_code = exit_code
+        self._get_exit_ok = get_exit_ok
+        self.closed_handle = None
+
+    def OpenProcess(self, access, inherit, pid):
+        return self._handle
+
+    def GetExitCodeProcess(self, handle, ref):
+        if not self._get_exit_ok:
+            return 0
+        ref._obj.value = self._exit_code
+        return 1
+
+    def CloseHandle(self, handle):
+        self.closed_handle = handle
+
+
+class TestIsRunningWin32Probe:
+    """Functional tests for _is_running_win32 with a mocked kernel32 (CI runs on Linux,
+    so the real OpenProcess never executes there)."""
+
+    def _install(self, monkeypatch, kernel32, last_error=0):
+        import ctypes
+
+        monkeypatch.setattr(ctypes, "windll", SimpleNamespace(kernel32=kernel32), raising=False)
+        monkeypatch.setattr(ctypes, "GetLastError", lambda: last_error, raising=False)
+
+    def test_still_active_process_is_running(self, monkeypatch):
+        self._install(monkeypatch, _FakeKernel32(exit_code=259))  # STILL_ACTIVE
+
+        assert process_module._is_running_win32(1234) is True
+
+    def test_exited_process_is_not_running(self, monkeypatch):
+        self._install(monkeypatch, _FakeKernel32(exit_code=0))
+
+        assert process_module._is_running_win32(1234) is False
+
+    def test_unopenable_pid_with_access_denied_is_running(self, monkeypatch):
+        # The pid exists but we lack permission to query it.
+        self._install(monkeypatch, _FakeKernel32(handle=0), last_error=5)  # ERROR_ACCESS_DENIED
+
+        assert process_module._is_running_win32(1234) is True
+
+    def test_unopenable_pid_with_other_error_is_not_running(self, monkeypatch):
+        self._install(monkeypatch, _FakeKernel32(handle=0), last_error=87)  # ERROR_INVALID_PARAMETER
+
+        assert process_module._is_running_win32(1234) is False
+
+    def test_failed_exit_code_query_is_not_running(self, monkeypatch):
+        self._install(monkeypatch, _FakeKernel32(get_exit_ok=False))
+
+        assert process_module._is_running_win32(1234) is False
+
+    def test_handle_is_closed(self, monkeypatch):
+        kernel32 = _FakeKernel32()
+        self._install(monkeypatch, kernel32)
+
+        process_module._is_running_win32(1234)
+
+        assert kernel32.closed_handle == 1
 
 
 class TestTerminate:
