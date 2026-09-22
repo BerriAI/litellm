@@ -124,6 +124,32 @@ class KeyDeleteBody(BaseModel):
     keys: list[str]
 
 
+class KeyDeleteByAliasBody(BaseModel):
+    key_aliases: list[str]
+
+
+class AuditLogParams(BaseModel):
+    object_id: str
+    action: str
+    table_name: str
+    page_size: int
+
+
+class AuditLogEntry(BaseModel):
+    id: str
+    changed_by: str | None = None
+    changed_by_api_key: str | None = None
+    action: str
+    table_name: str
+    object_id: str
+    before_value: object | None = None
+
+
+class AuditLogPage(BaseModel):
+    audit_logs: list[AuditLogEntry]
+    total: int
+
+
 class KeyInfoParams(BaseModel):
     key: str
 

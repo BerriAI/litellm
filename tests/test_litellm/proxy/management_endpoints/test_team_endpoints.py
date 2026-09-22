@@ -5130,6 +5130,168 @@ async def test_team_member_delete_cleans_verification_tokens(
 
 
 @pytest.mark.asyncio
+async def test_team_member_delete_writes_deleted_audit_log_for_member_keys(
+    mock_db_client, mock_admin_auth
+):
+    from litellm.proxy._types import (
+        LiteLLM_VerificationToken,
+        LitellmTableNames,
+        TeamMemberDeleteRequest,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    test_team_id = "team-del-audit-123"
+    test_user_id = "user-audit@example.com"
+    member_key = LiteLLM_VerificationToken(token="hashed-member-key", team_id=test_team_id, user_id=test_user_id)
+
+    mock_team_row = MagicMock()
+    mock_team_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "members_with_roles": [
+            {"user_id": test_user_id, "user_email": None, "role": "user"}
+        ],
+        "team_member_permissions": [],
+        "metadata": {},
+        "models": [],
+        "spend": 0.0,
+    }
+
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
+
+    mock_user_row = MagicMock()
+    mock_user_row.user_id = test_user_id
+    mock_user_row.teams = [test_team_id]
+    mock_db_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[mock_user_row]
+    )
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    mock_db_client.db.litellm_teammembership = MagicMock()
+    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
+
+    mock_db_client.db.litellm_verificationtoken = MagicMock()
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[member_key])
+    mock_db_client.db.litellm_verificationtoken.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
+    mock_db_client.db.litellm_jwtkeymapping = MagicMock()
+    mock_db_client.db.litellm_jwtkeymapping.find_many = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_deletedverificationtoken = MagicMock()
+    mock_db_client.db.litellm_deletedverificationtoken.create_many = AsyncMock(return_value=MagicMock())
+
+    _wire_member_delete_tx(mock_db_client)
+
+    captured: Final[list] = []
+
+    async def _capture(request_data):
+        captured.append(request_data)
+
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch(
+            "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+            new=_capture,
+        ),
+    ):
+        await team_member_delete(
+            data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
+            user_api_key_dict=mock_admin_auth,
+        )
+        for _ in range(100):
+            if captured:
+                break
+            await asyncio.sleep(0.01)
+
+    key_rows: Final = [r for r in captured if r.table_name == LitellmTableNames.KEY_TABLE_NAME]
+    assert len(key_rows) == 1
+    audit_row: Final = key_rows[0]
+    assert audit_row.action == "deleted"
+    assert audit_row.object_id == member_key.token
+    assert audit_row.changed_by
+    assert json.loads(audit_row.before_value)["token"] == member_key.token
+
+
+@pytest.mark.asyncio
+async def test_delete_team_writes_deleted_audit_log_for_team_keys(
+    monkeypatch,
+):
+    from litellm.proxy._types import DeleteTeamRequest, LiteLLM_VerificationToken, LitellmTableNames
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    team = LiteLLM_TeamTable(
+        team_id="team-doomed",
+        team_alias="doomed-team",
+        members_with_roles=[],
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+    )
+    team_key = LiteLLM_VerificationToken(token="hashed-doomed-key", team_id="team-doomed")
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    mock_prisma_client.delete_data = AsyncMock(return_value={"deleted_teams": ["team-doomed"]})
+    mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[team_key])
+    mock_prisma_client.db.execute_raw = AsyncMock()
+    mock_prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
+    mock_prisma_client.get_data = AsyncMock(return_value=None)
+
+    mock_tx = AsyncMock()
+    mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_tx_cm = MagicMock()
+    mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+    _wire_team_delete_tx(mock_prisma_client)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    caller = UserAPIKeyAuth(
+        user_id="admin-user",
+        api_key="sk-admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+    )
+    captured: Final[list] = []
+
+    async def _capture(request_data):
+        captured.append(request_data)
+
+    monkeypatch.setattr("litellm.store_audit_logs", True)
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+        _capture,
+    )
+    await delete_team(
+        data=DeleteTeamRequest(team_ids=["team-doomed"]),
+        http_request=MagicMock(),
+        user_api_key_dict=caller,
+        litellm_changed_by="admin-user",
+    )
+    for _ in range(100):
+        if captured:
+            break
+        await asyncio.sleep(0.01)
+
+    key_rows: Final = [r for r in captured if r.table_name == LitellmTableNames.KEY_TABLE_NAME]
+    assert len(key_rows) == 1
+    audit_row: Final = key_rows[0]
+    assert audit_row.action == "deleted"
+    assert audit_row.object_id == team_key.token
+    assert audit_row.changed_by
+    assert json.loads(audit_row.before_value)["token"] == team_key.token
+
+
+@pytest.mark.asyncio
 async def test_team_member_delete_reads_on_the_lock_holding_transaction(
     mock_db_client, mock_admin_auth
 ):

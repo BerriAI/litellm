@@ -118,6 +118,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
     build_model_max_budget_usage,
     resolve_model_budget,
@@ -3751,6 +3752,13 @@ async def _team_member_delete(
                 }
             )
 
+    if keys_to_delete:
+        KeyManagementEventHooks.create_key_deleted_audit_logs(
+            keys_being_deleted=keys_to_delete,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
     await delete_cache_team_object(
         team_id=data.team_id,
         team_alias=existing_team_row.team_alias,
@@ -4468,6 +4476,13 @@ async def delete_team(
         )
 
     await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
+
+    if keys_to_delete:
+        KeyManagementEventHooks.create_key_deleted_audit_logs(
+            keys_being_deleted=keys_to_delete,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
 
     await _invalidate_deleted_key_cache(
         keys=keys_to_delete,

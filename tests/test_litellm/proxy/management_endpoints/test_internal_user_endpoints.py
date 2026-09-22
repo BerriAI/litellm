@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import logging
@@ -4779,3 +4780,62 @@ def test_user_routes_answer_503_no_db_connection_when_the_callers_user_read_hits
 
     assert response.status_code == 503, response.text
     assert response.json() == _DB_OUTAGE_503_BODY
+
+
+@pytest.mark.asyncio
+async def test_delete_user_writes_deleted_audit_log_for_user_keys(mocker):
+    from litellm.proxy._types import (
+        DeleteUserRequest,
+        LiteLLM_VerificationToken,
+        LitellmTableNames,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import delete_user
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.user_id = "doomed-user"
+    mock_user_row.user_email = "doomed@example.com"
+    mock_user_row.teams = []
+    mock_user_row.model_dump_json.return_value = "{}"
+    mock_user_row.model_dump.return_value = {"user_id": "doomed-user", "user_email": "doomed@example.com", "teams": []}
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=mock_user_row)
+    mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(return_value=[])
+
+    user_key = LiteLLM_VerificationToken(token="hashed-user-key", user_id="doomed-user")
+    mock_prisma_client.db.litellm_verificationtoken.find_many = mocker.AsyncMock(return_value=[user_key])
+    mock_prisma_client.db.litellm_verificationtoken.delete_many = mocker.AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_invitationlink.delete_many = mocker.AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_organizationmembership.delete_many = mocker.AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_teammembership.delete_many = mocker.AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_jwtkeymapping.find_many = mocker.AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(return_value=1)
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.store_audit_logs", True)
+    captured: Final[list] = []
+
+    async def _capture(request_data):
+        captured.append(request_data)
+
+    mocker.patch(
+        "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+        new=_capture,
+    )
+
+    caller = UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await delete_user(data=DeleteUserRequest(user_ids=["doomed-user"]), user_api_key_dict=caller)
+    for _ in range(100):
+        if captured:
+            break
+        await asyncio.sleep(0.01)
+
+    key_rows: Final = [r for r in captured if r.table_name == LitellmTableNames.KEY_TABLE_NAME]
+    assert len(key_rows) == 1
+    audit_row: Final = key_rows[0]
+    assert audit_row.action == "deleted"
+    assert audit_row.object_id == user_key.token
+    assert audit_row.changed_by
+    assert json.loads(audit_row.before_value)["token"] == user_key.token
