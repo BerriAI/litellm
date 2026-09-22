@@ -9287,3 +9287,66 @@ def test_responses_ws_logging_object_carries_the_completed_responses_id_tier_and
     assert (logged.id, logged.service_tier) == ("resp_a", "priority")
     assert (logged.usage.prompt_tokens, logged.usage.completion_tokens, logged.usage.total_tokens) == (10, 5, 15)
     assert ResponsesWebSocketTokenUsageProcessor.create_logging_object([{"type": "error", "error": {}}]).id is None
+
+
+@pytest.mark.parametrize("provider", ("openai", "azure"))
+@pytest.mark.parametrize("model", ("gpt-realtime-2.1", "gpt-realtime-2.1-mini"))
+def test_realtime_cached_multimodal_token_cost(_local_model_cost_map, provider: str, model: str):
+    model_name: Final = f"azure/{model}" if provider == "azure" else model
+    rates: Final = litellm.model_cost[model_name]
+    events: Final[OpenAIRealtimeStreamList] = [
+        {"type": "session.created", "session": {"model": model}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 1000,
+                    "output_tokens": 300,
+                    "total_tokens": 1300,
+                    "input_token_details": {
+                        "text_tokens": 400,
+                        "audio_tokens": 400,
+                        "image_tokens": 200,
+                        "cached_tokens": 300,
+                        "cached_tokens_details": {"text_tokens": 100, "audio_tokens": 150, "image_tokens": 50},
+                    },
+                    "output_token_details": {"text_tokens": 100, "audio_tokens": 100, "reasoning_tokens": 100},
+                }
+            },
+        },
+    ]
+    combined: Final = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(events)
+    actual: Final = handle_realtime_stream_cost_calculation(
+        results=events,
+        combined_usage_object=combined,
+        custom_llm_provider=provider,
+        litellm_model_name=model_name,
+    )
+    expected: Final = (
+        300 * rates["input_cost_per_token"]
+        + 250 * rates["input_cost_per_audio_token"]
+        + 150 * rates["input_cost_per_image_token"]
+        + 100 * rates["cache_read_input_token_cost"]
+        + 150 * rates["cache_read_input_audio_token_cost"]
+        + 50 * rates["cache_read_input_image_token_cost"]
+        + 200 * rates["output_cost_per_token"]
+        + 100 * rates["output_cost_per_audio_token"]
+    )
+
+    assert actual == pytest.approx(expected)
+
+
+def test_realtime_translation_duration_cost(_local_model_cost_map):
+    from litellm.cost_calculator import handle_realtime_translation_cost_calculation
+
+    model: Final = "gpt-realtime-translate"
+    events: Final[OpenAIRealtimeStreamList] = [
+        {"type": "session.closed", "usage": {"type": "duration", "output_seconds": 2.0}}
+    ]
+    actual: Final = handle_realtime_translation_cost_calculation(
+        results=events,
+        custom_llm_provider="openai",
+        litellm_model_name=model,
+    )
+
+    assert actual == pytest.approx(2 * litellm.model_cost[model]["output_cost_per_second"])
