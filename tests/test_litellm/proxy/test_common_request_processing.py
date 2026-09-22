@@ -5664,11 +5664,11 @@ class TestEventStreamAllmPassthroughRoute:
         assert result == expected_bytes
 
     @pytest.mark.asyncio
-    async def test_non_bedrock_provider_returns_original_bytes(self):
+    async def test_unknown_provider_returns_original_bytes(self):
         stream_bytes = _build_event_stream_frame("messageStart", {"role": "assistant"})
         proxy_logging_obj = MagicMock()
 
-        processing_obj = ProxyBaseLLMRequestProcessing(data={"custom_llm_provider": "anthropic"})
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"custom_llm_provider": "unknown-provider"})
         result = await processing_obj._handle_event_stream_allm_passthrough_route(
             body_bytes=stream_bytes,
             proxy_logging_obj=proxy_logging_obj,
@@ -5676,6 +5676,51 @@ class TestEventStreamAllmPassthroughRoute:
         )
 
         assert result is stream_bytes
+
+    @pytest.mark.asyncio
+    async def test_anthropic_provider_dispatches_to_handler(self):
+        sse = (
+            b'event: content_block_delta\n'
+            b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"<PERSON_1>"}}\n\n'
+            b'event: message_stop\n'
+            b'data: {"type":"message_stop"}\n\n'
+        )
+
+        async def mock_hook(data, user_api_key_dict, response):
+            response = dict(response)
+            response["content"] = [{"type": "text", "text": "Alice"}]
+            return response
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_success_hook = mock_hook
+
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"custom_llm_provider": "anthropic", "endpoint": "/v1/messages"}
+        )
+        result = await processing_obj._handle_event_stream_allm_passthrough_route(
+            body_bytes=sse,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+        assert b"Alice" in result
+        assert b"<PERSON_1>" not in result
+
+    @pytest.mark.asyncio
+    async def test_anthropic_supports_event_stream_de_anonymization_for_messages(self):
+        from litellm.llms.pass_through.guardrail_translation.handler import (
+            LlmPassthroughRouteHandler,
+        )
+
+        assert LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(
+            "anthropic", "/v1/messages"
+        )
+        assert LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(
+            "anthropic", "messages"
+        )
+        assert not LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(
+            "anthropic", "/v1/complete"
+        )
 
     @pytest.mark.asyncio
     async def test_non_streaming_response_includes_custom_headers(self):

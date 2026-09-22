@@ -199,11 +199,17 @@ _PROVIDER_HANDLERS: dict[str, type[BaseTranslation]] = {}
 def _get_provider_handlers() -> dict[str, type[BaseTranslation]]:
     global _PROVIDER_HANDLERS
     if not _PROVIDER_HANDLERS:
+        from litellm.llms.anthropic.passthrough.guardrail_translation.handler import (
+            AnthropicPassthroughGuardrailHandler,
+        )
         from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
             BedrockPassthroughGuardrailHandler,
         )
 
-        _PROVIDER_HANDLERS = {"bedrock": BedrockPassthroughGuardrailHandler}
+        _PROVIDER_HANDLERS = {
+            "anthropic": AnthropicPassthroughGuardrailHandler,
+            "bedrock": BedrockPassthroughGuardrailHandler,
+        }
     return _PROVIDER_HANDLERS
 
 
