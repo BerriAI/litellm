@@ -17810,3 +17810,36 @@ def test_access_windows_apply_to_wildcard_early_resolve():
         request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
     )
     assert [d["model_info"]["id"] for d in deployments] == ["reserved-wildcard"]
+
+
+def test_access_windows_filter_reserved_deployments_method():
+    router = Router(model_list=_reserved_model_list())
+    reserved: dict = {
+        "model_info": {
+            "id": "reserved-deployment",
+            "access_windows": [_access_window_offsets(-1, 1, ["team-a"])],
+        }
+    }
+    open_deployment: dict = {"model_info": {"id": "open-deployment"}}
+    assert [
+        d["model_info"]["id"]
+        for d in router._filter_reserved_deployments(
+            model="gpt-4o-ptu",
+            healthy_deployments=[reserved, open_deployment],
+            request_team_id="team-b",
+        )
+    ] == ["open-deployment"]
+    with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+        router._filter_reserved_deployments(
+            model="gpt-4o-ptu",
+            healthy_deployments=[reserved],
+            request_team_id="team-b",
+        )
+    assert [
+        d["model_info"]["id"]
+        for d in router._filter_reserved_deployments(
+            model="gpt-4o-ptu",
+            healthy_deployments=[reserved, open_deployment],
+            request_team_id="team-a",
+        )
+    ] == ["reserved-deployment", "open-deployment"]
