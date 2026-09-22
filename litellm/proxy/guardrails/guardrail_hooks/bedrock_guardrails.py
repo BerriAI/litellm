@@ -482,10 +482,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 self._handle_unscannable_attachment(reason="image part carries no inline url")
             return await self._build_image_content_item(image_url=image_url)
         if part.get("type") in ("file", "document"):
-            self._handle_unscannable_attachment(
-                reason="a document/file attachment cannot be scanned; Bedrock ApplyGuardrail accepts text and "
-                "inline png/jpeg images only"
-            )
+            self._handle_unscannable_attachment(reason="a document/file attachment cannot be scanned")
         if part.get("type") == "image":
             return await self._build_anthropic_image_content_item(part=part)
         text: Final = part.get("text")
@@ -3477,10 +3474,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # Refused before the shortcuts: ApplyGuardrail has no content type for a document/file attachment.
         files: Final = tuple(inputs.get("files") or ()) if input_type == "request" else ()
         if files:
-            self._handle_unscannable_attachment(
-                reason=f"{len(files)} document/file attachment(s) cannot be scanned; "
-                "Bedrock ApplyGuardrail accepts text and inline png/jpeg images only"
-            )
+            self._handle_unscannable_attachment(reason=f"{len(files)} document/file attachment(s) cannot be scanned")
         try:
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: Applying guardrail to %s text(s) and %s image(s)", len(texts), len(image_urls)
