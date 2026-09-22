@@ -6,7 +6,6 @@ general_settings:
   disable_spend_logs: false
   proxy_batch_write_at: 1
   proxy_batch_polling_interval: 1
-  fail_closed_budget_enforcement: true
 litellm_settings:
   enable_redis_auth_cache: true
   cache: true
