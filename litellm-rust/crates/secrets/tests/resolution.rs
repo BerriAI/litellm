@@ -1,19 +1,14 @@
 use std::sync::Arc;
 
 use litellm_secrets::{
-    Error, KeyManagementSettings, OidcResolver, Secret, SecretManager, SecretManagerState,
-    SecretResolver, SecretValue, secret_manager_would_be_consulted,
+    Error, OidcResolver, Secret, SecretManagerState, SecretResolver, SecretValue,
+    secret_manager_would_be_consulted,
 };
 
-fn resolver(value: Option<&str>, configured: bool) -> SecretResolver {
-    let state = if configured {
-        SecretManagerState::new(SecretManager::Local, KeyManagementSettings::default())
-    } else {
-        SecretManagerState::default()
-    };
+fn resolver(value: Option<&str>) -> SecretResolver {
     let value = value.map(str::to_owned);
     SecretResolver::new(
-        Arc::new(state),
+        Arc::new(SecretManagerState::default()),
         Arc::new(move |_: &str| value.clone()),
         OidcResolver::default(),
     )
@@ -30,9 +25,8 @@ fn resolver(value: Option<&str>, configured: bool) -> SecretResolver {
 async fn conversion_is_explicit_and_independent_of_manager_configuration(
     #[case] input: &str,
     #[case] boolean: Option<bool>,
-    #[values(false, true)] configured: bool,
 ) {
-    let resolver = resolver(Some(input), configured);
+    let resolver = resolver(Some(input));
     assert_eq!(
         resolver.get_secret("key", None).await.unwrap(),
         Some(Secret::String(SecretValue::new(input)))
@@ -62,8 +56,8 @@ async fn conversion_is_explicit_and_independent_of_manager_configuration(
 
 #[rstest::rstest]
 #[tokio::test]
-async fn defaults_apply_only_to_absence(#[values(false, true)] configured: bool) {
-    let missing = resolver(None, configured);
+async fn defaults_apply_only_to_absence() {
+    let missing = resolver(None);
     assert_eq!(missing.get_secret("key", None).await.unwrap(), None);
     assert_eq!(
         missing.get_secret_bool("key", Some(false)).await.unwrap(),
@@ -92,7 +86,7 @@ async fn defaults_apply_only_to_absence(#[values(false, true)] configured: bool)
         );
     }
     assert_eq!(
-        resolver(Some(""), configured)
+        resolver(Some(""))
             .get_secret_str("key", Some(SecretValue::new("default")))
             .await
             .unwrap()
@@ -103,12 +97,8 @@ async fn defaults_apply_only_to_absence(#[values(false, true)] configured: bool)
 }
 
 #[tokio::test]
-async fn prefix_is_removed_once_and_local_manager_is_not_consulted() {
-    let state = SecretManagerState::new(SecretManager::Local, KeyManagementSettings::default());
-    assert_eq!(
-        state.system(),
-        Some(litellm_secrets::KeyManagementSystem::Local)
-    );
+async fn prefix_is_removed_once_and_resolved_from_environment() {
+    let state = SecretManagerState::default();
     assert!(!secret_manager_would_be_consulted(
         &state,
         "os.environ/os.environ/KEY"
@@ -131,7 +121,7 @@ async fn prefix_is_removed_once_and_local_manager_is_not_consulted() {
 
 #[tokio::test]
 async fn resolver_future_can_run_on_a_tokio_worker() {
-    let resolver = resolver(Some("worker-value"), false);
+    let resolver = resolver(Some("worker-value"));
     let result = tokio::spawn(async move { resolver.get_secret_str("KEY", None).await })
         .await
         .unwrap()
@@ -142,7 +132,9 @@ async fn resolver_future_can_run_on_a_tokio_worker() {
 #[cfg(feature = "aws")]
 mod aws {
     use super::*;
-    use litellm_secrets::{AccessMode, FailurePolicy, aws::AwsSecretsManagerV2};
+    use litellm_secrets::{
+        AccessMode, FailurePolicy, KeyManagementSettings, SecretManager, aws::AwsSecretsManagerV2,
+    };
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     fn state(server: &MockServer, settings: KeyManagementSettings) -> SecretManagerState {
@@ -319,7 +311,9 @@ mod aws {
 #[case::failure(503)]
 #[tokio::test]
 async fn google_resolver_distinguishes_absence_from_failure(#[case] status: u16) {
-    use litellm_secrets::{FailurePolicy, google::GoogleSecretManager};
+    use litellm_secrets::{
+        FailurePolicy, KeyManagementSettings, SecretManager, google::GoogleSecretManager,
+    };
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
     let server = MockServer::start().await;
     Mock::given(method("GET"))

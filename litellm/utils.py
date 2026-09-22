@@ -35,19 +35,17 @@ from importlib import resources
 from inspect import iscoroutine
 from io import StringIO
 from os.path import abspath, dirname, join
+from pathlib import PurePath
 from types import MappingProxyType
 
 import dotenv
 import httpx
 import openai
-import tiktoken
 from httpx import Proxy
 from httpx._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic
 from openai.types.chat.completion_create_params import ResponseFormat
 from pydantic import BaseModel
-from tiktoken import Encoding
-from tokenizers import Tokenizer
 
 import litellm
 import litellm.litellm_core_utils
@@ -81,12 +79,20 @@ from litellm.constants import (
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    bind_budget_reservation_to_callbacks,
+    normalize_drop_params,
+    unbind_budget_reservation_from_callbacks,
+)
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, strip_special_tokens
+from litellm.rust_bridge import tokenizer as tokenizer_dispatch
+from litellm.rust_bridge.catalog import decision
+from litellm.rust_bridge.configuration import Decision
 
 _CachingHandlerResponse = None
 _LLMCachingHandler = None
@@ -283,7 +289,9 @@ except (ImportError, AttributeError, TypeError):
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
+
+from typing_extensions import assert_never
 
 from litellm import utils as litellm_utils
 
@@ -879,6 +887,32 @@ async def _run_success_deployment_hook_on_converted_chat_stream(
     )
 
 
+@runtime_checkable
+class _NamedFile(Protocol):
+    @property
+    def name(self) -> object: ...
+
+
+def _ocr_document_summary(document: object) -> str:
+    if not isinstance(document, Mapping):
+        return "default-message-value"
+    doc: Final = cast(Mapping[str, object], document)  # cast-ok: ocr()/aocr() type the document as Mapping[str, object]
+    location: Final = doc.get("document_url", doc.get("image_url"))
+    if isinstance(location, str):
+        header, separator, payload = location.partition(",")
+        return f"{header} ({len(payload)} chars)" if separator and header.startswith("data:") else location
+    file_input: Final = doc.get("file")
+    mime_type: Final = doc.get("mime_type")
+    kind: Final = f"file ({mime_type})" if isinstance(mime_type, str) else "file"
+    if isinstance(file_input, PurePath):
+        return f"{kind} {file_input.name}"
+    if isinstance(file_input, bytes):
+        return f"{kind} {len(file_input)} bytes"
+    if isinstance(file_input, _NamedFile) and isinstance(file_input.name, str):
+        return f"{kind} {PurePath(file_input.name).name}"
+    return kind
+
+
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
 def function_setup(
     original_function: str,
@@ -1119,6 +1153,17 @@ def function_setup(
             messages = args[0] if len(args) > 0 else kwargs["prompt"]
         elif call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value:
             messages = kwargs.get("query")
+        elif call_type in (CallTypes.search.value, CallTypes.asearch.value):
+            search_query: Final = args[0] if len(args) > 0 else kwargs.get("query")
+            messages = (
+                "\n".join(part for part in search_query if isinstance(part, str))
+                if isinstance(search_query, list)
+                else search_query
+            )
+        elif call_type in (CallTypes.image_edit.value, CallTypes.aimage_edit.value):
+            messages = args[1] if len(args) > 1 else kwargs.get("prompt")
+        elif call_type in (CallTypes.ocr.value, CallTypes.aocr.value):
+            messages = _ocr_document_summary(args[1] if len(args) > 1 else kwargs.get("document"))
         elif call_type == CallTypes.atranscription.value or call_type == CallTypes.transcription.value:
             _file_obj: Final[FileTypes] = args[1] if len(args) > 1 else kwargs["file"]
             # Lazy import audio_utils.utils only when needed for transcription calls
@@ -1880,6 +1925,8 @@ def client(original_function):
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
+            if not _is_litellm_internal_call:
+                bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
             kwargs["litellm_logging_obj"] = logging_obj
             modified_kwargs: Final = await async_pre_call_deployment_hook(kwargs, call_type)
@@ -2081,6 +2128,7 @@ def client(original_function):
             # the failure hook ran, so a slow callback doesn't inflate the reported duration.
             end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
             if logging_obj and not _is_litellm_internal_call:
+                unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
                 try:
                     logging_obj.failure_handler(
                         e, traceback_exception, start_time, end_time
@@ -2247,17 +2295,27 @@ def _select_tokenizer(model: str, custom_tokenizer: CustomHuggingfaceTokenizer |
             identifier=custom_tokenizer["identifier"],
             revision=custom_tokenizer["revision"],
             auth_token=custom_tokenizer["auth_token"],
+            backend=_huggingface_tokenizer_backend(),
         )
     return _select_tokenizer_helper(model=model)
 
 
+def _huggingface_tokenizer_backend() -> Decision:
+    """The backend `tokenizer_dispatch.from_str` / `from_pretrained` will select right now.
+
+    Cached HuggingFace tokenizers are keyed on it, so flipping `LITELLM_RUST` or
+    `litellm.rust(...)` reaches a fresh object instead of the other backend's."""
+    return decision(tokenizer_dispatch.HUGGINGFACE_CONTEXT)
+
+
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
-def _select_custom_tokenizer_helper(identifier: str, revision: str, auth_token: str | None) -> SelectTokenizerResponse:
+def _select_custom_tokenizer_helper(
+    identifier: str, revision: str, auth_token: str | None, backend: Decision
+) -> SelectTokenizerResponse:
     verbose_logger.debug("Loading custom HuggingFace tokenizer %s (revision %s)", identifier, revision)
     return create_pretrained_tokenizer(identifier=identifier, revision=revision, auth_token=auth_token)
 
 
-@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
     if litellm.disable_hf_tokenizer_download is True:
         return _return_openai_tokenizer(model)
@@ -2267,6 +2325,10 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
         if result is not None:
             return result
     except Exception as e:
+        from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
+
+        if isinstance(e, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
+            raise
         verbose_logger.debug("Error selecting tokenizer: %s", e)
 
     # default - tiktoken
@@ -2301,19 +2363,26 @@ def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
     kind: Final = huggingface_tokenizer_kind(model)
     if kind is None:
         return None
-    return {"type": "huggingface_tokenizer", "tokenizer": _load_huggingface_tokenizer(kind)}
+    return {
+        "type": "huggingface_tokenizer",
+        "tokenizer": _load_huggingface_tokenizer(kind, _huggingface_tokenizer_backend()),
+    }
 
 
-def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> Tokenizer:
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind, backend: Decision) -> HuggingFace:
+    """One tokenizer per kind and backend; `backend` is the cache key, the dispatch re-derives it."""
     match kind:
         case "cohere":
-            return Tokenizer.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
+            return tokenizer_dispatch.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
         case "anthropic":
-            return Tokenizer.from_str(claude_json_str)
+            return tokenizer_dispatch.anthropic()
         case "llama2":
-            return Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
+            return tokenizer_dispatch.from_pretrained("hf-internal-testing/llama-tokenizer")
         case "llama3":
-            return Tokenizer.from_pretrained("Xenova/llama-3-tokenizer")
+            return tokenizer_dispatch.from_pretrained("Xenova/llama-3-tokenizer")
+        case _:
+            assert_never(kind)
 
 
 def encode(model="", text="", custom_tokenizer: dict | None = None):
@@ -2329,15 +2398,13 @@ def encode(model="", text="", custom_tokenizer: dict | None = None):
         enc: The encoded text.
     """
     tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model=model)
-    if isinstance(tokenizer_json["tokenizer"], Encoding):
-        enc = tokenizer_json["tokenizer"].encode(text, disallowed_special=())
-    else:
-        enc = tokenizer_json["tokenizer"].encode(text)
-    # Normalize: HuggingFace Tokenizer.encode() returns an Encoding object;
-    # extract .ids so the return type is always List[int].
-    if hasattr(enc, "ids"):
-        return enc.ids
-    return enc
+    if tokenizer_json["type"] == "openai_tokenizer":
+        openai_tokenizer: Final = cast(  # cast-ok: [LIT006] caller's explicit type tag selects this interface
+            Encoding, tokenizer_json["tokenizer"]
+        )
+        return openai_tokenizer.encode(text, disallowed_special=())
+    encoded: Final = tokenizer_json["tokenizer"].encode(text)
+    return encoded.ids if hasattr(encoded, "ids") else encoded
 
 
 def decode(
@@ -2356,26 +2423,12 @@ def decode(
     """
     tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model=model)
     if tokenizer_json["type"] == "huggingface_tokenizer":
-        if skip_special_tokens:
-            tokens = _strip_huggingface_special_token_ids(tokenizer_json["tokenizer"], tokens)
-        dec = tokenizer_json["tokenizer"].decode(tokens, skip_special_tokens=skip_special_tokens)
-        return dec
-    dec = tokenizer_json["tokenizer"].decode(tokens)
-    return dec
-
-
-def _strip_huggingface_special_token_ids(tokenizer: Tokenizer, tokens: Sequence[int]) -> Sequence[int]:
-    try:
-        added_tokens_decoder: Final = tokenizer.get_added_tokens_decoder()
-    except Exception:
-        return tokens
-
-    special_token_ids: Final = {
-        token_id for token_id, added_token in added_tokens_decoder.items() if getattr(added_token, "special", False)
-    }
-    if not special_token_ids:
-        return tokens
-    return [token for token in tokens if token not in special_token_ids]
+        ids: Final = strip_special_tokens(tokenizer_json["tokenizer"], tokens) if skip_special_tokens else tokens
+        hf_tokenizer: Final = cast(  # cast-ok: [LIT006] caller's explicit type tag selects this interface
+            HuggingFace, tokenizer_json["tokenizer"]
+        )
+        return hf_tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
+    return tokenizer_json["tokenizer"].decode(tokens)
 
 
 def create_pretrained_tokenizer(identifier: str, revision="main", auth_token: str | None = None):
@@ -2391,7 +2444,7 @@ def create_pretrained_tokenizer(identifier: str, revision="main", auth_token: st
     dict: A dictionary with the tokenizer and its type.
     """
 
-    tokenizer: Final = Tokenizer.from_pretrained(identifier, revision=revision, token=auth_token)
+    tokenizer: Final = tokenizer_dispatch.from_pretrained(identifier, revision=revision, token=auth_token)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 
@@ -2406,7 +2459,7 @@ def create_tokenizer(json: str):
     dict: A dictionary with the tokenizer and its type.
     """
 
-    tokenizer: Final = Tokenizer.from_str(json)
+    tokenizer: Final = tokenizer_dispatch.from_str(json)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 
@@ -4926,7 +4979,9 @@ def add_provider_specific_params_to_optional_params(
                 **extra_body,
             }
 
-            dropped_keys: Final = EXTRA_BODY_ROUTING_KEYS | frozenset(additional_drop_params or ())
+            dropped_keys: Final = EXTRA_BODY_ROUTING_KEYS | frozenset(
+                param for param in (additional_drop_params or ()) if isinstance(param, str)
+            )
             processed_extra_body: Final = {k: v for k, v in initial_extra_body.items() if k not in dropped_keys}
 
             _ensure_extra_body_is_safe: Final = getattr(sys.modules[__name__], "_ensure_extra_body_is_safe")
@@ -6027,6 +6082,14 @@ def _get_model_info_helper(
                 cache_read_input_token_cost_flex=_model_info.get("cache_read_input_token_cost_flex", None),
                 cache_read_input_token_cost_priority=_model_info.get("cache_read_input_token_cost_priority", None),
                 cache_read_input_token_cost_ultrafast=_model_info.get("cache_read_input_token_cost_ultrafast", None),
+                cache_read_input_token_cost_batches=_model_info.get("cache_read_input_token_cost_batches"),
+                cache_read_input_token_cost_above_272k_tokens_batches=_model_info.get(
+                    "cache_read_input_token_cost_above_272k_tokens_batches"
+                ),
+                cache_creation_input_token_cost_batches=_model_info.get("cache_creation_input_token_cost_batches"),
+                cache_creation_input_token_cost_above_272k_tokens_batches=_model_info.get(
+                    "cache_creation_input_token_cost_above_272k_tokens_batches"
+                ),
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
                 ),
@@ -6057,7 +6120,13 @@ def _get_model_info_helper(
                 input_cost_per_video_per_second=_model_info.get("input_cost_per_video_per_second", None),
                 input_cost_per_token_batches=_model_info.get("input_cost_per_token_batches"),
                 input_cost_per_video_token_batches=_model_info.get("input_cost_per_video_token_batches", None),
+                input_cost_per_token_above_272k_tokens_batches=_model_info.get(
+                    "input_cost_per_token_above_272k_tokens_batches"
+                ),
                 output_cost_per_token_batches=_model_info.get("output_cost_per_token_batches"),
+                output_cost_per_token_above_272k_tokens_batches=_model_info.get(
+                    "output_cost_per_token_above_272k_tokens_batches"
+                ),
                 output_cost_per_token=_output_cost_per_token,
                 output_cost_per_token_flex=_model_info.get("output_cost_per_token_flex", None),
                 output_cost_per_token_priority=_model_info.get("output_cost_per_token_priority", None),
@@ -6143,6 +6212,7 @@ def _get_model_info_helper(
                 supports_tool_search=_model_info.get("supports_tool_search", None),
                 supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
                 supports_anthropic_thinking_payload=_model_info.get("supports_anthropic_thinking_payload", None),
+                supports_anthropic_compaction=_model_info.get("supports_anthropic_compaction", None),
                 supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),
                 supports_minimal_reasoning_effort=_model_info.get("supports_minimal_reasoning_effort", None),
                 supports_low_reasoning_effort=_model_info.get("supports_low_reasoning_effort", None),
@@ -8340,6 +8410,7 @@ class ProviderConfigManager:
                 False,
             ),
             LlmProviders.EDENAI: (litellm.EdenAIChatConfig, False),
+            LlmProviders.FAL_AI: (litellm.FalAIChatConfig, False),
             LlmProviders.COMETAPI: (lambda: litellm.CometAPIConfig(), False),
             LlmProviders.DATAROBOT: (lambda: litellm.DataRobotConfig(), False),
             LlmProviders.GEMINI: (lambda: litellm.GoogleAIStudioGeminiConfig(), False),
@@ -9569,9 +9640,9 @@ class ProviderConfigManager:
 
             return BlackForestLabsImageEditConfig()
         elif LlmProviders.FAL_AI == provider:
-            from litellm.llms.fal_ai.image_edit import FalAIImageEditConfig
+            from litellm.llms.fal_ai.image_edit import get_fal_ai_image_edit_config
 
-            return FalAIImageEditConfig()
+            return get_fal_ai_image_edit_config(model)
         elif LlmProviders.AZURE_AI == provider:
             from litellm.llms.azure_ai.image_edit import get_azure_ai_image_edit_config
 

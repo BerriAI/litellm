@@ -4,6 +4,7 @@ from typing import Final
 
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.types.router import CustomPricingLiteLLMParams
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     {
@@ -46,6 +47,8 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "bucket_name",
             "s3_endpoint_url",
             "s3_region_name",
+            "s3_access_key_id",
+            "s3_secret_access_key",
             "vertex_credentials",
             "vertex_project",
             "vertex_location",
@@ -63,6 +66,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
+    | frozenset(CustomPricingLiteLLMParams.model_fields)
 )
 
 # Backward-compatible alias for existing imports/tests.

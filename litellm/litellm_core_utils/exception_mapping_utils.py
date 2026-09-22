@@ -10,6 +10,11 @@ import httpx
 
 import litellm
 from litellm._logging import _ENABLE_SECRET_REDACTION, _redact_string, verbose_logger
+from litellm.litellm_core_utils.bug_report import (
+    bug_report_notice,
+    build_bug_report,
+    should_report_bug,
+)
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.types.utils import LlmProviders
 
@@ -2673,7 +2678,21 @@ def exception_type(
                 )
             else:
                 raise APIConnectionError(
-                    message=f"{original_exception}\n{_redact_string(traceback.format_exc())}",
+                    message=(
+                        f"{original_exception}\n{_redact_string(traceback.format_exc())}"
+                        + (
+                            "\n"
+                            + bug_report_notice(
+                                build_bug_report(
+                                    original_exception,
+                                    surface="sdk",
+                                    custom_llm_provider=custom_llm_provider,
+                                )
+                            )
+                            if should_report_bug(original_exception)
+                            else ""
+                        )
+                    ),
                     llm_provider=custom_llm_provider,
                     model=model,
                     request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),  # stub the request

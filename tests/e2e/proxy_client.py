@@ -47,6 +47,8 @@ from models import (
     AnthropicMessagesResponse,
     ChatBody,
     ChatResponse,
+    ConfigFieldList,
+    ConfigListParams,
     CostMap,
     CostMapEntry,
     CountTokensBody,
@@ -83,6 +85,8 @@ from models import (
     RerankResponse,
     RouterCurrentValues,
     RouterSettingsResponse,
+    SearchToolCreateBody,
+    SearchToolCreateResponse,
     SpendLogRow,
     SpendLogs,
     SpendLogsPage,
@@ -630,6 +634,19 @@ class ProxyClient:
             provider_live=provider_live,
         )
 
+    def general_setting_enabled(self, field_name: str) -> bool:
+        """Whether the proxy is running with the named general_settings flag on, for
+        a test whose behavior only exists under a config flag the stack has to carry."""
+        fields = unwrap(
+            self.transport.get(
+                "/config/list",
+                headers=self.transport.master,
+                params=ConfigListParams(config_type="general_settings"),
+                response_type=ConfigFieldList,
+            )
+        ).root
+        return any(entry.field_name == field_name and entry.field_value is True for entry in fields)
+
     def register_model(
         self, body: ModelNewBody, listed_for: str | None = None, *, provider_live: bool = False
     ) -> str:
@@ -843,6 +860,30 @@ class ProxyClient:
             json=NoBody(),
             response_type=NoBody,
         )
+
+    def create_search_tool(self, body: SearchToolCreateBody) -> str:
+        """POST /search_tools: register a search tool on the running proxy and return its id
+        once every worker has had a config-reload window to pick it up from the DB."""
+        search_tool_id: Final = unwrap(
+            self.transport.post(
+                "/search_tools",
+                headers=self.management_headers(),
+                json=body,
+                response_type=SearchToolCreateResponse,
+            )
+        ).search_tool_id
+        settle_propagation(time.monotonic())
+        return search_tool_id
+
+    def delete_search_tool(self, search_tool_id: str) -> None:
+        result = self.transport.delete(
+            f"/search_tools/{search_tool_id}",
+            headers=self.management_headers(),
+            json=NoBody(),
+            response_type=NoBody,
+        )
+        if not is_ok(result):
+            warnings.warn(f"delete_search_tool({search_tool_id!r}) failed: {result}", stacklevel=2)
 
     def create_credential(self, body: CredentialCreateBody) -> None:
         unwrap(

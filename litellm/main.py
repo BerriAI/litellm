@@ -37,7 +37,6 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
-import tiktoken
 from pydantic import BaseModel
 from typing_extensions import overload
 
@@ -100,6 +99,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
     foundry_chat_rejects_function_tools_while_reasoning,
@@ -3594,6 +3594,37 @@ def _complete_edenai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
     return response
 
 
+def _complete_fal_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    if ctx.stream:
+        raise litellm.FalAIError(
+            status_code=400,
+            message="fal_ai chat completions do not support streaming",
+        )
+    api_base: Final = litellm.FalAIChatConfig.get_api_base(ctx.api_base)
+    api_key: Final = litellm.FalAIChatConfig.get_api_key(ctx.api_key or litellm.api_key)
+    response: Final = base_llm_http_handler.completion(
+        model=ctx.model,
+        messages=ctx.messages,
+        api_base=api_base,
+        custom_llm_provider="fal_ai",
+        model_response=ctx.model_response,
+        encoding=_get_encoding(),
+        logging_obj=ctx.logging,
+        optional_params=ctx.optional_params,
+        timeout=ctx.timeout,
+        litellm_params=ctx.litellm_params,
+        shared_session=ctx.shared_session,
+        acompletion=ctx.acompletion,
+        stream=ctx.stream,
+        api_key=api_key,
+        headers=ctx.headers or litellm.headers,
+        client=_dispatch_client_http(ctx),
+        provider_config=ctx.provider_config,
+    )
+    ctx.logging.post_call(input=ctx.messages, api_key=api_key, original_response=response)
+    return response
+
+
 def _complete_vertex_ai_beta(
     ctx: _CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -5799,6 +5830,8 @@ def completion(
             response = _complete_hosted_vllm(_dispatch_ctx)
         elif custom_llm_provider == "edenai":
             response = _complete_edenai(_dispatch_ctx)  # rebind-ok: dispatch chain binds response per branch
+        elif custom_llm_provider == "fal_ai":
+            response = _complete_fal_ai(_dispatch_ctx)  # rebind-ok: dispatch chain binds response per branch
         elif (
             # A known OpenAI model name only decides the route when nothing else
             # resolved a provider. get_llm_provider() already maps these names to
@@ -7456,7 +7489,9 @@ def text_completion(
         if isinstance(prompt, list):
             import concurrent.futures
 
-            tokenizer: Final = tiktoken.encoding_for_model("text-davinci-003")
+            from litellm.rust_bridge.tokenizer import get_encoding
+
+            tokenizer: Final = get_encoding("p50k_base")
             ## if it's a 2d list - each element in the list is a text_completion() request
             if len(prompt) > 0 and isinstance(prompt[0], list):
                 responses: Final = [None for x in prompt]  # init responses
@@ -9226,7 +9261,7 @@ async def acount_tokens(
     except Exception as e:
         verbose_logger.debug("Provider token counting failed for model=%s, falling back to local: %s", model, e)
 
-    # Fallback to local tiktoken-based token counting
+    # Fallback to local token counting
     fallback_messages = messages or []
     if system and fallback_messages:
         fallback_messages = [{"role": "system", "content": system}] + fallback_messages
@@ -9245,16 +9280,16 @@ async def acount_tokens(
 
 
 # Cache for encoding to avoid repeated __getattr__ calls
-_encoding_cache: tiktoken.Encoding | None = None
+_encoding_cache: Tokenizer | None = None
 
 
-def _load_module_encoding() -> tiktoken.Encoding:
+def _load_module_encoding() -> Tokenizer:
     import sys
 
     return sys.modules[__name__].encoding
 
 
-def _get_encoding() -> tiktoken.Encoding:
+def _get_encoding() -> Tokenizer:
     """Get encoding, loading it lazily if needed."""
     global _encoding_cache
     if _encoding_cache is None:
@@ -9263,18 +9298,15 @@ def _get_encoding() -> tiktoken.Encoding:
     return _encoding_cache
 
 
-def _load_default_encoding() -> tiktoken.Encoding:
+def _load_default_encoding() -> Tokenizer:
     from litellm._lazy_imports import _get_default_encoding
 
     return _get_default_encoding()
 
 
-def __getattr__(name: str) -> tiktoken.Encoding:
+def __getattr__(name: str) -> Tokenizer:
     """Lazy import handler for main module"""
     if name == "encoding":
-        # Use _get_default_encoding which properly sets TIKTOKEN_CACHE_DIR
-        # before loading tiktoken, ensuring the local cache is used
-        # instead of downloading from the internet
         _encoding: Final = _load_default_encoding()
         # Cache it in the module's __dict__ for subsequent accesses
         import sys
