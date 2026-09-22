@@ -30,6 +30,10 @@ def _header(headers: Mapping[str, str], name: str) -> str | None:
     return value.strip() or None if value is not None else None
 
 
+def _log_safe(value: str | None) -> str:
+    return (value or "").replace("\r", "").replace("\n", "")
+
+
 def agent_caller_from_headers(headers: Mapping[str, str], user_api_key_auth: UserAPIKeyAuth) -> AgentCaller | None:
     """The caller an agent key is acting for, or ``None`` when the key is not an agent's or no id was echoed."""
     if not user_api_key_auth.agent_id:
@@ -106,6 +110,11 @@ async def agent_caller_resolves(
         await load_team(user_api_key_auth)
         await load_user(user_api_key_auth)
     except Exception as error:  # noqa: BLE001  # any failure to resolve the caller must deny, never widen
-        verbose_proxy_logger.warning("agent caller %s could not be resolved, denying: %s", caller, error)
+        verbose_proxy_logger.warning(
+            "agent caller user=%s team=%s could not be resolved (%s), denying",
+            _log_safe(caller.user_id),
+            _log_safe(caller.team_id),
+            type(error).__name__,
+        )
         return False
     return True
