@@ -96,17 +96,15 @@ async def agent_caller_resolves(
     load_team: CallerTeamLoader = load_agent_caller_team,
     load_user: CallerUserLoader = load_agent_caller_user,
 ) -> bool:
-    """Whether the echoed ids name a team (when one was echoed, else a user) the proxy can load. The
-    grant resolvers answer "no grants" for a missing row just as for an unrestricted one, so callers
-    ask this first and deny outright when the invoking identity cannot be resolved."""
+    """Whether every echoed id names a row the proxy can load. The grant resolvers answer "no
+    grants" for a missing row just as for an unrestricted one, so callers ask this first and deny
+    outright when the invoking identity cannot be resolved."""
     caller: Final = user_api_key_auth.agent_caller
     if caller is None:
         return True
     try:
-        if caller.team_id is not None:
-            await load_team(user_api_key_auth)
-        else:
-            await load_user(user_api_key_auth)
+        await load_team(user_api_key_auth)
+        await load_user(user_api_key_auth)
     except Exception as error:  # noqa: BLE001  # any failure to resolve the caller must deny, never widen
         verbose_proxy_logger.warning("agent caller %s could not be resolved, denying: %s", caller, error)
         return False

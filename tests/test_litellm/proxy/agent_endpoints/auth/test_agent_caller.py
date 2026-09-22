@@ -62,33 +62,51 @@ def test_agent_caller_cannot_be_set_from_a_request_payload() -> None:
 
 
 async def _team_row(user_api_key_auth: UserAPIKeyAuth) -> LiteLLM_TeamTable | None:
+    """Behaves like the production loader: no row when no team was echoed, the row for ``callers``,
+    an error for any other id."""
+    caller: Final = user_api_key_auth.agent_caller
+    if caller is None or caller.team_id is None:
+        return None
+    if caller.team_id != "callers":
+        raise ValueError(f"Team doesn't exist in db. Team={caller.team_id}")
     return LiteLLM_TeamTable(team_id="callers")
 
 
 async def _user_row(user_api_key_auth: UserAPIKeyAuth) -> LiteLLM_UserTable | None:
+    caller: Final = user_api_key_auth.agent_caller
+    if caller is None or caller.user_id is None:
+        return None
+    if caller.user_id != "alice":
+        raise ValueError(f"User doesn't exist in db. User={caller.user_id}")
     return LiteLLM_UserTable(user_id="alice", max_budget=None, user_email=None)
-
-
-async def _no_row(user_api_key_auth: UserAPIKeyAuth) -> None:
-    raise ValueError("doesn't exist in db")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("caller", "load_team", "load_user", "expected"),
+    ("caller", "expected"),
     [
-        (None, _no_row, _no_row, True),
-        (AgentCaller(user_id="alice", team_id="callers"), _team_row, _no_row, True),
-        (AgentCaller(user_id="alice", team_id="ghost-team"), _no_row, _user_row, False),
-        (AgentCaller(user_id="alice", team_id=None), _no_row, _user_row, True),
-        (AgentCaller(user_id="ghost", team_id=None), _team_row, _no_row, False),
+        (None, True),
+        (AgentCaller(user_id="alice", team_id="callers"), True),
+        (AgentCaller(user_id=None, team_id="callers"), True),
+        (AgentCaller(user_id="alice", team_id=None), True),
+        (AgentCaller(user_id="alice", team_id="ghost-team"), False),
+        (AgentCaller(user_id="ghost", team_id="callers"), False),
+        (AgentCaller(user_id="ghost", team_id=None), False),
     ],
-    ids=["no_caller", "known_team", "unknown_team_despite_known_user", "known_user", "unknown_user"],
+    ids=[
+        "no_caller",
+        "known_team_and_user",
+        "known_team_alone",
+        "known_user_alone",
+        "unknown_team_despite_known_user",
+        "unknown_user_despite_known_team",
+        "unknown_user_alone",
+    ],
 )
-async def test_caller_resolves_only_when_the_echoed_team_or_else_user_names_a_row(
-    caller: AgentCaller | None, load_team, load_user, expected: bool
+async def test_caller_resolves_only_when_every_echoed_id_names_a_row(
+    caller: AgentCaller | None, expected: bool
 ) -> None:
     agent_key: Final = UserAPIKeyAuth(agent_id="agent-1")
     agent_key.agent_caller = caller
 
-    assert await agent_caller_resolves(agent_key, load_team=load_team, load_user=load_user) is expected
+    assert await agent_caller_resolves(agent_key, load_team=_team_row, load_user=_user_row) is expected

@@ -11937,9 +11937,9 @@ class TestAgentCallerServerCeiling:
             caller: Final = user_api_key_auth.agent_caller
             if caller is None:
                 return True
-            if caller.team_id is not None:
-                return caller.team_id in team_ids
-            return caller.user_id in user_ids
+            team_known: Final = caller.team_id is None or caller.team_id in team_ids
+            user_known: Final = caller.user_id is None or caller.user_id in user_ids
+            return team_known and user_known
 
         return AsyncMock(side_effect=resolves)
 
@@ -11974,7 +11974,9 @@ class TestAgentCallerServerCeiling:
     async def test_agent_key_acting_for_a_user_is_capped_at_the_invoking_teams_servers(self):
         agent_key: Final = self._agent_key_acting_for(user_id="alice", team_id="callers")
         with self._resolvers(
-            {"agent": ("server_1", "server_2"), "callers": ("server_2", "server_3")}, known_teams=frozenset({"callers"})
+            {"agent": ("server_1", "server_2"), "callers": ("server_2", "server_3")},
+            known_teams=frozenset({"callers"}),
+            known_users=frozenset({"alice"}),
         ) as manager:
             assert set(await manager.get_allowed_mcp_servers(agent_key)) == {"server_2", "public"}
 
@@ -11993,7 +11995,11 @@ class TestAgentCallerServerCeiling:
         by the caller resolving to no public server) stays out of the agent's reach on their behalf."""
         agent_key: Final = self._agent_key_acting_for(user_id="alice", team_id="callers")
         with (
-            self._resolvers({"agent": ("server_1",), "callers": ("server_1",)}, known_teams=frozenset({"callers"})),
+            self._resolvers(
+                {"agent": ("server_1",), "callers": ("server_1",)},
+                known_teams=frozenset({"callers"}),
+                known_users=frozenset({"alice"}),
+            ),
             patch.object(
                 MCPServerManager,
                 "operator_open_server_ids",
@@ -12007,15 +12013,17 @@ class TestAgentCallerServerCeiling:
     async def test_agent_key_acting_for_a_team_with_no_grants_reaches_only_what_that_team_can(self):
         agent_key: Final = self._agent_key_acting_for(user_id="alice", team_id="callers")
         with self._resolvers(
-            {"agent": ("server_1", "server_2"), "callers": ()}, known_teams=frozenset({"callers"})
+            {"agent": ("server_1", "server_2"), "callers": ()},
+            known_teams=frozenset({"callers"}),
+            known_users=frozenset({"alice"}),
         ) as manager:
             assert await manager.get_allowed_mcp_servers(agent_key) == ["public"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("user_id", "team_id"),
-        [("alice", "ghost-team"), ("ghost", None)],
-        ids=["unknown_team", "unknown_teamless_user"],
+        [("alice", "ghost-team"), ("ghost", None), ("ghost", "callers")],
+        ids=["unknown_team", "unknown_teamless_user", "unknown_user_on_known_team"],
     )
     async def test_agent_key_acting_for_an_unresolvable_caller_reaches_nothing(self, user_id: str, team_id: str | None):
         """An echoed identity the proxy cannot load is an empty ceiling: not even public servers."""
@@ -12041,7 +12049,7 @@ class TestAgentCallerServerCeiling:
             return MCPServerAccess(server_ids=("server_1",))
 
         with (
-            self._resolvers({}, known_teams=frozenset({"callers"})),
+            self._resolvers({}, known_teams=frozenset({"callers"}), known_users=frozenset({"alice"})),
             patch.object(MCPRequestHandler, "get_mcp_server_access", AsyncMock(side_effect=faulting_for_agent)),
             patch.object(
                 MCPServerManager,

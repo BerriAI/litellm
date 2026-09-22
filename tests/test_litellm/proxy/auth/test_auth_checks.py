@@ -9230,7 +9230,7 @@ async def test_agent_key_acting_for_a_team_is_capped_at_that_teams_models():
 
     assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
     assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
-    assert asked == ["team:team-a", "team:team-a"]
+    assert asked == ["team:team-a", "user:alice", "team:team-a", "user:alice"]
 
 
 @pytest.mark.asyncio
@@ -9299,6 +9299,22 @@ async def test_agent_key_acting_for_an_unknown_teamless_user_is_denied_with_403(
     assert exc_info.value.type == ProxyErrorTypes.user_model_access_denied
     assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
     assert "user_id='nobody'" in exc_info.value.internal_message
+
+
+@pytest.mark.asyncio
+async def test_agent_key_acting_for_an_unknown_user_on_a_known_team_is_denied_with_403():
+    """A real team id next to a user id that names nobody is still an unresolvable caller: the team's
+    own grant must not stand in for the missing user."""
+    agent_key: Final = _agent_key_acting_for(user_id="nobody", team_id="team-a")
+    load_team, _, asked = _caller_loaders(LiteLLM_TeamTable(team_id="team-a", models=["gpt-5"]), None)
+
+    with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
+        await _check_caller_models(agent_key, "gpt-5", load_team, _no_such_user)
+
+    assert exc_info.value.type == ProxyErrorTypes.user_model_access_denied
+    assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+    assert "user_id='nobody'" in exc_info.value.internal_message
+    assert asked == ["team:team-a"]
 
 
 @pytest.mark.asyncio

@@ -4387,6 +4387,9 @@ async def _check_agent_caller_model_access(
     caller_team: Final = await _load_agent_caller_row_or_deny(
         load_team, valid_token, model, ProxyErrorTypes.team_model_access_denied
     )
+    caller_user: Final = await _load_agent_caller_row_or_deny(
+        load_user, valid_token, model, ProxyErrorTypes.user_model_access_denied
+    )
     if caller_team is not None:
         await can_team_access_model(
             model=model,
@@ -4404,9 +4407,6 @@ async def _check_agent_caller_model_access(
             proxy_logging_obj=proxy_logging_obj,
         )
         return
-    caller_user: Final = await _load_agent_caller_row_or_deny(
-        load_user, valid_token, model, ProxyErrorTypes.user_model_access_denied
-    )
     if caller_user is None:
         return
     await can_user_call_model(model=model, llm_router=llm_router, user_object=caller_user)
