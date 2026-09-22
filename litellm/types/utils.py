@@ -3961,6 +3961,7 @@ all_litellm_params = (
         "disable_add_transform_inline_image_block",
         "api_key",
         "api_version",
+        "use_bearer_for_custom_base",
         "prompt_id",
         "prompt_variables",
         "litellm_system_prompt",
