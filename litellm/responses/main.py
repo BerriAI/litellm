@@ -453,7 +453,7 @@ def _bridge_kwargs(
             *GenericLiteLLMParams.model_fields,
             *(allowed_openai_params or ()),
         )
-    )
+    ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
     return MappingProxyType({key: value for key, value in kwargs.items() if key in forwarded_keys})
 
 
