@@ -153,9 +153,9 @@ async def test_post_call_failure_hook_attributes_single_router_deployment(
 async def test_post_call_failure_hook_keeps_router_stamped_metadata_for_post_call_failures(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
-    """A post-call guardrail block arrives with the router's own ``model_info`` already in
-    the request metadata. The pre-routing flag must stay off so deployment metrics keep
-    attributing the failure to the deployment that actually served the call."""
+    """A post-call guardrail block arrives after the provider handoff with the router's own
+    ``model_info`` in the request metadata. The pre-routing flag must stay off so deployment
+    metrics keep attributing the failure to the deployment that actually served the call."""
     from litellm.proxy import proxy_server
 
     recorded: list[dict] = []
@@ -180,12 +180,20 @@ async def test_post_call_failure_hook_keeps_router_stamped_metadata_for_post_cal
     monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
     proxy_logging.alert_types = []
 
+    request_data = {
+        "litellm_call_id": "post-call-guardrail",
+        "model": "internal-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"model_info": {"id": "routed-deployment", "served": True}},
+    }
+    logging_obj, request_data = litellm.utils.function_setup(
+        original_function="acompletion", rules_obj=litellm.utils.Rules(), start_time=datetime.now(), **request_data
+    )
+    logging_obj.model_call_details["first_api_call_start_time"] = datetime.now()
+    request_data["litellm_logging_obj"] = logging_obj
+
     await proxy_logging.post_call_failure_hook(
-        request_data={
-            "model": "internal-model",
-            "messages": [{"role": "user", "content": "hi"}],
-            "metadata": {"model_info": {"id": "routed-deployment", "served": True}},
-        },
+        request_data=request_data,
         original_exception=GuardrailRaisedException(guardrail_name="g", message="response blocked"),
         user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions"),
         route="/chat/completions",
@@ -196,6 +204,54 @@ async def test_post_call_failure_hook_keeps_router_stamped_metadata_for_post_cal
     assert kwargs["litellm_params"]["metadata"]["model_info"] == {"id": "routed-deployment", "served": True}
     assert PROXY_REJECTED_BEFORE_ROUTING_KEY not in kwargs["litellm_params"]
     assert kwargs["standard_logging_object"]["model_id"] == "routed-deployment"
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_flags_pre_routing_reject_despite_caller_model_info(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """A key allowed to override pricing keeps caller-supplied ``metadata.model_info``. A reject
+    before any provider handoff must still carry the pre-routing flag so deployment metrics do
+    not record an outage for a deployment the request never reached."""
+    from litellm.proxy import proxy_server
+
+    recorded: list[dict] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            recorded.append(kwargs)
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "internal-model",
+                    "litellm_params": {"model": "openai/gpt-4.1", "api_key": "sk-test"},
+                    "model_info": {"id": "real-deployment"},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
+    proxy_logging.alert_types = []
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={
+            "model": "internal-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"model_info": {"id": "spoofed-deployment"}},
+        },
+        original_exception=HTTPException(status_code=429, detail="key over limit"),
+        user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions"),
+        route="/chat/completions",
+    )
+
+    assert len(recorded) == 1
+    kwargs = recorded[0]
+    assert kwargs["litellm_params"][PROXY_REJECTED_BEFORE_ROUTING_KEY] is True
+    assert kwargs["litellm_params"]["custom_llm_provider"] == "openai"
 
 
 @pytest.mark.asyncio

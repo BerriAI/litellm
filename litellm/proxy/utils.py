@@ -977,26 +977,29 @@ _EMPTY_LIFT: Final = MappingProxyType({})
 
 
 def _stamp_deployment_attribution(
-    litellm_params: dict[str, object], model_group: str | None, team_id: str | None
+    litellm_params: dict[str, object], model_group: str | None, team_id: str | None, dispatched: bool
 ) -> Mapping[str, object]:
     """Stamp provider and logging-metadata attribution onto ``litellm_params`` and return it.
     ``litellm_params["model_info"]`` stays unset: the router's cooldown and per-deployment rpm
-    callbacks key off it and must not count a proxy-side reject against the deployment. Metadata
-    the router already stamped (a post-call failure) is left alone; only a pre-routing reject gets
-    the attribution plus the ``PROXY_REJECTED_BEFORE_ROUTING_KEY`` flag deployment metrics key off."""
+    callbacks key off it and must not count a proxy-side reject against the deployment. A failure
+    after the provider handoff keeps the metadata the router stamped; a request that never reached a
+    provider is flagged ``PROXY_REJECTED_BEFORE_ROUTING_KEY`` (deployment metrics key off it) whatever
+    its metadata says, since ``metadata.model_info`` can be caller supplied."""
     attribution: Final = _deployment_attribution_for_model_group(model_group, team_id)
     if "custom_llm_provider" in attribution:
         litellm_params["custom_llm_provider"] = attribution["custom_llm_provider"]
+    if dispatched:
+        return attribution
+    litellm_params[PROXY_REJECTED_BEFORE_ROUTING_KEY] = True
     if "model_info" not in attribution:
         return attribution
     if litellm_params.get("metadata") is None:
         litellm_params["metadata"] = {}  # mutable-ok: legacy logging payload is populated in place
     metadata: Final = litellm_params["metadata"]
-    if not isinstance(metadata, dict) or "model_info" in metadata:
+    if not isinstance(metadata, dict):
         return attribution
-    metadata["model_info"] = attribution["model_info"]
+    metadata.setdefault("model_info", attribution["model_info"])
     metadata.setdefault("deployment", attribution["deployment"])
-    litellm_params[PROXY_REJECTED_BEFORE_ROUTING_KEY] = True
     return attribution
 
 
@@ -3308,7 +3311,10 @@ class ProxyLogging:
                     _optional_params[k] = v
 
             attribution: Final = _stamp_deployment_attribution(
-                _litellm_params, request_data.get("model"), user_api_key_dict.team_id
+                _litellm_params,
+                request_data.get("model"),
+                user_api_key_dict.team_id,
+                dispatched=litellm_logging_obj.model_call_details.get("first_api_call_start_time") is not None,
             )
 
             litellm_logging_obj.update_environment_variables(
