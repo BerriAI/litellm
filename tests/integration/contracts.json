@@ -281,6 +281,9 @@
     "tests/integration/observability/test_guardrail_effects.py::test_guardrail_denial_prevents_provider_and_preserves_allowed_control": [
       "other.observability.guardrails.denial_prevents_provider_with_allowed_control"
     ],
+    "tests/integration/observability/test_guardrail_effects.py::test_bedrock_passthrough_converse_guardrail_ignores_denied_term_in_tool_definition": [
+      "other.observability.guardrails.bedrock_passthrough_converse_scans_only_caller_content"
+    ],
     "tests/integration/mcp/test_mcp_protocol_errors.py::test_jsonrpc_error_and_malformed_tool_result_remain_errors": [
       "other.mcp.errors.protocol_and_malformed_results_cannot_be_empty_success"
     ],
