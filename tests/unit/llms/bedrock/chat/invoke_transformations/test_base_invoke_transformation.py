@@ -1,10 +1,10 @@
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
-
+import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
@@ -12,6 +12,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 @pytest.mark.parametrize(
@@ -234,3 +235,61 @@ def test_transform_response_hands_json_mode_to_nova():
 
     assert result.choices[0].message.tool_calls is None
     assert json.loads(result.choices[0].message.content) == {"city": "Paris", "temperature": 21}
+
+
+def _invoke_stream_completion_with_spied_iter_bytes(**kwargs) -> MagicMock:
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.iter_bytes = MagicMock(return_value=iter([]))
+    client = HTTPHandler()
+    client.post = MagicMock(return_value=mock_response)
+
+    litellm.completion(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        **kwargs,
+    )
+    return mock_response.iter_bytes
+
+
+async def _invoke_stream_acompletion_with_spied_aiter_bytes(**kwargs) -> MagicMock:
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.aiter_bytes = MagicMock(return_value=_no_async_bytes())
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=mock_response)
+
+    await litellm.acompletion(
+        model="bedrock/invoke/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        **kwargs,
+    )
+    return mock_response.aiter_bytes
+
+
+async def _no_async_bytes():
+    return
+    yield b""
+
+
+def test_completion_plumbs_stream_chunk_size_through_invoke_stream():
+    _invoke_stream_completion_with_spied_iter_bytes().assert_called_once_with(chunk_size=None)
+    _invoke_stream_completion_with_spied_iter_bytes(stream_chunk_size=64).assert_called_once_with(chunk_size=64)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_plumbs_stream_chunk_size_through_invoke_stream():
+    default_spy = await _invoke_stream_acompletion_with_spied_aiter_bytes()
+    default_spy.assert_called_once_with(chunk_size=None)
+    sized_spy = await _invoke_stream_acompletion_with_spied_aiter_bytes(stream_chunk_size=64)
+    sized_spy.assert_called_once_with(chunk_size=64)

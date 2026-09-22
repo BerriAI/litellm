@@ -31,7 +31,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.bedrock import GuardrailConfigBlock
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import LiteLLMControlParams, ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
@@ -467,6 +467,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             fake_stream=True if "ai21" in api_base else False,
             bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
             json_mode=json_mode,
+            stream_chunk_size=LiteLLMControlParams.from_litellm_params(litellm_params).stream_chunk_size,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -508,6 +509,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             fake_stream=True if "ai21" in api_base else False,
             bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
             json_mode=json_mode,
+            stream_chunk_size=LiteLLMControlParams.from_litellm_params(litellm_params).stream_chunk_size,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,

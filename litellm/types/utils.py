@@ -3965,6 +3965,11 @@ class LiteLLMControlParams:
             else None
         )
 
+    @classmethod
+    def from_litellm_params(cls, litellm_params: Mapping[str, object]) -> "LiteLLMControlParams":
+        control: Final = litellm_params.get("control")
+        return control if isinstance(control, cls) else cls(stream_chunk_size=None)
+
 
 LITELLM_CONTROL_PARAM_NAMES: Final = tuple(field.name for field in fields(LiteLLMControlParams))
 

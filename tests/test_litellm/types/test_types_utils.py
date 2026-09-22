@@ -879,3 +879,15 @@ def test_control_params_from_kwargs_reads_stream_chunk_size():
     assert LiteLLMControlParams.from_kwargs({"stream_chunk_size": 64}) == LiteLLMControlParams(stream_chunk_size=64)
     assert LiteLLMControlParams.from_kwargs({}) == LiteLLMControlParams(stream_chunk_size=None)
     assert LiteLLMControlParams.from_kwargs({"stream_chunk_size": True}) == LiteLLMControlParams(stream_chunk_size=None)
+
+
+def test_control_params_from_litellm_params_reads_the_bag_or_falls_back_to_empty():
+    from litellm.types.utils import LiteLLMControlParams
+
+    bag: Final = LiteLLMControlParams(stream_chunk_size=64)
+    assert LiteLLMControlParams.from_litellm_params({"control": bag}) is bag
+    assert LiteLLMControlParams.from_litellm_params({}) == LiteLLMControlParams(stream_chunk_size=None)
+    assert LiteLLMControlParams.from_litellm_params({"control": None}) == LiteLLMControlParams(stream_chunk_size=None)
+    assert LiteLLMControlParams.from_litellm_params({"control": {"stream_chunk_size": 64}}) == LiteLLMControlParams(
+        stream_chunk_size=None
+    )
