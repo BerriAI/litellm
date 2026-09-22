@@ -38,10 +38,9 @@ else:
 _BODY_FIELDS_MANTLE_READS_FROM_HEADERS: Final = frozenset({"anthropic_version", "anthropic_beta"})
 _ANTHROPIC_BETAS: Final = TypeAdapter(tuple[str, ...])
 _MANTLE_REQUEST: Final = TypeAdapter(dict[str, object])
-_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
-def _move_betas_into_header(request: Mapping[str, object], headers: dict) -> None:
+def _move_betas_into_header(request: Mapping[str, object], headers: dict[str, str]) -> None:
     betas: Final = _ANTHROPIC_BETAS.validate_python(request.get("anthropic_beta") or ())
     if betas:
         headers["anthropic-beta"] = ",".join(betas)  # rebind-ok: the handler signs and sends this same dict
@@ -101,14 +100,19 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         )
         project_id: Final = litellm_params.get("aws_bedrock_project_id")
         has_version: Final = any(name.lower() == "anthropic-version" for name in merged_headers)
-        workspace_fields: Final = MappingProxyType({"anthropic-workspace": project_id}) if project_id else _NO_FIELDS
-        version_fields: Final = (
-            _NO_FIELDS if has_version else MappingProxyType({"anthropic-version": DEFAULT_ANTHROPIC_API_VERSION})
+        mantle_headers: Final = MappingProxyType(
+            {
+                name: value
+                for name, value in (
+                    ("anthropic-workspace", project_id),
+                    ("anthropic-version", None if has_version else DEFAULT_ANTHROPIC_API_VERSION),
+                )
+                if value
+            }
         )
         return {  # mutable-ok: the base class contract returns a dict the handler signs into in place
             **merged_headers,
-            **workspace_fields,
-            **version_fields,
+            **mantle_headers,
         }, resolved_api_base
 
     def transform_anthropic_messages_request(
@@ -133,15 +137,13 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         body: Final = MappingProxyType(
             {key: value for key, value in request.items() if key not in _BODY_FIELDS_MANTLE_READS_FROM_HEADERS}
         )
-        stream_fields: Final = (
-            MappingProxyType({"stream": True})
-            if anthropic_messages_optional_request_params.get("stream") is True
-            else _NO_FIELDS
+        streaming: Final = anthropic_messages_optional_request_params.get("stream") is True
+        mantle_fields: Final = MappingProxyType(
+            {key: value for key, value in (("model", model_id), ("stream", streaming)) if value}
         )
         return {  # mutable-ok: the base class contract returns the dict the handler serializes as the body
             **body,
-            "model": model_id,
-            **stream_fields,
+            **mantle_fields,
         }
 
     def transform_anthropic_messages_response(

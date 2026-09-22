@@ -447,7 +447,7 @@ async def test_mantle_anthropic_messages_sends_workspace_header_and_clean_body()
     assert "aws_bedrock_project_id" not in requests[0]["body"]
 
 
-async def _send_anthropic_messages_with_betas(**request_params) -> dict:
+async def _send_anthropic_messages_with_betas(**request_params: object) -> dict:
     import litellm
 
     requests = []
