@@ -25,6 +25,10 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
 
 vi.mock("./agent_card_discovery", () => ({ default: () => <div data-testid="agent-card-discovery" /> }));
 
+vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
+  useAccessGroups: () => ({ data: [], isLoading: false, isError: false }),
+}));
+
 const A2A_AGENT = {
   agent_id: "agent-1",
   agent_name: "my-agent",
@@ -176,6 +180,7 @@ describe("AgentInfoView update payload", () => {
       session_tpm_limit: 333,
       session_rpm_limit: 444,
       object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
+      access_group_ids: [],
     });
   });
 
@@ -217,6 +222,7 @@ describe("AgentInfoView update payload", () => {
       session_tpm_limit: 333,
       session_rpm_limit: 444,
       object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
+      access_group_ids: [],
     });
   });
 
@@ -295,6 +301,7 @@ describe("AgentInfoView update payload", () => {
         model: "langgraph/asst_1",
       },
       object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
+      access_group_ids: [],
     });
   });
 

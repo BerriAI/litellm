@@ -23640,6 +23640,8 @@ export interface components {
         };
         /** AgentConfig */
         AgentConfig: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
             agent_card_params: components["schemas"]["AgentCard"];
             /** Agent Name */
             agent_name: string;
@@ -23787,6 +23789,8 @@ export interface components {
         };
         /** AgentResponse */
         AgentResponse: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
             /** Agent Card Params */
             agent_card_params: {
                 [key: string]: unknown;
@@ -34983,6 +34987,8 @@ export interface components {
         };
         /** PatchAgentRequest */
         PatchAgentRequest: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
             agent_card_params?: components["schemas"]["AgentCard"];
             /** Agent Name */
             agent_name?: string;
