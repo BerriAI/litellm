@@ -462,6 +462,8 @@ class CallTypes(str, Enum):
     #########################################################
     create_video = "create_video"
     acreate_video = "acreate_video"
+    video_generation = "video_generation"
+    avideo_generation = "avideo_generation"
     avideo_retrieve = "avideo_retrieve"
     video_retrieve = "video_retrieve"
     avideo_content = "avideo_content"
