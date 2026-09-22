@@ -119,24 +119,30 @@ To reproduce the CI topology on a dedicated machine, `bash .github/e2e-stack/up.
 
 ### Secret manager lanes
 
-`key_management_system` is global to the proxy, so the `secret_manager/` tests run once per backend, each against its own proxy. `E2E_SECRET_MANAGER` opts in and names the backend (a key of `secret_backends.BACKENDS`). The proxy boots from `gateway/secret_manager_<system>_ci_config.yml`, and the tests reach the same manager through that backend's `SecretStore`. The managers are enterprise features, so the proxy needs a license. For `hashicorp_vault`:
+`key_management_system` is global to the proxy, so the `secret_manager/` tests run once per backend, each against its own proxy. The backends are `hashicorp_vault` and `cyberark` (CyberArk Conjur). `E2E_SECRET_MANAGER` opts in and names the backend (a key of `secret_backends.BACKENDS`). The proxy boots from `gateway/secret_manager_<system>_ci_config.yml`, and the tests reach the same manager through that backend's `SecretStore`. The managers are enterprise features, so the proxy needs a license. `secret_manager/backend.sh` runs any backend in Docker and writes its env, so every lane runs the same way locally:
 
 ```bash
-docker run --rm -d --name e2e-vault -p 8200:8200 --cap-add IPC_LOCK -e VAULT_DEV_ROOT_TOKEN_ID=e2e-dev-root hashicorp/vault:1.20
-env -u OPENAI_API_KEY HCP_VAULT_ADDR=http://127.0.0.1:8200 HCP_VAULT_TOKEN=e2e-dev-root LITELLM_LICENSE=... \
-  LITELLM_MASTER_KEY=sk-1234 DATABASE_URL=... uv run litellm --config tests/e2e/gateway/secret_manager_hashicorp_vault_ci_config.yml --port 4000
-E2E_SECRET_MANAGER=hashicorp_vault E2E_VAULT_ADDR=http://127.0.0.1:8200 E2E_VAULT_TOKEN=e2e-dev-root OPENAI_API_KEY=... \
-  uv run --group e2e-dev pytest tests/e2e/secret_manager/ -v
+bash tests/e2e/secret_manager/backend.sh up cyberark
+(set -a; . /tmp/litellm-e2e-secret-manager/cyberark/proxy.env; set +a; env -u OPENAI_API_KEY LITELLM_LICENSE=... \
+  LITELLM_MASTER_KEY=sk-1234 DATABASE_URL=... uv run litellm --config tests/e2e/gateway/secret_manager_cyberark_ci_config.yml --port 4000)
+(set -a; . /tmp/litellm-e2e-secret-manager/cyberark/tests.env; set +a; OPENAI_API_KEY=... \
+  uv run --group e2e-dev pytest tests/e2e/secret_manager/ -v)
+bash tests/e2e/secret_manager/backend.sh down cyberark
 ```
 
-Keep `OPENAI_API_KEY` out of the proxy's environment. The tests copy the runner's key into the manager under a fresh name per test, so a passing call proves the key came through the manager rather than the `os.environ` fallback `get_secret` takes when the manager errors
+`E2E_SECRET_MANAGER_PORT` moves the manager off its usual port (8200 for Vault, 8080 for Conjur), and `E2E_SECRET_MANAGER_DIR` moves the env files. Keep that directory private, because both files hold a working admin credential. Keep `OPENAI_API_KEY` out of the proxy's environment. The tests copy the runner's key into the manager under a fresh name per test, so a passing call proves the key came through the manager rather than the `os.environ` fallback `get_secret` takes when the manager errors
+
+A backend declares what it supports in its `SecretBackend.capabilities`, and a test that needs something not every backend does carries `@pytest.mark.requires_capability(...)`, so it is deselected, not failed or skipped, on the lanes that lack it. CyberArk has no `deletes_stored_keys`, because the proxy's delete answers `not_supported` and Conjur keeps the key, so the delete test runs only on the Vault lane
 
 To add a backend, leave the tests and markers alone and add:
 
-1. `secret_manager/secret_store_<system>.py`: a `SecretStore` (`write`, `read` returning None when absent, idempotent `destroy`) over the manager's own API through `e2e_http`'s external helpers, read from `E2E_<SYSTEM>_*` env vars, and a `SecretBackend` whose `system` is the litellm `KeyManagementSystem` value and whose `capabilities` lists what it supports (a backend without `deletes_stored_keys`, such as CyberArk, has the delete test deselected rather than failed)
+1. `secret_manager/secret_store_<system>.py`: a `SecretStore` (`write`, `read` returning None when absent, idempotent `destroy`) over the manager's own API through `e2e_http`'s external helpers, read from `E2E_<SYSTEM>_*` env vars, and a `SecretBackend` whose `system` is the litellm `KeyManagementSystem` value and whose `capabilities` lists what it supports
 2. its entry in `secret_backends.BACKENDS`
-3. `gateway/secret_manager_<system>_ci_config.yml`, a copy of the Vault one with only `key_management_system` changed; `test_secret_backends.py` checks it
-4. a CI step that runs the manager as a sidecar, gives the proxy its credentials and license, and sets `E2E_SECRET_MANAGER=<system>` plus the store's env vars on the runner
+3. `gateway/secret_manager_<system>_ci_config.yml`, a copy of an existing lane's with only `key_management_system` changed
+4. an `up_<system>` function in `secret_manager/backend.sh` that starts the manager and writes `proxy.env` and `tests.env`
+5. a CI step that runs `backend.sh up <system>` (or the same containers as sidecars), boots the proxy with `proxy.env` and a license, and runs pytest with `tests.env`
+
+`test_secret_backends.py` checks that the registry, the lane configs and `backend.sh` agree, so a backend missing any of steps 1 to 4 fails without a live stack
 
 ### Record and replay
 

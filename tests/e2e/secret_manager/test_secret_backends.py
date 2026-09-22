@@ -1,9 +1,11 @@
 """Markerless harness checks for the secret manager backend registry: every
 registered backend has a lane config that boots the proxy against that same
-backend with the settings the tests assume, so drift fails without a live stack."""
+backend with the settings the tests assume, and backend.sh can boot it, so drift
+fails without a live stack."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Final
 
@@ -16,7 +18,9 @@ from secret_backends import BACKENDS, selected_backend
 from secret_store import SecretBackend
 from test_secret_manager_e2e import VIRTUAL_KEY_PREFIX
 
-E2E_ROOT: Final = Path(__file__).resolve().parent.parent
+SUITE_DIR: Final = Path(__file__).resolve().parent
+E2E_ROOT: Final = SUITE_DIR.parent
+BACKEND_SCRIPT: Final = SUITE_DIR / "backend.sh"
 
 
 class KeyManagementSettings(BaseModel):
@@ -48,15 +52,24 @@ def test_lane_config_boots_the_proxy_against_its_backend(backend: SecretBackend)
     assert settings.key_management_settings.prefix_for_stored_virtual_keys == VIRTUAL_KEY_PREFIX
 
 
+def test_backend_script_boots_exactly_the_registered_backends() -> None:
+    booted: Final = set(re.findall(r"^up_(\w+)\(\) \{", BACKEND_SCRIPT.read_text(), flags=re.MULTILINE))
+
+    assert booted == set(BACKENDS), f"backend.sh boots {sorted(booted)}, the registry has {sorted(BACKENDS)}"
+
+
 @pytest.mark.parametrize("system", ["", "not_a_secret_manager"])
 def test_unknown_backend_fails_naming_the_known_ones(monkeypatch: pytest.MonkeyPatch, system: str) -> None:
     monkeypatch.setenv(SECRET_MANAGER_OPT_IN_ENV, system)
 
-    with pytest.raises(pytest.fail.Exception, match="hashicorp_vault"):
+    with pytest.raises(pytest.fail.Exception) as failure:
         selected_backend()
 
+    assert all(known in str(failure.value) for known in BACKENDS), str(failure.value)
 
-def test_named_backend_is_selected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(SECRET_MANAGER_OPT_IN_ENV, " hashicorp_vault ")
 
-    assert selected_backend() is BACKENDS["hashicorp_vault"]
+@pytest.mark.parametrize("system", BACKENDS.keys())
+def test_named_backend_is_selected(monkeypatch: pytest.MonkeyPatch, system: str) -> None:
+    monkeypatch.setenv(SECRET_MANAGER_OPT_IN_ENV, f" {system} ")
+
+    assert selected_backend() is BACKENDS[system]

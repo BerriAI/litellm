@@ -39,9 +39,8 @@ DEFAULT_MOUNT: Final = "secret"
 SYSTEM: Final = "hashicorp_vault"
 
 _START_HINT: Final = (
-    "Start one with `docker run --rm -d -p 8200:8200 -e VAULT_DEV_ROOT_TOKEN_ID=<token> hashicorp/vault`, "
-    f"boot the proxy from gateway/secret_manager_{SYSTEM}_ci_config.yml with HCP_VAULT_ADDR / HCP_VAULT_TOKEN "
-    f"pointing at it, and set {VAULT_ADDR_ENV} / {VAULT_TOKEN_ENV} for the tests"
+    f"Start one with `bash tests/e2e/secret_manager/backend.sh up {SYSTEM}`, which writes the env for "
+    f"the proxy (booted from gateway/secret_manager_{SYSTEM}_ci_config.yml) and for the tests"
 )
 
 
