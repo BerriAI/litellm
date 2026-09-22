@@ -6,13 +6,15 @@ import { createMcpServer, deleteMcpServerByName, listUpstreamToolNames, openMcpT
 // points at an unreachable URL on purpose.
 //
 // This spec makes read-only network calls to DeepWiki's public MCP server: from the proxy, and from
-// the test runner to learn which tools the upstream advertises today, so a tool rename on their side
-// cannot fail the suite. It needs no credentials, so there is no secret to leak from a public repo.
+// the test runner to learn which tools the upstream advertises today, so the tool list is never
+// pinned here. It needs no credentials, so there is no secret to leak from a public repo.
 //
 // A DeepWiki outage turns this red for something that is not a litellm regression. That is left
 // visible rather than auto-skipped: skipping on connection trouble also skips when the proxy's own
 // MCP client breaks, which is the regression this exists to catch. E2E_SKIP_EXTERNAL_MCP=1 opts out.
 const MCP_SERVER_URL = "https://mcp.deepwiki.com/mcp";
+// Read from DeepWiki's tools/list on 2026-09-22. One name has to be pinned so the call-tool test can
+// fill a known input (repoName); the listing test checks it is still advertised before the UI checks.
 const TOOL_NAME = "read_wiki_structure";
 const TOOL_ARG_REPO = "BerriAI/litellm";
 

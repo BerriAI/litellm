@@ -5,7 +5,6 @@ import { navigateToPage } from "./navigation";
 import { Page } from "../fixtures/pages";
 import { masterKey } from "./traffic";
 
-/** Lists the tool names an upstream MCP server advertises, asked directly rather than through the proxy. */
 export async function listUpstreamToolNames(url: string): Promise<string[]> {
   const client = new Client({ name: "litellm-ui-e2e", version: "0.0.0" });
   await client.connect(new StreamableHTTPClientTransport(new URL(url)));
