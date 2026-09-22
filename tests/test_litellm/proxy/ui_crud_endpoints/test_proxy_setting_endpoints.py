@@ -3877,14 +3877,31 @@ class TestSyncUiSettingsToGeneralSettings:
         assert general_settings["forward_client_headers_to_llm_api"] is True
         assert general_settings.source("forward_client_headers_to_llm_api") == "db"
 
-    def test_every_runtime_flag_resolves_from_the_ui_settings_row(self):
-        """A flag missing from the settings rules resolves against the wrong stored row and never reaches a reader."""
-        from litellm.proxy.config_resolvers.settings_rules import rule_for
-        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import _RUNTIME_GENERAL_SETTINGS_FLAGS
+    def test_every_runtime_flag_reaches_a_reader_once_applied(self, monkeypatch):
+        """A flag the settings rules do not route to the ui_settings row is stored but never read back."""
+        from litellm.proxy import proxy_server
+        from litellm.proxy.config_resolvers import SettingsStore
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
+            _RUNTIME_GENERAL_SETTINGS_FLAGS,
+            apply_runtime_general_settings_flags,
+        )
 
-        wrong_row = [key for key in _RUNTIME_GENERAL_SETTINGS_FLAGS if rule_for("general_settings", key).db_row != "ui_settings"]
+        general_settings = SettingsStore("general_settings")
+        general_settings.load_yaml({})
+        monkeypatch.setattr(proxy_server, "general_settings", general_settings)
 
-        assert wrong_row == []
+        stored = {
+            key: (["tpm_limit"] if key == TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING else True)
+            for key in _RUNTIME_GENERAL_SETTINGS_FLAGS
+        }
+        assert stored
+
+        apply_runtime_general_settings_flags(stored)
+
+        read_back = {key: general_settings.get(key) for key in stored}
+
+        assert read_back == stored
 
     def test_applied_runtime_flags_cannot_override_the_config_file(self, monkeypatch):
         from litellm.proxy import proxy_server
