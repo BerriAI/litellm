@@ -122,6 +122,9 @@
     "tests/integration/spend/test_cache_and_quota.py::test_different_system_messages_do_not_share_a_cached_response": [
       "quota_management.response_cache.system_messages_partition_cache_identity"
     ],
+    "tests/integration/spend/test_passthrough_budget_reservation.py::test_repeated_gemini_passthrough_calls_stay_served_while_key_spend_is_below_max_budget": [
+      "spend.budget_reservation.gemini_passthrough_success_releases_reservation_from_spend_counter"
+    ],
     "tests/integration/database/test_transaction_atomicity.py::test_access_group_second_key_constraint_failure_rolls_back_all_writes": [
       "other.database.access_group.failed_second_write_rolls_back_first"
     ],
