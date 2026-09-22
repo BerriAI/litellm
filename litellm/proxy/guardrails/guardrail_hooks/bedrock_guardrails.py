@@ -624,12 +624,61 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # Unrecognized inputs reach the decoder so the guardrail fails closed.
         return value
 
+    def _refuse_unscannable_image_ref(self, image_url: str) -> None:
+        """Refuse an image ref that is cheaply known to be unscannable.
+
+        Remote urls fail on the same substring test `BedrockImageProcessor.process_image_async`
+        uses to decide to fetch; malformed refs and non png/jpeg data URIs fail without paying
+        the base64 decode. Callers that can scan run the full builder after this returns
+        """
+        if "http://" in image_url or "https://" in image_url:
+            self._handle_unscannable_attachment(reason="remote image URLs are not supported")
+        normalized: Final = self._normalize_image_input(image_url)
+        if not normalized.startswith("data:"):
+            self._handle_unscannable_attachment(reason="image content could not be read")
+        header, _, payload = normalized.partition(",")
+        if ";base64" not in header or not payload:
+            self._handle_unscannable_attachment(reason="image content could not be read: malformed data uri")
+        if header.removeprefix("data:").split(";")[0] not in ("image/png", "image/jpeg"):
+            self._handle_unscannable_attachment(reason="attachment is not a png/jpeg image")
+
+    def _refuse_unscannable_part(self, part: object) -> None:
+        """The refusal half of `_build_input_content_item`, without any image decode."""
+        if not isinstance(part, dict):
+            return
+        part_map: Final = cast(Mapping[str, object], part)  # cast-ok: narrowed to dict on the line above
+        part_type: Final = part_map.get("type")
+        if part_type in ("file", "document"):
+            self._handle_unscannable_attachment(reason="a document/file attachment cannot be scanned")
+        if part_type == "image_url":
+            image_url: Final = self._get_image_url(item=part_map)
+            if image_url is None:
+                self._handle_unscannable_attachment(reason="image part carries no inline url")
+            self._refuse_unscannable_image_ref(image_url=image_url)
+        if part_type == "image":
+            image_ref: Final = self._anthropic_base64_image_ref(part_map)
+            if image_ref is None:
+                self._handle_unscannable_attachment(
+                    reason="an image source without inline base64 data cannot be scanned"
+                )
+            self._refuse_unscannable_image_ref(image_url=image_ref)
+
+    def _refuse_unscannable_leaf_parts(self, messages: "Sequence[AllMessageValues]") -> None:
+        """Raise the attachment refusal for any leaf part the guardrail cannot scan.
+
+        Runs on the unscoped message list so an attachment hiding in a message role
+        scoping drops is still refused; the ApplyGuardrail scan itself stays scoped.
+        Refusals only, so image parts get the cheap checks, never the base64 decode
+        """
+        for message in messages:
+            for leaf in _content_leaf_parts(message.get("content")):
+                self._refuse_unscannable_part(part=leaf)
+
     async def _build_image_content_item(self, image_url: str) -> BedrockContentItem:
         """Refuse remote urls with the same substring test
         `BedrockImageProcessor.process_image_async` uses to decide to fetch, so nothing
         it would download slips past."""
-        if "http://" in image_url or "https://" in image_url:
-            self._handle_unscannable_attachment(reason="remote image URLs are not supported")
+        self._refuse_unscannable_image_ref(image_url=image_url)
 
         try:
             block: Final = await BedrockImageProcessor.process_image_async(image_url=image_url, format=None)
@@ -2861,7 +2910,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # A file or unscannable image is refused even when role scoping below drops
         # its message from the scan set; the ApplyGuardrail call itself stays scoped
-        await asyncio.gather(*(self._build_input_content_items(message=m) for m in new_messages))
+        self._refuse_unscannable_leaf_parts(messages=new_messages)
 
         filter_result: Final = self._prepare_guardrail_messages_for_role(messages=new_messages)
         filtered_messages: Final = filter_result.payload_messages

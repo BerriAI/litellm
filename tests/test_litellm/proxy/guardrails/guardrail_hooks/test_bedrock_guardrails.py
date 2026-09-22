@@ -1126,6 +1126,58 @@ async def test_during_call_hook_refuses_attachment_in_scoped_out_message():
 
 
 @pytest.mark.asyncio
+async def test_during_call_hook_refuses_scoped_out_parts_without_decoding_images():
+    """The unscoped refusal pass must never pay the image decode cost.
+
+    A scoped-out message carrying a scannable png and a pdf gets refused on the
+    pdf, and ``BedrockImageProcessor.process_image_async`` is never invoked.
+    """
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-scoped-out-no-decode",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+        experimental_use_latest_role_message_only=True,
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="}},
+                    {
+                        "type": "file",
+                        "file": {"filename": "ssn.pdf", "file_data": "data:application/pdf;base64,JVBERi0="},
+                    },
+                ],
+            },
+            {"role": "user", "content": "what is 2+2"},
+        ],
+    }
+
+    with (
+        patch(
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.process_image_async",
+            new_callable=AsyncMock,
+            side_effect=AssertionError("image decode reached the refusal pass"),
+        ) as mock_decode,
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_decode.assert_not_called()
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_make_apply_guardrail_request_skips_output_scan_without_response_text():
     """A tool-calls-only assistant response yields no OUTPUT content, so it must not be posted."""
     guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
