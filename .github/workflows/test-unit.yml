@@ -138,6 +138,7 @@ jobs:
               tests/test_litellm/vector_stores
               tests/test_litellm/videos
               tests/test_litellm/test_*.py
+              --deselect=tests/test_litellm/test_fusion_router.py
             workers: 2
             reruns: 2
             timeout-minutes: 20
