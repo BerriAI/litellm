@@ -300,7 +300,7 @@ def test_audio_speech_http_error_preserves_detail(client, auth_as, patched_speec
     with auth_as():
         response = client.post(path, json=payload)
     assert response.status_code == 422
-    assert response.json()["error"]["message"] == "Provider rejected the speech request."
+    assert response.json()["detail"] == "Provider rejected the speech request."
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
