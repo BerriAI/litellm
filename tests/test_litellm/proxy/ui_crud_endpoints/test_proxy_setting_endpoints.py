@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Final
 
 import pytest
 from fastapi.testclient import TestClient
@@ -88,6 +89,16 @@ def mock_auth():
     app.dependency_overrides[user_api_key_auth] = mock_user_api_key_auth
     yield
     app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.fixture(autouse=True)
+def fresh_settings_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.config_resolvers.settings_store import SettingsStore
+
+    store: Final = SettingsStore("general_settings")
+    monkeypatch.setattr(proxy_server.proxy_config, "settings", store)
+    monkeypatch.setattr(proxy_server, "general_settings", store)
 
 
 class TestProxySettingEndpoints:
@@ -3881,6 +3892,31 @@ class TestTeamAdminEditableTeamFieldsSetting:
         assert "tpm_limit" in field_schema["items"]["enum"]
         assert "projects" in field_schema["items"]["enum"]
 
+    @pytest.mark.parametrize(("stored", "patched"), [(["tpm_limit"], []), (["rpm_limit"], ["max_budget"])])
+    def test_get_reports_its_own_db_row_whatever_an_earlier_test_patched(self, monkeypatch, stored, patched):
+        """A booted proxy keeps its runtime settings in one shared store. Each case PATCHes a list into
+        that store, so whichever case ran second used to read the other's list instead of its own DB row."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy import proxy_server
+
+        mock_prisma = self._as_proxy_admin(monkeypatch)
+        mock_db_record = MagicMock()
+        mock_db_record.ui_settings = {"team_admin_editable_team_fields": stored}
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=mock_db_record)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+        try:
+            fetched = client.get("/get/ui_settings")
+            proxy_server._bind_general_settings_store(proxy_server.proxy_config.settings)
+            response = client.patch("/update/ui_settings", json={"team_admin_editable_team_fields": patched})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert fetched.json()["values"]["team_admin_editable_team_fields"] == stored
+        assert response.status_code == 200
+        assert proxy_server.general_settings["team_admin_editable_team_fields"] == patched
+
 
 class TestSyncUiSettingsToGeneralSettings:
     """The DB re-read each pod runs on startup and on every config reload."""
@@ -3975,3 +4011,4 @@ class TestSyncUiSettingsToGeneralSettings:
 
         assert general_settings["forward_client_headers_to_llm_api"] is False
         assert general_settings.source("forward_client_headers_to_llm_api") == "config"
+
