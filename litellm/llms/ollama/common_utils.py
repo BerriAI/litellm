@@ -1,9 +1,19 @@
+from collections.abc import Mapping
 from typing import Any, Final
 
 import httpx
 
 from litellm import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+
+def think_from_reasoning_effort(model: str, reasoning_effort: object) -> str | bool | None:
+    effort: Final = reasoning_effort.get("effort") if isinstance(reasoning_effort, Mapping) else reasoning_effort
+    if not isinstance(effort, str):
+        return None
+    if model.startswith("gpt-oss"):
+        return effort
+    return effort in {"low", "medium", "high"}
 
 
 class OllamaError(BaseLLMException):
