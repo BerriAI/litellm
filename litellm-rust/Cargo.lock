@@ -3073,6 +3073,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-python-compat"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "hex",
+ "num-bigint 0.4.8",
+ "num-traits",
+ "rstest",
+ "serde",
+ "serde-pickle",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "litellm-secrets"
 version = "0.1.0"
 dependencies = [
