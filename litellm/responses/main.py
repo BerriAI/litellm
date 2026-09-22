@@ -1219,14 +1219,19 @@ def responses(
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
-        effective_extra_headers: Final = (
-            add_provider_affinity_header(
-                headers=extra_headers or MappingProxyType({}),
-                litellm_params=litellm_params,
+        try:
+            effective_extra_headers: Final = (
+                add_provider_affinity_header(
+                    headers=extra_headers or MappingProxyType({}),
+                    litellm_params=litellm_params,
+                )
+                if litellm_params.provider_affinity_header is not None
+                else extra_headers
             )
-            if litellm_params.provider_affinity_header is not None
-            else extra_headers
-        )
+        except ValueError as affinity_error:
+            raise litellm.BadRequestError(
+                message=str(affinity_error), model=model, llm_provider=custom_llm_provider
+            ) from affinity_error
 
         #########################################################
         # MOCK RESPONSE LOGIC

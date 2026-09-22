@@ -5653,18 +5653,23 @@ def completion(
             },
         )
         if litellm_params.get("provider_affinity_header") is not None:
-            headers = add_provider_affinity_header(
-                headers=headers or litellm.headers or MappingProxyType({}),
-                litellm_params=MappingProxyType(
-                    {
-                        "provider_affinity_header": litellm_params["provider_affinity_header"],
-                        "litellm_session_id": kwargs.get("litellm_session_id"),
-                        "session_id": kwargs.get("session_id"),
-                        "metadata": metadata,
-                        "litellm_metadata": kwargs.get("litellm_metadata"),
-                    }
-                ),
-            )
+            try:
+                headers = add_provider_affinity_header(
+                    headers=headers or litellm.headers or MappingProxyType({}),
+                    litellm_params=MappingProxyType(
+                        {
+                            "provider_affinity_header": litellm_params["provider_affinity_header"],
+                            "litellm_session_id": kwargs.get("litellm_session_id"),
+                            "session_id": kwargs.get("session_id"),
+                            "metadata": metadata,
+                            "litellm_metadata": kwargs.get("litellm_metadata"),
+                        }
+                    ),
+                )
+            except ValueError as affinity_error:
+                raise litellm.BadRequestError(
+                    message=str(affinity_error), model=model, llm_provider=custom_llm_provider
+                ) from affinity_error
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
             user=user,

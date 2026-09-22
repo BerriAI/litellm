@@ -278,6 +278,63 @@ async def test_dynamic_provider_receives_affinity_header_for_async_responses(str
         assert getattr(response, "model", None) == "test-model"
 
 
+def test_control_characters_in_session_id_are_a_bad_request_for_chat():
+    from openai import OpenAI
+
+    JSONProviderRegistry._providers = {"db_only_provider": _provider()}
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_chat_response_payload())
+
+    client = OpenAI(
+        api_key="test-key",
+        base_url="https://db-only.example/v1",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    try:
+        with pytest.raises(litellm.BadRequestError, match="HTTP header control characters"):
+            litellm.completion(
+                model="db_only_provider/test-model",
+                messages=[{"role": "user", "content": "hello"}],
+                api_key="test-key",
+                client=client,
+                litellm_session_id="session\nsplit",
+                provider_affinity_header="X-Conversation-Id",
+            )
+    finally:
+        client.close()
+
+    assert requests == []
+
+
+def test_control_characters_in_session_id_are_a_bad_request_for_responses():
+    JSONProviderRegistry._providers = {"db_only_provider": _provider(responses=True)}
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_responses_payload())
+
+    http_client = httpx.Client(transport=httpx.MockTransport(respond))
+    try:
+        with pytest.raises(litellm.BadRequestError, match="HTTP header control characters"):
+            litellm.responses(
+                model="db_only_provider/test-model",
+                input="hello",
+                api_key="test-key",
+                litellm_session_id="session\nsplit",
+                provider_affinity_header="X-Conversation-Id",
+                litellm_logging_obj=MagicMock(),
+                client=HTTPHandler(client=http_client),
+            )
+    finally:
+        http_client.close()
+
+    assert requests == []
+
+
 def test_builtin_provider_receives_affinity_header():
     from openai import OpenAI
 
