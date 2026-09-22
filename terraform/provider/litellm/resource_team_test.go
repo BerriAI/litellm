@@ -435,13 +435,6 @@ func TestTeamLimitTypesSentOnCreateOnly(t *testing.T) {
 	}
 }
 
-// handleResponse is shared by several resources (team, access_group,
-// unified_access_group, agent, budget, guardrail, organization, prompt,
-// search_tool, tag, team_block, key_block, team_member(_add), user), but only
-// access_group/unified_access_group's create actually hits a non-200 success
-// status in practice: POST /v1/access_group (and its /v1/unified_access_group
-// alias) answers 201, same shape as the mcp_server/model/key/organization_member
-// bug already fixed for handleAPIResponse/handleMCPAPIResponse/sendRequest.
 func TestHandleResponseAcceptsFullSuccessRange(t *testing.T) {
 	tests := []struct {
 		name       string
