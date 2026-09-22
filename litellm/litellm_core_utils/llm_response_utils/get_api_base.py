@@ -3,8 +3,32 @@ from typing import Final
 import litellm
 from litellm import verbose_logger
 
-from ...litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from ...litellm_core_utils.get_llm_provider_logic import (
+    declared_authenticating_provider,
+    get_llm_provider,
+)
 from ...types.router import LiteLLM_Params
+
+
+def _api_base_without_login(provider: str) -> str | None:
+    match provider:
+        case "github_copilot":
+            return litellm.GithubCopilotConfig().api_base_without_login()
+        case "chatgpt":
+            return litellm.ChatGPTConfig().api_base_without_login()
+        case _:
+            return None
+
+
+def _provider_default_api_base(model: str, custom_llm_provider: str | None, stream: bool) -> str | None:
+    match custom_llm_provider:
+        case "gemini":
+            action: Final = "streamGenerateContent" if stream else "generateContent"
+            return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:{action}"
+        case "openai":
+            return "https://api.openai.com"
+        case _:
+            return None
 
 
 def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | None:
@@ -42,6 +66,9 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
 
     if litellm.model_alias_map and model in litellm.model_alias_map:
         model = litellm.model_alias_map[model]
+    declared: Final = declared_authenticating_provider(model, _optional_params.custom_llm_provider)
+    if declared is not None:
+        return _api_base_without_login(declared)
     try:
         (
             model,
@@ -83,16 +110,4 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
                 _api_base = f"{_optional_params.vertex_location}-aiplatform.googleapis.com/v1/projects/{_optional_params.vertex_project}/locations/{_optional_params.vertex_location}/publishers/google/models/{model}:generateContent"
         return _api_base
 
-    if custom_llm_provider is None:
-        return None
-
-    if custom_llm_provider == "gemini":
-        if stream:
-            _api_base = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent"
-        else:
-            _api_base = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        return _api_base
-    elif custom_llm_provider == "openai":
-        _api_base = "https://api.openai.com"
-        return _api_base
-    return None
+    return _provider_default_api_base(model, custom_llm_provider, stream)
