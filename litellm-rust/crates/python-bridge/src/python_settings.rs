@@ -25,6 +25,7 @@ pub(crate) enum Adapter {
     StringCollection,
     HostCollection,
     SslVerifyInput,
+    PythonBinding,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,7 +132,7 @@ impl PythonSettings {
     pub(crate) fn version(self) -> u32 {
         match self {
             Self::Http | Self::UrlPolicy | Self::ProviderDefaults => 1,
-            Self::SecretManager => 2,
+            Self::SecretManager => 3,
         }
     }
 

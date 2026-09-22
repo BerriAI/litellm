@@ -49,6 +49,8 @@ class SecretManager:
     aws_web_identity_token: object
     aws_sts_endpoint: object
     replica_regions: object
+    client: object
+    settings_object: object
 
 
 def warn(message: str) -> None:
@@ -88,6 +90,8 @@ def secret_manager() -> SecretManager:
         aws_web_identity_token=settings.aws_web_identity_token,
         aws_sts_endpoint=settings.aws_sts_endpoint,
         replica_regions=settings.replica_regions,
+        client=litellm.secret_manager_client,
+        settings_object=configured_settings,
     )
 
 

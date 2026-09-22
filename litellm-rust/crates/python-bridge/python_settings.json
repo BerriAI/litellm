@@ -139,7 +139,7 @@
     }
   },
   "secret_manager": {
-    "version": 2,
+    "version": 3,
     "fields": {
       "system": {
         "adapter": "FalsyOptionalString",
@@ -272,6 +272,28 @@
         "shapes": [
           "none",
           "list"
+        ],
+        "unsupported_live": null
+      },
+      "client": {
+        "adapter": "PythonBinding",
+        "required": true,
+        "precedence": "module_global",
+        "sensitive": false,
+        "shapes": [
+          "none",
+          "object"
+        ],
+        "unsupported_live": null
+      },
+      "settings_object": {
+        "adapter": "PythonBinding",
+        "required": true,
+        "precedence": "module_global",
+        "sensitive": false,
+        "shapes": [
+          "none",
+          "object"
         ],
         "unsupported_live": null
       }

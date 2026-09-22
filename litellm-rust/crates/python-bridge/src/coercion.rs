@@ -343,6 +343,11 @@ impl<'py> Field<'py> {
         Err(self.invalid("a Boolean, Boolean string, CA path, or None"))
     }
 
+    /// A live Python object whose behavior stays in Python; `None` means no binding.
+    pub(crate) fn python_binding(&self) -> Option<Py<PyAny>> {
+        (!self.value.is_none()).then(|| self.value.clone().unbind())
+    }
+
     #[cfg_attr(
         not(test),
         expect(

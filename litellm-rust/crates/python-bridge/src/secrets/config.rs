@@ -1,6 +1,11 @@
+use std::sync::Arc;
+
+use litellm_secrets::{SecretManager, SecretManagerState};
 use litellm_secrets_types::{AccessMode, KeyManagementSettings, KeyManagementSystem, SecretValue};
+use pyo3::prelude::*;
 use serde_json::Value;
 
+use super::callback::PythonSecretManager;
 use crate::{
     coercion::{Field, ProjectionError},
     python_settings::{Adapter, PythonSettings, SettingSpec, Snapshot},
@@ -37,6 +42,10 @@ pub(crate) const AWS_WEB_IDENTITY_TOKEN: SettingSpec = aws("aws_web_identity_tok
 pub(crate) const AWS_STS_ENDPOINT: SettingSpec = aws("aws_sts_endpoint");
 pub(crate) const REPLICA_REGIONS: SettingSpec =
     secret_manager("replica_regions", Adapter::StringCollection).shapes(&["none", "list"]);
+pub(crate) const CLIENT: SettingSpec =
+    secret_manager("client", Adapter::PythonBinding).shapes(&["none", "object"]);
+pub(crate) const SETTINGS_OBJECT: SettingSpec =
+    secret_manager("settings_object", Adapter::PythonBinding).shapes(&["none", "object"]);
 
 #[cfg(test)]
 pub(crate) const SECRET_MANAGER_SPECS: &[SettingSpec] = &[
@@ -56,12 +65,50 @@ pub(crate) const SECRET_MANAGER_SPECS: &[SettingSpec] = &[
     AWS_WEB_IDENTITY_TOKEN,
     AWS_STS_ENDPOINT,
     REPLICA_REGIONS,
+    CLIENT,
+    SETTINGS_OBJECT,
 ];
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// `litellm.secret_manager_client` as the bridge classifies it.
+#[derive(Debug)]
+pub(crate) enum SecretManagerClient {
+    /// `None`: reads come from the process environment.
+    Local,
+    /// A custom manager, legacy compatible client, or manually assigned SDK client that keeps
+    /// executing in Python.
+    PythonCallback(Py<PyAny>),
+}
+
+/// One operation-local capture of the secret manager globals, taken while attached to Python.
+#[derive(Debug)]
 pub(crate) struct SecretManagerSnapshot {
+    pub(crate) client: SecretManagerClient,
     pub(crate) system: Option<KeyManagementSystem>,
+    /// Typed settings that drive native routing: access mode and hosted keys.
     pub(crate) settings: KeyManagementSettings,
+    /// The original `KeyManagementSettings` object, handed back to Python callbacks unchanged.
+    pub(crate) settings_object: Option<Py<PyAny>>,
+}
+
+impl SecretManagerSnapshot {
+    pub(crate) fn into_state(self) -> Arc<SecretManagerState> {
+        match self.client {
+            SecretManagerClient::Local => Arc::new(SecretManagerState::default()),
+            SecretManagerClient::PythonCallback(client) => Arc::new(SecretManagerState::new(
+                SecretManager::External(Arc::new(PythonSecretManager::new(
+                    client,
+                    self.system,
+                    self.settings_object,
+                ))),
+                self.settings,
+            )),
+        }
+    }
+}
+
+/// Reads and projects the secret manager settings group in one attached operation.
+pub(crate) fn read(py: Python<'_>) -> PyResult<SecretManagerSnapshot> {
+    Ok(project(&PythonSettings::SecretManager.read(py)?)?)
 }
 
 pub(crate) fn project(snapshot: &Snapshot<'_>) -> Result<SecretManagerSnapshot, ProjectionError> {
@@ -96,7 +143,16 @@ pub(crate) fn project(snapshot: &Snapshot<'_>) -> Result<SecretManagerSnapshot, 
         replica_regions: collection(&REPLICA_REGIONS)?,
         ..KeyManagementSettings::default()
     };
-    Ok(SecretManagerSnapshot { system, settings })
+    let client = match snapshot.field(&CLIENT)?.python_binding() {
+        None => SecretManagerClient::Local,
+        Some(client) => SecretManagerClient::PythonCallback(client),
+    };
+    Ok(SecretManagerSnapshot {
+        client,
+        system,
+        settings,
+        settings_object: snapshot.field(&SETTINGS_OBJECT)?.python_binding(),
+    })
 }
 
 fn parse_optional_system(
@@ -126,7 +182,7 @@ mod tests {
         types::{PyDict, PyTuple},
     };
 
-    use super::project;
+    use super::{SecretManagerClient, project};
     use crate::python_settings::PythonSettings;
 
     fn snapshot<'py>(
@@ -136,7 +192,26 @@ mod tests {
         store_virtual_keys: Bound<'py, PyAny>,
         hosted_keys: Bound<'py, PyAny>,
     ) -> crate::python_settings::Snapshot<'py> {
+        snapshot_with_client(
+            py,
+            system,
+            access_mode,
+            store_virtual_keys,
+            hosted_keys,
+            py.None().into_bound(py),
+        )
+    }
+
+    fn snapshot_with_client<'py>(
+        py: Python<'py>,
+        system: &str,
+        access_mode: &str,
+        store_virtual_keys: Bound<'py, PyAny>,
+        hosted_keys: Bound<'py, PyAny>,
+        client: Bound<'py, PyAny>,
+    ) -> crate::python_settings::Snapshot<'py> {
         let locals = PyDict::new(py);
+        locals.set_item("client", client).unwrap();
         locals.set_item("system", system).unwrap();
         locals.set_item("access_mode", access_mode).unwrap();
         locals
@@ -166,6 +241,8 @@ class SecretManager:
     aws_web_identity_token: object
     aws_sts_endpoint: object
     replica_regions: object
+    client: object
+    settings_object: object
 
 root = SimpleNamespace(secret_manager=SecretManager(
     system=system,
@@ -184,6 +261,8 @@ root = SimpleNamespace(secret_manager=SecretManager(
     aws_web_identity_token=None,
     aws_sts_endpoint=None,
     replica_regions=None,
+    client=client,
+    settings_object=None,
 ))
 "#,
             Some(&locals),
@@ -244,6 +323,39 @@ root = SimpleNamespace(secret_manager=SecretManager(
             .unwrap_err();
             let error: PyErr = error.into();
             assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
+        });
+    }
+
+    #[test]
+    fn client_identity_selects_local_or_python_callback() {
+        Python::initialize();
+        Python::attach(|py| {
+            let falsy = false.into_pyobject(py).unwrap().to_owned().into_any();
+            let local = project(&snapshot(
+                py,
+                "local",
+                "read_only",
+                falsy.clone(),
+                PyTuple::empty(py).into_any(),
+            ))
+            .unwrap();
+            assert!(matches!(local.client, SecretManagerClient::Local));
+            assert!(local.settings_object.is_none());
+
+            let manager = py.eval(c"object()", None, None).unwrap();
+            let custom = project(&snapshot_with_client(
+                py,
+                "custom",
+                "read_only",
+                falsy,
+                PyTuple::empty(py).into_any(),
+                manager.clone(),
+            ))
+            .unwrap();
+            let SecretManagerClient::PythonCallback(client) = custom.client else {
+                panic!("a live client must stay a Python callback");
+            };
+            assert!(client.bind(py).is(&manager));
         });
     }
 }

@@ -124,7 +124,8 @@ def test_secret_manager_projects_custom_settings(monkeypatch: pytest.MonkeyPatch
         primary_secret_name="primary",
         aws_region_name="us-east-1",
     )
-    monkeypatch.setattr(litellm, "secret_manager_client", _VaultSecrets({"MISTRAL_API_KEY": "vault-key"}))
+    client: Final = _VaultSecrets({"MISTRAL_API_KEY": "vault-key"})
+    monkeypatch.setattr(litellm, "secret_manager_client", client)
     monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
     monkeypatch.setattr(litellm, "_key_management_settings", manager_settings)
 
@@ -145,6 +146,8 @@ def test_secret_manager_projects_custom_settings(monkeypatch: pytest.MonkeyPatch
         aws_web_identity_token=manager_settings.aws_web_identity_token,
         aws_sts_endpoint=manager_settings.aws_sts_endpoint,
         replica_regions=manager_settings.replica_regions,
+        client=client,
+        settings_object=manager_settings,
     )
 
 
@@ -178,6 +181,8 @@ def test_secret_manager_uses_key_management_defaults(monkeypatch: pytest.MonkeyP
         aws_web_identity_token=defaults.aws_web_identity_token,
         aws_sts_endpoint=defaults.aws_sts_endpoint,
         replica_regions=defaults.replica_regions,
+        client=None,
+        settings_object=None,
     )
 
 
