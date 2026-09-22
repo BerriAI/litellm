@@ -416,7 +416,7 @@ async def test_oso_image_query_model_takes_precedence_over_image_default() -> No
 
 
 @pytest.mark.asyncio
-async def test_oso_authorizes_cli_model_and_key_alias_used_for_dispatch() -> None:
+async def test_oso_speech_authorizes_cli_model_without_undispatched_key_alias() -> None:
     authorizer: Final = RecordingAuthorizer()
     request: Final = Request(
         scope={"type": "http", "method": "POST", "path": "/v1/audio/speech", "headers": (), "query_string": b""}
@@ -432,7 +432,47 @@ async def test_oso_authorizes_cli_model_and_key_alias_used_for_dispatch() -> Non
             oso_authorizer=authorizer,
         )
 
+    assert tuple(decision.resource_id for decision in authorizer.requests) == ("cli-model",)
+
+
+@pytest.mark.asyncio
+async def test_oso_chat_authorizes_key_alias_used_for_dispatch() -> None:
+    authorizer: Final = RecordingAuthorizer()
+    request: Final = Request(
+        scope={"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": (), "query_string": b""}
+    )
+
+    await _enforce_configured_oso_authorization(
+        user_api_key_auth_obj=UserAPIKeyAuth(user_id="user-alice", aliases={"body-model": "aliased-model"}),
+        request=request,
+        request_data={"model": "body-model"},
+        route="/v1/chat/completions",
+        general_settings=_enabled_settings(),
+        llm_router=None,
+        oso_authorizer=authorizer,
+    )
+
     assert tuple(decision.resource_id for decision in authorizer.requests) == ("aliased-model",)
+
+
+@pytest.mark.asyncio
+async def test_oso_image_generation_applies_global_but_not_key_alias() -> None:
+    authorizer: Final = RecordingAuthorizer()
+    request: Final = Request(
+        scope={"type": "http", "method": "POST", "path": "/v1/images/generations", "headers": (), "query_string": b""}
+    )
+    with patch.object(litellm, "model_alias_map", {"body-model": "global-alias"}):
+        await _enforce_configured_oso_authorization(
+            user_api_key_auth_obj=UserAPIKeyAuth(user_id="user-alice", aliases={"global-alias": "key-alias"}),
+            request=request,
+            request_data={"model": "body-model"},
+            route="/v1/images/generations",
+            general_settings=_enabled_settings(),
+            llm_router=None,
+            oso_authorizer=authorizer,
+        )
+
+    assert tuple(decision.resource_id for decision in authorizer.requests) == ("global-alias",)
 
 
 @pytest.mark.asyncio

@@ -236,7 +236,11 @@ def _configured_model(general_settings: Mapping[str, object], name: str) -> str 
     return value if isinstance(value, str) and value else None
 
 
-def _resolve_oso_model_alias(model: str, valid_token: UserAPIKeyAuth) -> str:
+def _resolve_oso_model_alias(model: str, valid_token: UserAPIKeyAuth, route: str) -> str:
+    if not route.endswith((*_OSO_COMPLETION_MODEL_ROUTE_SUFFIXES, *_OSO_IMAGE_EDIT_ROUTE_SUFFIXES)):
+        if route.endswith(_OSO_IMAGE_MODEL_ROUTE_SUFFIXES):
+            return litellm.model_alias_map.get(model, model)
+        return model
     global_alias: Final = litellm.model_alias_map.get(model, model)
     key_aliases: Final = valid_token.aliases
     if isinstance(key_aliases, Mapping):
@@ -304,9 +308,9 @@ def _effective_oso_model(
         request=request,
     )
     if isinstance(selected, str):
-        return _resolve_oso_model_alias(selected, valid_token)
+        return _resolve_oso_model_alias(selected, valid_token, route)
     if isinstance(selected, list):
-        return tuple(_resolve_oso_model_alias(item, valid_token) for item in selected if isinstance(item, str))
+        return tuple(_resolve_oso_model_alias(item, valid_token, route) for item in selected if isinstance(item, str))
     return None
 
 
