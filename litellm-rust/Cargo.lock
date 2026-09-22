@@ -3126,10 +3126,12 @@ version = "0.1.0"
 dependencies = [
  "aws-sdk-kms",
  "base64 0.22.1",
+ "futures-util",
  "google-cloud-auth",
  "google-cloud-kms-v1",
  "jsonwebtoken",
  "litellm-core-utils",
+ "litellm-python-compat",
  "litellm-secrets-aws",
  "litellm-secrets-azure",
  "litellm-secrets-cyberark",

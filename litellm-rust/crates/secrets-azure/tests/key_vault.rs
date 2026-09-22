@@ -231,3 +231,41 @@ async fn parity_fixture_matches_python_backend_contract(parity_fixture: Fixture)
         }
     }
 }
+
+#[tokio::test]
+async fn trait_read_limits_the_operation_duration() {
+    use litellm_secrets_types::{AzureOperationContext, BaseSecretManager, SecretOperationContext};
+    use std::time::Duration;
+    let server = MockServer::start().await;
+    Mock::given(wiremock::matchers::method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(1)))
+        .mount(&server)
+        .await;
+    let manager = manager(&server);
+    let context = SecretOperationContext::Azure(AzureOperationContext {
+        timeout: Some(Duration::from_millis(30)),
+    });
+    assert!(matches!(
+        BaseSecretManager::async_read_secret(&manager, "key", &context).await,
+        Err(Error::Timeout)
+    ));
+}
+
+#[rstest]
+#[case::aws(litellm_secrets_types::SecretOperationContext::Aws(Default::default()))]
+#[case::vault(litellm_secrets_types::SecretOperationContext::Hashicorp(Default::default()))]
+#[tokio::test]
+async fn foreign_context_is_rejected_before_io(
+    #[case] context: litellm_secrets_types::SecretOperationContext,
+) {
+    use litellm_secrets_types::BaseSecretManager;
+    let server = MockServer::start().await;
+    let manager = manager(&server);
+    assert!(matches!(
+        BaseSecretManager::async_read_secret(&manager, "key", &context).await,
+        Err(Error::Operation(
+            litellm_secrets_types::Error::InvalidOperationContext
+        ))
+    ));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}

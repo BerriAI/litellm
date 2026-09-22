@@ -4,7 +4,7 @@ use litellm_core_utils::settings::Lookup;
 use litellm_secrets_hashicorp::{Error, HashicorpVault, HashicorpVaultConfig};
 use litellm_secrets_types::{
     AwsOperationContext, BaseSecretManager, CyberarkOperationContext, HashicorpOperationContext,
-    SecretOperationContext, SecretValue, SecretWriteContext,
+    SecretDeleter, SecretOperationContext, SecretValue, SecretWriteContext, SecretWriter,
 };
 use rstest::{fixture, rstest};
 use serde::Deserialize;
@@ -556,7 +556,7 @@ async fn base_manager_context_overrides_vault_location_and_data_key(
             .expose(),
         "value"
     );
-    BaseSecretManager::async_write_secret(
+    SecretWriter::async_write_secret(
         &manager,
         "name",
         &SecretValue::new("updated"),
@@ -570,7 +570,7 @@ async fn base_manager_context_overrides_vault_location_and_data_key(
             .unwrap()
             .is_some()
     );
-    BaseSecretManager::async_delete_secret(&manager, "name", None, &operation)
+    SecretDeleter::async_delete_secret(&manager, "name", None, &operation)
         .await
         .unwrap();
 }
@@ -769,7 +769,7 @@ async fn foreign_contexts_cannot_access_vault_secrets(
         Err(Error::InvalidOperationContext)
     ));
     assert!(matches!(
-        BaseSecretManager::async_write_secret(
+        SecretWriter::async_write_secret(
             &manager,
             "name",
             &SecretValue::new("replacement"),
@@ -782,7 +782,7 @@ async fn foreign_contexts_cannot_access_vault_secrets(
         Err(Error::InvalidOperationContext)
     ));
     assert!(matches!(
-        BaseSecretManager::async_delete_secret(&manager, "name", None, &context).await,
+        SecretDeleter::async_delete_secret(&manager, "name", None, &context).await,
         Err(Error::InvalidOperationContext)
     ));
     assert!(matches!(
@@ -1066,3 +1066,50 @@ X3w9iTPddCHuvZ1fpufi2TyArJh0OkoNtLXJHTKrHjf2N+61AQzFiv5WieJrdE+H
 qr32PTUuVGPyO9LyTY4/RL0=
 -----END PRIVATE KEY-----
 ";
+
+#[rstest]
+#[tokio::test]
+async fn same_name_rotation_keeps_the_replacement(token_values: Vec<(&str, &str)>) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let server = MockServer::start().await;
+    let reads = AtomicUsize::new(0);
+    Mock::given(method("GET"))
+        .and(path("/v1/secret/data/name"))
+        .respond_with(move |_: &wiremock::Request| {
+            let value = if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                "original"
+            } else {
+                "replacement"
+            };
+            ResponseTemplate::new(200).set_body_json(read_response(json!({"key": value})))
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/secret/data/name"))
+        .and(body_json(json!({"data": {"key": "replacement", "description": "Rotated from name"}})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {"created_time": "", "deletion_time": "", "custom_metadata": null, "destroyed": false, "version": 2},
+            "lease_id": "", "lease_duration": 0, "renewable": false, "request_id": "", "warnings": null, "wrap_info": null
+        }))).expect(1).mount(&server).await;
+    Mock::given(method("DELETE"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let manager = manager(&server, &token_values);
+    manager
+        .async_rotate_secret("name", "name", &SecretValue::new("replacement"))
+        .await
+        .unwrap();
+    assert_eq!(
+        manager
+            .async_read_secret("name")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "replacement"
+    );
+}

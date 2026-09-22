@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+tokio.workspace = true
 litellm-auth-gcp = { workspace = true, features = ["google-sdk"] }
 litellm-secrets-types.workspace = true
 litellm-auth-types.workspace = true
@@ -25,5 +26,4 @@ reqwest.workspace = true
 [dev-dependencies]
 google-cloud-auth.workspace = true
 rstest.workspace = true
-tokio.workspace = true
 wiremock = "0.6.5"

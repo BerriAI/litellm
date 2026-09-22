@@ -1,21 +1,20 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use litellm_secrets_types::{
-    BaseSecretManager, Error, HashicorpOperationContext, SecretOperationContext, SecretValue,
-    SecretWriteContext, async_rotate_secret, validate_secret_name,
+    BaseSecretManager, Error, HashicorpOperationContext, SecretDeleter, SecretOperationContext,
+    SecretValue, SecretWriteContext, SecretWriter, async_rotate_secret, validate_secret_name,
 };
 use rstest::{fixture, rstest};
 
 struct Manager {
     step: AtomicUsize,
     absent_at: Option<usize>,
+    verified_value: &'static str,
     operation: SecretOperationContext,
 }
 
 impl BaseSecretManager for Manager {
     type Error = Error;
-    type WriteResponse = &'static str;
-    type DeleteResponse = ();
 
     async fn async_read_secret(
         &self,
@@ -25,8 +24,18 @@ impl BaseSecretManager for Manager {
         assert_eq!(context, &self.operation);
         let step = self.step.fetch_add(1, Ordering::SeqCst);
         assert_eq!(name, if step == 0 { "old" } else { "new" });
-        Ok((self.absent_at != Some(step)).then(|| SecretValue::new("value")))
+        Ok((self.absent_at != Some(step)).then(|| {
+            SecretValue::new(if step == 0 {
+                "value"
+            } else {
+                self.verified_value
+            })
+        }))
     }
+}
+
+impl SecretWriter for Manager {
+    type WriteResponse = &'static str;
 
     async fn async_write_secret(
         &self,
@@ -42,6 +51,10 @@ impl BaseSecretManager for Manager {
         assert_eq!(context.operation, self.operation);
         Ok("provider-response")
     }
+}
+
+impl SecretDeleter for Manager {
+    type DeleteResponse = ();
 
     async fn async_delete_secret(
         &self,
@@ -76,6 +89,7 @@ async fn rotation_verifies_before_deleting_and_returns_provider_response(
     let manager = Manager {
         step: AtomicUsize::new(0),
         absent_at: None,
+        verified_value: "replacement",
         operation: operation.clone(),
     };
     assert_eq!(
@@ -100,6 +114,7 @@ async fn missing_old_or_new_value_stops_rotation_before_deletion(
     let manager = Manager {
         step: AtomicUsize::new(0),
         absent_at: Some(absent_at),
+        verified_value: "replacement",
         operation: SecretOperationContext::default(),
     };
     assert_eq!(
@@ -155,4 +170,26 @@ fn names_reject_path_traversal_and_control_characters(#[case] name: &str) {
 #[case::three_dots("...")]
 fn names_allow_safe_values(#[case] name: &str) {
     assert_eq!(validate_secret_name(name), Ok(()));
+}
+
+#[tokio::test]
+async fn a_different_replacement_never_deletes_the_current_secret() {
+    let manager = Manager {
+        step: AtomicUsize::new(0),
+        absent_at: None,
+        verified_value: "stale-value",
+        operation: SecretOperationContext::Default,
+    };
+    assert_eq!(
+        async_rotate_secret(
+            &manager,
+            "old",
+            "new",
+            &SecretValue::new("replacement"),
+            &SecretOperationContext::Default
+        )
+        .await,
+        Err(Error::NewSecretMismatch)
+    );
+    assert_eq!(manager.step.load(Ordering::SeqCst), 3);
 }

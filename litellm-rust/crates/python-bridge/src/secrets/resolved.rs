@@ -1,10 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
-use futures_util::{future::BoxFuture, future::try_join_all};
-use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
-use litellm_llms::base_llm::inference::secrets::{SecretSource, Secrets};
+use futures_util::future::BoxFuture;
+use litellm_core_utils::settings::ProcessEnvironment;
+use litellm_secrets::source::SecretSource;
 use litellm_secrets::{
-    Error, FailurePolicy, OidcResolver, Secret, SecretManagerState, SecretResolver,
+    Error, FailurePolicy, OidcResolver, SecretManagerState, SecretResolver, SecretValue,
 };
 
 use super::config::SecretManagerSnapshot;
@@ -31,41 +31,11 @@ impl ResolvedSecrets {
 }
 
 impl SecretSource for ResolvedSecrets {
-    fn resolve<'a>(&'a self, names: &'a [&'static str]) -> BoxFuture<'a, Result<Secrets, Error>> {
-        Box::pin(async move {
-            let values = try_join_all(names.iter().map(|name| async move {
-                self.resolver
-                    .get_secret(name, None)
-                    .await
-                    .map(|secret| secret.map(|secret| ((*name).to_owned(), secret_value(secret))))
-            }))
-            .await?
-            .into_iter()
-            .flatten()
-            .collect::<HashMap<_, _>>();
-            Ok(Arc::new(ResolvedLookup { values }) as Secrets)
-        })
-    }
-}
-
-struct ResolvedLookup {
-    values: HashMap<String, String>,
-}
-
-impl Lookup for ResolvedLookup {
-    fn get(&self, name: &str) -> Option<String> {
-        self.values
-            .get(name)
-            .cloned()
-            .or_else(|| ProcessEnvironment.get(name))
-    }
-}
-
-fn secret_value(secret: Secret) -> String {
-    match secret {
-        Secret::String(value) => value.expose().to_owned(),
-        Secret::Bool(value) => if value { "True" } else { "False" }.to_owned(),
-        Secret::Json(value) => value.to_string(),
+    fn get_secret_str<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<SecretValue>, Error>> {
+        Box::pin(self.resolver.get_secret_str(name, None))
     }
 }
 
@@ -86,7 +56,7 @@ mod tests {
     };
 
     use super::ResolvedSecrets;
-    use litellm_llms::base_llm::inference::secrets::SecretSource;
+    use litellm_secrets::source::SecretSource;
 
     fn state(server: &MockServer, settings: KeyManagementSettings) -> Arc<SecretManagerState> {
         let client = Client::from_conf(
@@ -145,7 +115,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manager_failure_resolves_to_none_instead_of_the_environment() {
+    async fn manager_failure_uses_environment_fallback() {
         let name = "LITELLM_RUST_BRIDGE_MANAGER_FAILURE";
         unsafe { std::env::set_var(name, "env-key") };
         let server = MockServer::start().await;
@@ -161,7 +131,7 @@ mod tests {
         )
         .await;
         unsafe { std::env::remove_var(name) };
-        assert_eq!(result, None);
+        assert_eq!(result.as_deref(), Some("env-key"));
         assert_eq!(missing, None);
     }
 
@@ -204,11 +174,14 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let secrets = ResolvedSecrets::from_state(state(&server, KeyManagementSettings::default()))
-            .resolve(&[declared])
+        let source = ResolvedSecrets::from_state(state(&server, KeyManagementSettings::default()));
+        let snapshot = source.resolve(&[declared]).await.unwrap();
+        assert_eq!(snapshot.get(undeclared), None);
+        let result = source
+            .get_secret_str(undeclared)
             .await
-            .unwrap();
-        let result = secrets.get(undeclared);
+            .unwrap()
+            .map(|value| value.expose().to_owned());
         unsafe { std::env::remove_var(undeclared) };
         assert_eq!(result.as_deref(), Some("manager-key"));
     }
@@ -271,7 +244,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn undeclared_names_still_read_the_process_environment() {
+    async fn names_excluded_by_hosted_keys_read_the_process_environment() {
         let name = "LITELLM_RUST_BRIDGE_UNDECLARED";
         unsafe { std::env::set_var(name, "env-key") };
         let server = MockServer::start().await;

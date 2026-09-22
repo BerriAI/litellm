@@ -4,6 +4,7 @@ mod error;
 mod handler;
 mod oidc;
 mod resolver;
+pub mod source;
 mod state;
 
 pub use error::Error;

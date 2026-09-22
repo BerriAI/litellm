@@ -3,8 +3,8 @@ use std::{fs, sync::Arc, time::Duration};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_core_utils::settings::Lookup;
 use litellm_secrets_types::{
-    BaseSecretManager, SecretOperationContext, SecretValue, SecretWriteContext,
-    validate_secret_name,
+    BaseSecretManager, KeyManagementSystem, SecretOperationContext, SecretValue,
+    SecretWriteContext, SecretWriter, validate_secret_name,
 };
 use moka::future::Cache;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
@@ -196,6 +196,7 @@ impl CyberArkSecretManager {
         name: &str,
         context: &SecretOperationContext,
     ) -> Result<Option<SecretValue>, Error> {
+        context.validate_for(KeyManagementSystem::Cyberark)?;
         if let Some(value) = self.secrets.get(name).await {
             return Ok(Some(value));
         }
@@ -255,6 +256,7 @@ impl CyberArkSecretManager {
         _description: Option<&str>,
         context: &SecretOperationContext,
     ) -> Result<(), Error> {
+        context.validate_for(KeyManagementSystem::Cyberark)?;
         validate_secret_name(name)?;
         self.ensure_variable_exists(name, context).await;
         let response = with_timeout(
@@ -355,8 +357,9 @@ impl CyberArkSecretManager {
         &self,
         name: &str,
         _recovery_window_in_days: Option<u32>,
-        _context: &SecretOperationContext,
+        context: &SecretOperationContext,
     ) -> Result<DeleteOutcome, Error> {
+        context.validate_for(KeyManagementSystem::Cyberark)?;
         tracing::warn!(
             "CyberArk Conjur does not support direct secret deletion. Secrets must be removed through policy updates."
         );
@@ -367,8 +370,6 @@ impl CyberArkSecretManager {
 
 impl BaseSecretManager for CyberArkSecretManager {
     type Error = Error;
-    type WriteResponse = ();
-    type DeleteResponse = DeleteOutcome;
 
     async fn async_read_secret(
         &self,
@@ -377,6 +378,10 @@ impl BaseSecretManager for CyberArkSecretManager {
     ) -> Result<Option<SecretValue>, Error> {
         self.async_read_secret_with_context(name, context).await
     }
+}
+
+impl SecretWriter for CyberArkSecretManager {
+    type WriteResponse = ();
 
     async fn async_write_secret(
         &self,
@@ -391,16 +396,6 @@ impl BaseSecretManager for CyberArkSecretManager {
             &context.operation,
         )
         .await
-    }
-
-    async fn async_delete_secret(
-        &self,
-        name: &str,
-        recovery_window_in_days: Option<u32>,
-        context: &SecretOperationContext,
-    ) -> Result<DeleteOutcome, Error> {
-        self.async_delete_secret_with_context(name, recovery_window_in_days, context)
-            .await
     }
 }
 

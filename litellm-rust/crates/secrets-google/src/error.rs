@@ -1,5 +1,9 @@
 #[derive(thiserror::Error, veil::Redact)]
 pub enum Error {
+    #[error(transparent)]
+    Operation(#[from] litellm_secrets_types::Error),
+    #[error("secret manager operation timed out")]
+    Timeout,
     #[error("Google KMS client configuration failed")]
     Client(
         #[from]

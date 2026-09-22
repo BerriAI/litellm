@@ -702,3 +702,35 @@ fn parity_fixture_matches_authentication_contract(parity_fixture: ParityFixture)
         "- !variable \"team/app/key\"\n"
     );
 }
+
+#[rstest]
+#[case::aws(SecretOperationContext::Aws(Default::default()))]
+#[case::vault(SecretOperationContext::Hashicorp(Default::default()))]
+#[tokio::test]
+async fn foreign_context_is_rejected_before_io(#[case] context: SecretOperationContext) {
+    let server = MockServer::start().await;
+    let manager = manager(&server, Duration::from_secs(60));
+    assert!(matches!(
+        BaseSecretManager::async_read_secret(&manager, "key", &context).await,
+        Err(Error::Operation(
+            litellm_secrets_types::Error::InvalidOperationContext
+        ))
+    ));
+    assert!(matches!(
+        manager
+            .async_write_secret_with_context("key", &SecretValue::new("value"), None, &context)
+            .await,
+        Err(Error::Operation(
+            litellm_secrets_types::Error::InvalidOperationContext
+        ))
+    ));
+    assert!(matches!(
+        manager
+            .async_delete_secret_with_context("key", None, &context)
+            .await,
+        Err(Error::Operation(
+            litellm_secrets_types::Error::InvalidOperationContext
+        ))
+    ));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}

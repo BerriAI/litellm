@@ -12,8 +12,8 @@ use aws_sdk_secretsmanager::{
 };
 use litellm_secrets_aws::{AwsSecretsManagerV2, Error, RotationResponse};
 use litellm_secrets_types::{
-    AwsOperationContext, BaseSecretManager, KeyManagementSettings, SecretOperationContext,
-    SecretValue, SecretWriteContext,
+    AwsOperationContext, BaseSecretManager, KeyManagementSettings, SecretDeleter,
+    SecretOperationContext, SecretValue, SecretWriteContext, SecretWriter,
 };
 use rstest::{fixture, rstest};
 use serde_json::json;
@@ -308,7 +308,7 @@ async fn trait_write_uses_typed_write_context(default_settings: KeyManagementSet
         tags: std::collections::BTreeMap::from([("stage".into(), "test".into())]),
         ..Default::default()
     };
-    let response = BaseSecretManager::async_write_secret(
+    let response = SecretWriter::async_write_secret(
         &manager(&server, default_settings),
         "key",
         &SecretValue::new("value"),
@@ -331,7 +331,7 @@ async fn trait_delete_accepts_an_unspecified_recovery_window(
         .expect(1)
         .mount(&server)
         .await;
-    let response = BaseSecretManager::async_delete_secret(
+    let response = SecretDeleter::async_delete_secret(
         &manager(&server, default_settings),
         "key",
         None,

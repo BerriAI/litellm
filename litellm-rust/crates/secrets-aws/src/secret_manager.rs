@@ -16,8 +16,8 @@ use litellm_auth_aws::constants::{
 };
 use litellm_core_utils::settings::Lookup;
 use litellm_secrets_types::{
-    AwsOperationContext, BaseSecretManager, KeyManagementSettings, Secret, SecretOperationContext,
-    SecretValue, SecretWriteContext, async_rotate_secret,
+    AwsOperationContext, BaseSecretManager, KeyManagementSettings, Secret, SecretDeleter,
+    SecretOperationContext, SecretValue, SecretWriteContext, SecretWriter, async_rotate_secret,
 };
 use serde_json::Value;
 
@@ -409,8 +409,6 @@ impl ContextClientFactory {
 
 impl BaseSecretManager for AwsSecretsManagerV2 {
     type Error = Error;
-    type WriteResponse = CreateSecretOutput;
-    type DeleteResponse = DeleteSecretOutput;
 
     async fn async_read_secret(
         &self,
@@ -420,6 +418,10 @@ impl BaseSecretManager for AwsSecretsManagerV2 {
         let client = self.client_for_context(context)?;
         Self::async_read_secret_with_client(&client, name).await
     }
+}
+
+impl SecretWriter for AwsSecretsManagerV2 {
+    type WriteResponse = CreateSecretOutput;
 
     async fn async_write_secret(
         &self,
@@ -437,6 +439,10 @@ impl BaseSecretManager for AwsSecretsManagerV2 {
         )
         .await
     }
+}
+
+impl SecretDeleter for AwsSecretsManagerV2 {
+    type DeleteResponse = DeleteSecretOutput;
 
     async fn async_delete_secret(
         &self,

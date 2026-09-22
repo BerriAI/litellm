@@ -3,7 +3,9 @@ use std::sync::Arc;
 use litellm_auth_azure::{AzureAuthInputs, AzureAuthService, ConfigValue};
 use litellm_auth_types::{InputSource, Sourced};
 use litellm_core_utils::settings::Lookup;
-use litellm_secrets_types::{Secret, SecretValue};
+use litellm_secrets_types::{
+    BaseSecretManager, KeyManagementSystem, Secret, SecretOperationContext, SecretValue,
+};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC};
 use serde::Deserialize;
 
@@ -77,6 +79,12 @@ impl AzureKeyVault {
     }
 
     pub async fn get_secret(&self, name: &str) -> Result<Option<Secret>, Error> {
+        BaseSecretManager::async_read_secret(self, name, &SecretOperationContext::Default)
+            .await
+            .map(|value| value.map(Secret::String))
+    }
+
+    async fn read(&self, name: &str) -> Result<Option<SecretValue>, Error> {
         let token = self
             .auth
             .get_azure_ad_token(&self.inputs, &|key| self.environment.get(key))
@@ -103,7 +111,7 @@ impl AzureKeyVault {
         }
         let payload: SecretResponse = response.json().await.map_err(Error::Http)?;
         let value = payload.value.ok_or(Error::MissingValue)?;
-        Ok(Some(Secret::String(SecretValue::new(value))))
+        Ok(Some(SecretValue::new(value)))
     }
 }
 
@@ -113,4 +121,22 @@ fn scope_for(vault: &reqwest::Url) -> String {
         .split_once('.')
         .map_or(host, |(_, remainder)| remainder);
     format!("https://{resource}/.default")
+}
+
+impl BaseSecretManager for AzureKeyVault {
+    type Error = Error;
+
+    async fn async_read_secret(
+        &self,
+        name: &str,
+        context: &SecretOperationContext,
+    ) -> Result<Option<SecretValue>, Error> {
+        context.validate_for(KeyManagementSystem::AzureKeyVault)?;
+        match context.timeout() {
+            Some(timeout) => tokio::time::timeout(timeout, self.read(name))
+                .await
+                .map_err(|_| Error::Timeout)?,
+            None => self.read(name).await,
+        }
+    }
 }

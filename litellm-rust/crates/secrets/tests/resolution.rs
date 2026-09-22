@@ -246,7 +246,7 @@ mod aws {
     #[case::denied(400, serde_json::json!({"__type":"AccessDeniedException"}))]
     #[case::malformed(200, serde_json::json!({}))]
     #[tokio::test]
-    async fn read_failures_resolve_to_none_without_environment_or_default(
+    async fn read_results_follow_the_selected_failure_policy(
         #[case] status: u16,
         #[case] body: serde_json::Value,
         #[values(FailurePolicy::Propagate, FailurePolicy::EnvironmentFallback)]
@@ -256,7 +256,7 @@ mod aws {
     ) {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body.clone()))
             .expect(1)
             .mount(&server)
             .await;
@@ -266,13 +266,23 @@ mod aws {
             OidcResolver::default(),
         )
         .with_failure_policy(policy);
-        assert_eq!(
-            resolver
-                .get_secret_str("KEY", default.map(SecretValue::new))
-                .await
-                .unwrap(),
-            None
-        );
+        let result = resolver
+            .get_secret_str("KEY", default.map(SecretValue::new))
+            .await;
+        if body.get("__type").and_then(serde_json::Value::as_str)
+            == Some("ResourceNotFoundException")
+        {
+            assert_eq!(result.unwrap(), None);
+        } else if policy == FailurePolicy::EnvironmentFallback {
+            assert_eq!(
+                result.unwrap().as_ref().map(SecretValue::expose),
+                environment
+            );
+        } else if let Some(default) = default {
+            assert_eq!(result.unwrap().unwrap().expose(), default);
+        } else {
+            assert!(matches!(result, Err(Error::Aws(_))));
+        }
     }
 
     #[rstest::rstest]
@@ -412,20 +422,19 @@ async fn google_resolver_distinguishes_absence_from_failure(#[case] status: u16)
     let resolver = SecretResolver::new(Arc::new(state), environment, OidcResolver::default());
     let result = resolver.get_secret_str("KEY", None).await;
     if status == 404 {
-        assert_eq!(result.unwrap().unwrap().expose(), "environment");
+        assert_eq!(result.unwrap(), None);
     } else {
         assert!(
             matches!(result, Err(Error::Google(litellm_secrets::google::Error::Status(actual))) if actual == status)
         );
     }
+    let fallback = resolver
+        .with_failure_policy(FailurePolicy::EnvironmentFallback)
+        .get_secret_str("KEY", None)
+        .await
+        .unwrap();
     assert_eq!(
-        resolver
-            .with_failure_policy(FailurePolicy::EnvironmentFallback)
-            .get_secret_str("KEY", None)
-            .await
-            .unwrap()
-            .unwrap()
-            .expose(),
-        "environment"
+        fallback.as_ref().map(SecretValue::expose),
+        (status != 404).then_some("environment")
     );
 }

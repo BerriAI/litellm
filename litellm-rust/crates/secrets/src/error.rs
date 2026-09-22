@@ -26,6 +26,8 @@ pub enum Error {
     TypeMismatch { expected: &'static str },
     #[error("external secret manager failed")]
     ExternalManager(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("external secret manager read failed")]
+    ExternalRead(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[cfg(feature = "aws")]
     #[error(transparent)]
     Aws(#[from] litellm_secrets_aws::Error),

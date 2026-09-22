@@ -11,35 +11,39 @@ pub fn validate_secret_name(name: &str) -> Result<(), Error> {
     Ok(())
 }
 
-#[expect(
-    async_fn_in_trait,
-    reason = "closed backend dispatch does not require Send bounds on generic rotation"
-)]
 pub trait BaseSecretManager {
     type Error: From<Error>;
-    type WriteResponse;
-    type DeleteResponse;
 
-    async fn async_read_secret(
+    fn async_read_secret(
         &self,
         name: &str,
         context: &SecretOperationContext,
-    ) -> Result<Option<SecretValue>, Self::Error>;
-    async fn async_write_secret(
+    ) -> impl std::future::Future<Output = Result<Option<SecretValue>, Self::Error>> + Send;
+}
+
+pub trait SecretWriter: BaseSecretManager {
+    type WriteResponse;
+
+    fn async_write_secret(
         &self,
         name: &str,
         value: &SecretValue,
         context: &SecretWriteContext,
-    ) -> Result<Self::WriteResponse, Self::Error>;
-    async fn async_delete_secret(
+    ) -> impl std::future::Future<Output = Result<Self::WriteResponse, Self::Error>> + Send;
+}
+
+pub trait SecretDeleter: BaseSecretManager {
+    type DeleteResponse;
+
+    fn async_delete_secret(
         &self,
         name: &str,
         recovery_window_in_days: Option<u32>,
         context: &SecretOperationContext,
-    ) -> Result<Self::DeleteResponse, Self::Error>;
+    ) -> impl std::future::Future<Output = Result<Self::DeleteResponse, Self::Error>> + Send;
 }
 
-pub async fn async_rotate_secret<M: BaseSecretManager>(
+pub async fn async_rotate_secret<M: SecretWriter + SecretDeleter>(
     manager: &M,
     current_name: &str,
     new_name: &str,
@@ -60,15 +64,15 @@ pub async fn async_rotate_secret<M: BaseSecretManager>(
             &SecretWriteContext::rotated_from(current_name, context.clone()),
         )
         .await?;
-    if manager
-        .async_read_secret(new_name, context)
-        .await?
-        .is_none()
-    {
-        return Err(Error::NewSecretMissing.into());
+    match manager.async_read_secret(new_name, context).await? {
+        None => return Err(Error::NewSecretMissing.into()),
+        Some(actual) if actual != *value => return Err(Error::NewSecretMismatch.into()),
+        Some(_) => {}
     }
-    manager
-        .async_delete_secret(current_name, Some(7), context)
-        .await?;
+    if current_name != new_name {
+        manager
+            .async_delete_secret(current_name, Some(7), context)
+            .await?;
+    }
     Ok(response)
 }

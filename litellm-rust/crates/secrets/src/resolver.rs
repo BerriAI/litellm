@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
-use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
+use litellm_core_utils::{
+    serde_compat::parse_str_bool,
+    settings::{Lookup, ProcessEnvironment},
+};
+use litellm_python_compat::{Value, literal::literal_eval};
 
 use crate::state::{LookupTarget, normalize_secret_name};
 use crate::{Error, OidcResolver, Secret, SecretManagerState, SecretValue};
@@ -61,34 +65,27 @@ impl SecretResolver {
                 .oidc
                 .resolve(name, self.environment.as_ref())
                 .await
-                .map(|value| value.map(Secret::String).or(default_value));
+                .map(|value| value.map(Secret::String));
         }
         let LookupTarget::Manager { backend, settings } = self.state.lookup_target(name) else {
-            return Ok(self.environment_secret(name).or(default_value));
+            return Ok(self.environment.get(name).map(|value| {
+                parse_str_bool(&value)
+                    .map_or_else(|| Secret::String(SecretValue::new(value)), Secret::Bool)
+            }));
         };
         match crate::get_secret_from_manager(backend, name, settings, self.environment.as_ref())
             .await
         {
-            Ok(value) => Ok(value
-                .or_else(|| self.environment_secret(name))
-                .or(default_value)),
+            Ok(value) => Ok(value.and_then(manager_value)),
             Err(error @ Error::ExternalManager(_)) => Err(error),
             Err(error) => match self.failure_policy {
-                FailurePolicy::Propagate => Err(error),
-                FailurePolicy::EnvironmentFallback => self
-                    .environment_secret(name)
-                    .or(default_value)
-                    .map(Some)
-                    .ok_or(error),
+                FailurePolicy::Propagate => default_value.map(Some).ok_or(error),
+                FailurePolicy::EnvironmentFallback => Ok(self
+                    .environment
+                    .get(name)
+                    .and_then(|value| manager_value(Secret::String(SecretValue::new(value))))),
             },
         }
-    }
-
-    fn environment_secret(&self, name: &str) -> Option<Secret> {
-        self.environment
-            .get(name)
-            .map(SecretValue::new)
-            .map(Secret::String)
     }
 
     pub async fn get_secret_str(
@@ -102,9 +99,7 @@ impl SecretResolver {
         {
             Some(Secret::String(value)) => Ok(Some(value)),
             None => Ok(None),
-            Some(Secret::Bool(_) | Secret::Json(_)) => {
-                Err(Error::TypeMismatch { expected: "string" })
-            }
+            Some(Secret::Bool(_) | Secret::Json(_)) => Ok(None),
         }
     }
 
@@ -118,19 +113,19 @@ impl SecretResolver {
             .await?
         {
             Some(Secret::Bool(value)) => Ok(Some(value)),
-            Some(Secret::String(value)) => {
-                match value.expose().trim().to_ascii_lowercase().as_str() {
-                    "true" => Ok(Some(true)),
-                    "false" => Ok(Some(false)),
-                    _ => Err(Error::TypeMismatch {
-                        expected: "boolean",
-                    }),
-                }
-            }
-            Some(Secret::Json(_)) => Err(Error::TypeMismatch {
-                expected: "boolean",
-            }),
+            Some(Secret::String(value)) => Ok(parse_str_bool(value.expose())),
+            Some(Secret::Json(_)) => Ok(None),
             None => Ok(None),
         }
+    }
+}
+
+fn manager_value(secret: Secret) -> Option<Secret> {
+    let Secret::String(value) = secret else {
+        return None;
+    };
+    match literal_eval(value.expose()) {
+        Ok(Value::Bool(boolean)) => Some(Secret::Bool(boolean)),
+        _ => Some(Secret::String(value)),
     }
 }

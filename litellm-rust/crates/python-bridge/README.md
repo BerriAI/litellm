@@ -1,4 +1,4 @@
-Native OCR uses `SecretSource` with `EnvironmentSecrets`, preserving process-environment reads. Readable Python secret managers still make OCR decline to the existing Python implementation. `ResolvedSecrets` and the separate `secret_manager_binding()` snapshot are inactive foundations for a later rollout
+Native OCR uses the shared `litellm_secrets::source::SecretSource`. Unreadable or unconfigured managers use `EnvironmentSecrets`. Readable managers decline to Python unless the Rust secret-manager binding is enabled. When enabled, `ResolvedSecrets` delegates existing Python clients through the Python handler and shared Rust resolver. Synchronous transformations receive explicit snapshots without implicit environment reads for undeclared names
 
 Cache and secret-manager catalog entries remain Python-only, including when `LITELLM_RUST=1`. The new cache runtime is not connected to SDK or gateway caching
 

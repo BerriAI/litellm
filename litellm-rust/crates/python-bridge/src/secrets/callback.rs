@@ -4,9 +4,13 @@ use litellm_core_utils::settings::Lookup;
 use litellm_secrets::{
     Error, ExternalSecretManager, KeyManagementSettings, KeyManagementSystem, Secret, SecretValue,
 };
-use pyo3::{exceptions::PyException, prelude::*, types::PyDict};
+use pyo3::{
+    exceptions::PyException,
+    prelude::*,
+    types::{PyDict, PyString},
+};
 
-use super::error::external_error;
+use super::error::{external_error, read_error};
 
 const HANDLER_MODULE: &str = "litellm.secret_managers.secret_manager_handler";
 const ENVIRONMENT_FALLBACK_LOG: &str =
@@ -35,23 +39,6 @@ impl PythonSecretManager {
 
     fn read(&self, py: Python<'_>, name: &str) -> PyResult<Option<String>> {
         let client = self.client.bind(py);
-        if self.system == Some(KeyManagementSystem::Custom)
-            || (self.system.is_none() && client.hasattr("sync_read_secret")?)
-        {
-            let kwargs = PyDict::new(py);
-            kwargs.set_item("secret_name", name)?;
-            if self.system == Some(KeyManagementSystem::Custom) {
-                let optional_params = self
-                    .settings
-                    .as_ref()
-                    .map(|settings| settings.bind(py).call_method0("model_dump"))
-                    .transpose()?;
-                kwargs.set_item("optional_params", optional_params)?;
-            }
-            return client
-                .call_method("sync_read_secret", (), Some(&kwargs))?
-                .extract();
-        }
         let kwargs = PyDict::new(py);
         kwargs.set_item("client", client)?;
         kwargs.set_item("key_manager", self.system.map_or("local", python_name))?;
@@ -60,10 +47,15 @@ impl PythonSecretManager {
             Some(settings) => kwargs.set_item("key_management_settings", settings.bind(py))?,
             None => kwargs.set_item("key_management_settings", py.None())?,
         }
-        py.import(HANDLER_MODULE)?
+        let result = py
+            .import(HANDLER_MODULE)?
             .getattr("get_secret_from_manager")?
-            .call((), Some(&kwargs))?
-            .extract()
+            .call((), Some(&kwargs))?;
+        if result.is_instance_of::<PyString>() {
+            result.extract().map(Some)
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -101,7 +93,7 @@ impl ExternalSecretManager for PythonSecretManager {
                 Err(error) if error.is_instance_of::<PyException>(py) => {
                     log_environment_fallback(py, name, &error)
                         .map_err(|error| external_error(py, error))?;
-                    Ok(None)
+                    Err(read_error(py, error))
                 }
                 Err(error) => Err(external_error(py, error)),
             })
@@ -159,6 +151,11 @@ class Manager:
     def sync_read_secret(self, secret_name):
         raise failure
 manager = Manager()
+import sys, types
+handler = sys.modules.setdefault('litellm.secret_managers.secret_manager_handler', types.ModuleType('litellm.secret_managers.secret_manager_handler'))
+def get_secret_from_manager(**kwargs):
+    return kwargs['client'].sync_read_secret(kwargs['secret_name'])
+handler.get_secret_from_manager = get_secret_from_manager
 ",
                 Some(&locals),
                 Some(&locals),
@@ -296,6 +293,7 @@ sys.modules.setdefault('litellm._logging', logging)
         py.run(
             c"
 import sys, types
+previous_handler = sys.modules.get('litellm.secret_managers.secret_manager_handler')
 calls = []
 def get_secret_from_manager(**kwargs):
     calls.append(kwargs)
@@ -313,12 +311,37 @@ sys.modules['litellm.secret_managers.secret_manager_handler'] = handler
         body(&locals);
         py.run(
             c"
-sys.modules.pop('litellm.secret_managers.secret_manager_handler', None)
+if previous_handler is None:
+    sys.modules.pop('litellm.secret_managers.secret_manager_handler', None)
+else:
+    sys.modules['litellm.secret_managers.secret_manager_handler'] = previous_handler
 ",
             Some(&locals),
             Some(&locals),
         )
         .unwrap();
+    }
+
+    #[rstest]
+    #[case("None")]
+    #[case("True")]
+    #[case("123")]
+    #[case("{'key': 'value'}")]
+    fn nonstring_results_are_absent_without_a_read_failure(#[case] expression: &str) {
+        Python::initialize();
+        Python::attach(|py| {
+            with_fake_handler(py, |locals| {
+                locals.set_item("expression", expression).unwrap();
+                py.run(
+                    c"handler.get_secret_from_manager = lambda **kwargs: eval(expression)",
+                    Some(locals),
+                    Some(locals),
+                )
+                .unwrap();
+                let reader = PythonSecretManager::new(py.None(), None, None);
+                assert_eq!(reader.read(py, "KEY").unwrap(), None);
+            });
+        });
     }
 
     #[rstest]
@@ -336,72 +359,6 @@ sys.modules.pop('litellm.secret_managers.secret_manager_handler', None)
             serde_json::to_value(system).unwrap(),
             serde_json::Value::String(python_name(system).to_owned())
         );
-    }
-
-    #[rstest]
-    #[case::legacy(None, false)]
-    #[case::custom(Some(KeyManagementSystem::Custom), true)]
-    fn direct_readers_receive_compatible_kwargs(
-        #[case] system: Option<KeyManagementSystem>,
-        #[case] expects_optional_params: bool,
-    ) {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                c"
-class Settings:
-    def model_dump(self):
-        return {'scope': 'custom'}
-class Manager:
-    def __init__(self):
-        self.names = []
-        self.optional_params = []
-    def sync_read_secret(self, secret_name, optional_params=None, timeout=None):
-        self.names.append(secret_name)
-        self.optional_params.append(optional_params)
-        return 'direct-' + secret_name
-manager = Manager()
-settings = Settings()
-",
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-            let manager = locals.get_item("manager").unwrap().unwrap();
-            let settings = expects_optional_params
-                .then(|| locals.get_item("settings").unwrap().unwrap().unbind());
-            let reader = PythonSecretManager::new(manager.clone().unbind(), system, settings);
-            assert_eq!(
-                reader.read(py, "API_KEY").unwrap().as_deref(),
-                Some("direct-API_KEY")
-            );
-            assert_eq!(
-                manager
-                    .getattr("names")
-                    .unwrap()
-                    .extract::<Vec<String>>()
-                    .unwrap(),
-                ["API_KEY"]
-            );
-            let optional_params = manager
-                .getattr("optional_params")
-                .unwrap()
-                .get_item(0)
-                .unwrap();
-            if expects_optional_params {
-                assert_eq!(
-                    optional_params
-                        .get_item("scope")
-                        .unwrap()
-                        .extract::<String>()
-                        .unwrap(),
-                    "custom"
-                );
-            } else {
-                assert!(optional_params.is_none());
-            }
-        });
     }
 
     #[test]

@@ -8,8 +8,8 @@ use std::{
 
 use litellm_core_utils::settings::Lookup;
 use litellm_secrets_types::{
-    BaseSecretManager, HashicorpOperationContext, SecretOperationContext, SecretValue,
-    SecretWriteContext, async_rotate_secret, validate_secret_name,
+    BaseSecretManager, HashicorpOperationContext, SecretDeleter, SecretOperationContext,
+    SecretValue, SecretWriteContext, SecretWriter, async_rotate_secret, validate_secret_name,
 };
 use moka::future::Cache;
 use rustify::errors::ClientError as RustifyClientError;
@@ -365,8 +365,6 @@ impl HashicorpVault {
 
 impl BaseSecretManager for HashicorpVault {
     type Error = Error;
-    type WriteResponse = Value;
-    type DeleteResponse = ();
 
     async fn async_read_secret(
         &self,
@@ -375,6 +373,10 @@ impl BaseSecretManager for HashicorpVault {
     ) -> Result<Option<SecretValue>, Error> {
         HashicorpVault::async_read_secret_with_context(self, name, context).await
     }
+}
+
+impl SecretWriter for HashicorpVault {
+    type WriteResponse = Value;
 
     async fn async_write_secret(
         &self,
@@ -384,6 +386,10 @@ impl BaseSecretManager for HashicorpVault {
     ) -> Result<Value, Error> {
         HashicorpVault::async_write_secret_with_context(self, name, value, context).await
     }
+}
+
+impl SecretDeleter for HashicorpVault {
+    type DeleteResponse = ();
 
     async fn async_delete_secret(
         &self,
@@ -408,9 +414,7 @@ fn hashicorp_context(
     match context {
         SecretOperationContext::Hashicorp(context) => Ok(Some(context)),
         SecretOperationContext::Default => Ok(None),
-        SecretOperationContext::Aws(_) | SecretOperationContext::Cyberark(_) => {
-            Err(Error::InvalidOperationContext)
-        }
+        _ => Err(Error::InvalidOperationContext),
     }
 }
 

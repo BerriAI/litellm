@@ -272,3 +272,43 @@ async fn cache_preserves_raw_values(default_ttl: Duration, #[case] raw: &str) {
         );
     }
 }
+
+#[tokio::test]
+async fn trait_read_limits_the_operation_duration() {
+    use litellm_secrets_types::{
+        BaseSecretManager, GoogleOperationContext, SecretOperationContext,
+    };
+    use std::time::Duration;
+    let server = MockServer::start().await;
+    Mock::given(wiremock::matchers::method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(1)))
+        .mount(&server)
+        .await;
+    let manager = manager(&server, false, Duration::from_secs(60));
+    let context = SecretOperationContext::Google(GoogleOperationContext {
+        timeout: Some(Duration::from_millis(30)),
+    });
+    assert!(matches!(
+        BaseSecretManager::async_read_secret(&manager, "key", &context).await,
+        Err(Error::Timeout)
+    ));
+}
+
+#[rstest]
+#[case::aws(litellm_secrets_types::SecretOperationContext::Aws(Default::default()))]
+#[case::vault(litellm_secrets_types::SecretOperationContext::Hashicorp(Default::default()))]
+#[tokio::test]
+async fn foreign_context_is_rejected_before_io(
+    #[case] context: litellm_secrets_types::SecretOperationContext,
+) {
+    use litellm_secrets_types::BaseSecretManager;
+    let server = MockServer::start().await;
+    let manager = manager(&server, false, Duration::from_secs(60));
+    assert!(matches!(
+        BaseSecretManager::async_read_secret(&manager, "key", &context).await,
+        Err(Error::Operation(
+            litellm_secrets_types::Error::InvalidOperationContext
+        ))
+    ));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}

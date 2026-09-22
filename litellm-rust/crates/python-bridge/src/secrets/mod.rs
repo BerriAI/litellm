@@ -5,7 +5,7 @@ pub(crate) mod resolved;
 
 use std::sync::Arc;
 
-use litellm_llms::base_llm::inference::secrets::{EnvironmentSecrets, SecretSource};
+use litellm_secrets::source::{EnvironmentSecrets, SecretSource};
 use pyo3::prelude::*;
 
 pub(crate) use error::python_error;
@@ -32,7 +32,7 @@ fn select(
     resolved: impl FnOnce() -> PyResult<Arc<dyn SecretSource>>,
 ) -> PyResult<Arc<dyn SecretSource>> {
     if !manager.read(&READABLE)? {
-        return Ok(Arc::new(EnvironmentSecrets));
+        return Ok(Arc::new(EnvironmentSecrets::default()));
     }
     if !manager.read(&NATIVE)? {
         return Err(RustBridgeDeclined::new_err(
@@ -46,7 +46,7 @@ fn select(
 mod tests {
     use std::sync::Arc;
 
-    use litellm_llms::base_llm::inference::secrets::{EnvironmentSecrets, SecretSource};
+    use litellm_secrets::source::{EnvironmentSecrets, SecretSource};
     use pyo3::{prelude::*, types::PyDict};
     use rstest::rstest;
 
@@ -84,7 +84,7 @@ mod tests {
             let mut resolved_called = false;
             let selected = select(&PythonSettings::SecretManager.snapshot(manager), || {
                 resolved_called = true;
-                Ok(Arc::new(EnvironmentSecrets) as Arc<dyn SecretSource>)
+                Ok(Arc::new(EnvironmentSecrets::default()) as Arc<dyn SecretSource>)
             });
             match expected {
                 Selected::Environment => assert!(selected.is_ok() && !resolved_called),
