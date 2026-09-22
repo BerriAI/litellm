@@ -22,6 +22,7 @@ from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentChunkResult,
     BedrockGuardrail,
+    _decoded_base64_length,
     _redact_pii_matches,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -1016,7 +1017,8 @@ async def test_during_call_hook_skips_bedrock_call_for_tool_result_only_turn():
 
     Regression for `400: At least one GuardrailContentBlock must be provided` on
     /v1/messages: with experimental_use_latest_role_message_only the scanned turn is the
-    Anthropic tool_result block, which carries no text, so ApplyGuardrail rejected the call.
+    Anthropic tool_result block; when it carries nothing readable, ApplyGuardrail
+    rejected the empty content list.
     """
     guardrail = BedrockGuardrail(
         guardrail_name="bedrock-tool-result",
@@ -1026,7 +1028,9 @@ async def test_during_call_hook_skips_bedrock_call_for_tool_result_only_turn():
         default_on=True,
         experimental_use_latest_role_message_only=True,
     )
-    data = {"model": "claude-sonnet-4-5", "messages": _anthropic_tool_result_conversation()}
+    messages = _anthropic_tool_result_conversation()
+    messages[2]["content"] = [{"type": "tool_result", "tool_use_id": "toolu_01A", "content": []}]
+    data = {"model": "claude-sonnet-4-5", "messages": messages}
 
     with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
         await guardrail.async_moderation_hook(
@@ -1036,7 +1040,7 @@ async def test_during_call_hook_skips_bedrock_call_for_tool_result_only_turn():
         )
 
     mock_post.assert_not_called()
-    assert data["messages"] == _anthropic_tool_result_conversation()
+    assert data["messages"][-1]["content"] == [{"type": "tool_result", "tool_use_id": "toolu_01A", "content": []}]
 
 
 @pytest.mark.asyncio
@@ -1076,8 +1080,7 @@ async def test_during_call_hook_still_scans_tool_result_turn_carrying_text():
     mock_post.assert_called_once()
     sent = mock_post.call_args.kwargs["data"].decode()
     assert "now summarize that" in sent
-    # tool_result text is not extracted by this path (https://github.com/BerriAI/litellm/issues/33086)
-    assert "18C and sunny" not in sent
+    assert "18C and sunny" in sent
 
 
 @pytest.mark.asyncio
@@ -1112,7 +1115,7 @@ async def test_make_apply_guardrail_request_skips_scan_without_credentials():
     ):
         await guardrail.make_bedrock_api_request(
             source="INPUT",
-            messages=[{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "out"}]}],
+            messages=[{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": []}]}],
         )
 
     mock_post.assert_not_called()
@@ -5711,9 +5714,6 @@ class TestBedrockGuardrailImageInput:
             pytest.param(None, id="no content"),
             pytest.param(123, id="content is not a list"),
             pytest.param([123], id="part is not a mapping"),
-            pytest.param([{"type": "image_url"}], id="image part with no url"),
-            pytest.param([{"type": "image_url", "image_url": 123}], id="url is not a string or mapping"),
-            pytest.param([{"type": "image_url", "image_url": {"url": 123}}], id="url value is not a string"),
             pytest.param([{"type": "input_audio"}], id="part carries neither image nor text"),
         ],
     )
@@ -6124,6 +6124,113 @@ class TestBedrockGuardrailImageInput:
             )
 
         assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_a_document_nested_inside_a_tool_result_is_refused(self):
+        """A tool_result wrapper is transparent to attachments: the model reads the
+        nested document, so the guardrail refuses it exactly like a top-level one."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize this"},
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu_1",
+                        "content": [
+                            {
+                                "type": "document",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "application/pdf",
+                                    "data": "AAAA",
+                                },
+                            }
+                        ],
+                    },
+                ],
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_a_tool_result_nested_base64_image_is_scanned_and_counted(self):
+        g = self._guardrail()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe the output"},
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu_1",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": self._PNG_DATA_URI.split(",")[1],
+                                },
+                            }
+                        ],
+                    },
+                ],
+            }
+        ]
+
+        request = await g.convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        kinds = [key for item in request["content"] for key in item]
+        assert "image" in kinds
+        assert BedrockGuardrail._image_count_in(messages) == 1
+
+    @pytest.mark.asyncio
+    async def test_an_image_url_part_with_only_a_file_id_is_refused(self):
+        """A file-backed image is not an inline png/jpeg, so it is refused like any
+        other attachment the guardrail cannot read."""
+        messages = [
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"file_id": "file_abc"}}]}
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+
+    @pytest.mark.parametrize(
+        "part",
+        [
+            pytest.param({"type": "image_url", "image_url": {}}, id="empty image_url"),
+            pytest.param({"type": "image_url"}, id="no image_url field"),
+            pytest.param({"type": "image_url", "image_url": 123}, id="url is not a string or mapping"),
+            pytest.param({"type": "image_url", "image_url": {"url": 123}}, id="url value is not a string"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_an_image_url_part_with_no_inline_url_is_refused(self, part):
+        """An image part carrying no readable reference is refused instead of being
+        silently dropped past the scan."""
+        messages = [{"role": "user", "content": [part]}]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert "image part carries no inline url" in str(exc_info.value.detail)
+
+    def test_decoded_base64_length_lands_on_both_sides_of_the_4_mib_cap(self):
+        """The estimate must use the exact decoded length so an image that is exactly
+        the ApplyGuardrail limit passes and one byte over is refused."""
+        limit: int = 4 * 1024 * 1024
+
+        assert _decoded_base64_length(base64.b64encode(b"\x00" * limit).decode()) == limit
+        assert _decoded_base64_length(base64.b64encode(b"\x00" * (limit + 1)).decode()) == limit + 1
+        assert _decoded_base64_length("QUJD") == 3
+        assert _decoded_base64_length("QUE=") == 2
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_scans_images_from_inputs(self):

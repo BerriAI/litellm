@@ -470,7 +470,10 @@ def _image_url_part_ref(content_item: Mapping[str, object]) -> str | None:
     if not isinstance(image_url, dict):
         return None
     url: Final = image_url.get("url")
-    return url if isinstance(url, str) and url else None
+    if isinstance(url, str) and url:
+        return url
+    file_id: Final = image_url.get("file_id")
+    return file_id if isinstance(file_id, str) and file_id else None
 
 
 def _input_file_ref(content_item: Mapping[str, object]) -> str:

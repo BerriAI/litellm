@@ -3448,6 +3448,28 @@ class TestOpenAIResponsesHandlerAttachments:
         assert guardrail.inputs["files"] == ["data:application/pdf;base64,AAAA"]
 
     @pytest.mark.asyncio
+    async def test_image_url_part_with_only_a_file_id_reaches_guardrail_as_images(self):
+        """A file-backed image_url has no inline url; it still must surface so the
+        guardrail can refuse it instead of dropping it past the scan."""
+        handler = OpenAIResponsesHandler()
+        guardrail = InputRecordingGuardrail()
+        data = {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "image_url", "image_url": {"file_id": "file_abc"}}],
+                }
+            ],
+            "model": "gpt-4o",
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["images"] == ["file_abc"]
+
+    @pytest.mark.asyncio
     async def test_input_file_with_only_a_file_id_reaches_guardrail(self):
         handler = OpenAIResponsesHandler()
         guardrail = InputRecordingGuardrail()

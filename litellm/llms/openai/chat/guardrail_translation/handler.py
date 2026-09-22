@@ -71,6 +71,21 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
 
 
+def _image_part_ref(content_item: Mapping[str, object]) -> str | None:
+    """The url or provider file id an ``image_url`` part carries."""
+    image_url: Final = content_item.get("image_url")
+    if isinstance(image_url, str):
+        return image_url or None
+    if isinstance(image_url, dict):
+        url: Final = image_url.get("url")
+        if isinstance(url, str) and url:
+            return url
+        file_id: Final = image_url.get("file_id")
+        if isinstance(file_id, str) and file_id:
+            return file_id
+    return None
+
+
 def _file_part_ref(content_item: Mapping[str, object]) -> str:
     """Identify a ``type == "file"`` part by whichever reference field it carries."""
     file_part: Final = content_item.get("file")
@@ -356,13 +371,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
                     # Extract images (image_url)
                     if content_item.get("type") == "image_url":
-                        image_url = content_item.get("image_url", {})
-                        if isinstance(image_url, dict):
-                            url = image_url.get("url")
-                            if url:
-                                images_to_check.append(url)
-                        elif isinstance(image_url, str):
-                            images_to_check.append(image_url)
+                        image_ref: Final = _image_part_ref(content_item)
+                        if image_ref is not None:
+                            images_to_check.append(image_ref)
 
                     # Extract non-image file attachments
                     if content_item.get("type") == "file":

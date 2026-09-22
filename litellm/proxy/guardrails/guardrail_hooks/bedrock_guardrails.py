@@ -246,6 +246,30 @@ def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
 _RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
 
 
+def _decoded_base64_length(encoded: str) -> int:
+    """Decoded byte length of a base64 payload without materializing it."""
+    return len(encoded) * 3 // 4 - encoded[-2:].count("=")
+
+
+def _flatten_tool_result_part(part: object) -> tuple[object, ...]:
+    """A tool_result block yields its nested content as leaf parts, so a document or
+    image inside it is counted, scanned, or refused exactly like a top-level part."""
+    if isinstance(part, dict) and part.get("type") == "tool_result":
+        content: Final = part.get("content")
+        if isinstance(content, str):
+            return (content,)
+        if isinstance(content, list):
+            return tuple(leaf for nested in content for leaf in _flatten_tool_result_part(nested))
+        return ()
+    return (part,)
+
+
+def _content_leaf_parts(content: object) -> tuple[object, ...]:
+    if not isinstance(content, list):
+        return ()
+    return tuple(leaf for part in content for leaf in _flatten_tool_result_part(part))
+
+
 def _is_responses_api_route(request_route: str | None) -> bool:
     if request_route is None:
         return False
@@ -439,9 +463,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return (BedrockContentItem(text=BedrockTextContent(text=content)),)
         if not isinstance(content, list):
             return ()
-        parts: Final = cast(  # cast-ok: AllMessageValues content is a union of part TypedDicts
-            tuple[object, ...], tuple(content)
-        )
+        parts: Final = _content_leaf_parts(content)
         items: Final = await asyncio.gather(*(self._build_input_content_item(item=item) for item in parts))
         return tuple(item for item in items if item is not None)
 
@@ -457,11 +479,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if part.get("type") == "image_url":
             image_url: Final = self._get_image_url(item=part)
             if image_url is None:
-                return None
+                self._handle_unscannable_attachment(reason="image part carries no inline url")
             return await self._build_image_content_item(image_url=image_url)
         if part.get("type") in ("file", "document"):
-            # OpenAI `file` parts and Anthropic `document` blocks reach the model
-            # untouched, and ApplyGuardrail has no content type to scan them with.
             self._handle_unscannable_attachment(
                 reason="a document/file attachment cannot be scanned; Bedrock ApplyGuardrail accepts text and "
                 "inline png/jpeg images only"
@@ -514,8 +534,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if isinstance(image_url, str):
             return image_url
         if isinstance(image_url, dict):
-            url: Final = cast(Mapping[str, object], image_url).get("url")  # cast-ok: narrowed to dict on the line above
-            return url if isinstance(url, str) else None
+            mapping: Final = cast(Mapping[str, object], image_url)  # cast-ok: narrowed to dict on the line above
+            url: Final = mapping.get("url")
+            if isinstance(url, str) and url:
+                return url
+            file_id: Final = mapping.get("file_id")
+            return file_id if isinstance(file_id, str) and file_id else None
         return None
 
     @classmethod
@@ -524,9 +548,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return frozenset(
             cls._normalize_image_input(url)
             for message in messages or ()
-            for content in (message.get("content"),)
-            if isinstance(content, list)
-            for part in content
+            for part in _content_leaf_parts(message.get("content"))
             if isinstance(part, dict)
             for url in (
                 (
@@ -543,12 +565,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """Count image occurrences in the exact messages sent to ApplyGuardrail."""
         count = 0  # rebind-ok: running count over request content
         for message in messages or ():
-            content = message.get("content")
-            if not isinstance(content, list):
-                continue
             count += sum(
                 1
-                for part in content
+                for part in _content_leaf_parts(message.get("content"))
                 if isinstance(part, dict)
                 and (
                     (part.get("type") == "image_url" and cls._get_image_url(part) is not None)
@@ -568,7 +587,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             detail={  # mutable-ok: HTTPException detail payload, serialized immediately
                 "error": "Violated guardrail policy",
                 "bedrock_guardrail_response": (
-                    f"Request contains an image the guardrail cannot scan ({reason}). "
+                    f"Request contains an attachment the guardrail cannot scan: {reason}. "
                     "Bedrock ApplyGuardrail accepts inline png/jpeg images only"
                 ),
                 "guardrail_name": self.guardrail_name,
@@ -639,9 +658,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if image_format is None or not image_bytes:
             self._handle_unscannable_attachment(reason="attachment is not a png/jpeg image")
 
-        # base64 decodes to roughly 3/4 of its length; estimate rather than decode the
-        # whole image a second time just to measure it.
-        decoded_size: Final = len(image_bytes) * 3 // 4
+        decoded_size: Final = _decoded_base64_length(image_bytes)
         if decoded_size > _MAX_IMAGE_BYTES:
             self._handle_unscannable_attachment(
                 reason=f"image is {decoded_size / 1024 / 1024:.1f} MB, over ApplyGuardrail's 4 MB limit"
@@ -3457,9 +3474,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # from `image`/`source` blocks. Five other guardrails already consume this
         # field; Bedrock was the one that dropped it on the floor.
         image_urls: Final = tuple(inputs.get("images") or ()) if input_type == "request" else ()
-        # Before the shortcuts below, so a document/file attachment cannot be
-        # skipped either. ApplyGuardrail accepts only text and inline images, so
-        # any non-image attachment is refused fail-closed on the request side.
+        # Refused before the shortcuts: ApplyGuardrail has no content type for a document/file attachment.
         files: Final = tuple(inputs.get("files") or ()) if input_type == "request" else ()
         if files:
             self._handle_unscannable_attachment(

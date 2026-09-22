@@ -102,3 +102,24 @@ class TestOpenAIChatHandlerAttachments:
         assert guardrail.calls == 1, "file-only turn never reached apply_guardrail"
         assert guardrail.inputs is not None
         assert guardrail.inputs["files"] == ["file_abc"]
+
+    @pytest.mark.asyncio
+    async def test_image_url_part_with_only_a_file_id_reaches_guardrail_as_images(self):
+        """A file-backed image_url has no inline url; it still must surface so the
+        guardrail can refuse it instead of dropping it past the scan."""
+        guardrail = RecordingGuardrail()
+        data = {
+            "model": "gpt-4o",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "image_url", "image_url": {"file_id": "file_abc"}}],
+                }
+            ],
+        }
+
+        await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["images"] == ["file_abc"]
