@@ -1,13 +1,20 @@
 import asyncio
 import concurrent.futures
+import functools
 import gc
+import http.server
+import ipaddress
 import json
 import os
+import queue
+import ssl
 import sys
 import threading
 import time
 import unittest
 import weakref
+from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
@@ -18,15 +25,19 @@ import pytest
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 from opentelemetry import trace
-from opentelemetry.sdk._logs import LogData
+from opentelemetry._logs.severity import SeverityNumber
+from opentelemetry.sdk._logs import LogData, LogRecord
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
-from opentelemetry.sdk._logs.export import InMemoryLogExporter, SimpleLogRecordProcessor
+from opentelemetry.sdk._logs.export import InMemoryLogExporter, LogExportResult, SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, MetricsData
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
+from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from parameterized import parameterized
+
+import requests
 
 import litellm
 from litellm.integrations import opentelemetry as otel_module
@@ -2085,62 +2096,210 @@ class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
         self.assertEqual(traces, "http://collector:4318/v1/traces")
 
 
-def test_resolve_otlp_http_tls_uses_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    certificate_file: Final = tmp_path / "ca.pem"
-    certificate_file.write_text("certificate")
-    monkeypatch.setenv("SSL_CERT_FILE", str(certificate_file))
-    monkeypatch.delenv("SSL_VERIFY", raising=False)
-    monkeypatch.delenv("OTEL_EXPORTER_OTLP_CERTIFICATE", raising=False)
-    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE", raising=False)
-
-    tls: Final = otel_module._resolve_otlp_http_tls("TRACES")
-
-    assert tls.certificate_file == str(certificate_file)
-    assert tls.session is None
+@dataclass(frozen=True, slots=True)
+class _TlsSink:
+    url: str
+    certificate_path: str
+    received: "queue.Queue[str]"
 
 
-def test_resolve_otlp_http_tls_disables_verification(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SSL_VERIFY", "false")
-    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
-    monkeypatch.delenv("OTEL_EXPORTER_OTLP_CERTIFICATE", raising=False)
-    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE", raising=False)
+class _RecordingOtelHandler(http.server.BaseHTTPRequestHandler):
+    def __init__(self, *args: object, received: "queue.Queue[str]", **kwargs: object) -> None:
+        self._received: Final = received
+        super().__init__(*args, **kwargs)
 
-    tls: Final = otel_module._resolve_otlp_http_tls("TRACES")
-    assert tls.certificate_file is None
-    assert tls.session is not None
+    def do_POST(self) -> None:
+        length: Final = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)
+        self._received.put(self.path)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-protobuf")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
-    adapter: Final = tls.session.get_adapter("https://example.invalid")
-    connection: Final = adapter.poolmanager.connection_from_url("https://example.invalid")
-    adapter.cert_verify(connection, "https://example.invalid", True, None)
-
-    assert connection.cert_reqs == "CERT_NONE"
-
-
-def test_resolve_otlp_http_tls_prefers_otel_certificate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    certificate_file: Final = tmp_path / "ca.pem"
-    certificate_file.write_text("certificate")
-    monkeypatch.setenv("SSL_CERT_FILE", str(certificate_file))
-    monkeypatch.setenv("OTEL_EXPORTER_OTLP_CERTIFICATE", "/otel-ca.pem")
-
-    tls: Final = otel_module._resolve_otlp_http_tls("TRACES")
-
-    assert tls.certificate_file is None
-    assert tls.session is None
+    def log_message(self, format: str, *args: object) -> None:
+        pass
 
 
-def test_http_span_exporter_uses_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    certificate_file: Final = tmp_path / "ca.pem"
-    certificate_file.write_text("certificate")
-    monkeypatch.setenv("SSL_CERT_FILE", str(certificate_file))
-    monkeypatch.delenv("SSL_VERIFY", raising=False)
-    monkeypatch.delenv("OTEL_EXPORTER_OTLP_CERTIFICATE", raising=False)
-    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE", raising=False)
+def _write_self_signed_cert(directory: Path, stem: str) -> tuple[Path, Path]:
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
 
-    config: Final = OpenTelemetryConfig(exporter="otlp_http", endpoint="https://collector.invalid:4318")
-    otel: Final = OpenTelemetry(config=config)
+    key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    certificate: Final = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(timezone.utc) - timedelta(minutes=1))
+        .not_valid_after(datetime.now(timezone.utc) + timedelta(hours=1))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    certificate_path: Final = directory / f"{stem}.crt"
+    certificate_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    key_path: Final = directory / f"{stem}.key"
+    key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
+    return certificate_path, key_path
+
+
+@pytest.fixture
+def tls_sink(tmp_path: Path) -> Iterator[_TlsSink]:
+    certificate_path, key_path = _write_self_signed_cert(tmp_path, "sink")
+    received: "queue.Queue[str]" = queue.Queue()
+    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(str(certificate_path), str(key_path))
+    server: Final = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), functools.partial(_RecordingOtelHandler, received=received)
+    )
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield _TlsSink(
+        url=f"https://127.0.0.1:{server.server_port}",
+        certificate_path=str(certificate_path),
+        received=received,
+    )
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=5)
+
+
+def _isolate_otlp_tls_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in (
+        "SSL_VERIFY",
+        "SSL_CERT_FILE",
+        "OTEL_EXPORTER_OTLP_CERTIFICATE",
+        "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
+        "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
+        "OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "2")
+    monkeypatch.setattr(litellm, "ssl_verify", True)
+
+
+def _ended_span():
+    provider: Final = TracerProvider()
+    span = provider.get_tracer(__name__).start_span("tls-export-test")
+    span.end()
+    return provider, span
+
+
+def _otlp_http_otel(endpoint: str) -> OpenTelemetry:
+    return OpenTelemetry(config=OpenTelemetryConfig(exporter="otlp_http", endpoint=endpoint))
+
+
+def test_otlp_http_span_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tls_sink: _TlsSink) -> None:
+    _isolate_otlp_tls_env(monkeypatch)
+    monkeypatch.setenv("SSL_CERT_FILE", tls_sink.certificate_path)
+    otel: Final = _otlp_http_otel(tls_sink.url)
     processor: Final = otel._get_span_processor()
+    provider, span = _ended_span()
+    try:
+        result: Final = processor.span_exporter.export([span])
+        assert result is SpanExportResult.SUCCESS, f"span export failed: {result}"
+        assert tls_sink.received.get(timeout=5) == "/v1/traces"
+    finally:
+        processor.shutdown()
+        provider.shutdown()
 
-    assert processor.span_exporter._certificate_file == str(certificate_file)
+
+def test_otlp_http_metric_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tls_sink: _TlsSink) -> None:
+    _isolate_otlp_tls_env(monkeypatch)
+    monkeypatch.setenv("SSL_CERT_FILE", tls_sink.certificate_path)
+    otel: Final = _otlp_http_otel(tls_sink.url)
+    reader: Final = otel._get_metric_reader()
+    provider: Final = MeterProvider(metric_readers=[reader])
+    try:
+        provider.get_meter(__name__).create_counter("tls_export_test").add(1)
+        assert provider.force_flush(), "metric flush failed"
+        assert tls_sink.received.get(timeout=5) == "/v1/metrics"
+    finally:
+        provider.shutdown()
+
+
+def test_otlp_http_log_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tls_sink: _TlsSink) -> None:
+    _isolate_otlp_tls_env(monkeypatch)
+    monkeypatch.setenv("SSL_CERT_FILE", tls_sink.certificate_path)
+    otel: Final = _otlp_http_otel(tls_sink.url)
+    exporter: Final = otel._get_log_exporter()
+    try:
+        record: Final = LogRecord(
+            timestamp=int(time.time() * 1e9),
+            observed_timestamp=int(time.time() * 1e9),
+            trace_id=0,
+            span_id=0,
+            trace_flags=trace.TraceFlags(0),
+            severity_number=SeverityNumber.INFO,
+            body="tls-export-test",
+        )
+        log_data: Final = LogData(log_record=record, instrumentation_scope=InstrumentationScope("tls-export-test"))
+        result: Final = exporter.export([log_data])
+        assert result is LogExportResult.SUCCESS, f"log export failed: {result}"
+        assert tls_sink.received.get(timeout=5) == "/v1/logs"
+    finally:
+        exporter.shutdown()
+
+
+def test_otlp_http_export_skips_verification_when_ssl_verify_false(
+    monkeypatch: pytest.MonkeyPatch, tls_sink: _TlsSink
+) -> None:
+    _isolate_otlp_tls_env(monkeypatch)
+    monkeypatch.setenv("SSL_VERIFY", "false")
+    otel: Final = _otlp_http_otel(tls_sink.url)
+    processor: Final = otel._get_span_processor()
+    provider, span = _ended_span()
+    try:
+        result: Final = processor.span_exporter.export([span])
+        assert result is SpanExportResult.SUCCESS, f"span export failed: {result}"
+        assert tls_sink.received.get(timeout=5) == "/v1/traces"
+    finally:
+        processor.shutdown()
+        provider.shutdown()
+
+
+def test_otlp_http_export_rejects_untrusted_collector_by_default(
+    monkeypatch: pytest.MonkeyPatch, tls_sink: _TlsSink
+) -> None:
+    _isolate_otlp_tls_env(monkeypatch)
+    otel: Final = _otlp_http_otel(tls_sink.url)
+    processor: Final = otel._get_span_processor()
+    provider, span = _ended_span()
+    try:
+        with pytest.raises(requests.exceptions.SSLError):
+            processor.span_exporter.export([span])
+        assert tls_sink.received.empty(), "sink received a request it should never have trusted"
+    finally:
+        processor.shutdown()
+        provider.shutdown()
+
+
+def test_otel_certificate_env_takes_precedence_over_ssl_cert_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tls_sink: _TlsSink
+) -> None:
+    _isolate_otlp_tls_env(monkeypatch)
+    unrelated_certificate, _ = _write_self_signed_cert(tmp_path, "unrelated")
+    monkeypatch.setenv("SSL_CERT_FILE", tls_sink.certificate_path)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_CERTIFICATE", str(unrelated_certificate))
+    otel: Final = _otlp_http_otel(tls_sink.url)
+    processor: Final = otel._get_span_processor()
+    provider, span = _ended_span()
+    try:
+        with pytest.raises(requests.exceptions.SSLError):
+            processor.span_exporter.export([span])
+        assert tls_sink.received.empty(), "sink received a request it should never have trusted"
+    finally:
+        processor.shutdown()
+        provider.shutdown()
 
 
 class TestOpenTelemetryProtocolSelection(unittest.TestCase):
