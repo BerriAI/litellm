@@ -473,8 +473,10 @@ class ProxyExtrasDBManager:
                     env=_get_prisma_env(),
                 )
         except subprocess.CalledProcessError as e:
+            diff_sql_path.unlink(missing_ok=True)
             logger.warning(f"Failed to generate migration diff: {e.stderr}")
         except subprocess.TimeoutExpired:
+            diff_sql_path.unlink(missing_ok=True)
             logger.warning("Migration diff generation timed out.")
 
         # check if the migration was created
