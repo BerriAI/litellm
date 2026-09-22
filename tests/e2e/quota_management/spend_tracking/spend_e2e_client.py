@@ -284,17 +284,16 @@ class SpendClient:
             key, min_rows=min_rows, predicate=predicate
         )
 
+    def calculate_spend_result(self, model: str, content: str) -> Result[SpendCalculateResponse]:
+        return self.proxy.transport.post(
+            "/spend/calculate",
+            headers=self.proxy.transport.master,
+            json=SpendCalculateBody(model=model, messages=[ChatMessage(role="user", content=content)]),
+            response_type=SpendCalculateResponse,
+        )
+
     def calculate_spend(self, model: str, content: str) -> float:
-        return unwrap(
-            self.proxy.transport.post(
-                "/spend/calculate",
-                headers=self.proxy.transport.master,
-                json=SpendCalculateBody(
-                    model=model, messages=[ChatMessage(role="user", content=content)]
-                ),
-                response_type=SpendCalculateResponse,
-            )
-        ).cost
+        return unwrap(self.calculate_spend_result(model, content)).cost
 
     def spend_by_tags(self) -> list[TagSpend]:
         result = self.proxy.transport.get(

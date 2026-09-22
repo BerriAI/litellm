@@ -471,6 +471,7 @@ from .exceptions import (
     BudgetExceededError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    ModelNotMappedError,
     NotFoundError,
     OpenAIError,
     PermissionDeniedError,
@@ -6191,7 +6192,7 @@ def _get_model_info_helper(
             return returned_model_info
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)
-        raise Exception(
+        raise ModelNotMappedError(
             f"This model isn't mapped yet. model={model}, custom_llm_provider={custom_llm_provider}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json."
         )
 

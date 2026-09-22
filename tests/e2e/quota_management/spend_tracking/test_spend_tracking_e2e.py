@@ -21,7 +21,7 @@ from math import isclose
 from typing import Final
 
 import pytest
-from e2e_http import Success
+from e2e_http import Success, UnknownApiError
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody, SpendLogs, SpendLogsParams
 from spend_e2e_client import SpendClient, SpendLogRow, is_ok, unique_marker, unwrap
@@ -507,6 +507,20 @@ def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
         "/spend/calculate returned 0 for gemini-2.5-flash; "
         "cost map may be missing this model"
     )
+
+
+@pytest.mark.covers("quota_management.spend_tracking.spend_calculate.rejects_unpriced_model")
+def test_spend_calculate_rejects_unpriced_model_with_4xx(client: SpendClient) -> None:
+    """A model with no pricing row (retired from the cost map, never added) is a
+    caller mistake, so /spend/calculate must answer 4xx naming the model, not 500."""
+    model: Final = f"openrouter/e2e-unpriced-{unique_marker()}"
+    result = client.calculate_spend_result(model, "price this request")
+    match result:
+        case UnknownApiError(status_code=status_code, body=body):
+            assert 400 <= status_code < 500, f"expected 4xx for unpriced model, got {status_code}: {body[:300]}"
+            assert model in body, f"error body does not name the unpriced model: {body[:300]}"
+        case _:
+            pytest.fail(f"expected a 4xx rejection for unpriced model {model}, got {result}")
 
 
 def test_spend_logs_endpoint_returns_spend(
