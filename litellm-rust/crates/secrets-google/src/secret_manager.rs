@@ -38,6 +38,8 @@ struct Response {
 #[derive(Deserialize)]
 struct Payload {
     data: Option<String>,
+    #[serde(rename = "dataCrc32c")]
+    data_crc32c: Option<String>,
 }
 
 impl GoogleSecretManager {
@@ -145,10 +147,19 @@ impl GoogleSecretManager {
             return Err(Error::Status(response.status().as_u16()));
         }
         let response: Response = response.json().await?;
-        let Some(data) = response.payload.and_then(|payload| payload.data) else {
+        let Some(payload) = response.payload else {
+            return Err(Error::MissingPayload);
+        };
+        let Some(data) = payload.data else {
             return Err(Error::MissingPayload);
         };
         let bytes = STANDARD.decode(data)?;
+        if let Some(expected) = payload.data_crc32c {
+            let expected = expected.parse::<u32>().map_err(|_| Error::Checksum)?;
+            if crc32c::crc32c(&bytes) != expected {
+                return Err(Error::Checksum);
+            }
+        }
         let plaintext = String::from_utf8(bytes).map_err(|_| Error::Utf8)?;
         let value = SecretValue::new(plaintext);
         self.cache.insert(name.to_owned(), value.clone()).await;

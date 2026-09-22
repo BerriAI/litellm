@@ -34,6 +34,8 @@ pub enum Error {
     RefreshInterval,
     #[error("payload is not valid base64")]
     Base64(#[from] base64::DecodeError),
+    #[error("Google Secret Manager payload checksum mismatch")]
+    Checksum,
     #[error("decrypted value is not UTF-8")]
     Utf8,
     #[error("invalid Google Secret Manager endpoint")]

@@ -31,6 +31,10 @@ pub enum Error {
     MalformedPayload,
     #[error("HashiCorp Vault secret value is not a string")]
     NonStringValue,
+    #[error("HashiCorp Vault data key conflicts with description")]
+    DataKeyConflictsWithDescription,
+    #[error("HashiCorp Vault secret version exceeds CAS range")]
+    CasVersionOverflow,
     #[error("HashiCorp Vault operation timed out")]
     Timeout,
     #[error("invalid HashiCorp Vault refresh interval")]

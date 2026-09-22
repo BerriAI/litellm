@@ -91,6 +91,7 @@ impl AzureKeyVault {
             .client
             .get(url)
             .bearer_auth(token.value().secret().expose())
+            .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await
             .map_err(Error::Http)?;

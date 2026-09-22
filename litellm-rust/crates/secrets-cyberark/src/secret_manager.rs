@@ -23,6 +23,7 @@ const DEFAULT_API_BASE: &str = "http://127.0.0.1:8080";
 const DEFAULT_ACCOUNT: &str = "default";
 const DEFAULT_USERNAME: &str = "admin";
 const DEFAULT_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
+const MAX_TOKEN_LIFETIME: Duration = Duration::from_secs(7 * 60);
 const SECRET_NAME_SAFE: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'_')
@@ -59,7 +60,9 @@ impl CyberArkSecretManager {
         let ttl = refresh_interval
             .filter(|interval| !interval.is_zero())
             .unwrap_or(DEFAULT_REFRESH_INTERVAL);
-        let token = Cache::builder().time_to_live(ttl).build();
+        let token = Cache::builder()
+            .time_to_live(ttl.min(MAX_TOKEN_LIFETIME))
+            .build();
         let secrets = Cache::builder().time_to_live(ttl).build();
         Self {
             client,
@@ -80,7 +83,7 @@ impl CyberArkSecretManager {
         let api_key = environment.get(CYBERARK_API_KEY).unwrap_or_default();
         let cert = environment.get(CYBERARK_CLIENT_CERT).unwrap_or_default();
         let key = environment.get(CYBERARK_CLIENT_KEY).unwrap_or_default();
-        if api_key.is_empty() && (cert.is_empty() || key.is_empty()) {
+        if api_key.is_empty() {
             return Err(Error::MissingCredentials);
         }
         if !enterprise_enabled {
@@ -155,7 +158,8 @@ impl CyberArkSecretManager {
             .endpoint
             .join(&format!(
                 "authn/{}/{}/authenticate",
-                self.account, self.username
+                self.account,
+                utf8_percent_encode(&self.username, SECRET_NAME_SAFE)
             ))
             .map_err(|_| Error::Endpoint)?;
         let response = with_timeout(
@@ -195,6 +199,7 @@ impl CyberArkSecretManager {
         if let Some(value) = self.secrets.get(name).await {
             return Ok(Some(value));
         }
+        let had_cached_token = self.token.get(&()).await.is_some();
         let response = with_timeout(
             self.client
                 .get(self.secret_url(name)?)
@@ -203,6 +208,20 @@ impl CyberArkSecretManager {
         )
         .send()
         .await?;
+        let response = if had_cached_token && response.status() == reqwest::StatusCode::UNAUTHORIZED
+        {
+            self.token.invalidate(&()).await;
+            with_timeout(
+                self.client
+                    .get(self.secret_url(name)?)
+                    .header("Authorization", self.authorization_header(context).await?),
+                context,
+            )
+            .send()
+            .await?
+        } else {
+            response
+        };
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -247,6 +266,20 @@ impl CyberArkSecretManager {
         )
         .send()
         .await?;
+        let response = if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            self.token.invalidate(&()).await;
+            with_timeout(
+                self.client
+                    .post(self.secret_url(name)?)
+                    .header("Authorization", self.authorization_header(context).await?)
+                    .body(value.expose().to_owned()),
+                context,
+            )
+            .send()
+            .await?
+        } else {
+            response
+        };
         if !response.status().is_success() {
             return Err(Error::Status(response.status().as_u16()));
         }
@@ -274,7 +307,7 @@ impl CyberArkSecretManager {
             self.client
                 .post(policy_url)
                 .header("Authorization", authorization)
-                .header("Content-Type", "application/x-yaml")
+                .header("Content-Type", "text/plain")
                 .body(body),
             context,
         )

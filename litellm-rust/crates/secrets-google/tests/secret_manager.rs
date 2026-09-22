@@ -61,12 +61,43 @@ async fn successful_reads_use_auth_latest_version_and_cache_including_empty_valu
     }
 }
 
+#[tokio::test]
+async fn matching_checksum_is_accepted_and_cached() {
+    let server = MockServer::start().await;
+    let value = "private-value";
+    Mock::given(path(
+        "/v1/projects/project/secrets/key/versions/latest:access",
+    ))
+    .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        "payload": {
+            "data": STANDARD.encode(value),
+            "dataCrc32c": crc32c::crc32c(value.as_bytes()).to_string()
+        }
+    })))
+    .expect(1)
+    .mount(&server)
+    .await;
+    let manager = manager(&server, false, Duration::from_secs(60));
+    for _ in 0..2 {
+        assert_eq!(
+            manager
+                .get_secret_from_google_secret_manager("key")
+                .await
+                .unwrap()
+                .unwrap()
+                .as_str(),
+            Some(value)
+        );
+    }
+}
+
 enum ExpectedReadFailure {
     Missing,
     Status(u16),
     MissingPayload,
     Base64,
     Utf8,
+    Checksum,
 }
 
 #[rstest]
@@ -89,6 +120,11 @@ enum ExpectedReadFailure {
     200,
     serde_json::json!({"payload":{"data":STANDARD.encode([0xff])}}),
     ExpectedReadFailure::Utf8
+)]
+#[case::checksum_mismatch(
+    200,
+    serde_json::json!({"payload":{"data":STANDARD.encode("corrupt"),"dataCrc32c":"0"}}),
+    ExpectedReadFailure::Checksum
 )]
 #[tokio::test]
 async fn failed_or_missing_reads_are_not_cached(
@@ -117,6 +153,7 @@ async fn failed_or_missing_reads_are_not_cached(
         }
         ExpectedReadFailure::Base64 => assert!(matches!(result, Err(Error::Base64(_)))),
         ExpectedReadFailure::Utf8 => assert!(matches!(result, Err(Error::Utf8))),
+        ExpectedReadFailure::Checksum => assert!(matches!(result, Err(Error::Checksum))),
     }
     drop(failing);
     Mock::given(path(

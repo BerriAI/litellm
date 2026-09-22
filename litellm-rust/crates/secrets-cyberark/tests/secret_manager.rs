@@ -1,4 +1,10 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_secrets_cyberark::{CyberArkSecretManager, DeleteOutcome, Error};
@@ -126,6 +132,132 @@ async fn concurrent_reads_share_authentication_request() {
 
     assert_eq!(first.unwrap().unwrap().expose(), "value");
     assert_eq!(second.unwrap().unwrap().expose(), "value");
+}
+
+#[rstest]
+#[case::host("host/team/app", "/authn/acct/host%2Fteam%2Fapp/authenticate")]
+#[case::user("alice@devops", "/authn/acct/alice%40devops/authenticate")]
+#[tokio::test]
+async fn authentication_encodes_login(#[case] username: &str, #[case] expected_path: &str) {
+    let server = MockServer::start().await;
+    Mock::given(RawPath(expected_path.to_owned()))
+        .and(method("POST"))
+        .and(body_string("k3y"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(TOKEN_JSON))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(path("/secrets/acct/variable/key"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("value"))
+        .mount(&server)
+        .await;
+    let manager = CyberArkSecretManager::with_client(
+        reqwest::Client::new(),
+        server.uri().parse().unwrap(),
+        "acct".into(),
+        username.into(),
+        SecretValue::new("k3y"),
+        None,
+    );
+
+    assert_eq!(
+        manager
+            .async_read_secret("key")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "value"
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn rejected_cached_token_is_reauthenticated_once() {
+    let server = MockServer::start().await;
+    mount_auth(&server, 2).await;
+    Mock::given(path("/secrets/acct/variable/first"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("first-value"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_response = Arc::clone(&attempts);
+    Mock::given(path("/secrets/acct/variable/second"))
+        .respond_with(move |_: &Request| {
+            if attempts_for_response.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(401)
+            } else {
+                ResponseTemplate::new(200).set_body_string("second-value")
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let manager = manager(&server, Duration::from_secs(600));
+
+    assert_eq!(
+        manager
+            .async_read_secret("first")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "first-value"
+    );
+    assert_eq!(
+        manager
+            .async_read_secret("second")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "second-value"
+    );
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[rstest]
+#[tokio::test]
+async fn rejected_write_token_is_reauthenticated_once() {
+    let server = MockServer::start().await;
+    mount_auth(&server, 2).await;
+    Mock::given(path("/policies/acct/policy/root"))
+        .respond_with(ResponseTemplate::new(409))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_response = Arc::clone(&attempts);
+    Mock::given(method("POST"))
+        .and(path("/secrets/acct/variable/key"))
+        .and(body_string("value"))
+        .respond_with(move |_: &Request| {
+            if attempts_for_response.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(401)
+            } else {
+                ResponseTemplate::new(200)
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let manager = manager(&server, Duration::from_secs(600));
+
+    manager
+        .async_write_secret("key", &SecretValue::new("value"), None)
+        .await
+        .unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        manager
+            .async_read_secret("key")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "value"
+    );
 }
 
 #[rstest]
@@ -285,7 +417,7 @@ async fn writes_tolerate_policy_status_and_cache_value(#[case] policy_status: u1
     let server = MockServer::start().await;
     mount_auth(&server, 1).await;
     Mock::given(path("/policies/acct/policy/root"))
-        .and(header("content-type", "application/x-yaml"))
+        .and(header("content-type", "text/plain"))
         .and(body_string("- !variable \"team/app\"\n"))
         .respond_with(ResponseTemplate::new(policy_status))
         .expect(1)
@@ -451,6 +583,20 @@ fn new_validates_credentials_before_license_and_configuration() {
 }
 
 #[rstest]
+fn certificate_without_api_key_is_rejected_before_loading_files() {
+    let result = CyberArkSecretManager::new(
+        Arc::new(|name: &str| match name {
+            "CYBERARK_CLIENT_CERT" => Some("/missing/cert".into()),
+            "CYBERARK_CLIENT_KEY" => Some("/missing/key".into()),
+            _ => None,
+        }),
+        true,
+    );
+
+    assert!(matches!(result, Err(Error::MissingCredentials)));
+}
+
+#[rstest]
 #[tokio::test]
 async fn new_reads_environment_defaults_end_to_end() {
     let server = MockServer::start().await;
@@ -489,6 +635,7 @@ fn new_reports_missing_client_certificate_files() {
     assert!(matches!(
         CyberArkSecretManager::new(
             Arc::new(|name: &str| match name {
+                "CYBERARK_API_KEY" => Some("k3y".into()),
                 "CYBERARK_CLIENT_CERT" => Some("/missing/cert".into()),
                 "CYBERARK_CLIENT_KEY" => Some("/missing/key".into()),
                 _ => None,

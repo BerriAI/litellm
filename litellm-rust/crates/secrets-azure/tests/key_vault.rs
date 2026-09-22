@@ -25,6 +25,7 @@ async fn reads_secret_with_bearer_token_and_api_version() {
     Mock::given(path("/secrets/OPENAI-API-KEY"))
         .and(query_param("api-version", "7.4"))
         .and(header("authorization", "Bearer fake"))
+        .and(header("accept", "application/json"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({"value": "s3cret", "id": "secret-id"})),

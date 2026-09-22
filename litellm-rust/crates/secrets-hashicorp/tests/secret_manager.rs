@@ -73,6 +73,46 @@ fn read_response(data: serde_json::Value) -> serde_json::Value {
     })
 }
 
+fn metadata_response(version: u64) -> serde_json::Value {
+    json!({
+        "data": {
+            "cas_required": true,
+            "created_time": "",
+            "current_version": version,
+            "delete_version_after": "0s",
+            "max_versions": 0,
+            "oldest_version": 1,
+            "updated_time": "",
+            "custom_metadata": null,
+            "versions": {}
+        },
+        "lease_id": "",
+        "lease_duration": 0,
+        "renewable": false,
+        "request_id": "",
+        "warnings": null,
+        "wrap_info": null
+    })
+}
+
+fn write_response(version: u64) -> serde_json::Value {
+    json!({
+        "data": {
+            "created_time": "",
+            "deletion_time": "",
+            "custom_metadata": null,
+            "destroyed": false,
+            "version": version
+        },
+        "lease_id": "",
+        "lease_duration": 0,
+        "renewable": false,
+        "request_id": "",
+        "warnings": null,
+        "wrap_info": null
+    })
+}
+
 #[fixture]
 fn token_values() -> Vec<(&'static str, &'static str)> {
     vec![("HCP_VAULT_TOKEN", "token")]
@@ -533,6 +573,98 @@ async fn base_manager_context_overrides_vault_location_and_data_key(
     BaseSecretManager::async_delete_secret(&manager, "name", None, &operation)
         .await
         .unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn rejects_description_that_would_replace_the_secret_value(token_values: Vec<(&str, &str)>) {
+    let server: MockServer = MockServer::start().await;
+    let manager: HashicorpVault = manager(&server, &token_values);
+    let context = SecretWriteContext {
+        description: Some("metadata".to_owned()),
+        operation: SecretOperationContext::Hashicorp(HashicorpOperationContext {
+            data_key: Some("description".to_owned()),
+            ..HashicorpOperationContext::default()
+        }),
+        ..SecretWriteContext::default()
+    };
+
+    assert!(matches!(
+        manager
+            .async_write_secret_with_context("name", &SecretValue::new("secret"), &context)
+            .await,
+        Err(Error::DataKeyConflictsWithDescription)
+    ));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
+#[case::existing(200, 2)]
+#[case::new_secret(404, 0)]
+#[tokio::test]
+async fn cas_required_writes_retry_with_the_current_version(
+    token_values: Vec<(&str, &str)>,
+    #[case] metadata_status: u16,
+    #[case] expected_cas: u64,
+) {
+    let server: MockServer = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/secret/data/name"))
+        .and(body_json(json!({"data": {"key": "value"}})))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({"errors": ["CAS required"]})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/secret/metadata/name"))
+        .respond_with(
+            ResponseTemplate::new(metadata_status).set_body_json(metadata_response(expected_cas)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/secret/data/name"))
+        .and(body_json(json!({
+            "data": {"key": "value"},
+            "options": {"cas": expected_cas}
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(write_response(expected_cas + 1)))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let result = manager(&server, &token_values)
+        .async_write_secret("name", SecretValue::new("value"), None)
+        .await;
+
+    assert!(result.is_ok());
+}
+
+#[rstest]
+#[tokio::test]
+async fn failed_cas_lookup_preserves_the_write_error(token_values: Vec<(&str, &str)>) {
+    let server: MockServer = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/secret/data/name"))
+        .respond_with(
+            ResponseTemplate::new(400).set_body_json(json!({"errors": ["write rejected"]})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/secret/metadata/name"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({"errors": ["forbidden"]})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let result = manager(&server, &token_values)
+        .async_write_secret("name", SecretValue::new("value"), None)
+        .await;
+
+    assert!(matches!(result, Err(Error::Status { status: 400 })));
 }
 
 #[rstest]

@@ -17,6 +17,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use vaultrs::{
     api,
+    api::kv2::requests::SetSecretRequestOptions,
     auth::approle,
     client::{Identity, VaultClient, VaultClientSettingsBuilder},
     error::ClientError,
@@ -192,6 +193,9 @@ impl HashicorpVault {
         let location: SecretLocation =
             self.secret_location_with_context(secret_name, &context.operation)?;
         let data_key: String = data_key(&context.operation)?;
+        if context.description.is_some() && data_key == "description" {
+            return Err(Error::DataKeyConflictsWithDescription);
+        }
         let data: HashMap<String, Value> = match context.description.as_deref() {
             Some(description) => [
                 (data_key, Value::String(value.expose().to_owned())),
@@ -208,9 +212,30 @@ impl HashicorpVault {
         };
         let metadata = with_timeout(&context.operation, async {
             let client: Arc<VaultClient> = self.vault_client().await?;
-            kv2::set(client.as_ref(), &location.mount, &location.path, &data)
-                .await
-                .map_err(|error| map_api_error(error, ErrorContext::Secret))
+            match kv2::set(client.as_ref(), &location.mount, &location.path, &data).await {
+                Ok(metadata) => Ok(metadata),
+                Err(error) if api_status(&error) == Some(400) => {
+                    let version =
+                        match kv2::read_metadata(client.as_ref(), &location.mount, &location.path)
+                            .await
+                        {
+                            Ok(metadata) => u32::try_from(metadata.current_version)
+                                .map_err(|_| Error::CasVersionOverflow)?,
+                            Err(error) if api_status(&error) == Some(404) => 0,
+                            Err(_) => return Err(map_api_error(error, ErrorContext::Secret)),
+                        };
+                    kv2::set_with_options(
+                        client.as_ref(),
+                        &location.mount,
+                        &location.path,
+                        &data,
+                        SetSecretRequestOptions { cas: version },
+                    )
+                    .await
+                    .map_err(|error| map_api_error(error, ErrorContext::Secret))
+                }
+                Err(error) => Err(map_api_error(error, ErrorContext::Secret)),
+            }
         })
         .await?;
         self.cache.invalidate_all();
