@@ -13,6 +13,7 @@ import { NoRedisWarningBanner } from "@/components/NoRedisWarningBanner";
 import { EnvCredentialLoginWarningBanner } from "@/components/EnvCredentialLoginWarningBanner";
 import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
 import { UserBanner } from "@/components/UserBanner";
+import LiteAdmin from "@/components/liteadmin/LiteAdmin";
 import { UpgradeBanner } from "@/components/UpgradeBanner";
 import { uiHref } from "@/utils/uiHref";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
@@ -141,6 +142,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <UserBanner accessToken={accessToken} />
         <UpgradeBanner accessToken={accessToken} />
         <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
+        <LiteAdmin />
       </div>
     </div>
   );
