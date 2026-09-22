@@ -1757,13 +1757,21 @@ class Logging(LiteLLMLoggingBaseClass):
         if transformed_result is not None:
             result = transformed_result
 
-        result_hidden_params: Final = getattr(result, "_hidden_params", None) or MappingProxyType({})
+        priced_result: Final = (
+            result.response
+            if isinstance(result, (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent))
+            else result
+        )
+
+        result_hidden_params: Final = getattr(priced_result, "_hidden_params", None) or MappingProxyType({})
         result_additional_headers: Final = (
             result_hidden_params.get("additional_headers")
             if isinstance(result_hidden_params, dict)
             else getattr(result_hidden_params, "additional_headers", None)
         )
-        if isinstance(result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(result, "_hidden_params"):
+        if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(
+            priced_result, "_hidden_params"
+        ):
             hidden_params: Final = result_hidden_params
             if (
                 "response_cost" in hidden_params and hidden_params["response_cost"] is not None
@@ -1799,7 +1807,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         try:
             response_cost_calculator_kwargs: Final = {
-                "response_object": result,
+                "response_object": priced_result,
                 "model": litellm_model_name or self.model,
                 "cache_hit": cache_hit,
                 "custom_llm_provider": self.model_call_details.get("custom_llm_provider", None),

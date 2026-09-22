@@ -27983,7 +27983,9 @@ export interface components {
             /** Jwt Issuer */
             jwt_issuer?: string | null;
             /** Key */
-            key: string;
+            key?: string | null;
+            /** Token */
+            token?: string | null;
         };
         /** CreateSearchToolRequest */
         CreateSearchToolRequest: {
@@ -39856,6 +39858,8 @@ export interface components {
             jwt_issuer?: string | null;
             /** Key */
             key?: string | null;
+            /** Token */
+            token?: string | null;
         };
         /** UpdateKeyRequest */
         UpdateKeyRequest: {
