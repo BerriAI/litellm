@@ -14606,6 +14606,38 @@ async def test_catalog_operation_retains_routes_only_for_same_configured_target(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["concurrent", "staged", "deleted", "staged_after_delete", "staged_with_concurrent"])
+async def test_catalog_reload_keeps_new_route_owner_over_earlier_route(change):
+    manager: Final = MCPServerManager()
+    servers: Final = {name: MCPServer(server_id=name, name=name, transport=MCPTransport.http,
+        client_id="configured-client") for name in ("old_owner", "new_owner", "concurrent_owner")}
+    manager.config_mcp_servers = servers
+    manager.published_tool_routes = {"shared-search": "old_owner"}
+
+    async def read_rows(**_kwargs):
+        if change == "concurrent":
+            manager.published_tool_routes["shared-search"] = "new_owner"
+        elif change in ("staged", "staged_after_delete", "staged_with_concurrent"):
+            if change == "staged_after_delete":
+                manager.published_tool_routes.clear()
+            elif change == "staged_with_concurrent":
+                manager.published_tool_routes["shared-search"] = "concurrent_owner"
+            manager.tool_name_to_mcp_server_name_mapping["shared-search"] = "new_owner"
+        else:
+            manager.published_tool_routes.clear()
+        return []
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=read_rows)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        await manager.reload_servers_from_database()
+    if change == "deleted":
+        assert "shared-search" not in manager.published_tool_routes
+    else:
+        assert manager.published_tool_routes["shared-search"] == "new_owner"
+
+
+@pytest.mark.asyncio
 async def test_catalog_observes_committed_update_and_delete_without_background_reload():
     from datetime import timedelta
 
