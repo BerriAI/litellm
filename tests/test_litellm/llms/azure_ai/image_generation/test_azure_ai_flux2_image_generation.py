@@ -205,7 +205,7 @@ def test_flux2_flex_cost_accepts_lowercase_model_spelling():
     assert cost == pytest.approx(5e-08 * 1536 * 1024 * 2)
 
 
-def test_flux2_flex_cost_prefers_deployment_input_cost_per_pixel():
+def test_flux2_flex_cost_prefers_deployment_input_cost_per_pixel() -> None:
     response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n"), ImageObject(b64_json="aW1n")])
 
     cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
@@ -220,7 +220,7 @@ def test_flux2_flex_cost_prefers_deployment_input_cost_per_pixel():
     assert cost == pytest.approx(2e-07 * 2048 * 1024 * 2)
 
 
-def test_unlisted_azure_ai_model_bills_deployment_input_cost_per_pixel():
+def test_unlisted_azure_ai_model_bills_deployment_input_cost_per_pixel() -> None:
     response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n"), ImageObject(b64_json="aW1n")])
 
     cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(

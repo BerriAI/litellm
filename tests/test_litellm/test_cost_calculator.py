@@ -710,8 +710,8 @@ def test_completion_cost_image_generation_reads_deployment_model_info_price_from
 
 
 def test_completion_cost_image_generation_registered_deployment_price_keeps_map_token_rates(
-    _local_model_cost_map, monkeypatch: pytest.MonkeyPatch
-):
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     deployment_id: Final = "gemini-image-deployment-priced-per-image"
     monkeypatch.setitem(
         litellm.model_cost,
@@ -739,8 +739,8 @@ def test_completion_cost_image_generation_registered_deployment_price_keeps_map_
 
 
 def test_completion_cost_image_generation_ignores_deployment_model_info_without_custom_pricing(
-    _local_model_cost_map,
-):
+    _local_model_cost_map: None,
+) -> None:
     cost = completion_cost(
         completion_response=ImageResponse(data=[ImageObject(url="https://example.com/img.png")]),
         model="fal_ai/openai/gpt-image-2",
@@ -755,7 +755,7 @@ def test_completion_cost_image_generation_ignores_deployment_model_info_without_
     assert cost == pytest.approx(0.211)
 
 
-async def test_router_image_generation_bills_litellm_params_output_cost_per_image():
+async def test_router_image_generation_bills_litellm_params_output_cost_per_image() -> None:
     from litellm import Router
 
     router = Router(

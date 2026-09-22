@@ -53,7 +53,7 @@ class TestGetLitellmParamsKwargsExtraction:
         for key in NAMED_PRICE_PARAMS:
             assert result[key] is None
 
-    def test_custom_pricing_kwargs_are_extracted(self):
+    def test_custom_pricing_kwargs_are_extracted(self) -> None:
         from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
         from litellm.types.router import CustomPricingLiteLLMParams
 
