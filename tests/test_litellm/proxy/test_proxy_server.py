@@ -3555,6 +3555,23 @@ async def test_load_config_rejects_malformed_role_permissions(tmp_path):
         await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
 
 
+@pytest.mark.asyncio
+async def test_load_config_compiles_key_alias_pattern_at_startup(tmp_path, monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "key_alias_pattern", None)
+    config_file: Final = tmp_path / "config.yaml"
+
+    config_file.write_text(yaml.dump({"model_list": [], "litellm_settings": {"key_alias_pattern": "^team-("}}))
+    with pytest.raises(Exception, match=r"litellm_settings\.key_alias_pattern"):
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+    assert litellm.key_alias_pattern is None
+
+    config_file.write_text(yaml.dump({"model_list": [], "litellm_settings": {"key_alias_pattern": "^team-[a-z]+$"}}))
+    await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+    assert litellm.key_alias_pattern == "^team-[a-z]+$"
+
+
 def test_os_environ_resolution_leaves_the_config_layer_holding_the_reference(monkeypatch):
     from litellm.proxy.proxy_server import ProxyConfig
 
