@@ -32,7 +32,7 @@ litellm_settings:
       - host: 127.0.0.1
         port: 6379
     ssl: true
-  callbacks: ["arize_phoenix", "datadog", "smtp_email", "prometheus", "otel", "tests.e2e.logging.callback_cost_capture.capture"]
+  callbacks: ["arize_phoenix", "datadog", "smtp_email", "prometheus", "otel"]
   require_auth_for_metrics_endpoint: false
 
 router_settings:

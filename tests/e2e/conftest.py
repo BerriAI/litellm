@@ -24,7 +24,6 @@ from typing import Final
 import pytest
 import requests
 from e2e_config import (
-    CALLBACK_COST_CAPTURE_OPT_IN_ENV,
     CLI_DETERMINISM_OPT_IN_ENV,
     CONTROL_PLANE_BASE_URL,
     FIXTURE_DIR,
@@ -63,7 +62,6 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "cli_determinism": CLI_DETERMINISM_OPT_IN_ENV,
         "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
         "provider_edge_host": PROVIDER_EDGE_HOST_OPT_IN_ENV,
-        "callback_cost_capture": CALLBACK_COST_CAPTURE_OPT_IN_ENV,
         "otel_v2": OTEL_V2_OPT_IN_ENV,
     }
 )
@@ -153,12 +151,6 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "provider_edge_host: routes provider traffic through the pytest host's edge in every fixture mode, so the "
         "gateway must reach the pytest host; deselected unless E2E_PROVIDER_EDGE_HOST_REACHABLE is set",
-    )
-    config.addinivalue_line(
-        "markers",
-        "callback_cost_capture: reads the JSONL written by the gateway's registered "
-        "logging.callback_cost_capture.capture CustomLogger, so the gateway and pytest must share a filesystem; "
-        "deselected unless E2E_CALLBACK_COST_CAPTURE_FILE is set",
     )
     config.addinivalue_line(
         "markers",

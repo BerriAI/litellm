@@ -221,6 +221,9 @@
       "other.observability.callbacks.credentials_stay_out_of_event_bodies",
       "other.observability.callbacks.concurrent_results_join_complete_events_and_rows"
     ],
+    "tests/integration/observability/test_responses_callback_cost.py::test_responses_success_callback_cost_is_priced_and_matches_spend_row": [
+      "other.observability.callbacks.responses_success_cost_matches_spend_row"
+    ],
     "tests/integration/observability/test_guardrail_effects.py::test_guardrail_rewrites_system_and_user_in_actual_anthropic_request": [
       "other.observability.guardrails.rewrite_reaches_correct_anthropic_positions"
     ],
