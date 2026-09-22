@@ -49,6 +49,7 @@ from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
+    header_value,
     httpxSpecialProvider,
 )
 from litellm.proxy._experimental.mcp_server.tool_registry import (
@@ -457,7 +458,7 @@ def _raise_for_upstream_failure(
     if response.status_code == 401 and relays_upstream_auth:
         raise MCPUpstreamAuthError(
             status_code=response.status_code,
-            www_authenticate=response.headers.get("www-authenticate"),
+            www_authenticate=header_value(response.headers, "www-authenticate"),
             server_name=upstream,
         )
     raise MCPOpenApiUpstreamError(response.status_code, upstream)

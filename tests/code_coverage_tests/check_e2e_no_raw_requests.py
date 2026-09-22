@@ -5,7 +5,7 @@ anywhere; a small allowlist grandfathers the files that legitimately make raw ca
 (the transport itself, the root conftest liveness probe, the claude_code version
 resolver's constant registry URL fetch, and the mcp OAuth client, whose httpx
 client is the object the official mcp SDK's streamable_http_client requires and so
-cannot go through the sync requests transport). Referenced by tests/e2e/CLAUDE.md."""
+cannot go through the sync requests transport). Referenced by tests/e2e/AGENTS.md."""
 
 from __future__ import annotations
 

@@ -17,6 +17,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_OPENAI_MODERATIONS_MODEL
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import iter_message_text
@@ -24,11 +25,9 @@ from litellm.types.utils import CallTypesLiteral
 
 
 class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
-    def __init__(self):
-        self.model_name = (
-            litellm.openai_moderations_model_name or "text-moderation-latest"
-        )  # pass the model_name you initialized on litellm.Router()
-        pass
+    @property
+    def model_name(self) -> str:
+        return litellm.openai_moderations_model_name or DEFAULT_OPENAI_MODERATIONS_MODEL
 
     #### CALL HOOKS - proxy only ####
 

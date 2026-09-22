@@ -541,3 +541,102 @@ async def test_scim_put_user_explicit_active_false_blocks_keys():
     assert update_kwargs["where"] == {"token": "hash-block-me"}
     assert update_kwargs["data"]["blocked"] is True
     assert '"scim_blocked": true' in update_kwargs["data"]["metadata"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["PUT", "PATCH"])
+@pytest.mark.parametrize("active", [False, True])
+@pytest.mark.parametrize("failure", [None, "write", "keys"])
+@pytest.mark.parametrize("status_change", [False, True])
+async def test_scim_status_write_refreshes_user_cache(
+    method: str, active: bool, failure: str | None, status_change: bool
+) -> None:
+    import json
+    from typing import Final
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    user_id: Final = "scim-cache-user"
+    saved: Final = LiteLLM_UserTable(
+        user_id=user_id, user_email="x@example.com", teams=[], metadata={"scim_active": not active if status_change else active},
+    )
+    updated: Final = LiteLLM_UserTable(
+        user_id=user_id, user_email="x@example.com", teams=[], metadata={"scim_active": active},
+    )
+    client, db = _build_prisma_with_keys([], mock_user=saved.model_copy(deep=True), updated_user=updated)
+    if failure == "write":
+        db.litellm_usertable.update.side_effect = RuntimeError("status write failed")
+    if failure == "keys":
+        db.litellm_verificationtoken.find_many.side_effect = RuntimeError("key update failed")
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key=user_id, value=saved, model_type=LiteLLM_UserTable)
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", client),  # test-quality-ok: substitute the database dependency
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: exercise a real isolated cache
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),  # test-quality-ok: isolate the logging dependency
+        patch(  # test-quality-ok: observe the Redis publication boundary
+            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            new_callable=AsyncMock,
+        ) as broadcast,
+    ):
+        request: Final = (
+            update_user(user_id=user_id, user=SCIMUser.model_validate(_build_put_user_payload(user_id, active=active)))
+            if method == "PUT" else
+            patch_user(user_id=user_id, patch_ops=SCIMPatchOp(
+                Operations=[SCIMPatchOperation(op="replace", path="active", value=active)]
+            ))
+        )
+        if failure == "write" or (failure == "keys" and status_change):
+            with pytest.raises(ProxyException, match="status write failed" if failure == "write" else "key update failed"):
+                await request
+        else:
+            response: Final = await request
+            assert response.active is active
+        assert json.loads(db.litellm_usertable.update.await_args.kwargs["data"]["metadata"])["scim_active"] is active
+        cached: Final = await cache.async_get_cache(key=user_id, model_type=LiteLLM_UserTable)
+        if failure == "write":
+            assert cached == saved
+            broadcast.assert_not_awaited()
+        else:
+            assert cached is None
+            broadcast.assert_awaited_once_with(cache_key=user_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, "delete"])
+async def test_scim_delete_user_evicts_cached_user_row(failure: str | None) -> None:
+    from typing import Final
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    user_id: Final = "scim-deleted-user"
+    saved: Final = LiteLLM_UserTable(user_id=user_id, user_email="x@example.com", teams=[], metadata={})
+    client, db = _build_prisma_with_keys([], mock_user=saved.model_copy(deep=True))
+    if failure == "delete":
+        db.litellm_usertable.delete.side_effect = RuntimeError("user delete failed")
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key=user_id, value=saved, model_type=LiteLLM_UserTable)
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", client),  # test-quality-ok: substitute the database dependency
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: exercise a real isolated cache
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),  # test-quality-ok: isolate the logging dependency
+        patch(  # test-quality-ok: observe the Redis publication boundary
+            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            new_callable=AsyncMock,
+        ) as broadcast,
+    ):
+        if failure == "delete":
+            with pytest.raises(ProxyException, match="user delete failed"):
+                await delete_user(user_id=user_id)
+        else:
+            response: Final = await delete_user(user_id=user_id)
+            assert response.status_code == 204
+    cached: Final = await cache.async_get_cache(key=user_id, model_type=LiteLLM_UserTable)
+    if failure == "delete":
+        assert cached == saved
+        broadcast.assert_not_awaited()
+    else:
+        assert cached is None
+        broadcast.assert_awaited_once_with(cache_key=user_id)

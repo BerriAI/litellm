@@ -12,10 +12,16 @@ Auth: OAuth2 Bearer token (not an API key).
 """
 
 import json
+from collections.abc import Awaitable, Callable
 from typing import Final
 
 from litellm import verbose_logger
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import (
+    VertexChirpRealtimeConfig,
+    is_vertex_speech_to_text_model,
+)
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
 class VertexAIRealtimeConfig(GeminiRealtimeConfig):
@@ -232,3 +238,20 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
             return []
 
         return super().transform_realtime_request(message, model, session_configuration_request)
+
+
+def vertex_realtime_config(
+    model: str,
+    *,
+    access_token: str,
+    resolve_access_token: Callable[[], Awaitable[str]],
+    project: str,
+    location: str | None,
+) -> VertexAIRealtimeConfig | VertexChirpRealtimeConfig:
+    if is_vertex_speech_to_text_model(model):
+        return VertexChirpRealtimeConfig(resolve_access_token=resolve_access_token, project=project, location=location)
+    return VertexAIRealtimeConfig(
+        access_token=access_token,
+        project=project,
+        location=VertexBase.get_vertex_region(vertex_region=location, model=model),
+    )

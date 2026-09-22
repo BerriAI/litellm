@@ -146,6 +146,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_assistant_prefill: bool | None
     supports_prompt_caching: bool | None
     supports_prompt_cache_breakpoint: ReadOnly[bool | None]
+    supports_thinking_cache_preservation: ReadOnly[bool | None]
     supports_computer_use: bool | None
     supports_audio_input: bool | None
     supports_embedding_image_input: bool | None
@@ -254,6 +255,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
     cache_read_input_audio_token_cost: ReadOnly[float | None]
+    cache_read_input_image_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
@@ -313,6 +315,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x output
     output_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
     output_cost_per_image: float | None
+    output_cost_per_pixel: ReadOnly[float | None]
     output_cost_per_image_token: float | None
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
@@ -327,10 +330,14 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     )  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
+    output_cost_per_second_768p: ReadOnly[float | None]
+    output_cost_per_second_2k: ReadOnly[float | None]
     output_cost_per_second_4k: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
+    ocr_cost_per_page_batches: ReadOnly[float | None]
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
     annotation_cost_per_page: float | None  # for OCR models
+    annotation_cost_per_page_batches: ReadOnly[float | None]
     search_context_cost_per_query: SearchContextCostPerQuery | None  # Cost for using web search tool
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
@@ -452,6 +459,8 @@ class CallTypes(str, Enum):
     #########################################################
     create_video = "create_video"
     acreate_video = "acreate_video"
+    video_generation = "video_generation"
+    avideo_generation = "avideo_generation"
     avideo_retrieve = "avideo_retrieve"
     video_retrieve = "video_retrieve"
     avideo_content = "avideo_content"
@@ -2547,6 +2556,10 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
+    @field_serializer("data")
+    def _serialize_image_data(self, data: Sequence[OpenAIImage] | None) -> Sequence[Mapping[str, object]] | None:
+        return None if data is None else [image.model_dump() for image in data]
+
     def __init__(
         self,
         created: int | None = None,
@@ -2893,6 +2906,7 @@ RoutingDecisionCause = Literal[
     "reasoning_override",
     "llm_classifier",
     "capability_classifier",
+    "jev_classifier",
     "llm_v2_classifier",
     "llm_v2_fallback",
     # classifier_type 'heuristic_first': the local scorer produced at least one signal and landed at
@@ -2971,6 +2985,13 @@ LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN: Final[InternalCallOrigin] = "llm_as_a_judg
 BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_cost_poll"
 
 
+class StandardLoggingHeuristicV2Forecast(TypedDict):
+    probabilities: ReadOnly[Mapping[str, float]]
+    threshold: ReadOnly[float]
+    predicted_tier: ReadOnly[str]
+    request_type: ReadOnly[str]
+
+
 class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
@@ -2987,6 +3008,9 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalation_keyword: str
     classifier_model: str
     classifier_cost: float
+    classifier_probabilities: ReadOnly[Mapping[str, float]]
+    classifier_confidence: ReadOnly[float]
+    heuristic_v2_forecast: ReadOnly[StandardLoggingHeuristicV2Forecast]
     classifier_crux: str  # writable-ok: added only when a capability verdict is available
     classifier_primary_rule: str  # writable-ok: added only when a capability verdict is available
     classifier_capability_boundary: str  # writable-ok: added only when a capability verdict is available
@@ -3030,6 +3054,9 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "score",
         "classifier_model",
         "classifier_cost",
+        "classifier_probabilities",
+        "classifier_confidence",
+        "heuristic_v2_forecast",
         "classifier_primary_rule",
         "classifier_capability_boundary",
         "classifier_p_solve",
@@ -3443,7 +3470,9 @@ class StandardLoggingPayload(ClassifierAudit):
     stream: bool | None
     response_cost: float
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown
-    autorouter_savings: ReadOnly[float | None]  # None = not an auto-routed caller request; 0.0 is a real figure
+    autorouter_savings: ReadOnly[float | None]
+    autorouter_savings_estimate: ReadOnly[Mapping[str, JsonValue] | None]
+    autorouter_baseline_observation: ReadOnly[str | None]
     response_cost_failure_debug_info: StandardLoggingModelCostFailureDebugInformation | None
     status: StandardLoggingPayloadStatus
     status_fields: StandardLoggingPayloadStatusFields
@@ -3508,6 +3537,10 @@ OPENAI_RESPONSE_HEADERS: Final = [
 ]
 
 
+OtelSpanScope = Literal["full", "llm_only"]
+OTEL_SPAN_SCOPES: Final[frozenset[str]] = frozenset(get_args(OtelSpanScope))
+
+
 class StandardCallbackDynamicParams(TypedDict, total=False):
     # Langfuse dynamic params
     langfuse_public_key: str | None
@@ -3515,6 +3548,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_secret_key: str | None
     langfuse_host: str | None
     langfuse_environment: ReadOnly[str | None]
+    langfuse_span_scope: ReadOnly[OtelSpanScope | None]
 
     # Langfuse prompt version
     langfuse_prompt_version: int | None
@@ -3585,6 +3619,8 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_second_1080p: float | None = None
     output_cost_per_second_480p: float | None = None
     output_cost_per_second_720p: float | None = None
+    output_cost_per_second_768p: float | None = None
+    output_cost_per_second_2k: float | None = None
     output_cost_per_second_4k: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
@@ -3611,6 +3647,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
     cache_read_input_audio_token_cost: float | None = None
+    cache_read_input_image_token_cost: float | None = None
     input_cost_per_character_above_128k_tokens: float | None = None
     input_cost_per_audio_token: float | None = None
     input_cost_per_token_cache_hit: float | None = None
@@ -3664,8 +3701,10 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_above_512k_tokens: float | None = None
     output_vector_size: int | None = None
     ocr_cost_per_page: float | None = None
+    ocr_cost_per_page_batches: float | None = None
     ocr_cost_per_credit: float | None = None
     annotation_cost_per_page: float | None = None
+    annotation_cost_per_page_batches: float | None = None
     regional_processing_uplift_multiplier_eu: float | None = None
     regional_processing_uplift_multiplier_us: float | None = None
     regional_endpoint_uplift_multiplier: float | None = None
@@ -3722,6 +3761,10 @@ def is_server_derived_pricing_key(key: str) -> bool:
     return key in SERVER_DERIVED_PRICING_FIELDS or ABOVE_THRESHOLD_COST_KEY_PATTERN.search(key) is not None
 
 
+PRICING_OVERRIDES_KEY: Final = "pricing_overrides"
+COST_MAP_LOOKUP_KEY: Final = "key"
+
+
 def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str, Any]:
     """Drop the pricing ``/model/info`` derives for display, keeping everything else.
 
@@ -3731,7 +3774,32 @@ def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str
     deployment at that day's price where no cost map refresh can reach it. A deployment's
     own pricing belongs on ``litellm_params``, which is unaffected.
     """
-    return MappingProxyType({k: v for k, v in model_info.items() if not is_server_derived_pricing_key(k)})
+    return MappingProxyType(
+        {k: v for k, v in model_info.items() if k != PRICING_OVERRIDES_KEY and not is_server_derived_pricing_key(k)}
+    )
+
+
+def echoed_cost_map_pricing_fields(model_info: Mapping[str, Any]) -> tuple[str, ...]:
+    """Pricing fields a stored ``model_info`` blob copied from a ``/model/info`` response.
+
+    Only ``litellm.get_model_info`` emits ``key`` (the resolved cost-map entry), so a stored
+    blob carrying it alongside pricing fields holds the cost map as it stood on the day the
+    row was saved, not a price anyone typed. Rows saved before 1.102 through the Admin UI
+    edit form look exactly like this, and a price typed into ``litellm_params`` never does.
+    """
+    if COST_MAP_LOOKUP_KEY not in model_info:
+        return ()
+    return tuple(sorted(k for k in model_info if is_server_derived_pricing_key(k)))
+
+
+def pricing_override_fields(*sources: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            frozenset(
+                k for source in sources for k, v in source.items() if v is not None and is_server_derived_pricing_key(k)
+            )
+        )
+    )
 
 
 # Server-controlled fields that bound or drive an interceptor's agentic loop
@@ -3771,7 +3839,12 @@ bedrock_batch_litellm_params: Final = (
     "aws_batch_role_arn",
     "s3_bucket_name",
     "s3_region_name",
+    "s3_endpoint_url",
     "s3_output_bucket_name",
+    "s3_bucket_owner",
+    "s3_access_key_id",
+    "s3_secret_access_key",
+    "s3_encryption_key_id",
     "bedrock_tags",
 )
 
@@ -3981,8 +4054,10 @@ class LlmProviders(str, Enum):
     BYTEZ = "bytez"
     REPLICATE = "replicate"
     REDUCTO = "reducto"
+    AWS_TEXTRACT = "aws_textract"
     RUNWAYML = "runwayml"
     AWS_POLLY = "aws_polly"
+    TRANSCRIBE = "transcribe"
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
     OPENROUTER = "openrouter"
@@ -4069,6 +4144,7 @@ class LlmProviders(str, Enum):
     TOPAZ = "topaz"
     SAP_GENERATIVE_AI_HUB = "sap"
     ASSEMBLYAI = "assemblyai"
+    AZURE_SPEECH = "azure_speech"
     CHARITY_ENGINE = "charity_engine"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
@@ -4090,6 +4166,7 @@ class LlmProviders(str, Enum):
     OCI = "oci"
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
+    EDENAI = "edenai"
     DOTPROMPT = "dotprompt"
     MANUS = "manus"
     WANDB = "wandb"
@@ -4131,6 +4208,12 @@ OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
     LlmProviders.HOSTED_VLLM.value,
     LlmProviders.LITELLM_PROXY.value,
 }
+
+FILE_CONTENT_STREAMING_PROVIDERS: Final[frozenset[str]] = frozenset(
+    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value}
+)
+
+LITELLM_EXECUTED_BATCH_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.HOSTED_VLLM.value})
 
 ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai"]
 

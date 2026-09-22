@@ -47,6 +47,8 @@ from models import (
     AnthropicMessagesResponse,
     ChatBody,
     ChatResponse,
+    ConfigFieldList,
+    ConfigListParams,
     CostMap,
     CostMapEntry,
     CountTokensBody,
@@ -79,6 +81,8 @@ from models import (
     ModelUpdateBody,
     OcrBody,
     OcrResponse,
+    RerankBody,
+    RerankResponse,
     RouterCurrentValues,
     RouterSettingsResponse,
     SpendLogRow,
@@ -89,6 +93,7 @@ from models import (
     TeamDeleteBody,
     TeamNewBody,
     TeamNewResponse,
+    TeamUpdateBody,
     ToolsetCreateBody,
     ToolsetRow,
     ToolsetUpdateBody,
@@ -627,6 +632,19 @@ class ProxyClient:
             provider_live=provider_live,
         )
 
+    def general_setting_enabled(self, field_name: str) -> bool:
+        """Whether the proxy is running with the named general_settings flag on, for
+        a test whose behavior only exists under a config flag the stack has to carry."""
+        fields = unwrap(
+            self.transport.get(
+                "/config/list",
+                headers=self.transport.master,
+                params=ConfigListParams(config_type="general_settings"),
+                response_type=ConfigFieldList,
+            )
+        ).root
+        return any(entry.field_name == field_name and entry.field_value is True for entry in fields)
+
     def register_model(
         self, body: ModelNewBody, listed_for: str | None = None, *, provider_live: bool = False
     ) -> str:
@@ -871,6 +889,16 @@ class ProxyClient:
             )
         ).team_id
 
+    def update_team(self, body: TeamUpdateBody) -> None:
+        unwrap(
+            self.transport.post(
+                "/team/update",
+                headers=self.transport.master,
+                json=body,
+                response_type=NoBody,
+            )
+        )
+
     def delete_team(self, team_id: str) -> None:
         result = self.transport.post(
             "/team/delete",
@@ -927,6 +955,16 @@ class ProxyClient:
             json=body,
             response_type=OcrResponse,
             timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
+        )
+
+    def rerank(self, key: str, body: RerankBody) -> Result[RerankResponse]:
+        """POST /v1/rerank (Cohere-format). No official OpenAI/Anthropic SDK
+        covers this route, so it stays on the shared typed transport."""
+        return self.transport.post(
+            "/v1/rerank",
+            headers=self.transport.bearer(key),
+            json=body,
+            response_type=RerankResponse,
         )
 
     def count_tokens(self, key: str, body: CountTokensBody) -> Result[CountTokensResponse]:

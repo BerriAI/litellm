@@ -7,19 +7,18 @@
 //! calls the provider, and returns a typed OpenAI-shaped response.
 
 mod error;
+pub mod types;
 pub use error::Error;
 mod client;
 mod common_utils;
-pub use litellm_providers::chat::{conversation, response_utils};
 pub(crate) mod handler;
 mod prepare;
-pub mod streaming;
-pub use litellm_providers::chat::types;
-
 use handler::execute_chat_completions_provider_call;
+use litellm_types::utils::ChatCompletionsResponse;
 use prepare::{parse_messages, resolve_provider_config, resolve_request};
 use serde_json::{Map, Value};
-use types::{ChatCompletionsRequest, ChatCompletionsResponse};
+
+use crate::chat_completions::types::ChatCompletionsRequest;
 
 pub async fn chat_completions(
     request: ChatCompletionsRequest<'_>,
