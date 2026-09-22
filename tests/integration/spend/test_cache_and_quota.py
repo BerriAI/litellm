@@ -1,4 +1,7 @@
+import json
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from hashlib import sha256
 from typing import Final
@@ -7,10 +10,10 @@ import httpx
 import pytest
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_as_test
-
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
+from integration._support.wire import Reply, Request, wire_server
 
 
 @pytest.mark.covers("quota_management.response_cache.generated_sequences_preserve_content_and_accounting")
@@ -209,6 +212,64 @@ def test_key_budget_at_boundary_blocks_provider_then_explicit_reset_restores(gat
             denied_again.text
         )
         assert upstream.get("/__observations").json()["requests"] == []
+
+
+@pytest.mark.covers(
+    "quota_management.budget.key.in_flight_count_tokens_reserves_nothing_so_completion_reaches_provider"
+)
+def test_in_flight_count_tokens_does_not_reserve_key_budget_away_from_a_completion(gateway: Gateway) -> None:
+    counting_reached_provider: Final = threading.Event()
+    completion_answered: Final = threading.Event()
+
+    def respond(request: Request) -> Reply:
+        counting_reached_provider.set()
+        assert completion_answered.wait(timeout=30), "completion never ran while count tokens was in flight"
+        return Reply(body=b'{"totalTokens": 12, "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 12}]}')
+
+    with (
+        wire_server(respond) as wire,
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+        ThreadPoolExecutor(max_workers=1) as background,
+    ):
+        counted: Final = scenario.model(
+            model="gemini/gemini-3.8-flash",
+            api_base=wire.url,
+            api_key="synthetic-gemini-key",
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+        )
+        completed: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        key: Final = scenario.key(models=[counted, completed], max_budget=0.06)
+        contents: Final = [{"role": "user", "parts": [{"text": "hello"}]}]
+        counting: Final = background.submit(
+            gateway.request, "POST", f"/v1beta/models/{counted}:countTokens", {"contents": contents}, key=key
+        )
+        assert counting_reached_provider.wait(timeout=30), "count tokens request never reached the provider"
+        upstream.get("/__observations").raise_for_status()
+        prompt: Final = f"after count tokens {uuid.uuid4().hex}"
+        completion: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": completed, "messages": [{"role": "user", "content": prompt}]},
+            key=key,
+        )
+        completion_answered.set()
+        count: Final = counting.result(timeout=30)
+        assert completion.status_code == 200 and completion.json()["usage"]["total_tokens"] == 40, completion.text
+        assert [call["body"]["messages"] for call in upstream.get("/__observations").json()["requests"]] == [
+            [{"role": "user", "content": prompt}]
+        ]
+        assert count.status_code == 200, count.text
+        assert count.json() == {"totalTokens": 12, "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 12}]}, (
+            count.text
+        )
+        provider_calls: Final = wire.drain()
+        assert [(call.method, call.target) for call in provider_calls] == [
+            ("POST", "/v1beta/models/gemini-3.8-flash:countTokens")
+        ]
+        assert provider_calls[0].headers["x-goog-api-key"] == "synthetic-gemini-key"
+        assert json.loads(provider_calls[0].body) == {"contents": contents}
 
 
 @pytest.mark.covers("quota_management.response_cache.system_messages_partition_cache_identity")
