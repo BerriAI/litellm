@@ -338,6 +338,10 @@ class TestParseReplicaUrls:
     def test_falls_back_to_the_data_plane_address_when_unset(self) -> None:
         assert parse_replica_urls("", "http://lb") == ("http://lb",)
 
+    def test_collapses_repeated_gateway_addresses_to_one_replica(self) -> None:
+        raw: Final = "http://127.0.0.1:4010,http://127.0.0.1:4010/,http://127.0.0.1:4011,http://127.0.0.1:4010"
+        assert parse_replica_urls(raw, "http://lb") == ("http://127.0.0.1:4010", "http://127.0.0.1:4011")
+
 
 def _answers(answers: Iterable[str]) -> ReplicaRead[str]:
     it: Final = iter(answers)
