@@ -1,9 +1,7 @@
-"""Declarative Rust/Python selection for routes with Rust integration.
+"""Ordered rollout policy for routes, cache backends, and secret managers.
 
-Rules are static data matched top to bottom; the first match wins and a
-context with no matching rule stays on Python. Whether the Rust core can serve
-a specific request body is not decided here: that is Rust admission, which
-signals ``RustBridgeDeclined`` before any provider I/O.
+The first matching rule wins; unmatched contexts stay on Python. Native
+admission separately decides whether the selected implementation can execute.
 """
 
 from __future__ import annotations
@@ -14,6 +12,8 @@ from typing import Final, TypeAlias
 
 from litellm.rust_bridge.configuration import Decision, Rollout
 from litellm.rust_bridge.configuration import decision as _decision
+from litellm.types.caching import LiteLLMCacheType
+from litellm.types.secret_managers.main import KeyManagementSystem
 
 
 class Route(str, Enum):
@@ -31,7 +31,7 @@ class Delivery(Enum):
 
 
 @dataclass(frozen=True, slots=True)
-class Context:
+class RouteContext:
     route: Route
     provider: str | None = None
     model: str | None = None
@@ -39,7 +39,7 @@ class Context:
 
 
 @dataclass(frozen=True, slots=True)
-class Rule:
+class RouteRule:
     route: Route
     rollout: Rollout
     providers: frozenset[str] | None = None
@@ -48,14 +48,12 @@ class Rule:
 
     def matches(self, context: Context) -> bool:
         return (
-            context.route is self.route
+            isinstance(context, RouteContext)
+            and context.route is self.route
             and (self.providers is None or context.provider in self.providers)
             and (self.models is None or context.model in self.models)
             and (self.deliveries is None or context.delivery in self.deliveries)
         )
-
-
-Rules: TypeAlias = tuple[Rule, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,34 +66,58 @@ class CacheRule:
     rollout: Rollout
     backends: frozenset[str] | None = None
 
-    def matches(self, context: CacheContext) -> bool:
-        return self.backends is None or context.backend in self.backends
+    def matches(self, context: Context) -> bool:
+        return isinstance(context, CacheContext) and (self.backends is None or context.backend in self.backends)
 
 
-CacheRules: TypeAlias = tuple[CacheRule, ...]
+@dataclass(frozen=True, slots=True)
+class SecretManagerContext:
+    system: str
+
+
+@dataclass(frozen=True, slots=True)
+class SecretManagerRule:
+    rollout: Rollout
+    systems: frozenset[str] | None = None
+
+    def matches(self, context: Context) -> bool:
+        return isinstance(context, SecretManagerContext) and (self.systems is None or context.system in self.systems)
+
+
+Context: TypeAlias = RouteContext | CacheContext | SecretManagerContext
+Rule: TypeAlias = RouteRule | CacheRule | SecretManagerRule
+Rules: TypeAlias = tuple[Rule, ...]
 
 RULES: Final[Rules] = (
-    Rule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),
-    Rule(Route.OCR, Rollout.RUST_OPT_OUT),
-    Rule(Route.MESSAGES, Rollout.RUST_OPT_IN),
-    Rule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
+    RouteRule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),
+    RouteRule(Route.OCR, Rollout.RUST_OPT_OUT),
+    RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN),
+    RouteRule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
+    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.LOCAL})),
+    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.REDIS})),
+    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.REDIS_SEMANTIC})),
+    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.VALKEY_SEMANTIC})),
+    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.S3})),
+    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.DISK})),
+    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.QDRANT_SEMANTIC})),
+    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.AZURE_BLOB})),
+    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.GCS})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.GOOGLE_KMS.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.AZURE_KEY_VAULT.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.AWS_SECRET_MANAGER.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.GOOGLE_SECRET_MANAGER.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.HASHICORP_VAULT.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.CYBERARK.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.LOCAL.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.AWS_KMS.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.CUSTOM.value})),
 )
 
-CACHE_RULES: Final[CacheRules] = ()
 
-
-def rollout(context: Context, rules: Rules = RULES) -> Rollout:
-    return next((rule.rollout for rule in rules if rule.matches(context)), Rollout.PYTHON_ONLY)
-
-
-def decision(context: Context, rules: Rules = RULES) -> Decision:
-    return _decision(rollout(context, rules))
-
-
-def cache_rollout(context: CacheContext, rules: CacheRules | None = None) -> Rollout:
-    selected_rules: Final = CACHE_RULES if rules is None else rules
+def rollout(context: Context, rules: Rules | None = None) -> Rollout:
+    selected_rules: Final = RULES if rules is None else rules
     return next((rule.rollout for rule in selected_rules if rule.matches(context)), Rollout.PYTHON_ONLY)
 
 
-def cache_decision(context: CacheContext, rules: CacheRules | None = None) -> Decision:
-    return _decision(cache_rollout(context, rules))
+def decision(context: Context, rules: Rules | None = None) -> Decision:
+    return _decision(rollout(context, rules))

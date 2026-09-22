@@ -38,7 +38,7 @@ from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.caching.redis_semantic_cache import RedisSemanticCache
 from litellm.caching.s3_cache import S3Cache
 from litellm.rust_bridge import _native
-from litellm.rust_bridge.catalog import CacheRule
+from litellm.rust_bridge.catalog import CacheRule, Route, RouteRule, SecretManagerRule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.response_cache import ResponseCacheRuntime, resolve_response_cache
 from litellm.types.caching import LiteLLMCacheType
@@ -201,7 +201,11 @@ def test_existing_constructor_and_global_are_unchanged() -> None:
 
 
 async def test_catalog_constructs_native_runtime_from_public_cache_configuration() -> None:
-    rules: Final = (CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({"local"})),)
+    rules: Final = (
+        RouteRule(Route.OCR, Rollout.PYTHON_ONLY),
+        SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({"local"})),
+        CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({"local"})),
+    )
     facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
     runtime: Final = resolve_response_cache(facade, rules)
     assert isinstance(runtime, ResponseCacheRuntime)

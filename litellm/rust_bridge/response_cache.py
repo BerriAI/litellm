@@ -8,7 +8,7 @@ from typing import Final, Protocol, cast
 from typing_extensions import ReadOnly, Required, TypedDict, assert_never
 
 from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
-from litellm.rust_bridge.catalog import CacheContext, CacheRules, cache_decision
+from litellm.rust_bridge.catalog import CacheContext, Rules, decision
 from litellm.rust_bridge.configuration import Decision
 
 
@@ -139,11 +139,11 @@ class ResponseCacheRuntime:
 
 def resolve_response_cache(
     cache: CacheFacade,
-    rules: CacheRules | None = None,
+    rules: Rules | None = None,
 ) -> ResponseCacheRuntime | None:
     backend_value: Final = cache.type
     backend: Final = str.__str__(backend_value) if isinstance(backend_value, str) else str(backend_value)
-    selected: Final = cache_decision(CacheContext(backend=backend), rules)
+    selected: Final = decision(CacheContext(backend=backend), rules)
     match selected:
         case Decision.PYTHON:
             return None

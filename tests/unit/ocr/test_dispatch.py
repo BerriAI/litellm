@@ -12,7 +12,7 @@ from litellm.ocr.dispatch import (
 )
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, Rule, Rules
+from litellm.rust_bridge.catalog import Route, RouteRule, Rules
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.ocr.entrypoints import (
     NATIVE_AOCR,
@@ -22,8 +22,8 @@ from litellm.rust_bridge.ocr.entrypoints import (
     NativeOcr,
 )
 
-PYTHON_RULES: Final[Rules] = (Rule(Route.OCR, Rollout.PYTHON_ONLY),)
-RUST_RULES: Final[Rules] = (Rule(Route.OCR, Rollout.RUST_REQUIRED),)
+PYTHON_RULES: Final[Rules] = (RouteRule(Route.OCR, Rollout.PYTHON_ONLY),)
+RUST_RULES: Final[Rules] = (RouteRule(Route.OCR, Rollout.RUST_REQUIRED),)
 
 
 def ocr_binding(native: NativeOcr | None) -> NativeBinding[NativeOcr]:
@@ -403,8 +403,8 @@ def test_provider_scoped_rule_sees_the_provider_named_by_the_model_prefix(
     model: str, custom_llm_provider: str | None, expected: str
 ) -> None:
     rules: Final[Rules] = (
-        Rule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),
-        Rule(Route.OCR, Rollout.PYTHON_ONLY),
+        RouteRule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),
+        RouteRule(Route.OCR, Rollout.PYTHON_ONLY),
     )
     document: Final[Mapping[str, object]] = {"type": "image_url", "image_url": "data:image/png;base64,YQ=="}
     kwargs: Final[Mapping[str, object]] = (
