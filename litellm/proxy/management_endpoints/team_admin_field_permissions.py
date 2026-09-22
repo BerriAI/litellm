@@ -292,7 +292,9 @@ def team_admin_key_edit_verdict(
     if not enabled:
         return TeamAdminMemberKeyEditingDisabled()
     changed: Final = changed_key_fields(data, existing)
-    blocked: Final = sorted(changed - KEY_BUDGET_FIELDS)
+    blocked: Final = sorted(
+        (changed | (frozenset({"spend"}) if "spend" in data.model_fields_set else frozenset())) - KEY_BUDGET_FIELDS
+    )
     if blocked:
         return TeamAdminFieldNotPermitted(field=blocked[0])
     return TeamAdminKeyEditAllowed(changed=changed)

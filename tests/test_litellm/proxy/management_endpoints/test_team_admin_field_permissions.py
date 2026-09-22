@@ -258,6 +258,11 @@ class TestTeamAdminKeyEditVerdict:
         verdict = team_admin_key_edit_verdict(data, _key(spend=3.5), enabled=True)
         assert verdict == TeamAdminFieldNotPermitted(field="spend")
 
+    def test_spend_echo_is_blocked_even_when_unchanged(self):
+        data = UpdateKeyRequest(key="sk-1", spend=4.5, max_budget=0)
+        verdict = team_admin_key_edit_verdict(data, _key(spend=4.5, max_budget=10.0), enabled=True)
+        assert verdict == TeamAdminFieldNotPermitted(field="spend")
+
     def test_budget_plus_non_budget_names_the_non_budget_field(self):
         data = UpdateKeyRequest(key="sk-1", max_budget=0, key_alias="renamed")
         verdict = team_admin_key_edit_verdict(data, _key(max_budget=10.0, key_alias="member"), enabled=True)
