@@ -30,6 +30,9 @@
     ]
   },
   "tests": {
+    "tests/integration/management/test_team_budget_duration_defaults.py::test_team_new_explicit_null_budget_duration_is_not_replaced_by_default": [
+      "mgmt.team.new.explicit_null_budget_duration_overrides_default"
+    ],
     "tests/integration/management/test_key_updates.py::test_update_preserves_independent_fields_and_serving": [
       "mgmt.key.update.preserves_independent_fields"
     ],
