@@ -45,19 +45,6 @@ _CONFIG_YAML: Final = """model_list:
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
-
-files_settings:
-  - custom_llm_provider: openai
-    api_key: os.environ/OPENAI_API_KEY
-  - custom_llm_provider: azure
-    api_base: os.environ/AZURE_API_BASE
-    api_key: os.environ/AZURE_API_KEY
-    api_version: 2025-04-01-preview
-  - custom_llm_provider: vertex_ai
-    vertex_project: os.environ/VERTEXAI_PROJECT
-    vertex_location: us-central1
-    vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
-    bucket_name: os.environ/GCS_BUCKET_NAME
 """
 
 

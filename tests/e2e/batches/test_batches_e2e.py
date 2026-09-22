@@ -25,7 +25,6 @@ from typing import Final
 
 import pytest
 from batch_cleanup import cleanup_batch, cleanup_file
-from bedrock_env_gateway import BedrockEnvGateway
 from batch_client import (
     AZURE_FILE_EXPIRY_SECONDS,
     UPLOAD_FILENAME,
@@ -37,6 +36,7 @@ from batch_client import (
     is_model_access_denied,
     is_result_access_denied,
 )
+from bedrock_env_gateway import BedrockEnvGateway
 from capabilities import (
     AZURE_BATCH_MODEL,
     BATCH_ID_SHAPE,
