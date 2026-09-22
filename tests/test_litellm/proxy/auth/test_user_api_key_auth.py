@@ -9131,3 +9131,107 @@ async def test_websocket_auth_hands_the_reservation_to_the_socket_state():
     assert result.budget_reservation == reservation
     assert websocket.state.budget_reservation is reservation
     assert websocket.scope["state"]["budget_reservation"] is reservation
+
+
+def _proxy_server_attrs_for_over_budget_key(*, general_settings: dict) -> dict:
+    """The proxy_server globals _user_api_key_auth_builder reads while enforcing a key budget."""
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.delete_cache = MagicMock()
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    mock_proxy_logging_obj.budget_alerts = AsyncMock()
+
+    return {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": general_settings,
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+
+
+async def _auth_key_that_spent_its_budget(*, route: str, general_settings: dict) -> UserAPIKeyAuth:
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.proxy_server import hash_token
+
+    api_key = "sk-key-that-spent-its-budget"
+    spent_key = UserAPIKeyAuth(
+        api_key=api_key,
+        token=hash_token(api_key),
+        user_id="u1",
+        max_budget=1.0,
+        spend=5.0,
+    )
+
+    async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 5.0
+
+    attrs = _proxy_server_attrs_for_over_budget_key(general_settings=general_settings)
+    originals = {attr: getattr(_proxy_server_mod, attr, None) for attr in attrs}
+    try:
+        for attr, val in attrs.items():
+            setattr(_proxy_server_mod, attr, val)
+        with (
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+                new_callable=AsyncMock,
+                return_value=spent_key,
+            ),
+            patch("litellm.proxy.proxy_server.get_current_spend", _spend_by_counter),
+        ):
+            request = Request(scope={"type": "http"})
+            request._url = URL(url=route)
+            return await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+    finally:
+        for attr, val in originals.items():
+            setattr(_proxy_server_mod, attr, val)
+
+
+@pytest.mark.asyncio
+async def test_key_that_spent_its_budget_is_refused_on_mcp_by_default():
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    with pytest.raises(ProxyException) as refused:
+        await _auth_key_that_spent_its_budget(route="/mcp/", general_settings={})
+
+    assert refused.value.type == ProxyErrorTypes.budget_exceeded
+
+
+@pytest.mark.asyncio
+async def test_key_that_spent_its_budget_keeps_mcp_once_the_operator_opts_out():
+    """An MCP session carries no model spend of its own, so an operator can keep those
+    servers reachable for a key that has spent its budget, while priced routes stay refused."""
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    opted_out = {"mcp_skip_budget_checks": True}
+    result = await _auth_key_that_spent_its_budget(route="/mcp/", general_settings=opted_out)
+    assert result.user_id == "u1"
+
+    with pytest.raises(ProxyException) as refused:
+        await _auth_key_that_spent_its_budget(route="/v1/chat/completions", general_settings=opted_out)
+
+    assert refused.value.type == ProxyErrorTypes.budget_exceeded

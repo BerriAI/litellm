@@ -8982,6 +8982,68 @@ def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() 
     assert request_skips_budget_checks(route="/v1/chat/completions", model=None, llm_router=None) is False
 
 
+def test_mcp_routes_stay_budget_enforced_until_the_operator_opts_out(monkeypatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {}, raising=False)
+    assert route_skips_budget_checks(route="/mcp/") is False
+    assert route_skips_budget_checks(route="/mcp/tools/call") is False
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"mcp_skip_budget_checks": True}, raising=False)
+    assert route_skips_budget_checks(route="/mcp/") is True
+    assert route_skips_budget_checks(route="/mcp/tools/call") is True
+    assert route_skips_budget_checks(route="/v1/chat/completions") is False
+
+
+async def _common_checks_for_over_budget_user_on_route(*, route: str) -> bool:
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    user: Final = LiteLLM_UserTable(user_id="u1", spend=0.0, max_budget=1.0)
+    token: Final = UserAPIKeyAuth(token="k1", user_id="u1")
+
+    async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 5.0 if counter_key == "spend:user:u1" else 0.0
+
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.get_current_spend", _spend_by_counter),
+    ):
+        result: Final = await common_checks(
+            request_body={},
+            team_object=None,
+            user_object=user,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=token,
+            request=MagicMock(spec=Request),
+        )
+        await asyncio.sleep(0)
+    return result
+
+
+@pytest.mark.asyncio
+async def test_over_budget_user_keeps_mcp_only_once_the_operator_opts_out(monkeypatch):
+    """An MCP tool call spends nothing by default, so an operator can let a key that has
+    spent its budget keep using MCP servers while priced routes stay refused."""
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {}, raising=False)
+    with pytest.raises(litellm.BudgetExceededError):
+        await _common_checks_for_over_budget_user_on_route(route="/mcp/")
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"mcp_skip_budget_checks": True}, raising=False)
+    assert await _common_checks_for_over_budget_user_on_route(route="/mcp/") is True
+    with pytest.raises(litellm.BudgetExceededError):
+        await _common_checks_for_over_budget_user_on_route(route="/v1/chat/completions")
+
+
 def _agent_model_ceiling_resolver(
     models: frozenset[str] | None,
 ) -> tuple[CeilingResolver, list[str]]:

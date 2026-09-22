@@ -868,9 +868,23 @@ BUDGET_ENFORCED_SIDE_EFFECT_ROUTES: Final = frozenset(
 )
 
 
+def mcp_route_skips_budget_checks(route: str) -> bool:
+    """Whether the operator opted MCP requests out of spend budget enforcement.
+
+    Without it a key at its max_budget loses every MCP server the moment a client connects,
+    though an MCP tool call only spends what `mcp_server_cost_info` priced it at."""
+    if not RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.mcp_inference_routes.value):
+        return False
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("mcp_skip_budget_checks") is True
+
+
 def route_skips_budget_checks(route: str) -> bool:
     return route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES and (
-        route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route)
+        route in MODEL_DISCOVERY_ROUTES
+        or mcp_route_skips_budget_checks(route=route)
+        or not RouteChecks.is_llm_api_route(route=route)
     )
 
 
