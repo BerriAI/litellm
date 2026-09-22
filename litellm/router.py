@@ -2472,8 +2472,7 @@ class Router:
                     messages=cast(  # cast-ok: the public completion message shape is a valid acompletion subset
                         list[AllMessageValues], messages
                     ),
-                    stream=False,
-                    **kwargs,
+                    **(kwargs | {"stream": False}),
                 )
             kwargs["model"] = model
             kwargs["messages"] = messages

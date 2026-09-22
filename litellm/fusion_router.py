@@ -836,10 +836,8 @@ class FusionReplayStream(CustomStreamWrapper):
             custom_llm_provider=source.custom_llm_provider,
             stream_options=source.stream_options,
         )
-        self._hidden_params = {  # mutable-ok: stream consumers attach response metadata
-            **source._hidden_params,
-            "fusion": dict(fusion_metadata),
-        }
+        self._hidden_params.update(source._hidden_params)
+        self._hidden_params["fusion"] = dict(fusion_metadata)
         self._iterator = iter(chunks)
 
     def __next__(self) -> ModelResponseStream:

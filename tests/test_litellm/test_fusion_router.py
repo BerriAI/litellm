@@ -1332,9 +1332,10 @@ async def test_router_responses_and_anthropic_adapters_stream_direct_outer_respo
     assert all(isinstance(event, bytes) for event in anthropic_events)
 
 
-def test_sync_router_and_responses_support_nonstreaming_fusion() -> None:
+@pytest.mark.parametrize("request_kwargs", [{}, {"stream": False}, {"stream": None}])
+def test_sync_router_and_responses_support_nonstreaming_fusion(request_kwargs: dict[str, bool | None]) -> None:
     router = Router(model_list=_router_model_list())
-    response = router.completion(model="fusion/test", messages=[{"role": "user", "content": "Answer"}])
+    response = router.completion(model="fusion/test", messages=[{"role": "user", "content": "Answer"}], **request_kwargs)
     assert isinstance(response, ModelResponse)
     assert response.choices[0].message.content == "Final"
     responses_result = router._fusion_aware_responses(model="fusion/test", input="Answer")
