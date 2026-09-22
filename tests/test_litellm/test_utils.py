@@ -230,6 +230,13 @@ def test_get_model_info_prefers_exact_dated_key_over_stripped(
     assert info["key"] == expected_key
 
 
+def test_get_model_info_internal_failure_is_not_reported_as_unmapped() -> None:
+    with patch("litellm.utils._get_potential_model_names", side_effect=RuntimeError("malformed metadata")):
+        with pytest.raises(Exception, match="This model isn't mapped yet") as exc_info:
+            litellm.utils._get_model_info_helper(model="gpt-4o", custom_llm_provider="openai")
+    assert not isinstance(exc_info.value, litellm.ModelNotMappedError)
+
+
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
     """
     Test that azure_ai provider can match openai and azure models.

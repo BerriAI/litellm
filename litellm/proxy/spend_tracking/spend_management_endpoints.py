@@ -2323,6 +2323,13 @@ async def calculate_spend(request: SpendCalculateRequest):
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
+        if isinstance(e, litellm.exceptions.ModelNotMappedError):
+            raise ProxyException(
+                message=str(e),
+                type="invalid_request_error",
+                param="model",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),

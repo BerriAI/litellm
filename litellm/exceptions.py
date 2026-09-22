@@ -991,6 +991,10 @@ LITELLM_EXCEPTION_TYPES: Final = [
 ]
 
 
+class ModelNotMappedError(Exception):
+    pass
+
+
 class BudgetExceededError(Exception):
     def __init__(
         self,
