@@ -9,6 +9,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime
+from functools import reduce
 from hashlib import sha256
 from importlib.metadata import version
 from itertools import chain
@@ -565,6 +566,19 @@ class DiscardingSpanExporter(SpanExporter):
 
 
 _ExportOutcome = Literal["delivered", "retry", "rejected", "too_large"]
+_Batch = tuple[ReadableSpan, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _Halving:
+    """One round of a 413 split: the batches still to send and the results of the ones already settled."""
+
+    pending: tuple[_Batch, ...]
+    settled: tuple[SpanExportResult, ...] = ()
+
+
+def _halves(batch: _Batch) -> tuple[_Batch, _Batch]:
+    return batch[: len(batch) // 2], batch[len(batch) // 2 :]
 
 
 def enable_langfuse_debug_logging() -> None:
@@ -596,29 +610,47 @@ class LangfuseSpanExporter(SpanExporter):
     delays: Sequence[float] = (1.0, 2.0, 4.0)
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        body: Final = _encode(spans)
+        """Halving a batch of n spans settles every span within ``n.bit_length()`` rounds, so the rounds are a fixed
+        fold rather than a recursion."""
+        rounds: Final = range(len(spans).bit_length() + 1)
+        final: Final = reduce(lambda halving, _: self._round(halving), rounds, _Halving(pending=(tuple(spans),)))
+        return (
+            SpanExportResult.SUCCESS
+            if all(result is SpanExportResult.SUCCESS for result in final.settled)
+            else SpanExportResult.FAILURE
+        )
+
+    def _round(self, halving: _Halving) -> _Halving:
+        sent: Final = tuple((batch, self._send_batch(batch)) for batch in halving.pending)
+        return _Halving(
+            pending=tuple(half for batch, outcome in sent if outcome == "too_large" for half in _halves(batch)),
+            settled=halving.settled
+            + tuple(
+                SpanExportResult.SUCCESS if outcome == "delivered" else SpanExportResult.FAILURE
+                for _, outcome in sent
+                if outcome != "too_large"
+            ),
+        )
+
+    def _send_batch(self, batch: _Batch) -> _ExportOutcome:
+        """A 413 on more than one span asks for halves; on a single span the span is dropped and reported."""
+        body: Final = _encode(batch)
         if body is None:
-            return SpanExportResult.FAILURE
+            return "rejected"
         outcome: Final = self._send(body)
         if outcome != "too_large":
-            return SpanExportResult.SUCCESS if outcome == "delivered" else SpanExportResult.FAILURE
-        if len(spans) == 1:
+            return outcome
+        if len(batch) == 1:
             verbose_logger.error(
                 "Langfuse rejected a single %d byte span export to %s as too large, dropping it",
                 len(body),
                 self.endpoint,
             )
-            return SpanExportResult.FAILURE
+            return "rejected"
         verbose_logger.warning(
-            "Langfuse rejected a %d byte export of %d spans as too large, resending in halves", len(body), len(spans)
+            "Langfuse rejected a %d byte export of %d spans as too large, resending in halves", len(body), len(batch)
         )
-        half: Final = len(spans) // 2
-        results: Final = (self.export(spans[:half]), self.export(spans[half:]))
-        return (
-            SpanExportResult.SUCCESS
-            if all(r is SpanExportResult.SUCCESS for r in results)
-            else SpanExportResult.FAILURE
-        )
+        return "too_large"
 
     def _send(self, body: bytes) -> _ExportOutcome:
         for delay in self.delays:

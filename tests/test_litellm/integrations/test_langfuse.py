@@ -2371,7 +2371,7 @@ def test_prompt_cache_ttl_typo_is_named_before_the_sdk_is_imported(monkeypatch, 
 @pytest.mark.parametrize("raw", ["5", " -3 ", "+0"], ids=["whole", "negative", "signed-zero"])
 def test_whole_second_prompt_cache_ttl_passes_the_gate(monkeypatch, raw):
     monkeypatch.setenv("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS", raw)
-    langfuse_module.raise_if_unusable_prompt_cache_ttl()
+    assert langfuse_module.raise_if_unusable_prompt_cache_ttl() is None
 
 
 def test_stopped_logger_hands_its_export_channel_back(monkeypatch):
