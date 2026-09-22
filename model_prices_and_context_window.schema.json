@@ -462,6 +462,7 @@
             "guardrail",
             "image_edit",
             "image_generation",
+            "messages",
             "moderation",
             "ocr",
             "realtime",
