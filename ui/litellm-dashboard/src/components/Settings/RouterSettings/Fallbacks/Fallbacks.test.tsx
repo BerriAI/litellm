@@ -417,6 +417,25 @@ describe("Fallbacks", () => {
       expect(screen.queryByTestId("delete-modal")).not.toBeInTheDocument();
     });
 
+    it("hides write actions until the source map has loaded", async () => {
+      let resolveSources: (value: { fields: never[]; source: Record<string, string> }) => void = () => {};
+      vi.mocked(networkingModule.getRouterSettingsCall).mockReturnValue(
+        new Promise((resolve) => {
+          resolveSources = resolve;
+        }),
+      );
+      renderWithQueryClient(<Fallbacks {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+      });
+      expect(screen.queryByTestId("add-fallbacks-button")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("edit-fallback-button")).not.toBeInTheDocument();
+
+      resolveSources({ fields: [], source: { fallbacks: "config" } });
+      expect(await screen.findByTestId("add-fallbacks-button")).toBeDisabled();
+    });
+
     it.each(["env", "default", "db"])("keeps fallbacks editable when source is %s", async (source) => {
       const user = userEvent.setup();
       vi.mocked(networkingModule.getRouterSettingsCall).mockResolvedValue({

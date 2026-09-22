@@ -122,7 +122,7 @@ async function testFallbackModelResponse(selectedModel: string, accessToken: str
 
 const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) => {
   const [routerSettings, setRouterSettings] = useState<{ [key: string]: any }>({});
-  const [routerSources, setRouterSources] = useState<FieldSourceMap>({});
+  const [routerSources, setRouterSources] = useState<FieldSourceMap | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [fallbackToDelete, setFallbackToDelete] = useState<FallbackEntry | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -254,7 +254,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
 
   const hasFallbacks = Array.isArray(routerSettings.fallbacks) && routerSettings.fallbacks.length > 0;
   // Admin Viewer follows the read-parity rule: see fallbacks, no writes.
-  const canModify = isProxyAdminRole(userRole ?? "");
+  const canModify = isProxyAdminRole(userRole ?? "") && routerSources !== null;
   const fallbacksFrozen = isConfigOwned(routerSources, "fallbacks");
   const frozenActionClass = `${iconWrapperClass} cursor-not-allowed opacity-50`;
 

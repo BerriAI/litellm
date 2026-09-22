@@ -25,7 +25,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
   const [availableRoutingStrategies, setAvailableRoutingStrategies] = useState<string[]>([]);
   const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
   const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
-  const [routerSources, setRouterSources] = useState<FieldSourceMap>({});
+  const [routerSources, setRouterSources] = useState<FieldSourceMap | null>(null);
 
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
@@ -177,7 +177,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
     }
   };
 
-  if (!accessToken) {
+  if (!accessToken || routerSources === null) {
     return null;
   }
 

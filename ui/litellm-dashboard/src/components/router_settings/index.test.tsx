@@ -67,9 +67,9 @@ describe("RouterSettings", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("should render the Save Changes and Reset buttons when authenticated", () => {
+  it("should render the Save Changes and Reset buttons when authenticated", async () => {
     renderWithProviders(<RouterSettings {...defaultProps} />);
-    expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /save changes/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /reset/i })).toBeInTheDocument();
   });
 
@@ -201,6 +201,25 @@ describe("RouterSettings", () => {
 
       await user.hover(strategySelect);
       expect(await screen.findByText("Set in config.yaml and cannot be changed here")).toBeInTheDocument();
+    });
+
+    it("holds the form until the source map has loaded so config owned fields never render editable", async () => {
+      let resolveSources: (
+        value: typeof mockRouterSettingsResponse & { source: Record<string, string> },
+      ) => void = () => {};
+      vi.mocked(getRouterSettingsCall).mockReturnValue(
+        new Promise((resolve) => {
+          resolveSources = resolve;
+        }),
+      );
+      renderWithProviders(<RouterSettings {...defaultProps} />);
+
+      await waitFor(() => expect(getCallbacksCall).toHaveBeenCalled());
+      expect(screen.queryByRole("textbox", { name: /num_retries/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /save changes/i })).not.toBeInTheDocument();
+
+      resolveSources({ ...mockRouterSettingsResponse, source: { num_retries: "config" } });
+      expect(await screen.findByRole("textbox", { name: /num_retries/i })).toBeDisabled();
     });
 
     it.each(["env", "default", "db"])("keeps fields editable when source is %s", async (source) => {
