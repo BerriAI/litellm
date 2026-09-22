@@ -906,7 +906,7 @@ class IncompleteStreamError(APIError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
-    ):
+    ) -> None:
         super().__init__(
             status_code=500,
             message=message,
