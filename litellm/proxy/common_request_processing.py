@@ -2907,7 +2907,9 @@ class ProxyBaseLLMRequestProcessing:
             response.pop("_hidden_params", None)
 
         if include_guardrail_response_requested(self.data):
-            response = attach_guardrail_information(response=response, request_data=self.data)
+            response = attach_guardrail_information(  # rebind-ok: response tail rebinds the copied response
+                response=response, request_data=self.data
+            )
 
         # Call response headers hook for non-streaming success
         callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
