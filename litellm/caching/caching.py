@@ -862,6 +862,15 @@ class Cache:
             if self.should_use_cache(**kwargs) is not True:
                 return
 
+            input_count: Final = len(kwargs["input"]) if isinstance(kwargs["input"], list) else 1
+            if len(result.data) != input_count:
+                verbose_logger.debug(
+                    "LiteLLM Cache: skipping embedding cache write, %d inputs but %d embeddings in the response",
+                    input_count,
+                    len(result.data),
+                )
+                return
+
             # set default ttl if not set
             if self.ttl is not None:
                 kwargs["ttl"] = self.ttl

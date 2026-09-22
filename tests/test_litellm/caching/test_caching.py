@@ -278,3 +278,35 @@ def test_exact_cache_key_includes_anthropic_messages_params(anthropic_param):
     assert baseline != cache.get_cache_key(
         model="claude-sonnet-4-5", messages=messages, **anthropic_param
     )
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_skips_write_when_one_input_yields_many_embeddings(monkeypatch):
+    """A cross-encoder behind /embeddings returns one score per document for a single
+    input string; caching data[0] per input would make the second call return 1 score."""
+    import litellm
+    from litellm import CustomLLM
+
+    provider_calls: list[list[str]] = []
+
+    class ScoreEveryDocument(CustomLLM):
+        async def aembedding(self, model, input, model_response, **kwargs) -> EmbeddingResponse:
+            provider_calls.append(list(input))
+            return EmbeddingResponse(
+                model=model,
+                data=[Embedding(embedding=[float(i)], index=i, object="embedding") for i in range(5)],
+            )
+
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "score-every-doc", "custom_handler": ScoreEveryDocument()}]
+    )
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "score-every-doc"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "score-every-doc"])
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+
+    batch = '{"query": "q", "documents": ["a", "b", "c", "d", "e"]}'
+    first = await litellm.aembedding(model="score-every-doc/m", input=[batch])
+    second = await litellm.aembedding(model="score-every-doc/m", input=[batch])
+
+    assert len(provider_calls) == 2, provider_calls
+    assert [len(first.data), len(second.data)] == [5, 5]

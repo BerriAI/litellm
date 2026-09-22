@@ -780,3 +780,39 @@ async def test_agentic_loop_followup_cache_hit_with_converted_stream_marker_repl
     assert hit.cached_result.choices[0].message.content == "done"
     logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
     assert logging_obj.handle_sync_success_callbacks_for_async_calls.call_args.kwargs["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_order(monkeypatch):
+    import litellm
+    from litellm import CustomLLM
+    from litellm.caching.caching import Cache
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    provider_inputs: list[list[str]] = []
+
+    class RecordingEmbedder(CustomLLM):
+        async def aembedding(self, model, input, model_response, **kwargs) -> EmbeddingResponse:
+            provider_inputs.append(list(input))
+            return EmbeddingResponse(
+                model=model,
+                data=[
+                    Embedding(embedding=[float(len(text))], index=idx, object="embedding")
+                    for idx, text in enumerate(input)
+                ],
+            )
+
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "recording-embedder", "custom_handler": RecordingEmbedder()}]
+    )
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "recording-embedder"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "recording-embedder"])
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+
+    await litellm.aembedding(model="recording-embedder/m", input=["aa", "bbbb"])
+    mixed_input = ["c", "aa", "ddd", "bbbb", "eeeee"]
+    response = await litellm.aembedding(model="recording-embedder/m", input=mixed_input)
+
+    assert provider_inputs == [["aa", "bbbb"], ["c", "ddd", "eeeee"]], provider_inputs
+    assert [item["index"] for item in response.data] == [0, 1, 2, 3, 4]
+    assert [item["embedding"] for item in response.data] == [[float(len(text))] for text in mixed_input]
