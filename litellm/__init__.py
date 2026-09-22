@@ -328,6 +328,9 @@ provider_url_destination_allowed_hosts: List[str] = []
 #: "override" (default) or "additive": whether a key or team destination replaces
 #: the operator's exporter for that backend or exports alongside it.
 otel_tenant_destination_mode: str | None = None
+#: "include" (default) or "exclude": whether a key or team destination receives the
+#: proxy's own SERVICE and DB_CALL spans (auth, Redis, Postgres, spend writes).
+otel_tenant_internal_spans: str | None = None
 ssl_ecdh_curve: Optional[str] = None  # Set to 'X25519' to disable PQC and improve performance
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False

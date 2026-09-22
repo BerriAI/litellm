@@ -440,6 +440,22 @@ def _in_scope(span: ReadableSpan, scope: "OtelSpanScope") -> bool:
     return scope == "full" or is_llm_call_span(span)
 
 
+def _is_internal_span(span: ReadableSpan) -> bool:
+    """Whether ``span`` is the proxy's own work rather than the request or the tenant's call.
+
+    The request root is the SERVER span; the model call, the MCP call and the guardrail
+    each carry one of the tenant-owned keys. Everything else the proxy emits inside a
+    request is a SERVICE or DB_CALL span: auth, Redis, Postgres, spend writes.
+    """
+    return span.kind is not SpanKind.SERVER and not _is_tenant_owned_span(span.attributes or _NO_ATTRIBUTES)
+
+
+def _forwarded(span: ReadableSpan, destination: "OtelDestination") -> bool:
+    if not _in_scope(span, destination.span_scope):
+        return False
+    return destination.internal_spans == "include" or not _is_internal_span(span)
+
+
 def _scoped(span: ReadableSpan, scope: "OtelSpanScope") -> ReadableSpan:
     """Under ``llm_only`` the model call is the only span the exporter gets, so it goes out as the
     trace's root (its parent is the request span that is held back) and, unless the caller named the
@@ -570,9 +586,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
     def on_end(self, span: ReadableSpan) -> None:
         suppressed: Final = suppressed_backends()
         for destination in request_destinations():
-            if self._operator_already_writes(span, destination, suppressed) or not _in_scope(
-                span, destination.span_scope
-            ):
+            if self._operator_already_writes(span, destination, suppressed) or not _forwarded(span, destination):
                 continue
             processor = self._acquire(destination)  # rebind-ok: loop variable; pyright forbids Final in a loop
             if processor is None:

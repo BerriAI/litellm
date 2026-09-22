@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from litellm.types.utils import OtelSpanScope
+from litellm.types.utils import OtelInternalSpans, OtelSpanScope
 
 
 class OtelDestination(BaseModel):
@@ -31,6 +31,13 @@ class OtelDestination(BaseModel):
         default="full",
         description="``llm_only`` keeps just the model-call spans; the rest of the request tree is not forwarded.",
     )
+    internal_spans: OtelInternalSpans = Field(
+        default="include",
+        description=(
+            "``exclude`` holds back the proxy's own SERVICE and DB_CALL spans (auth, Redis, Postgres, "
+            "spend writes); the request root and the tenant's own model, guardrail and MCP spans still go."
+        ),
+    )
 
     def header_string(self) -> str:
         """Render headers as the ``k=v,k2=v2`` form an ``ExporterSpec`` expects.
@@ -45,9 +52,9 @@ class OtelDestination(BaseModel):
     def cache_key(self) -> tuple[str, tuple[tuple[str, str], ...], tuple[tuple[str, str], ...], str | None]:
         """Identity for processor reuse, so one destination means one exporter.
 
-        ``span_scope`` is left out on purpose: the scope decides which spans reach the
-        processor, not how the processor exports them, so a full and an ``llm_only``
-        view of the same account share one exporter.
+        ``span_scope`` and ``internal_spans`` are left out on purpose: they decide which
+        spans reach the processor, not how the processor exports them, so a full and an
+        ``llm_only`` view of the same account share one exporter.
         """
         return (
             self.endpoint,

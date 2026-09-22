@@ -2,6 +2,7 @@ import pytest
 
 from litellm.proxy.common_utils.callback_config_validation import (
     callback_config_error,
+    conflicting_internal_spans_error,
     conflicting_span_scope_error,
     cross_entry_family_error,
     logging_metadata_config_error,
@@ -99,6 +100,55 @@ def test_key_logging_entries_may_not_disagree_on_the_span_scope():
         ]
     }
     assert logging_metadata_config_error(agreeing) is None
+
+
+@pytest.mark.parametrize("callback_name", ["langfuse_otel", "arize", "weave_otel", "newrelic"])
+def test_otel_internal_spans_is_accepted_on_every_destination_backend(callback_name):
+    assert callback_config_error(callback_name, {"otel_internal_spans": "exclude"}) is None
+    assert callback_config_error(callback_name, {"otel_internal_spans": "include"}) is None
+
+
+@pytest.mark.parametrize("bad", ["everything", "EXCLUDE", "no", ""])
+def test_callback_config_error_rejects_an_unknown_otel_internal_spans(bad):
+    error = callback_config_error("arize", {"otel_internal_spans": bad})
+    assert error is not None and "otel_internal_spans" in error and "exclude" in error
+
+
+@pytest.mark.parametrize("callback_name", ["langfuse", "datadog", "otel", "arize_phoenix", None])
+def test_otel_internal_spans_on_a_callback_that_has_no_destination_is_rejected(callback_name):
+    error = callback_config_error(callback_name, {"otel_internal_spans": "exclude"})
+    assert error is not None and "otel_internal_spans" in error and "langfuse_otel" in error
+
+
+def test_key_logging_entries_of_one_backend_may_not_disagree_on_internal_spans():
+    def entry(callback_name, callback_type, value):
+        return {
+            "callback_name": callback_name,
+            "callback_type": callback_type,
+            "callback_vars": {"otel_internal_spans": value},
+        }
+
+    disagreeing = {"logging": [entry("arize", "success", "exclude"), entry("arize", "failure", "include")]}
+    error = logging_metadata_config_error(disagreeing)
+    assert error is not None and "otel_internal_spans" in error and "'exclude'" in error
+
+    two_backends = {"logging": [entry("arize", "success", "exclude"), entry("langfuse_otel", "success", "include")]}
+    assert logging_metadata_config_error(two_backends) is None
+
+
+@pytest.mark.parametrize(
+    "new_vars, stored, rejected",
+    [
+        ({"otel_internal_spans": "exclude"}, [{"otel_internal_spans": "include"}], True),
+        ({"otel_internal_spans": "exclude"}, [{"otel_internal_spans": "exclude"}], False),
+        ({"otel_internal_spans": "exclude"}, [{"arize_api_key": "k"}], False),
+        ({"arize_api_key": "k"}, [{"otel_internal_spans": "exclude"}], False),
+        (None, [{"otel_internal_spans": "exclude"}], False),
+    ],
+)
+def test_one_internal_spans_value_per_backend(new_vars, stored, rejected):
+    error = conflicting_internal_spans_error(new_vars, stored)
+    assert (error is not None) is rejected
 
 
 @pytest.mark.parametrize("var", ["arize_success_sampling_rate", "arize_error_sampling_rate"])

@@ -16,6 +16,13 @@
         "ui_name": "Space ID",
         "description": "Arize Space ID to identify your workspace",
         "required": true
+      },
+      "otel_internal_spans": {
+        "type": "select",
+        "ui_name": "Internal Spans",
+        "description": "include sends the proxy's own SERVICE and DB_CALL spans (auth, Redis, Postgres) with the trace, exclude holds them back",
+        "options": ["include", "exclude"],
+        "required": false
       }
     },
     "description": "Arize Logging Integration"
@@ -266,6 +273,13 @@
         "description": "full sends the whole request trace, llm_only sends just the model-call spans",
         "options": ["full", "llm_only"],
         "required": false
+      },
+      "otel_internal_spans": {
+        "type": "select",
+        "ui_name": "Internal Spans",
+        "description": "include sends the proxy's own SERVICE and DB_CALL spans (auth, Redis, Postgres) with the trace, exclude holds them back",
+        "options": ["include", "exclude"],
+        "required": false
       }
     },
     "description": "Langfuse v3 OTEL Logging Integration"
@@ -325,6 +339,13 @@
         "type": "text",
         "ui_name": "New Relic Region (us or eu)",
         "description": "Data center region for this team's account. Defaults to us.",
+        "required": false
+      },
+      "otel_internal_spans": {
+        "type": "select",
+        "ui_name": "Internal Spans",
+        "description": "include sends the proxy's own SERVICE and DB_CALL spans (auth, Redis, Postgres) with the trace, exclude holds them back",
+        "options": ["include", "exclude"],
         "required": false
       }
     },

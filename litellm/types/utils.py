@@ -3612,6 +3612,8 @@ OPENAI_RESPONSE_HEADERS: Final = [
 
 OtelSpanScope = Literal["full", "llm_only"]
 OTEL_SPAN_SCOPES: Final[frozenset[str]] = frozenset(get_args(OtelSpanScope))
+OtelInternalSpans = Literal["include", "exclude"]
+OTEL_INTERNAL_SPAN_CHOICES: Final[frozenset[str]] = frozenset(get_args(OtelInternalSpans))
 
 
 class StandardCallbackDynamicParams(TypedDict, total=False):
@@ -3622,6 +3624,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_host: str | None
     langfuse_environment: ReadOnly[str | None]
     langfuse_span_scope: ReadOnly[OtelSpanScope | None]
+    otel_internal_spans: ReadOnly[OtelInternalSpans | None]
 
     # Langfuse prompt version
     langfuse_prompt_version: int | None

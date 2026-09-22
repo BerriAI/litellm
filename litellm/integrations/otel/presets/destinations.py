@@ -14,8 +14,9 @@ from typing import Final
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.destination import OtelDestination
+from litellm.integrations.otel.plumbing.context import tenant_internal_spans_default
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
-from litellm.types.utils import OtelSpanScope, StandardCallbackDynamicParams
+from litellm.types.utils import OtelInternalSpans, OtelSpanScope, StandardCallbackDynamicParams
 
 #: An endpoint plus the OTLP transport to reach it with, or ``None`` when the backend
 #: names no destination. The transport is ``None`` where the backend has only one.
@@ -117,6 +118,11 @@ def _span_scope(callback_name: str, params: StandardCallbackDynamicParams) -> Ot
     return params.get("langfuse_span_scope") or "full"
 
 
+def _internal_spans(params: StandardCallbackDynamicParams) -> OtelInternalSpans:
+    configured: Final = params.get("otel_internal_spans")
+    return tenant_internal_spans_default() if configured is None else configured
+
+
 def destination_capable_backends() -> frozenset[str]:
     """Backends a key or team can point at its own account."""
     from litellm.integrations.otel.presets import DYNAMIC_HEADERS_BY_CALLBACK
@@ -156,4 +162,5 @@ def destination_for(
         callback_name=callback_name,
         protocol=protocol,
         span_scope=_span_scope(callback_name, params),
+        internal_spans=_internal_spans(params),
     )

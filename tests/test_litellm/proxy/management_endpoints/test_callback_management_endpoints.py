@@ -298,6 +298,19 @@ class TestLangfuseOtelCallbackConfig:
         assert frozenset(scope["options"]) == OTEL_SPAN_SCOPES
         assert scope["required"] is False
 
+    @pytest.mark.parametrize("callback_id", ["langfuse_otel", "arize", "newrelic"])
+    def test_internal_spans_is_a_select_over_exactly_the_choices_the_validator_accepts(self, callback_id):
+        from litellm.types.utils import OTEL_INTERNAL_SPAN_CHOICES
+
+        client = TestClient(app)
+        response = client.get("/callbacks/configs", headers={"Authorization": "Bearer sk-1234"})
+        assert response.status_code == 200
+        config = next(config for config in response.json() if config.get("id") == callback_id)
+        internal_spans = config["dynamic_params"]["otel_internal_spans"]
+        assert internal_spans["type"] == "select"
+        assert frozenset(internal_spans["options"]) == OTEL_INTERNAL_SPAN_CHOICES
+        assert internal_spans["required"] is False
+
 
 class TestNewRelicTeamCallbackValidation:
     def _data(self, callback_vars):

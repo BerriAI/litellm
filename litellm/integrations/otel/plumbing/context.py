@@ -21,6 +21,7 @@ from opentelemetry.trace.propagation.tracecontext import (
 )
 
 from litellm.integrations.otel.model.semconv import HTTP
+from litellm.types.utils import OtelInternalSpans
 
 if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
@@ -398,6 +399,24 @@ def tenant_destinations_are_additive() -> bool:
 
     configured: Final = litellm.otel_tenant_destination_mode or os.environ.get(OTEL_TENANT_DESTINATION_MODE_ENV)
     return isinstance(configured, str) and configured.strip().lower() == ADDITIVE_DESTINATION_MODE
+
+
+EXCLUDE_INTERNAL_SPANS: Final = "exclude"
+OTEL_TENANT_INTERNAL_SPANS_ENV: Final = "LITELLM_OTEL_TENANT_INTERNAL_SPANS"
+
+
+def tenant_internal_spans_default() -> OtelInternalSpans:
+    """The ``internal_spans`` a tenant destination gets when its own callback vars name none.
+
+    Include is the default, so a destination keeps the whole request tree unless the
+    operator or the team asks for the proxy's own SERVICE and DB_CALL spans to stay home.
+    """
+    import litellm
+
+    configured: Final = litellm.otel_tenant_internal_spans or os.environ.get(OTEL_TENANT_INTERNAL_SPANS_ENV)
+    if isinstance(configured, str) and configured.strip().lower() == EXCLUDE_INTERNAL_SPANS:
+        return "exclude"
+    return "include"
 
 
 def destination_backends() -> frozenset[str]:
