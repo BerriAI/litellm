@@ -48,6 +48,7 @@ from models import (
     SpendLogsPageParams,
     SpendTagsResponse,
     TagSpend,
+    TeamInfoParams,
     UserDeleteBody,
     UserDeleteResponse,
     UserNewBody,
@@ -189,6 +190,7 @@ class DailyActivityKeyMetadata(BaseModel):
 
 class DailyActivityKeyMetrics(BaseModel):
     api_requests: int = 0
+    spend: float = 0.0
 
 
 class DailyActivityKeyBreakdown(BaseModel):
@@ -207,6 +209,14 @@ class DailyActivityRow(BaseModel):
 
 class DailyActivityResponse(BaseModel):
     results: list[DailyActivityRow] = []
+
+
+class TeamInfoSpend(BaseModel):
+    spend: float | None = None
+
+
+class TeamInfoSpendResponse(BaseModel):
+    team_info: TeamInfoSpend
 
 
 def _chat_body(
@@ -333,6 +343,33 @@ class SpendClient:
                 return spend
             time.sleep(self.proxy.poll_interval)
         return spend
+
+    def team_spend(self, team_id: str) -> float:
+        return (
+            unwrap(
+                self.proxy.transport.get(
+                    "/team/info",
+                    headers=self.proxy.transport.master,
+                    params=TeamInfoParams(team_id=team_id),
+                    response_type=TeamInfoSpendResponse,
+                )
+            ).team_info.spend
+            or 0.0
+        )
+
+    def poll_team_spend(self, team_id: str, *, minimum: float = 0.0) -> float:
+        outcome: Final = await_converged(
+            lambda: self.team_spend(team_id),
+            converged=lambda spend: spend > minimum,
+            timeout=self.proxy.poll_timeout,
+            interval=self.proxy.poll_interval,
+            now=time.monotonic,
+            sleep=time.sleep,
+        )
+        return outcome.result if isinstance(outcome, Converged) else outcome.last_result
+
+    def scrape_metrics(self) -> str:
+        return self.proxy.probe("/metrics", params=NoBody()).body
 
     def spend_logs_page(
         self, *, api_key: str | None, page: int, page_size: int
@@ -500,9 +537,21 @@ class SpendClient:
         return self.proxy.transport.probe("/health", params=HealthParams(model=model))
 
     def daily_activity_for_key(self, token: str, *, start: datetime, end: datetime) -> DailyActivityKeyBreakdown | None:
+        return self._key_breakdown("/user/daily/activity", token, start=start, end=end)
+
+    def usage_export_row_for_key(
+        self, token: str, *, start: datetime, end: datetime
+    ) -> DailyActivityKeyBreakdown | None:
+        """The key's row on /user/daily/activity/aggregated, the response the
+        dashboard's Export Usage Data CSV serializes."""
+        return self._key_breakdown("/user/daily/activity/aggregated", token, start=start, end=end)
+
+    def _key_breakdown(
+        self, route: str, token: str, *, start: datetime, end: datetime
+    ) -> DailyActivityKeyBreakdown | None:
         response: Final = unwrap(
             self.proxy.transport.get(
-                "/user/daily/activity",
+                route,
                 headers=self.proxy.transport.master,
                 params=DailyActivityParams(
                     start_date=start.strftime("%Y-%m-%d"),
@@ -520,8 +569,20 @@ class SpendClient:
     def poll_daily_activity_for_key(
         self, token: str, *, start: datetime, end: datetime, min_requests: int
     ) -> DailyActivityKeyBreakdown | None:
+        return self._poll_key_breakdown(lambda: self.daily_activity_for_key(token, start=start, end=end), min_requests)
+
+    def poll_usage_export_row_for_key(
+        self, token: str, *, start: datetime, end: datetime, min_requests: int
+    ) -> DailyActivityKeyBreakdown | None:
+        return self._poll_key_breakdown(
+            lambda: self.usage_export_row_for_key(token, start=start, end=end), min_requests
+        )
+
+    def _poll_key_breakdown(
+        self, fetch: Callable[[], DailyActivityKeyBreakdown | None], min_requests: int
+    ) -> DailyActivityKeyBreakdown | None:
         outcome: Final = await_converged(
-            lambda: self.daily_activity_for_key(token, start=start, end=end),
+            fetch,
             converged=lambda found: found is not None and found.metrics.api_requests >= min_requests,
             timeout=self.proxy.poll_timeout,
             interval=self.proxy.poll_interval,
