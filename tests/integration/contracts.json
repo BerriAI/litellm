@@ -223,6 +223,9 @@
     "tests/integration/providers/test_xiaomi_mimo_wire.py::test_xiaomi_mimo_tool_call_is_forwarded_and_returned": [
       "other.provider_wire.xiaomi_mimo.tool_call_survives_translation"
     ],
+    "tests/integration/providers/test_deepseek_vision_wire.py::test_deepseek_vision_forwards_image_url_content_list_instead_of_collapsing_to_text": [
+      "other.provider_wire.deepseek.vision_image_content_list_reaches_provider"
+    ],
     "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_h3_video_create_uses_canonical_body_and_status_path": [
       "other.provider_wire.fal_ai.video_queue_create_status_and_content_download"
     ],
