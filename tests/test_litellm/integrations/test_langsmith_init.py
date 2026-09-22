@@ -224,13 +224,6 @@ class TestLangsmithLoggerInit:
 
 
 class TestLangsmithBatchSerialization:
-    """Regression tests for the batch flush dying on non-JSON-native values.
-
-    LiteLLM routinely puts `datetime` and `Decimal` into run metadata. Handing
-    those to httpx's `json=` kwarg raised `TypeError` inside the flush, which
-    swallows exceptions, so the run silently never reached LangSmith.
-    """
-
     async def _logger(self, transport_handler, tenant_id=None):
         logger = LangsmithLogger(
             langsmith_api_key="test-key",
@@ -288,28 +281,28 @@ class TestLangsmithBatchSerialization:
 
     @pytest.mark.asyncio
     async def test_nan_metadata_is_dropped_instead_of_shipping_invalid_json(self):
-        """`float('nan')` serializes to the bare `NaN` token, which is not JSON.
-        LangSmith rejects the whole batch on it, so the flush must bail instead."""
         captured: list[httpx.Request] = []  # mutable-ok: transport capture buffer
         logger = await self._logger(self._capturing_transport(captured))
         logger.log_queue = self._queue(logger, {"score": float("nan")})
 
         await logger.async_send_batch()
 
-        assert captured == []
+        assert captured == [], (
+            "nan metadata must abort the batch: a bare NaN token is invalid JSON and LangSmith rejects it"
+        )
         await logger.async_httpx_client.client.aclose()
 
     @pytest.mark.asyncio
     async def test_batch_declares_json_content_type(self):
-        """A pre-serialized body carries no implicit content type, so the header
-        has to be set explicitly or LangSmith refuses the request."""
         captured: list[httpx.Request] = []  # mutable-ok: transport capture buffer
         logger = await self._logger(self._capturing_transport(captured))
         logger.log_queue = self._queue(logger, {"model": "gpt-4.1-mini"})
 
         await logger.async_send_batch()
 
-        assert captured[0].headers["content-type"] == "application/json"
+        assert captured[0].headers["content-type"] == "application/json", (
+            "a content= body carries no implicit content type; LangSmith refuses it without this header"
+        )
         assert captured[0].url.path.endswith("/api/v1/runs/batch")
         assert captured[0].headers["x-api-key"] == "test-key"
         assert "x-tenant-id" not in captured[0].headers
@@ -330,9 +323,6 @@ class TestLangsmithBatchSerialization:
 
     @pytest.mark.asyncio
     async def test_langsmith_error_response_does_not_propagate(self):
-        """The flush runs inside a logging callback: a 4xx from LangSmith must
-        not surface as an error on the user's completion call."""
-
         captured: list[httpx.Request] = []  # mutable-ok: transport capture buffer
 
         async def reject(request: httpx.Request) -> httpx.Response:
