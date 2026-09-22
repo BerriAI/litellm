@@ -239,6 +239,33 @@ describe("LoggingSettings", () => {
     ]);
   });
 
+  it("renders sampling rate inputs for the Arize callback and records changes", () => {
+    const mockOnChange = vi.fn();
+
+    const initialValue = [
+      {
+        callback_name: "arize",
+        callback_type: "success",
+        callback_vars: {},
+      },
+    ];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
+
+    const successInput = screen.getByPlaceholderText("os.environ/ARIZE_SUCCESS_SAMPLING_RATE");
+    const errorInput = screen.getByPlaceholderText("os.environ/ARIZE_ERROR_SAMPLING_RATE");
+    expect(successInput).toBeInTheDocument();
+    expect(errorInput).toBeInTheDocument();
+
+    fireEvent.change(successInput, { target: { value: "0.4" } });
+    let lastCall = mockOnChange.mock.calls[mockOnChange.mock.calls.length - 1];
+    expect(lastCall[0][0].callback_vars.arize_success_sampling_rate).toBe("0.4");
+
+    fireEvent.change(errorInput, { target: { value: "0.9" } });
+    lastCall = mockOnChange.mock.calls[mockOnChange.mock.calls.length - 1];
+    expect(lastCall[0][0].callback_vars.arize_error_sampling_rate).toBe("0.9");
+  });
+
   it("correctly handles numerical input with decimal values", () => {
     const mockOnChange = vi.fn();
 

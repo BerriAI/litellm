@@ -3,6 +3,7 @@ import pytest
 from litellm.proxy.common_utils.callback_config_validation import (
     callback_config_error,
     conflicting_span_scope_error,
+    cross_entry_family_error,
     logging_metadata_config_error,
 )
 
@@ -67,8 +68,16 @@ def test_one_span_scope_per_team(new_vars, stored, rejected):
 def test_key_logging_entries_may_not_disagree_on_the_span_scope():
     disagreeing = {
         "logging": [
-            {"callback_name": "langfuse_otel", "callback_type": "success", "callback_vars": {"langfuse_span_scope": "full"}},
-            {"callback_name": "langfuse_otel", "callback_type": "failure", "callback_vars": {"langfuse_span_scope": "llm_only"}},
+            {
+                "callback_name": "langfuse_otel",
+                "callback_type": "success",
+                "callback_vars": {"langfuse_span_scope": "full"},
+            },
+            {
+                "callback_name": "langfuse_otel",
+                "callback_type": "failure",
+                "callback_vars": {"langfuse_span_scope": "llm_only"},
+            },
         ]
     }
     error = logging_metadata_config_error(disagreeing)
@@ -76,9 +85,46 @@ def test_key_logging_entries_may_not_disagree_on_the_span_scope():
 
     agreeing = {
         "logging": [
-            {"callback_name": "langfuse_otel", "callback_type": "success", "callback_vars": {"langfuse_span_scope": "llm_only"}},
-            {"callback_name": "langfuse_otel", "callback_type": "failure", "callback_vars": {"langfuse_span_scope": "llm_only"}},
+            {
+                "callback_name": "langfuse_otel",
+                "callback_type": "success",
+                "callback_vars": {"langfuse_span_scope": "llm_only"},
+            },
+            {
+                "callback_name": "langfuse_otel",
+                "callback_type": "failure",
+                "callback_vars": {"langfuse_span_scope": "llm_only"},
+            },
             {"callback_name": "otel", "callback_type": "success", "callback_vars": {}},
         ]
     }
     assert logging_metadata_config_error(agreeing) is None
+
+
+@pytest.mark.parametrize("var", ["arize_success_sampling_rate", "arize_error_sampling_rate"])
+@pytest.mark.parametrize("bad", ["1.5", "-0.1", "abc", "nan", "inf"])
+def test_callback_config_error_rejects_out_of_range_arize_sampling_rate(var, bad):
+    error = callback_config_error("arize", {var: bad})
+    assert error is not None and var in error and repr(bad) in error
+
+
+@pytest.mark.parametrize("var", ["arize_success_sampling_rate", "arize_error_sampling_rate"])
+@pytest.mark.parametrize("good", ["0", "1", "0.25", "", "None"])
+def test_callback_config_error_accepts_in_range_arize_sampling_rate(var, good):
+    assert callback_config_error("arize", {var: good}) is None
+
+
+def test_arize_sampling_rate_rejected_on_non_arize_callback():
+    error = callback_config_error("langfuse", {"arize_success_sampling_rate": "0.5"})
+    assert error is not None
+    assert "applies to the arize callback only" in error
+    assert callback_config_error("arize", {"arize_success_sampling_rate": "0.5"}) is None
+
+
+def test_arize_sampling_rates_are_not_family_credentials():
+    """The rates choose what the Arize family exports, not where it sends, so an
+    entry that repeats or adds a rate next to a stored Arize entry is not the
+    credential-redirect shape cross_entry_family_error rejects."""
+    stored = [{"arize_api_key": "k1", "arize_success_sampling_rate": "0.5"}]
+    assert cross_entry_family_error({"arize_success_sampling_rate": "0.1"}, stored) is None
+    assert cross_entry_family_error({"arize_error_sampling_rate": "0.5"}, stored) is None

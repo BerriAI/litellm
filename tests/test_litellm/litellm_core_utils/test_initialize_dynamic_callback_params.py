@@ -1,4 +1,3 @@
-
 from types import MappingProxyType
 from typing import Final
 
@@ -246,9 +245,7 @@ def test_trusted_vars_overlay_uses_shared_parser_semantics():
     # datadog handler consumes, so values are str()-coerced identically.
     from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD
 
-    params = initialize_standard_callback_dynamic_params(
-        {TRUSTED_CALLBACK_VARS_FIELD: {"newrelic_api_key": 12345}}
-    )
+    params = initialize_standard_callback_dynamic_params({TRUSTED_CALLBACK_VARS_FIELD: {"newrelic_api_key": 12345}})
 
     assert params.get("newrelic_api_key") == "12345"
 
@@ -266,3 +263,19 @@ def test_validate_langfuse_environment_value():
     for bad in ["Production", "langfuse-eu", "", "team a"]:
         with pytest.raises(ValueError, match="langfuse_environment"):
             validate_langfuse_environment_value(bad)
+
+
+def test_arize_sampling_rates_are_picked_up_from_metadata():
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "arize_success_sampling_rate": "0.5",
+                "arize_error_sampling_rate": "0.1",
+            }
+        }
+    }
+
+    params = initialize_standard_callback_dynamic_params(kwargs)
+
+    assert params.get("arize_success_sampling_rate") == "0.5"
+    assert params.get("arize_error_sampling_rate") == "0.1"
