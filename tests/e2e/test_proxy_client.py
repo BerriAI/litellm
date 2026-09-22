@@ -389,6 +389,9 @@ class TestReplicasFor:
         )
         assert set(client.replicas_for("/key/info")) == {"http://backend"}
         assert set(client.replicas_for("/project/info")) == {"http://backend"}
+        assert set(client.replicas_for("/credentials")) == {"http://backend"}
+        assert set(client.replicas_for("/public/litellm_model_cost_map")) == {"http://backend"}
+        assert set(client.replicas_for("/v2/login")) == {"http://backend"}
         assert set(client.replicas_for("/v1/models")) == {"http://gateway-1", "http://gateway-2"}
 
     def test_monolith_reads_management_routes_back_from_every_replica(self) -> None:
@@ -516,6 +519,54 @@ def test_management_operations_send_the_selected_credential(
         expected: Final = "Bearer bootstrap" if kind == "master" else f"Bearer synthetic-{kind}"
         assert received.get_nowait() == expected, name
         assert received.empty(), "an unauthorized request must not be retried"
+
+
+DATA_PLANE_OPERATIONS: Final[frozenset[str]] = frozenset(
+    {
+        "connection_test",
+        "create_mcp_server",
+        "update_mcp_server",
+        "delete_mcp_server",
+        "proxy.memory_summary",
+        "proxy.create_toolset",
+        "proxy.update_toolset",
+        "proxy.delete_toolset",
+    }
+)
+
+SPLIT_PLANE_OPERATIONS: Final[tuple[tuple[str, Callable[[ManagementClient], object]], ...]] = (
+    *MANAGEMENT_OPERATIONS,
+    ("dashboard_login", lambda c: c.dashboard_login("admin", "password")),
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "operation"), SPLIT_PLANE_OPERATIONS, ids=tuple(name for name, _ in SPLIT_PLANE_OPERATIONS)
+)
+def test_management_operations_reach_the_plane_that_serves_them_in_a_split_deployment(
+    name: str, operation: Callable[[ManagementClient], object]
+) -> None:
+    with (
+        caller_boundary(status=401) as (data, data_received),
+        caller_boundary(status=401) as (control, control_received),
+        without_retries(),
+    ):
+        data_url: Final = next(iter(data.proxy.replicas))
+        control_url: Final = next(iter(control.proxy.replicas))
+        split: Final = ManagementClient(
+            proxy=build_proxy_client(
+                base_url=data_url, control_plane_base_url=control_url, replica_urls=(data_url,), master_key="bootstrap"
+            ),
+            master_key="bootstrap",
+        )
+        try:
+            operation(split)
+        except AssertionError:
+            pass
+        expected: Final = (0, 1) if name in DATA_PLANE_OPERATIONS else (1, 0)
+        assert (control_received.qsize(), data_received.qsize()) == expected, (
+            f"{name} was sent to the wrong plane; a gateway 404s every management route it does not serve"
+        )
 
 
 class TestSplitCallerPropagation:
