@@ -10872,7 +10872,7 @@ async def test_realtime_session_rejected_in_pre_call_releases_the_budget_reserva
     """A rate-limit or guardrail rejection happens before route_request, so the
     relay never runs and no success log can own the reservation. The endpoint
     must release it on that exit too, or the key stays pinned at the reserved
-    amount and its next requests 429 with budget_exceeded while /key/info shows
+    amount and its next requests 422 with budget_exceeded while /key/info shows
     spend 0 (reproduced live with rpm_limit=1). The client still gets the
     pre-call error event and the 1011 close it got before."""
     reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
@@ -11762,6 +11762,66 @@ def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_n
     pc = ps.ProxyConfig()
     resolved_db_values = pc._prepared_db_settings_values("litellm_settings", {field_name: db_value})
     pc._apply_litellm_settings_db_values(resolved_db_values)
+
+    assert getattr(litellm, field_name) == db_value
+
+
+@pytest.mark.asyncio
+async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(monkeypatch: pytest.MonkeyPatch):
+    """A DB-only litellm_settings row that pairs success_callback: ["datadog"] with
+    datadog_params.turn_off_message_logging: true must build the DataDogLogger redacted, the
+    same as the identical block in YAML. Regression for the redaction keys being absent from
+    the safe-override allowlist while the callback half of the row was honoured."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.datadog.datadog import DataDogLogger
+    from litellm.litellm_core_utils import litellm_logging
+
+    monkeypatch.setenv("DD_API_KEY", "test-key")
+    monkeypatch.setenv("DD_SITE", "us5.datadoghq.com")
+    monkeypatch.setattr(litellm, "datadog_params", None)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+
+    db_row = {
+        "success_callback": ["datadog"],
+        "datadog_params": {"turn_off_message_logging": True},
+        "turn_off_message_logging": True,
+    }
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(pc._prepared_db_settings_values("litellm_settings", db_row))
+    pc._add_callbacks_from_db_config({"litellm_settings": db_row})
+
+    datadog_loggers = [cb for cb in litellm.success_callback if isinstance(cb, DataDogLogger)]
+    assert len(datadog_loggers) == 1
+    assert datadog_loggers[0].turn_off_message_logging is True
+    assert litellm.turn_off_message_logging is True
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "datadog_params",
+        "datadog_llm_observability_params",
+        "newrelic_params",
+        "pointfive_params",
+        "aws_sqs_callback_params",
+    ],
+)
+def test_db_stored_callback_params_propagate_to_litellm_module(monkeypatch: pytest.MonkeyPatch, field_name: str):
+    """Every callback init params block stored in the DB litellm_settings row must land on the
+    litellm module before the matching logger is built, so the DB row behaves like YAML."""
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(litellm, field_name, None)
+    db_value = {"turn_off_message_logging": True}
+
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(pc._prepared_db_settings_values("litellm_settings", {field_name: db_value}))
 
     assert getattr(litellm, field_name) == db_value
 

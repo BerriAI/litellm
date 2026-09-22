@@ -4,6 +4,7 @@ import ssl
 from collections.abc import AsyncGenerator, AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache
+from itertools import chain
 from types import MappingProxyType, ModuleType
 from typing import (
     TYPE_CHECKING,
@@ -5613,18 +5614,29 @@ class BaseLLMHTTPHandler:
         }
 
         internal_keys: Final = {"litellm_logging_obj"}
-        kwargs_for_followup: Final = {
-            k: v
-            for k, v in kwargs.items()
-            if not is_interception_internal_key(k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES)
-            and k != "_code_interpreter_interception_converted_stream"
-            and k not in internal_keys
-            and k not in optional_params
-        }
-        kwargs_for_followup.update(patch.kwargs)
-        kwargs_for_followup["_agentic_loop_depth"] = depth + 1
-        kwargs_for_followup["max_agentic_loops"] = max_loops
-        kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
+        kwargs_for_followup: Final = MappingProxyType(
+            {
+                key: value
+                for key, value in chain(
+                    (
+                        (k, v)
+                        for k, v in kwargs.items()
+                        if not is_interception_internal_key(
+                            k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES
+                        )
+                        and k != "_code_interpreter_interception_converted_stream"
+                        and k not in internal_keys
+                        and k not in optional_params
+                    ),
+                    ((k, v) for k, v in patch.kwargs.items() if k not in optional_params),
+                    (
+                        ("_agentic_loop_depth", depth + 1),
+                        ("max_agentic_loops", max_loops),
+                        ("_agentic_loop_fingerprints", fingerprints + [fingerprint]),
+                    ),
+                )
+            }
+        )
 
         try:
             response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
@@ -8881,7 +8893,7 @@ class BaseLLMHTTPHandler:
                     url=url,
                     headers=headers,
                 )
-            return video_status_provider_config.transform_video_status_retrieve_response(
+            return await video_status_provider_config.async_transform_video_status_retrieve_response(
                 raw_response=response,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,

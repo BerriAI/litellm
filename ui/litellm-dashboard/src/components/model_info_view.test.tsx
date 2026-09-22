@@ -655,7 +655,7 @@ describe("ModelInfoView", () => {
     });
 
     const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
-    expect(updatePayload.litellm_params.litellm_credential_name).toBe("selected-credential");
+    expect(updatePayload.litellm_params).not.toHaveProperty("litellm_credential_name");
     expect(updatePayload.litellm_params.litellm_credential_name).not.toBe("from-json");
   });
 
@@ -1545,6 +1545,18 @@ describe("ModelInfoView", () => {
       await screen.findByRole("combobox", { expanded: true });
     };
 
+    const openCredentialSelect = async (user: ReturnType<typeof userEvent.setup>, triggerText?: string) => {
+      const trigger = screen
+        .getAllByRole("combobox")
+        .filter((element) => element.getAttribute("data-slot") === "select-trigger")
+        .find((element) => triggerText === undefined || element.textContent?.includes(triggerText));
+      if (trigger === undefined) {
+        throw new Error(`Could not find credential selector${triggerText ? ` with ${triggerText}` : ""}`);
+      }
+      await user.click(trigger);
+      await screen.findByRole("combobox", { expanded: true });
+    };
+
     const save = async (user: ReturnType<typeof userEvent.setup>) => {
       await user.click(screen.getByRole("button", { name: /save changes/i }));
       await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalled());
@@ -1566,7 +1578,6 @@ describe("ModelInfoView", () => {
           model: "gpt-4",
           api_base: "https://api.openai.com/v1",
           custom_llm_provider: "openai",
-          litellm_credential_name: "selected-credential",
           tags: [],
           guardrails: [],
         },
@@ -1803,6 +1814,104 @@ describe("ModelInfoView", () => {
       const payload = await save(user);
 
       expect(payload.litellm_params.litellm_credential_name).toBe("other-credential");
+    });
+
+    it("sends explicit null when None is picked for a model with a stored credential", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "None" }));
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params.litellm_credential_name).toBeNull();
+      expect("litellm_credential_name" in payload.litellm_params).toBe(true);
+    });
+
+    it("omits the credential when it is cleared and then restored before saving", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "None" }));
+      await openCredentialSelect(user);
+      await user.click(await screen.findByRole("option", { name: "selected-credential" }));
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params).not.toHaveProperty("litellm_credential_name");
+    });
+
+    it("omits the credential when None is picked for a model that never had one", async () => {
+      const { litellm_credential_name: _storedCredential, ...litellmParamsWithoutCredential } =
+        defaultModelData.litellm_params;
+      const modelWithoutCredential = {
+        ...defaultModelData,
+        litellm_params: litellmParamsWithoutCredential,
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [modelWithoutCredential] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [modelWithoutCredential] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user);
+      await user.click(await screen.findByRole("option", { name: "None" }));
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params).not.toHaveProperty("litellm_credential_name");
+      expect(payload.litellm_params.litellm_credential_name).not.toBe("");
+    });
+
+    it("restores the stored credential in the selector after cancel", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "None" }));
+      await user.click(screen.getByRole("button", { name: /cancel/i }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      const credentialTrigger: HTMLElement = screen
+        .getAllByRole("combobox")
+        .filter((element) => element.getAttribute("data-slot") === "select-trigger")
+        .at(0) as HTMLElement;
+      expect(credentialTrigger).toHaveTextContent("selected-credential");
+    });
+
+    it("shows Manual in read mode after saving None", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "None" }));
+      await save(user);
+
+      expect(await screen.findByText("Manual")).toBeInTheDocument();
+      expect(screen.queryByText("selected-credential")).not.toBeInTheDocument();
+    });
+
+    it("keeps showing the stored credential in read mode after an untouched save", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      await save(user);
+
+      expect(await screen.findByText("selected-credential")).toBeInTheDocument();
+    });
+
+    it("keeps the form open and surfaces the error when the backend rejects the detach", async () => {
+      mockModelPatchUpdateCall.mockRejectedValueOnce(new Error("403 Only a proxy admin can detach"));
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "None" }));
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(mockToast.fromError).toHaveBeenCalled());
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+      expect(mockToast.success).not.toHaveBeenCalledWith("Model settings updated successfully");
     });
 
     it("sends the vector stores picked in the knowledge base selector", async () => {

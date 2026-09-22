@@ -26,6 +26,7 @@ from litellm.types.utils import ModelResponse
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
+    from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 
 
 class VertexGemmaConfig(OpenAIGPTConfig):
@@ -55,7 +56,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         self,
         model_response: ModelResponse,
         stream: bool,
-    ) -> ModelResponse | Any:
+    ) -> "ModelResponse | MockResponseIterator":
         """
         Helper method to return fake stream iterator if streaming is requested.
 
@@ -137,7 +138,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         client: HTTPHandler | httpx.Client | None,
         api_base: str,
         headers: dict[str, str],  # mutable-ok: forwarded to post(headers: dict | None)
-        request_data: dict[str, Any],  # mutable-ok: forwarded to post(json: dict | ...)
+        request_data: dict[str, object],  # mutable-ok: forwarded to post(json: dict | ...)
         timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         if isinstance(client, HTTPHandler):
@@ -172,7 +173,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         client: AsyncHTTPHandler | httpx.AsyncClient | None,
         api_base: str,
         headers: dict[str, str],  # mutable-ok: forwarded to post(headers: dict | None)
-        request_data: dict[str, Any],  # mutable-ok: forwarded to post(json: dict | ...)
+        request_data: dict[str, object],  # mutable-ok: forwarded to post(json: dict | ...)
         timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client

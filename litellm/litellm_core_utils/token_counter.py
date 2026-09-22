@@ -49,6 +49,8 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionDocumentObject,
     ChatCompletionNamedToolChoiceParam,
+    ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolParam,
     OpenAIMessageContentListBlock,
 )
@@ -865,6 +867,8 @@ def _count_content_list(
     content_list: str
     | Iterable[
         OpenAIMessageContentListBlock
+        | ChatCompletionThinkingBlock
+        | ChatCompletionRedactedThinkingBlock
         | AnthropicMessagesTextParam
         | AnthropicMessagesImageParam
         | AnthropicMessagesDocumentParam
@@ -909,9 +913,9 @@ def _count_content_list(
                     use_default_image_token_count,
                     default_token_count,
                 )
-            elif c["type"] == "thinking":
+            elif c["type"] in ("thinking", "redacted_thinking"):
                 # Claude extended thinking content block
-                # Count the thinking text and skip signature (opaque signature blob)
+                # Count the thinking text and skip the opaque blobs (signature, redacted data)
                 thinking_text = str(c.get("thinking", ""))
                 if thinking_text:
                     num_tokens += count_function(thinking_text)
@@ -931,7 +935,8 @@ def _count_content_list(
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
-                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, tool_reference)."
+                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
+                    f"tool_reference)."
                 )
         return num_tokens
     except Exception as e:
