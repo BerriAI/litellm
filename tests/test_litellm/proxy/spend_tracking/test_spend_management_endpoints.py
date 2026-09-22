@@ -257,6 +257,8 @@ from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.proxy._types import (
     LitellmUserRoles,
     Member,
+    ProxyException,
+    SpendCalculateRequest,
     SpendLogsPayload,
     UserAPIKeyAuth,
 )
@@ -7835,3 +7837,18 @@ def test_ui_view_request_response_internal_user_missing_row_forbidden(client, mo
         assert custom_logger.requested_ids == []
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_calculate_spend_unpriced_model_returns_400():
+    model = "openrouter/unit-test-unpriced-model"
+    with patch("litellm.proxy.proxy_server.llm_router", None):
+        with pytest.raises(ProxyException) as exc_info:
+            await spend_management_endpoints.calculate_spend(
+                SpendCalculateRequest(model=model, messages=[{"role": "user", "content": "hi"}])
+            )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.param == "model"
+    assert model in exc_info.value.message

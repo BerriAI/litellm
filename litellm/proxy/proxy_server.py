@@ -597,6 +597,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
     generate_key_helper_fn,
+    parse_key_alias_pattern,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
@@ -6267,6 +6268,8 @@ class ProxyConfig:
                         litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(**value)
                     else:
                         raise Exception(f"Invalid value set for upperbound_key_generate_params - value={value}")
+                elif key == "key_alias_pattern":
+                    litellm.key_alias_pattern = parse_key_alias_pattern(value)
                 elif key == "json_logs" and value is True:
                     litellm.json_logs = True
                     litellm._turn_on_json()
