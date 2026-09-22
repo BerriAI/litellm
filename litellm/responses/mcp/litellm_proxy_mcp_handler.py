@@ -872,7 +872,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 if litellm_logging_obj:
                     try:
                         litellm_logging_obj.post_call(original_response=result)
-                        await litellm_logging_obj.async_post_mcp_tool_call_hook(
+                        result = await litellm_logging_obj.async_post_mcp_tool_call_hook(
                             kwargs=litellm_logging_obj.model_call_details,
                             response_obj=result,
                             start_time=start_time,
