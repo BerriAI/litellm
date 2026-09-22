@@ -211,6 +211,9 @@
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_flux_dev_generation_without_deployment_api_base_uses_global_api_base": [
       "other.provider_wire.fal_ai.global_api_base_routes_image_generation"
     ],
+    "tests/integration/providers/test_openai_image_edit_wire.py::test_openai_compatible_image_edit_forwards_seed_form_field_to_backend": [
+      "other.provider_wire.openai.image_edit_forwards_provider_specific_form_fields"
+    ],
     "tests/integration/providers/test_xiaomi_mimo_wire.py::test_xiaomi_mimo_nonstream_surfaces_reasoning_and_charges_registry_price[mimo-v2.6-pro]": [
       "other.provider_wire.xiaomi_mimo.reasoning_content_and_registry_pricing"
     ],
