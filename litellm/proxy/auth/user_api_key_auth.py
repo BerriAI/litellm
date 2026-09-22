@@ -932,9 +932,14 @@ async def _latest_active_key_hash_for_user(prisma_client: PrismaClient, user_id:
     row: Final = await VerificationTokenRepository(prisma_client).table.find_first(
         where={  # mutable-ok: the prisma where clause contract is a plain dict
             "user_id": user_id,
-            "OR": [  # mutable-ok: prisma filter literal
-                {"expires": None},  # mutable-ok: prisma filter literal
-                {"expires": {"gt": datetime.now(timezone.utc)}},  # mutable-ok: prisma filter literal
+            "AND": [  # mutable-ok: prisma filter literal
+                {"OR": [{"blocked": False}, {"blocked": None}]},  # mutable-ok: prisma filter literal
+                {  # mutable-ok: prisma filter literal
+                    "OR": [  # mutable-ok: prisma filter literal
+                        {"expires": None},  # mutable-ok: prisma filter literal
+                        {"expires": {"gt": datetime.now(timezone.utc)}},  # mutable-ok: prisma filter literal
+                    ]
+                },
             ],
         },
         order={"created_at": "desc"},  # mutable-ok: prisma order literal

@@ -2145,7 +2145,9 @@ def _auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler, **over
 @pytest.mark.asyncio
 async def test_auto_register_map_existing_key_reuses_users_latest_key():
     """With auto_register_map_existing_key on, the mapping must point at the user's
-    most recently created non-expired key hash and nothing may be minted."""
+    most recently created non-expired, non-blocked key hash and nothing may be minted."""
+    from typing import Final
+
     from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
 
     prisma_client = MagicMock()
@@ -2175,9 +2177,14 @@ async def test_auto_register_map_existing_key_reuses_users_latest_key():
     find_first.assert_awaited_once()
     where = find_first.await_args.kwargs["where"]
     assert where["user_id"] == "validated-user"
-    assert {"expires": None} in where["OR"], f"non-expired keys must be included: {where}"
-    assert any(isinstance(entry.get("expires"), dict) and "gt" in entry["expires"] for entry in where["OR"]), (
+    expires_or: Final = next(entry["OR"] for entry in where["AND"] if any("expires" in e for e in entry["OR"]))
+    assert {"expires": None} in expires_or, f"non-expired keys must be included: {where}"
+    assert any(isinstance(entry.get("expires"), dict) and "gt" in entry["expires"] for entry in expires_or), (
         f"future-expiring keys must be included: {where}"
+    )
+    blocked_or: Final = next(entry["OR"] for entry in where["AND"] if any("blocked" in e for e in entry["OR"]))
+    assert {"blocked": False} in blocked_or and {"blocked": None} in blocked_or, (
+        f"blocked keys must be excluded from reuse: {where}"
     )
     assert find_first.await_args.kwargs["order"] == {"created_at": "desc"}
 
