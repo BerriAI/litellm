@@ -156,6 +156,44 @@ def test_responses_stream_completes_through_empty_choices_metadata_and_usage_chu
     assert outbound["stream"] is True and outbound["stream_options"] == {"include_usage": True}, f"observed outbound body: {outbound!r}"
 
 
+def provider_cost_object_stream(identity: str, total_cost: float) -> tuple[bytes, ...]:
+    cost: Final = {"input_tokens_cost": 0.0001, "output_tokens_cost": 0.0002, "request_cost": 0.012, "total_cost": total_cost}
+    usage: Final = {"id": identity, "object": "chat.completion.chunk", "created": 1, "model": "sonar", "choices": [], "usage": {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15, "cost": cost}}
+    return (frame(identity, {"role": "assistant", "content": "Hello "}), frame(identity, {"content": "from search"}), frame(identity, {}, finish="stop"), b"data: " + json.dumps(usage).encode() + b"\n\n", b"data: [DONE]\n\n")
+
+
+def sse_data_lines(text: str) -> tuple[str, ...]:
+    return tuple(line.removeprefix("data: ") for line in text.splitlines() if line.startswith("data: "))
+
+
+@pytest.mark.covers("other.streaming.usage.provider_cost_object_completes_stream_and_bills_total_cost")
+def test_perplexity_stream_with_cost_breakdown_object_completes_and_bills_total_cost(gateway: Gateway) -> None:
+    identity: Final = "stream-cost-object-" + uuid.uuid4().hex
+    total_cost: Final = 0.0123
+    with gateway.scenario() as scenario, wire_server(lambda request: Reply(content_type="text/event-stream", chunks=provider_cost_object_stream(identity, total_cost))) as wire:
+        model: Final = scenario.model(model="perplexity/sonar", api_base=wire.url + "/v1")
+        with gateway.client.stream("POST", "/v1/chat/completions", json={"model": model, "messages": [{"role": "user", "content": identity}], "stream": True, "stream_options": {"include_usage": True}}, headers={"Authorization": f"Bearer {gateway.key}"}) as response:
+            text: Final = response.read().decode()
+        assert response.status_code == 200, text
+        lines: Final = sse_data_lines(text)
+        assert lines[-1] == "[DONE]", text
+        events: Final = tuple(json.loads(line) for line in lines[:-1])
+        assert [event for event in events if "error" in event] == [], text
+        assert "".join(choice["delta"].get("content") or "" for event in events for choice in event["choices"]) == "Hello from search", text
+        assert [choice.get("finish_reason") for event in events for choice in event["choices"] if choice.get("finish_reason")] == ["stop"], text
+        usages: Final = tuple(event["usage"] for event in events if event.get("usage") is not None)
+        assert len(usages) == 1, text
+        assert (usages[0]["prompt_tokens"], usages[0]["completion_tokens"], usages[0]["total_tokens"]) == (11, 4, 15), text
+        requests: Final = wire.drain()
+        assert len(requests) == 1
+        outbound: Final = json.loads(requests[0].body)
+        assert outbound["model"] == "sonar" and outbound["stream"] is True, outbound
+        assert outbound["messages"] == [{"role": "user", "content": identity}], outbound
+        rows: Final = eventually(lambda: read_rows('SELECT spend, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (identity,)), lambda values: len(values) == 1, seconds=70)
+        assert (rows[0]["prompt_tokens"], rows[0]["completion_tokens"]) == (11, 4)
+        assert float(rows[0]["spend"]) == pytest.approx(total_cost)
+
+
 @pytest.mark.covers("other.streaming.failure.truncated_transport_raises_and_control_recovers")
 def test_truncated_http_stream_is_an_error_and_next_stream_succeeds() -> None:
     import litellm
