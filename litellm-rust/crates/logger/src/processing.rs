@@ -162,6 +162,9 @@ impl Processor {
     }
 
     fn hides_encoded_credential(&self, value: &str) -> Result<bool> {
+        if !value.as_bytes().contains(&b'%') {
+            return Ok(false);
+        }
         let decoded = percent_decode_str(value).decode_utf8_lossy();
         Ok(self.redact_text(&decoded)? != decoded)
     }
