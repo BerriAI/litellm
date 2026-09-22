@@ -37,8 +37,10 @@ search_tools:
       api_key: os.environ/WEBIQ_API_KEY
 ```
 
+Set `LITELLM_PROXY_URL` to your existing LiteLLM deployment URL, without a trailing slash. This is the gateway URL your application calls; the provider itself calls `https://api.microsoft.ai/v3/search/web`
+
 ```bash
-curl http://localhost:4000/v1/search/webiq-search \
+curl "$LITELLM_PROXY_URL/v1/search/webiq-search" \
   -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"query":"retrieval augmented generation research","max_results":5}'

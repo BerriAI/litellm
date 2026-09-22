@@ -54,7 +54,7 @@ def test_search_maps_request_and_preserves_sources(respx_mock: respx.MockRouter)
     )
 
     assert json.loads(route.calls.last.request.content) == {
-        "query": "RAG research (site:example.com OR site:example.org) -site:excluded.example",
+        "query": "(RAG research) (site:example.com OR site:example.org) -site:excluded.example",
         "maxResults": 3,
         "region": "GB",
         "contentFormat": "passage",
@@ -182,8 +182,8 @@ def test_native_options_override_mapped_defaults_without_mutating_input() -> Non
         ([], "query"),
         ([""], "query"),
         (["-"], "query"),
-        (["-example.com"], "query -site:example.com"),
-        (["example.com"], "query (site:example.com)"),
+        (["-example.com"], "(query) -site:example.com"),
+        (["example.com"], "(query) (site:example.com)"),
     ],
 )
 def test_domain_filter_queries(domains: list[str], expected: str) -> None:

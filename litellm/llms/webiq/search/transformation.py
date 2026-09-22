@@ -38,7 +38,9 @@ def _query_with_domains(query: str, domains: object) -> str:
     included: Final = tuple(f"site:{domain}" for domain in parsed if domain and not domain.startswith("-"))
     excluded: Final = tuple(f"-site:{domain[1:]}" for domain in parsed if domain.startswith("-") and len(domain) > 1)
     include_clause: Final = f"({' OR '.join(included)})" if included else ""
-    return " ".join(part for part in (query, include_clause, *excluded) if part)
+    if not included and not excluded:
+        return query
+    return " ".join(part for part in (f"({query})", include_clause, *excluded) if part)
 
 
 class WebIQSearchConfig(BaseSearchConfig):
