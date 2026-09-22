@@ -127,12 +127,10 @@ def _debug_client(caller: UserAPIKeyAuth) -> TestClient:
 )
 @pytest.mark.usefixtures("hostile_proxy_config")
 def test_debug_report_refuses_everyone_but_proxy_admins(caller: UserAPIKeyAuth) -> None:
-    client = _debug_client(caller)
+    response = _debug_client(caller).get("/debug/report")
 
-    for url in ("/debug/report", "/debug/report?verbose=true"):
-        response = client.get(url)
-        assert response.status_code == 403, response.text
-        assert "litellm_version" not in response.text
+    assert response.status_code == 403, response.text
+    assert "litellm_version" not in response.text
 
 
 @pytest.mark.usefixtures("hostile_proxy_config")
@@ -147,28 +145,4 @@ def test_debug_report_returns_what_the_bug_report_link_carries_and_nothing_from_
         "litellm_settings.callbacks = [langfuse]",
         "model_list[*].provider = [azure]",
     ]
-    assert not any(hostile in response.text for hostile in HOSTILE_STRINGS), response.text
-
-
-@pytest.mark.usefixtures("hostile_proxy_config")
-def test_verbose_debug_report_lists_every_config_key_with_operator_values_typed_out() -> None:
-    client = _debug_client(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
-
-    response = client.get("/debug/report?verbose=true")
-
-    assert response.status_code == 200, response.text
-    assert response.json() == {
-        **client.get("/debug/report").json(),
-        "config_lines": [
-            "model_list[0].model_name = <str>",
-            "model_list[0].litellm_params.model = azure/<str>",
-            "model_list[0].litellm_params.api_base = <str>",
-            "model_list[0].litellm_params.api_key = <str>",
-            "litellm_settings.drop_params = true",
-            "litellm_settings.callbacks = [langfuse, <str>]",
-            "general_settings.master_key = <str>",
-            "general_settings.database_url = <str>",
-            "general_settings.store_model_in_db = true",
-        ],
-    }
     assert not any(hostile in response.text for hostile in HOSTILE_STRINGS), response.text

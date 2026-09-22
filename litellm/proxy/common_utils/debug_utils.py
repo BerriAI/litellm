@@ -789,24 +789,18 @@ async def configure_gc_thresholds_endpoint(
 @router.get("/debug/report", include_in_schema=False)
 async def get_debug_report(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    verbose: bool = False,
 ) -> EnvironmentReport:
     """
     The same LiteLLM-owned environment facts the bug report link puts in a GitHub issue:
     versions, deployment kind, and config flags whose keys and values LiteLLM defines.
     Nothing from the operator's config values, request data, or errors
 
-    verbose=true walks the whole loaded config instead: every key path, with booleans, numbers
-    and LiteLLM-defined enum values shown, every other string shown as <str> and operator-keyed
-    maps (environment_variables, model_group_alias, headers, metadata) shown as a key count
-
     Example usage:
     curl http://localhost:4000/debug/report -H "Authorization: Bearer sk-1234"
-    curl "http://localhost:4000/debug/report?verbose=true" -H "Authorization: Bearer sk-1234"
     """
     if not is_proxy_admin(user_api_key_dict):
         raise HTTPException(status_code=403, detail="Only proxy admins can read /debug/report")
-    return build_proxy_environment_report(verbose=verbose)
+    return build_proxy_environment_report()
 
 
 @router.get(

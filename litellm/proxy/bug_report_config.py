@@ -28,28 +28,30 @@ from litellm.types.secret_managers.main import KeyManagementSystem
 _OBJECT_MAP: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _OBJECT_LIST: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
-MAX_CONFIG_DEPTH: Final = 32
-
-OPERATOR_KEYED_MAPS: Final = frozenset(
+CREDENTIAL_KEY_PARTS: Final = frozenset(
     {
-        "environment_variables",
-        "mcp_servers",
-        "model_group_alias",
-        "model_group_retry_policy",
-        "fallbacks",
-        "context_window_fallbacks",
-        "content_policy_fallbacks",
-        "extra_headers",
-        "default_headers",
-        "headers",
-        "static_headers",
-        "extra_body",
-        "metadata",
-        "model_alias_map",
-        "tag_budget_config",
-        "priority_reservation",
+        "key",
+        "keys",
+        "secret",
+        "secrets",
+        "token",
+        "password",
+        "passwd",
+        "credential",
+        "credentials",
+        "url",
+        "uri",
+        "dsn",
+        "host",
+        "hosts",
+        "base",
+        "endpoint",
+        "cert",
+        "pem",
+        "salt",
     }
 )
+ENUM_KEYS_WITH_CREDENTIAL_PARTS: Final = frozenset({"key_management_system"})
 
 
 def _object_map(value: object) -> Mapping[str, object]:
@@ -116,24 +118,26 @@ def _cache_params_keys() -> frozenset[str]:
     return frozenset(name for name in inspect.signature(Cache.__init__).parameters if name != "self")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped params, only names are read
 
 
-def _render_json_scalar(value: JsonValue) -> str | None:
-    if isinstance(value, bool):
-        return str(value).lower()
-    if isinstance(value, str) and value in _known_values():
-        return value
-    return None
+def _is_credential_key(key: str) -> bool:
+    return key not in ENUM_KEYS_WITH_CREDENTIAL_PARTS and not CREDENTIAL_KEY_PARTS.isdisjoint(key.lower().split("_"))
 
 
-def _render_json(value: JsonValue) -> str | None:
-    if not isinstance(value, list):
-        return _render_json_scalar(value)
-    known_items: Final = tuple(rendered for item in value if (rendered := _render_json_scalar(item)) is not None)
-    return f"[{', '.join(known_items)}]" if known_items else None
+def _render_json(key: str, value: JsonValue) -> str | None:
+    match value:
+        case bool():
+            return str(value).lower()
+        case str():
+            return value if value in _known_values() and not _is_credential_key(key) else None
+        case list():
+            known_items: Final = tuple(rendered for item in value if (rendered := _render_json(key, item)) is not None)
+            return f"[{', '.join(known_items)}]" if known_items else None
+        case _:
+            return None
 
 
-def _render(value: object) -> str | None:
+def _render(key: str, value: object) -> str | None:
     try:
-        return _render_json(_JSON.validate_python(value))
+        return _render_json(key, _JSON.validate_python(value))
     except ValidationError:
         return None
 
@@ -142,7 +146,7 @@ def _section_lines(section: str, values: Mapping[str, object], known_keys: froze
     return tuple(
         f"{section}.{key} = {rendered}"
         for key, value in values.items()
-        if key in known_keys and (rendered := _render(value)) is not None
+        if key in known_keys and (rendered := _render(key, value)) is not None
     )
 
 
@@ -180,66 +184,6 @@ def _model_list_lines(model_list: object) -> tuple[str, ...]:
     return (f"model_list[*].provider = [{', '.join(providers)}]",) if providers else ()
 
 
-def _verbose_scalar(value: object) -> str:
-    if isinstance(value, bool):
-        return str(value).lower()
-    if isinstance(value, int | float):
-        return str(value)
-    if value is None:
-        return "null"
-    if not isinstance(value, str):
-        return "<object>"
-    if value in _known_values():
-        return value
-    provider: Final = _deployment_provider(value)
-    return "<str>" if provider is None else f"{provider}/<str>"
-
-
-def _mapping_or_none(value: object) -> Mapping[str, object] | None:
-    try:
-        return _OBJECT_MAP.validate_python(value)
-    except ValidationError:
-        return None
-
-
-def _items_or_none(value: object) -> Sequence[object] | None:
-    try:
-        return _OBJECT_LIST.validate_python(value)
-    except ValidationError:
-        return None
-
-
-def _is_container(value: object) -> bool:
-    return _mapping_or_none(value) is not None or _items_or_none(value) is not None
-
-
-def _verbose_lines(path: str, key: str, value: object, depth: int) -> tuple[str, ...]:
-    entries: Final = _mapping_or_none(value)
-    items: Final = _items_or_none(value)
-    if entries is None and items is None:
-        return (f"{path} = {_verbose_scalar(value)}",)
-    if entries is not None and key in OPERATOR_KEYED_MAPS:
-        return (f"{path} = <{len(entries)} keys>",)
-    if depth >= MAX_CONFIG_DEPTH:
-        return (f"{path} = <object>",)
-    if entries is not None:
-        return tuple(
-            line
-            for child_key, child in entries.items()
-            for line in _verbose_lines(f"{path}.{child_key}" if path else child_key, child_key, child, depth + 1)
-        )
-    children: Final = items or ()
-    if not any(_is_container(item) for item in children):
-        return (f"{path} = [{', '.join(_verbose_scalar(item) for item in children)}]",)
-    return tuple(
-        line for index, item in enumerate(children) for line in _verbose_lines(f"{path}[{index}]", key, item, depth + 1)
-    )
-
-
-def verbose_config_lines(config: Mapping[str, object], general_settings: Mapping[str, object]) -> tuple[str, ...]:
-    return _verbose_lines("", "", {**config, "general_settings": general_settings}, 0)
-
-
 def safe_config_lines(config: Mapping[str, object], general_settings: Mapping[str, object]) -> tuple[str, ...]:
     litellm_settings: Final = _object_map(config.get("litellm_settings"))
     return (
@@ -254,18 +198,17 @@ def safe_config_lines(config: Mapping[str, object], general_settings: Mapping[st
     )
 
 
-def _proxy_config_lines(*, verbose: bool = False) -> tuple[str, ...]:
+def _proxy_config_lines() -> tuple[str, ...]:
     from litellm.proxy import proxy_server
 
-    render: Final = verbose_config_lines if verbose else safe_config_lines
-    return render(
+    return safe_config_lines(
         proxy_server.proxy_config.config,
         _object_map(proxy_server.general_settings),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # bare dict global, validated by _object_map
     )
 
 
-def build_proxy_environment_report(*, verbose: bool = False) -> EnvironmentReport:
-    return build_environment_report(surface="proxy", config_lines=_proxy_config_lines(verbose=verbose))
+def build_proxy_environment_report() -> EnvironmentReport:
+    return build_environment_report(surface="proxy", config_lines=_proxy_config_lines())
 
 
 def build_proxy_bug_report(

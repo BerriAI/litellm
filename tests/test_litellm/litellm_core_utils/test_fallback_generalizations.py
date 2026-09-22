@@ -517,7 +517,7 @@ def test_shipped_gemini_chat_baseline_keeps_reasoning_effort_on_unmapped_model(s
         drop_params=False,
     )
     assert isinstance(optional_params, dict)
-    assert optional_params["thinkingConfig"]["thinkingBudget"] > 0
+    assert optional_params["thinkingConfig"]["thinkingLevel"] == "medium"
     assert optional_params["thinkingConfig"]["includeThoughts"] is True
 
 
