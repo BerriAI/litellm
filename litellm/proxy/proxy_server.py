@@ -78,7 +78,6 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.bug_report import (
     allowlisted,
     bug_report_notice,
-    build_bug_report,
     should_report_bug,
 )
 from litellm.litellm_core_utils.litellm_logging import (
@@ -373,6 +372,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket,
 )
 from litellm.proxy.batches_endpoints.endpoints import router as batches_router
+from litellm.proxy.bug_report_config import build_proxy_bug_report
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
@@ -1981,9 +1981,8 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if should_report_bug(exc):
         verbose_proxy_logger.error(
             bug_report_notice(
-                build_bug_report(
+                build_proxy_bug_report(
                     exc,
-                    surface="proxy",
                     call_type=allowlisted(request.url.path, KNOWN_PROXY_ROUTES),
                 )
             )
