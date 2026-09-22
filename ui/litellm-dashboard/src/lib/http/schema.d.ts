@@ -4356,6 +4356,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/debug/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Debug Report
+         * @description The same LiteLLM-owned environment facts the bug report link puts in a GitHub issue:
+         *     versions, deployment kind, and config flags whose keys and values LiteLLM defines.
+         *     Nothing from the operator's config values, request data, or errors
+         *
+         *     Example usage:
+         *     curl http://localhost:4000/debug/report -H "Authorization: Bearer sk-1234"
+         */
+        get: operations["get_debug_report_debug_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/delete/allowed_ip": {
         parameters: {
             query?: never;
@@ -28779,6 +28804,22 @@ export interface components {
             /** Template Id */
             template_id: string;
         };
+        /** EnvironmentReport */
+        EnvironmentReport: {
+            /** Config Lines */
+            config_lines: string[];
+            /** Deployment */
+            deployment: string | null;
+            /** Litellm Version */
+            litellm_version: string;
+            /** Python Version */
+            python_version: string;
+            /**
+             * Surface
+             * @enum {string}
+             */
+            surface: "sdk" | "proxy";
+        };
         /** ErrorResponse */
         ErrorResponse: {
             /**
@@ -48588,6 +48629,26 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    get_debug_report_debug_report_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentReport"];
                 };
             };
         };

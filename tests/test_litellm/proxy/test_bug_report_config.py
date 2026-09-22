@@ -5,7 +5,7 @@ from collections.abc import Iterator, Mapping
 import pytest
 
 from litellm.proxy import proxy_server
-from litellm.proxy.bug_report_config import build_proxy_bug_report, safe_config_lines
+from litellm.proxy.bug_report_config import build_proxy_bug_report, build_proxy_environment_report, safe_config_lines
 
 CUSTOMER_STRINGS = (
     "acme",
@@ -193,6 +193,14 @@ def loaded_proxy_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 def test_build_proxy_bug_report_reads_the_loaded_proxy_config():
     report = build_proxy_bug_report(RuntimeError("boom"), stream=False)
 
-    assert report.surface == "proxy"
+    assert report.environment.surface == "proxy"
     assert report.stream is False
-    assert report.config_lines == safe_config_lines(CUSTOMER_CONFIG, CUSTOMER_GENERAL_SETTINGS)
+    assert report.environment.config_lines == safe_config_lines(CUSTOMER_CONFIG, CUSTOMER_GENERAL_SETTINGS)
+
+
+@pytest.mark.usefixtures("loaded_proxy_config")
+def test_proxy_environment_report_matches_the_bug_report_environment():
+    environment = build_proxy_environment_report()
+
+    assert environment == build_proxy_bug_report(RuntimeError("boom")).environment
+    assert environment.config_lines == safe_config_lines(CUSTOMER_CONFIG, CUSTOMER_GENERAL_SETTINGS)
