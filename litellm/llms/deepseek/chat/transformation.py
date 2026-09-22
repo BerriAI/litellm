@@ -225,6 +225,13 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         )
 
     @staticmethod
+    def _normalize_thinking_tool_choice(optional_params: dict) -> dict:
+        tool_choice: Final = optional_params.get("tool_choice")
+        if tool_choice is None or tool_choice in ("none", "auto"):
+            return optional_params
+        return {**optional_params, "tool_choice": "auto"}
+
+    @staticmethod
     def _drop_unsupported_tools(optional_params: dict) -> dict:
         """
         DeepSeek's /chat/completions only accepts tools of type "function".
@@ -312,6 +319,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         """
         optional_params = self._drop_unsupported_tools(optional_params)
         if self._thinking_mode_active(model=model, optional_params=optional_params):
+            optional_params = self._normalize_thinking_tool_choice(optional_params)
             messages = self._fill_reasoning_content(messages)
         return super().transform_request(
             model=model,
@@ -335,6 +343,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         """
         optional_params = self._drop_unsupported_tools(optional_params)
         if self._thinking_mode_active(model=model, optional_params=optional_params):
+            optional_params = self._normalize_thinking_tool_choice(optional_params)
             messages = self._fill_reasoning_content(messages)
         return await super().async_transform_request(
             model=model,
