@@ -38,7 +38,7 @@ test.describe("MCP Tools", () => {
     await deleteMcpServerByName(page, serverName);
   });
 
-  test("MCP Tools tab lists the tools the upstream server advertises", async ({ page }) => {
+  test("MCP Catalog tab lists the tools the upstream server advertises", async ({ page }) => {
     const upstreamTools = await listUpstreamToolNames(MCP_SERVER_URL);
     expect(upstreamTools).toContain(TOOL_NAME);
 

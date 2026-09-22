@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Final, Literal, Optional
@@ -4073,6 +4074,212 @@ class TestMCPServerManager:
         )
         mock_client.list_resource_templates.assert_awaited_once()
         assert result == expected_templates
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("manager_method", "client_method"),
+        [
+            ("get_prompts_from_server", "list_prompts"),
+            ("get_resources_from_server", "list_resources"),
+            ("get_resource_templates_from_server", "list_resource_templates"),
+        ],
+    )
+    async def test_catalog_fetch_failure_is_swallowed_unless_raise_on_error(
+        self, manager_method: str, client_method: str
+    ) -> None:
+        """Catalog fetches stay best-effort for the MCP protocol aggregate (empty list) but a
+        single-server caller that opts in gets the classified fault instead of empty-success."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-1",
+            name="alias-server",
+            alias="alias-server",
+            server_name="alias-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+        )
+        mock_client = AsyncMock()
+        setattr(mock_client, client_method, AsyncMock(side_effect=httpx.ConnectError("connection refused")))
+        mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
+
+        with patch.object(manager, "_create_mcp_client", new_callable=AsyncMock, return_value=mock_client):
+            assert await getattr(manager, manager_method)(server, user_api_key_auth=None) == []
+            with pytest.raises(MCPServerListError) as exc_info:
+                await getattr(manager, manager_method)(server, user_api_key_auth=None, raise_on_error=True)
+
+        assert exc_info.value.fault == ServerListFault(tag="unreachable")
+        assert exc_info.value.server_name == server.name
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "manager_method",
+        ["get_prompts_from_server", "get_resources_from_server", "get_resource_templates_from_server"],
+    )
+    @pytest.mark.parametrize("challenge_carrier", ["resolver_http_exception", "upstream_auth_error"])
+    async def test_catalog_fetch_relays_auth_challenge_like_tools(
+        self, manager_method: str, challenge_carrier: str
+    ) -> None:
+        """An auth challenge raised while building the client (a v2 resolver HTTPException 401) or by
+        the upstream itself must reach a single-server caller as MCPUpstreamAuthError with the
+        WWW-Authenticate intact, exactly as the tools listing relays it, not as a bare fault."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-1",
+            name="alias-server",
+            alias="alias-server",
+            server_name="alias-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+        )
+        challenge = 'Bearer resource_metadata="https://example.com/.well-known/oauth-protected-resource"'
+        raised = (
+            HTTPException(status_code=401, detail="Unauthorized", headers={"WWW-Authenticate": challenge})
+            if challenge_carrier == "resolver_http_exception"
+            else MCPUpstreamAuthError(status_code=401, www_authenticate=challenge, server_name=server.name)
+        )
+
+        with patch.object(manager, "_create_mcp_client", new_callable=AsyncMock, side_effect=raised):
+            with pytest.raises(MCPUpstreamAuthError) as exc_info:
+                await getattr(manager, manager_method)(server, user_api_key_auth=None, raise_on_error=True)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.www_authenticate == challenge
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("manager_method", "client_method"),
+        [
+            ("get_prompts_from_server", "list_prompts"),
+            ("get_resources_from_server", "list_resources"),
+            ("get_resource_templates_from_server", "list_resource_templates"),
+        ],
+    )
+    async def test_catalog_fetch_prepares_upstream_headers_like_tools(
+        self, manager_method: str, client_method: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Prompt and resource listings must reach the upstream with the same credentials the tools
+        listing sends: ``${NAME}`` static headers interpolated from the server's env vars and the
+        MCPJWTSigner token injected when nothing else carries an Authorization."""
+        import jwt
+
+        import litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer as jwt_signer_module
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import MCPJWTSigner
+
+        monkeypatch.setattr(jwt_signer_module, "_mcp_jwt_signer_instance", None)
+        MCPJWTSigner(
+            guardrail_name="catalog-jwt-signer",
+            event_hook="pre_mcp_call",
+            default_on=True,
+            issuer="https://litellm.example.com",
+            audience="mcp",
+        )
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-1",
+            name="alias-server",
+            alias="alias-server",
+            server_name="alias-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            static_headers={"X-Tenant": "${TENANT}"},
+            env_vars=[{"name": "TENANT", "value": "acme", "scope": "global"}],
+        )
+        mock_client = AsyncMock()
+        setattr(mock_client, client_method, AsyncMock(return_value=[]))
+        mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
+        upstream_headers: list[dict[str, str] | None] = []
+
+        async def create_client(*, extra_headers: dict[str, str] | None, **_: object) -> AsyncMock:
+            upstream_headers.append(extra_headers)
+            return mock_client
+
+        with patch.object(manager, "_create_mcp_client", create_client):
+            await getattr(manager, manager_method)(
+                server,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="alice"),
+                extra_headers={"X-Caller": "dashboard"},
+            )
+
+        assert len(upstream_headers) == 1
+        sent = upstream_headers[0]
+        assert sent is not None
+        assert sent["X-Caller"] == "dashboard"
+        assert sent["X-Tenant"] == "acme"
+        claims = jwt.decode(sent["Authorization"].removeprefix("Bearer "), options={"verify_signature": False})
+        assert claims["sub"] == "alice"
+        assert claims["scope"] == "mcp:tools/list"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("manager_method", "client_method", "make_item"),
+        [
+            ("get_prompts_from_server", "list_prompts", lambda name: Prompt(name=name)),
+            ("get_resources_from_server", "list_resources", lambda name: Resource(uri=f"demo://{name}", name=name)),
+            (
+                "get_resource_templates_from_server",
+                "list_resource_templates",
+                lambda name: ResourceTemplate(uriTemplate=f"demo://{name}/{{id}}", name=name),
+            ),
+        ],
+    )
+    async def test_catalog_discovery_cache_survives_jwt_signer_and_isolates_users(
+        self,
+        manager_method: str,
+        client_method: str,
+        make_item: Callable[[str], Prompt | Resource | ResourceTemplate],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The MCPJWTSigner mints a fresh token on every listing, so the token itself must not be part of
+        the discovery cache key; the user it was signed for must be, since the upstream sees that identity."""
+        from types import SimpleNamespace
+
+        import litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer as jwt_signer_module
+        from litellm.experimental_mcp_client.client import MCPClient
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import MCPJWTSigner
+
+        monkeypatch.setattr(jwt_signer_module, "_mcp_jwt_signer_instance", None)
+        signer_clock = iter(range(1_700_000_000, 1_700_000_100))
+        monkeypatch.setattr(jwt_signer_module, "time", SimpleNamespace(time=lambda: next(signer_clock)))
+        MCPJWTSigner(
+            guardrail_name="catalog-jwt-signer",
+            event_hook="pre_mcp_call",
+            default_on=True,
+            issuer="https://litellm.example.com",
+            audience="mcp",
+        )
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-1",
+            name="alias-server",
+            alias="alias-server",
+            server_name="alias-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+        )
+        upstream_call = AsyncMock(side_effect=[[make_item("first")], [make_item("second")]])
+        seen_authorization: list[str] = []
+
+        async def create_client(**kwargs: object) -> MCPClient:
+            extra_headers = kwargs["extra_headers"]
+            assert isinstance(extra_headers, dict)
+            seen_authorization.append(extra_headers["Authorization"])
+            client = MCPClient(server_url=server.url, transport_type=MCPTransport.http, extra_headers=extra_headers)
+            setattr(client, client_method, upstream_call)
+            return client
+
+        alice = UserAPIKeyAuth(api_key="sk-alice", user_id="alice")
+        bob = UserAPIKeyAuth(api_key="sk-bob", user_id="bob")
+
+        with patch.object(manager, "_create_mcp_client", AsyncMock(side_effect=create_client)):
+            alice_first = await getattr(manager, manager_method)(server, user_api_key_auth=alice, add_prefix=False)
+            alice_second = await getattr(manager, manager_method)(server, user_api_key_auth=alice, add_prefix=False)
+            bob_first = await getattr(manager, manager_method)(server, user_api_key_auth=bob, add_prefix=False)
+        assert [item.name for item in alice_first] == ["first"]
+        assert alice_second == alice_first
+        assert [item.name for item in bob_first] == ["second"]
+        assert len(seen_authorization) == 3 and len(set(seen_authorization)) == 3
 
     @pytest.mark.asyncio
     async def test_read_resource_from_server_success(self):

@@ -911,7 +911,7 @@ class MCPJWTSigner(CustomGuardrail):
 async def inject_mcp_jwt_headers_for_upstream(
     user_api_key_dict: UserAPIKeyAuth | None,
     extra_headers: dict[str, str] | None = None,
-    raw_headers: dict[str, str] | None = None,
+    raw_headers: Mapping[str, str] | None = None,
     *,
     for_list_tools: bool = False,
     mcp_tool_name: str = "",

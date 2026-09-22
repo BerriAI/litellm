@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
+import { MCPPromptsSection, MCPResourcesSection } from "./MCPCatalogSections";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import {
   isClientForwardedTokenMode,
@@ -11,7 +12,13 @@ import {
   CallMCPToolResponse,
   getMcpOAuthMode,
 } from "@/components/mcp_tools/types";
-import { listMCPTools, callMCPTool, getMCPOAuthUserCredentialStatus } from "@/components/networking";
+import {
+  listMCPTools,
+  listMCPPrompts,
+  listMCPResources,
+  callMCPTool,
+  getMCPOAuthUserCredentialStatus,
+} from "@/components/networking";
 import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
 import { sanitizeMcpAliasForHeader, buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import { useToolsOAuthFlow } from "@/hooks/useToolsOAuthFlow";
@@ -148,6 +155,12 @@ const MCPToolsViewer = ({
     return Object.keys(customHeaders).length > 0 ? customHeaders : undefined;
   };
 
+  // Passthrough blocks until a browser session token exists; authorization_code blocks until
+  // the user has a valid DB credential (else the backend returns no tools).
+  const catalogQueriesEnabled =
+    !!accessToken &&
+    (usesBrowserHeldToken ? oauthToken !== null : isAuthorizationCode ? hasAuthorizationCodeCred : true);
+
   // Query to fetch MCP tools
   const {
     data: mcpToolsResponse,
@@ -179,11 +192,7 @@ const MCPToolsViewer = ({
       }
       return result;
     },
-    // Passthrough blocks until a browser session token exists; authorization_code blocks until
-    // the user has a valid DB credential (else the backend returns no tools).
-    enabled:
-      !!accessToken &&
-      (usesBrowserHeldToken ? oauthToken !== null : isAuthorizationCode ? hasAuthorizationCodeCred : true),
+    enabled: catalogQueriesEnabled,
     staleTime: 30000, // Consider data fresh for 30 seconds
     retry: (failureCount, error: any) => {
       // Don't retry on 401 — token is invalid, user must re-authenticate
@@ -192,12 +201,47 @@ const MCPToolsViewer = ({
     },
   });
 
+  const catalogQueryOptions = <T,>(name: "mcpPrompts" | "mcpResources", fetchCatalog: () => Promise<T>) => ({
+    queryKey: [name, serverId, passthroughHeaders, oauthToken],
+    queryFn: fetchCatalog,
+    enabled: catalogQueriesEnabled,
+    staleTime: 30000,
+  });
+
+  const {
+    data: mcpPromptsResponse,
+    isLoading: isLoadingPrompts,
+    refetch: refetchPrompts,
+  } = useQuery(
+    catalogQueryOptions("mcpPrompts", () => listMCPPrompts(accessToken ?? "", serverId, buildCustomHeaders())),
+  );
+
+  const {
+    data: mcpResourcesResponse,
+    isLoading: isLoadingResources,
+    refetch: refetchResources,
+  } = useQuery(
+    catalogQueryOptions("mcpResources", () => listMCPResources(accessToken ?? "", serverId, buildCustomHeaders())),
+  );
+
+  const refetchCatalog = useCallback(() => {
+    refetchTools();
+    refetchPrompts();
+    refetchResources();
+  }, [refetchTools, refetchPrompts, refetchResources]);
+
+  const toolsError = mcpToolsError as (Error & { status?: number; response?: { status?: number } }) | null;
+  const catalogUnauthorized =
+    (toolsError?.status ?? toolsError?.response?.status) === 401 ||
+    mcpPromptsResponse?.status === 401 ||
+    mcpResourcesResponse?.status === 401;
+
   // authorization_code authorize: same redirect+exchange flow as the admin "Authorize & Fetch"
   // and the chat "Connect" button, but persists the token to the per-user DB.
   const onAuthorizationCodeAuthSuccess = useCallback(() => {
     refetchAuthorizationCodeCred();
-    refetchTools();
-  }, [refetchAuthorizationCodeCred, refetchTools]);
+    refetchCatalog();
+  }, [refetchAuthorizationCodeCred, refetchCatalog]);
 
   const {
     startOAuthFlow: startDbOAuthFlow,
@@ -219,16 +263,14 @@ const MCPToolsViewer = ({
     startDbOAuthFlow();
   }, [serverId, startDbOAuthFlow]);
 
-  // If the tools query fails with 401, the cached OAuth token is invalid —
-  // clear it so the auth gate is shown again and the user can re-authenticate.
+  // A 401 from any listing means the cached OAuth token is invalid; clear it so the
+  // auth gate is shown again and the user can re-authenticate.
   useEffect(() => {
-    const err = mcpToolsError as (Error & { status?: number; response?: { status?: number } }) | null;
-    const status = err?.status ?? err?.response?.status;
-    if (status === 401) {
+    if (catalogUnauthorized) {
       removeToken(serverId, userID);
       setOauthToken(null);
     }
-  }, [mcpToolsError, serverId, userID]);
+  }, [catalogUnauthorized, serverId, userID]);
 
   // Mutation for calling a tool
   const { mutate: executeTool, isPending: isCallingTool } = useMutation({
@@ -261,12 +303,10 @@ const MCPToolsViewer = ({
 
   const toolsData = mcpToolsResponse?.tools || [];
 
-  const toolsError = mcpToolsError as (Error & { status?: number; response?: { status?: number } }) | null;
   // authorization_code only: a 401 from the list call means the stored credential is unusable and
   // the backend's refresh could not mint a token, so the user must re-authorize (the browser flow).
   // token_exchange has no gateway-side authorize step, so it is not gated here.
-  const authorizationCodeTokenRejected =
-    isAuthorizationCode && (toolsError?.status ?? toolsError?.response?.status) === 401;
+  const authorizationCodeTokenRejected = isAuthorizationCode && catalogUnauthorized;
 
   // An auth gate replaces the tool list when the user must authenticate first:
   // passthrough needs a browser token; authorization_code needs a stored DB credential or a
@@ -288,13 +328,19 @@ const MCPToolsViewer = ({
     );
   });
 
+  const promptsData = mcpPromptsResponse?.prompts ?? [];
+  const resourcesData = mcpResourcesResponse?.resources ?? [];
+  const resourceTemplatesData = mcpResourcesResponse?.resource_templates ?? [];
+  const catalogErrorMessage = (response: { error?: string | null; message?: string | null } | undefined) =>
+    response?.error ? response.message || response.error : null;
+
   return (
     <div className="w-full p-4">
       <Card className="w-full overflow-hidden rounded-xl shadow-md">
         <div className="grid h-auto w-full grid-cols-4 gap-4">
           {/* Left Sidebar with Controls */}
           <div className="col-span-1 flex flex-col bg-muted p-4">
-            <h2 className="mt-2 mb-6 text-xl font-semibold">MCP Tools</h2>
+            <h2 className="mt-2 mb-6 text-xl font-semibold">MCP Catalog</h2>
 
             <div className="flex flex-col flex-1">
               {/* Extra Headers Input Section */}
@@ -341,13 +387,13 @@ const MCPToolsViewer = ({
                       <Button
                         size="sm"
                         onClick={() => {
-                          refetchTools();
+                          refetchCatalog();
                           setShowHeaderInput(false);
                         }}
                         disabled={Object.values(passthroughHeaders).every((v) => !v || !v.trim())}
                         className="mt-2 w-full"
                       >
-                        Load Tools
+                        Load Catalog
                       </Button>
                     </div>
                   )}
@@ -379,7 +425,9 @@ const MCPToolsViewer = ({
                   <div className="rounded-lg border border-border bg-card p-4 text-center">
                     <Lock className="mx-auto mb-2 size-6 text-muted-foreground" />
                     <p className="mb-1 text-xs font-medium">Authentication required</p>
-                    <p className="mb-3 text-xs text-muted-foreground">Authenticate to view available tools</p>
+                    <p className="mb-3 text-xs text-muted-foreground">
+                      Authenticate to view available tools, prompts, and resources
+                    </p>
                     <Button
                       size="sm"
                       onClick={startOAuthFlow}
@@ -401,7 +449,7 @@ const MCPToolsViewer = ({
                     <Lock className="mx-auto mb-2 size-6 text-muted-foreground" />
                     <p className="mb-1 text-xs font-medium">Authentication required</p>
                     <p className="mb-3 text-xs text-muted-foreground">
-                      Authenticate with the upstream provider to view available tools
+                      Authenticate with the upstream provider to view available tools, prompts, and resources
                     </p>
                     <Button
                       size="sm"
@@ -539,6 +587,18 @@ const MCPToolsViewer = ({
                         )}
                       </>
                     )}
+
+                    <MCPPromptsSection
+                      prompts={promptsData}
+                      isLoading={isLoadingPrompts || authorizationCodeStatusLoading}
+                      errorMessage={catalogErrorMessage(mcpPromptsResponse)}
+                    />
+                    <MCPResourcesSection
+                      resources={resourcesData}
+                      resourceTemplates={resourceTemplatesData}
+                      isLoading={isLoadingResources || authorizationCodeStatusLoading}
+                      errorMessage={catalogErrorMessage(mcpResourcesResponse)}
+                    />
                   </>
                 ) : null}
               </div>

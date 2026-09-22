@@ -471,12 +471,12 @@ async def test_refresh_with_mismatched_id_token_rejected():
 
 
 @pytest.mark.asyncio
-async def test_audit_mode_logs_but_does_not_reject(caplog):
+async def test_audit_mode_logs_but_does_not_reject(caplog: pytest.LogCaptureFixture) -> None:
     token: Final = _sign_id_token({"email": "mallory@example.com", "email_verified": True})
     result: Final = await enforce_oauth_identity_binding(
         server=_server(mode="audit"),
         token_response={"access_token": "at", "id_token": token},
-        litellm_user_id="user-a",
+        litellm_user_id="user-a\r\nFORGED",
         grant_type="authorization_code",
         refresh_ownership=None,
         jwks_fetcher=_jwks_fetcher,
@@ -486,6 +486,7 @@ async def test_audit_mode_logs_but_does_not_reject(caplog):
     assert "oauth_principal_mismatch" in caplog.text
     assert "nonce" not in caplog.text
 
+    assert all("\n" not in record.getMessage() and "\r" not in record.getMessage() for record in caplog.records)
 
 @pytest.mark.asyncio
 async def test_unverified_email_rejected():

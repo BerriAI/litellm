@@ -8886,6 +8886,48 @@ export interface paths {
         patch: operations["aggregate_mcp_route_mcp_patch"];
         trace?: never;
     };
+    "/mcp-rest/prompts/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Prompts Rest Api
+         * @description List the prompts one MCP server exposes, with names as the upstream server reports them.
+         *
+         *     An upstream failure relays its classified HTTP status, the same as ``/mcp-rest/tools/list``.
+         */
+        get: operations["list_prompts_rest_api_mcp_rest_prompts_list_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mcp-rest/resources/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Resources Rest Api
+         * @description List the resources and resource templates one MCP server exposes.
+         */
+        get: operations["list_resources_rest_api_mcp_rest_resources_list_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/mcp-rest/test/connection": {
         parameters: {
             query?: never;
@@ -23999,6 +24041,18 @@ export interface components {
             /** Index Permissions */
             index_permissions: ("read" | "write")[];
         };
+        /**
+         * Annotations
+         * @description Optional annotations the client can use to inform how objects are used or displayed.
+         */
+        Annotations: {
+            /** Audience */
+            audience?: ("user" | "assistant")[] | null;
+            /** Lastmodified */
+            lastModified?: string | null;
+            /** Priority */
+            priority?: number | null;
+        };
         /** ApplyGuardrailRequest */
         ApplyGuardrailRequest: {
             /** Entities */
@@ -29640,6 +29694,20 @@ export interface components {
             /** Ip */
             ip: string;
         };
+        /**
+         * Icon
+         * @description An optionally-sized icon for display in a user interface (2025-11-25+).
+         */
+        Icon: {
+            /** Mimetype */
+            mimeType?: string | null;
+            /** Sizes */
+            sizes?: string[] | null;
+            /** Src */
+            src: string;
+            /** Theme */
+            theme?: ("light" | "dark") | null;
+        };
         /** ImageURLListItem */
         ImageURLListItem: {
             image_url: components["schemas"]["ImageURLObject"];
@@ -30100,6 +30168,18 @@ export interface components {
             prev?: string | null;
             /** Self */
             self: string;
+        };
+        /** ListMCPPromptsRestAPIResponse */
+        ListMCPPromptsRestAPIResponse: {
+            /** Prompts */
+            prompts: components["schemas"]["MCPCatalogPrompt"][];
+        };
+        /** ListMCPResourcesRestAPIResponse */
+        ListMCPResourcesRestAPIResponse: {
+            /** Resource Templates */
+            resource_templates: components["schemas"]["ResourceTemplate"][];
+            /** Resources */
+            resources: components["schemas"]["Resource"][];
         };
         /**
          * ListMeta
@@ -33090,6 +33170,27 @@ export interface components {
              * @description Exact value of the JWT claim named in litellm_jwtauth.mcp_client_id_jwt_field, or of the mcp_client_id_header header, that identifies this client application. Matched case-sensitively.
              */
             value: string;
+        };
+        /**
+         * MCPCatalogPrompt
+         * @description An MCP server's prompt as the upstream reports it. Subclassed only so the OpenAPI
+         *     component gets a name distinct from the prompt-management ``Prompt`` request model.
+         */
+        MCPCatalogPrompt: {
+            /** Meta */
+            _meta?: {
+                [key: string]: unknown;
+            } | null;
+            /** Arguments */
+            arguments?: components["schemas"]["PromptArgument"][] | null;
+            /** Description */
+            description?: string | null;
+            /** Icons */
+            icons?: components["schemas"]["Icon"][] | null;
+            /** Name */
+            name: string;
+            /** Title */
+            title?: string | null;
         };
         /** MCPConnectorEntry */
         MCPConnectorEntry: {
@@ -36157,6 +36258,20 @@ export interface components {
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
         };
+        /**
+         * PromptArgument
+         * @description Describes an argument that a prompt can accept.
+         */
+        PromptArgument: {
+            /** Description */
+            description?: string | null;
+            /** Name */
+            name: string;
+            /** Required */
+            required?: boolean | null;
+            /** Title */
+            title?: string | null;
+        };
         /** PromptCachingRequest */
         PromptCachingRequest: {
             /** Cache Creation Tokens */
@@ -37257,6 +37372,54 @@ export interface components {
         ResetSpendRequest: {
             /** Reset To */
             reset_to: number;
+        };
+        /**
+         * Resource
+         * @description A known resource that the server is capable of reading.
+         */
+        Resource: {
+            /** Meta */
+            _meta?: {
+                [key: string]: unknown;
+            } | null;
+            annotations?: components["schemas"]["Annotations"] | null;
+            /** Description */
+            description?: string | null;
+            /** Icons */
+            icons?: components["schemas"]["Icon"][] | null;
+            /** Mimetype */
+            mimeType?: string | null;
+            /** Name */
+            name: string;
+            /** Size */
+            size?: number | null;
+            /** Title */
+            title?: string | null;
+            /** Uri */
+            uri: string;
+        };
+        /**
+         * ResourceTemplate
+         * @description A template description for resources available on the server.
+         */
+        ResourceTemplate: {
+            /** Meta */
+            _meta?: {
+                [key: string]: unknown;
+            } | null;
+            annotations?: components["schemas"]["Annotations"] | null;
+            /** Description */
+            description?: string | null;
+            /** Icons */
+            icons?: components["schemas"]["Icon"][] | null;
+            /** Mimetype */
+            mimeType?: string | null;
+            /** Name */
+            name: string;
+            /** Title */
+            title?: string | null;
+            /** Uritemplate */
+            uriTemplate: string;
         };
         /** ResponseLiteLLM_ManagedVectorStore */
         ResponseLiteLLM_ManagedVectorStore: {
@@ -53997,6 +54160,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_prompts_rest_api_mcp_rest_prompts_list_get: {
+        parameters: {
+            query: {
+                /** @description The MCP server id, name, or alias to list prompts for */
+                server_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListMCPPromptsRestAPIResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_resources_rest_api_mcp_rest_resources_list_get: {
+        parameters: {
+            query: {
+                /** @description The MCP server id, name, or alias to list resources for */
+                server_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListMCPResourcesRestAPIResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

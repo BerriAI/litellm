@@ -22414,6 +22414,55 @@
   "mcp_app": {
     "components": {
       "schemas": {
+        "Annotations": {
+          "description": "Optional annotations the client can use to inform how objects are used or displayed.",
+          "properties": {
+            "audience": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "user",
+                      "assistant"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
+            "lastModified": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lastmodified"
+            },
+            "priority": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Priority"
+            }
+          },
+          "title": "Annotations",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -22425,6 +22474,176 @@
             }
           },
           "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "Icon": {
+          "description": "An optionally-sized icon for display in a user interface (2025-11-25+).",
+          "properties": {
+            "mimeType": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mimetype"
+            },
+            "sizes": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sizes"
+            },
+            "src": {
+              "title": "Src",
+              "type": "string"
+            },
+            "theme": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "light",
+                    "dark"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Theme"
+            }
+          },
+          "required": [
+            "src"
+          ],
+          "title": "Icon",
+          "type": "object"
+        },
+        "ListMCPPromptsRestAPIResponse": {
+          "properties": {
+            "prompts": {
+              "items": {
+                "$ref": "#/components/schemas/MCPCatalogPrompt"
+              },
+              "title": "Prompts",
+              "type": "array"
+            }
+          },
+          "required": [
+            "prompts"
+          ],
+          "title": "ListMCPPromptsRestAPIResponse",
+          "type": "object"
+        },
+        "ListMCPResourcesRestAPIResponse": {
+          "properties": {
+            "resource_templates": {
+              "items": {
+                "$ref": "#/components/schemas/ResourceTemplate"
+              },
+              "title": "Resource Templates",
+              "type": "array"
+            },
+            "resources": {
+              "items": {
+                "$ref": "#/components/schemas/Resource"
+              },
+              "title": "Resources",
+              "type": "array"
+            }
+          },
+          "required": [
+            "resources",
+            "resource_templates"
+          ],
+          "title": "ListMCPResourcesRestAPIResponse",
+          "type": "object"
+        },
+        "MCPCatalogPrompt": {
+          "description": "An MCP server's prompt as the upstream reports it. Subclassed only so the OpenAPI\ncomponent gets a name distinct from the prompt-management ``Prompt`` request model.",
+          "properties": {
+            "_meta": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Meta"
+            },
+            "arguments": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/PromptArgument"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Arguments"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "icons": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/Icon"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Icons"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "MCPCatalogPrompt",
           "type": "object"
         },
         "MCPCredentials": {
@@ -23238,6 +23457,240 @@
           "title": "NewMCPServerRequest",
           "type": "object"
         },
+        "PromptArgument": {
+          "description": "Describes an argument that a prompt can accept.",
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "required": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Required"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "PromptArgument",
+          "type": "object"
+        },
+        "Resource": {
+          "description": "A known resource that the server is capable of reading.",
+          "properties": {
+            "_meta": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Meta"
+            },
+            "annotations": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Annotations"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "icons": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/Icon"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Icons"
+            },
+            "mimeType": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mimetype"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Size"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
+            },
+            "uri": {
+              "title": "Uri",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "uri"
+          ],
+          "title": "Resource",
+          "type": "object"
+        },
+        "ResourceTemplate": {
+          "description": "A template description for resources available on the server.",
+          "properties": {
+            "_meta": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Meta"
+            },
+            "annotations": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Annotations"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "icons": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/Icon"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Icons"
+            },
+            "mimeType": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mimetype"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
+            },
+            "uriTemplate": {
+              "title": "Uritemplate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "uriTemplate"
+          ],
+          "title": "ResourceTemplate",
+          "type": "object"
+        },
         "ValidationError": {
           "properties": {
             "ctx": {
@@ -23404,6 +23857,106 @@
             }
           },
           "summary": "Aggregate Mcp Route",
+          "tags": [
+            "mcp_app"
+          ]
+        }
+      },
+      "/mcp-rest/prompts/list": {
+        "get": {
+          "description": "List the prompts one MCP server exposes, with names as the upstream server reports them.\n\nAn upstream failure relays its classified HTTP status, the same as ``/mcp-rest/tools/list``.",
+          "operationId": "list_prompts_rest_api_mcp_rest_prompts_list_get_2",
+          "parameters": [
+            {
+              "description": "The MCP server id, name, or alias to list prompts for",
+              "in": "query",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "description": "The MCP server id, name, or alias to list prompts for",
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ListMCPPromptsRestAPIResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Prompts Rest Api",
+          "tags": [
+            "mcp_app"
+          ]
+        }
+      },
+      "/mcp-rest/resources/list": {
+        "get": {
+          "description": "List the resources and resource templates one MCP server exposes.",
+          "operationId": "list_resources_rest_api_mcp_rest_resources_list_get_2",
+          "parameters": [
+            {
+              "description": "The MCP server id, name, or alias to list resources for",
+              "in": "query",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "description": "The MCP server id, name, or alias to list resources for",
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ListMCPResourcesRestAPIResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Resources Rest Api",
           "tags": [
             "mcp_app"
           ]
@@ -32238,6 +32791,55 @@
   "mcp_rest": {
     "components": {
       "schemas": {
+        "Annotations": {
+          "description": "Optional annotations the client can use to inform how objects are used or displayed.",
+          "properties": {
+            "audience": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "user",
+                      "assistant"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
+            "lastModified": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lastmodified"
+            },
+            "priority": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Priority"
+            }
+          },
+          "title": "Annotations",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -32249,6 +32851,176 @@
             }
           },
           "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "Icon": {
+          "description": "An optionally-sized icon for display in a user interface (2025-11-25+).",
+          "properties": {
+            "mimeType": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mimetype"
+            },
+            "sizes": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sizes"
+            },
+            "src": {
+              "title": "Src",
+              "type": "string"
+            },
+            "theme": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "light",
+                    "dark"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Theme"
+            }
+          },
+          "required": [
+            "src"
+          ],
+          "title": "Icon",
+          "type": "object"
+        },
+        "ListMCPPromptsRestAPIResponse": {
+          "properties": {
+            "prompts": {
+              "items": {
+                "$ref": "#/components/schemas/MCPCatalogPrompt"
+              },
+              "title": "Prompts",
+              "type": "array"
+            }
+          },
+          "required": [
+            "prompts"
+          ],
+          "title": "ListMCPPromptsRestAPIResponse",
+          "type": "object"
+        },
+        "ListMCPResourcesRestAPIResponse": {
+          "properties": {
+            "resource_templates": {
+              "items": {
+                "$ref": "#/components/schemas/ResourceTemplate"
+              },
+              "title": "Resource Templates",
+              "type": "array"
+            },
+            "resources": {
+              "items": {
+                "$ref": "#/components/schemas/Resource"
+              },
+              "title": "Resources",
+              "type": "array"
+            }
+          },
+          "required": [
+            "resources",
+            "resource_templates"
+          ],
+          "title": "ListMCPResourcesRestAPIResponse",
+          "type": "object"
+        },
+        "MCPCatalogPrompt": {
+          "description": "An MCP server's prompt as the upstream reports it. Subclassed only so the OpenAPI\ncomponent gets a name distinct from the prompt-management ``Prompt`` request model.",
+          "properties": {
+            "_meta": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Meta"
+            },
+            "arguments": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/PromptArgument"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Arguments"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "icons": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/Icon"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Icons"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "MCPCatalogPrompt",
           "type": "object"
         },
         "MCPCredentials": {
@@ -33062,6 +33834,240 @@
           "title": "NewMCPServerRequest",
           "type": "object"
         },
+        "PromptArgument": {
+          "description": "Describes an argument that a prompt can accept.",
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "required": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Required"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "PromptArgument",
+          "type": "object"
+        },
+        "Resource": {
+          "description": "A known resource that the server is capable of reading.",
+          "properties": {
+            "_meta": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Meta"
+            },
+            "annotations": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Annotations"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "icons": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/Icon"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Icons"
+            },
+            "mimeType": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mimetype"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Size"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
+            },
+            "uri": {
+              "title": "Uri",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "uri"
+          ],
+          "title": "Resource",
+          "type": "object"
+        },
+        "ResourceTemplate": {
+          "description": "A template description for resources available on the server.",
+          "properties": {
+            "_meta": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Meta"
+            },
+            "annotations": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Annotations"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "icons": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/Icon"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Icons"
+            },
+            "mimeType": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mimetype"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
+            },
+            "uriTemplate": {
+              "title": "Uritemplate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "uriTemplate"
+          ],
+          "title": "ResourceTemplate",
+          "type": "object"
+        },
         "ValidationError": {
           "properties": {
             "ctx": {
@@ -33105,6 +34111,106 @@
       }
     },
     "paths": {
+      "/mcp-rest/prompts/list": {
+        "get": {
+          "description": "List the prompts one MCP server exposes, with names as the upstream server reports them.\n\nAn upstream failure relays its classified HTTP status, the same as ``/mcp-rest/tools/list``.",
+          "operationId": "list_prompts_rest_api_mcp_rest_prompts_list_get",
+          "parameters": [
+            {
+              "description": "The MCP server id, name, or alias to list prompts for",
+              "in": "query",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "description": "The MCP server id, name, or alias to list prompts for",
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ListMCPPromptsRestAPIResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Prompts Rest Api",
+          "tags": [
+            "mcp_rest"
+          ]
+        }
+      },
+      "/mcp-rest/resources/list": {
+        "get": {
+          "description": "List the resources and resource templates one MCP server exposes.",
+          "operationId": "list_resources_rest_api_mcp_rest_resources_list_get",
+          "parameters": [
+            {
+              "description": "The MCP server id, name, or alias to list resources for",
+              "in": "query",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "description": "The MCP server id, name, or alias to list resources for",
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ListMCPResourcesRestAPIResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Resources Rest Api",
+          "tags": [
+            "mcp_rest"
+          ]
+        }
+      },
       "/mcp-rest/test/connection": {
         "post": {
           "description": "Test if we can connect to the provided MCP server before adding it",

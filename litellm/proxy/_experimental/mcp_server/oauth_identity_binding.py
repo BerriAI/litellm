@@ -405,7 +405,7 @@ async def enforce_oauth_identity_binding(
         verbose_logger.warning(
             "oauth_identity_binding audit: server=%s user=%s grant=%s rejected=%s (%s)",
             server.server_id,
-            litellm_user_id,
+            str(litellm_user_id).replace("\r", "\\r").replace("\n", "\\n"),
             grant_type,
             rejection.code,
             rejection.description,

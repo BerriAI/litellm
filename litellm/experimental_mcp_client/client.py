@@ -341,8 +341,8 @@ class MCPClient:
         if auth_value:
             self.update_auth_value(auth_value)
 
-    async def discovery_auth_fingerprint(self) -> str:
-        return self._hash_discovery_auth(await self.prepare_request_auth())
+    async def discovery_auth_fingerprint(self, *, ignore_headers: frozenset[str] = frozenset()) -> str:
+        return self._hash_discovery_auth(await self.prepare_request_auth(), ignore_headers)
 
     async def prepare_request_auth(self) -> httpx2.Request:
         """Preview the authenticated request without sending it, closing the auth flow afterwards."""
@@ -359,8 +359,11 @@ class MCPClient:
             await flow.aclose()
 
     @staticmethod
-    def _hash_discovery_auth(request: httpx2.Request) -> str:
-        material: Final = json.dumps((str(request.url), tuple(sorted(request.headers.multi_items()))))
+    def _hash_discovery_auth(request: httpx2.Request, ignore_headers: frozenset[str] = frozenset()) -> str:
+        kept: Final = tuple(
+            sorted(item for item in request.headers.multi_items() if item[0].lower() not in ignore_headers)
+        )
+        material: Final = json.dumps((str(request.url), kept))
         return hashlib.sha256(material.encode()).hexdigest()
 
     def _create_transport_context(
