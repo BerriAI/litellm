@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_content_hash,
     get_audio_file_for_health_check,
     get_audio_file_name,
+    normalize_transcription_keywords,
     process_audio_file,
 )
 
@@ -347,6 +348,19 @@ class TestNormalizeTranscriptionLanguageToBcp47:
         )
 
         assert normalize_transcription_language_to_bcp47(language) == expected
+
+
+class TestNormalizeTranscriptionKeywords:
+    @pytest.mark.parametrize(
+        ("keywords", "expected"),
+        [
+            (["alpha", "", 42, "beta"], ("alpha", "beta")),
+            ("alpha", ()),
+            (None, ()),
+        ],
+    )
+    def test_normalization(self, keywords, expected):
+        assert normalize_transcription_keywords(keywords) == expected
 
 
 class TestResolveSpeechMediaType:
