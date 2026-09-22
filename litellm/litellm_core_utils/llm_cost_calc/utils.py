@@ -1914,6 +1914,7 @@ class CostCalculatorUtils:
         return call_type in _IMAGE_RESPONSE_CALL_TYPES
 
     @staticmethod
+    @route_cost_api(CostApi.IMAGE_GENERATION_COST_ROUTER)
     def route_image_generation_cost_calculator(
         model: str,
         completion_response: ImageResponse,

@@ -40,6 +40,7 @@ class CostApi(str, Enum):
     COST_COMPONENT = "calculate_cost_component"
     IMAGE_RESPONSE_COST_FROM_USAGE = "calculate_image_response_cost_from_usage"
     IMAGE_RESPONSE_WEB_SEARCH_COST = "calculate_image_response_web_search_cost"
+    IMAGE_GENERATION_COST_ROUTER = "route_image_generation_cost_calculator"
     BEDROCK_GUARDRAIL_COST_BY_UNIT = "bedrock_guardrail_cost_by_unit"
     AZURE_PROMPT_SHIELD_GUARDRAIL_COST = "azure_prompt_shield_guardrail_cost"
     GUARDRAIL_INFORMATION_COST = "guardrail_information_cost"

@@ -63,7 +63,11 @@ def test_rust_required_routes_each_public_cost_function(api: CostApi, monkeypatc
     def native(name: str) -> Never:
         raise NativeCalled(name)
 
-    owner: Final = next(module for module in (cost_calculator, utils, guardrail_cost) if hasattr(module, api.value))
+    owner: Final = next(
+        owner
+        for owner in (cost_calculator, utils, utils.CostCalculatorUtils, guardrail_cost)
+        if hasattr(owner, api.value)
+    )
     target: Final[object] = getattr(owner, api.value)  # pyright: ignore[reportAny]  # module lookup is dynamic
     assert callable(target)
     monkeypatch.setattr(catalog, "RULES", (CostRule(Rollout.RUST_REQUIRED),))
