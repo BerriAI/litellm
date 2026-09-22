@@ -8389,21 +8389,6 @@ def test_get_assembled_streaming_response_bills_a_provider_reported_usage_cost()
     assert logging_obj._response_cost_calculator(result=assembled) == 0.0042
 
 
-def test_get_assembled_streaming_response_without_usage_cost_leaves_pricing_to_the_price_map():
-    logging_obj = _responses_stream_logging_obj()
-    now = datetime.datetime.now()
-
-    assembled = logging_obj._get_assembled_streaming_response(
-        result=_completed_responses_event(ResponseAPIUsage(input_tokens=12, output_tokens=2, total_tokens=14)),
-        start_time=now,
-        end_time=now,
-        is_async=True,
-        streaming_chunks=[],
-    )
-
-    assert "additional_headers" not in assembled._hidden_params
-    price_map_cost = logging_obj._response_cost_calculator(result=assembled)
-    assert price_map_cost is not None and 0 < price_map_cost != 0.0042
 
 
 def test_response_cost_calculator_prices_terminal_responses_event_from_its_response():

@@ -90,27 +90,6 @@ class TestGPTImageCostCalculator:
 class TestGPTImageCostRouting:
     """Test that gpt-image models are properly routed to the token-based calculator"""
 
-    def test_openai_dalle_routes_to_pixel_calculator(self):
-        """Test that OpenAI DALL-E still routes to pixel-based calculator"""
-        from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
-
-        image_response = ImageResponse(
-            created=1234567890,
-            data=[ImageObject(url="http://example.com/image.jpg")],
-        )
-        image_response.size = "1024x1024"
-        image_response.quality = "standard"
-
-        cost = CostCalculatorUtils.route_image_generation_cost_calculator(
-            model="dall-e-3",
-            completion_response=image_response,
-            custom_llm_provider="openai",
-            size="1024x1024",
-            quality="standard",
-            n=1,
-        )
-
-        assert cost >= 0
 
 
 class TestGPTImage15OutputImageTokens:

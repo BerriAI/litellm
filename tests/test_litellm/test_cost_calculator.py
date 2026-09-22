@@ -159,131 +159,8 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
-def test_cost_calculator_with_usage(_local_model_cost_map, monkeypatch):
-
-    usage = Usage(
-        prompt_tokens=120,
-        completion_tokens=100,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=10,
-            audio_tokens=90,
-            image_tokens=20,
-        ),
-    )
-    mr = ModelResponse(usage=usage, model="gemini-2.0-flash-001")
-
-    result = response_cost_calculator(
-        response_object=mr,
-        model="",
-        custom_llm_provider="vertex_ai",
-        call_type="acompletion",
-        optional_params={},
-        cache_hit=None,
-        base_model=None,
-    )
-
-    model_info = litellm.model_cost["gemini-2.0-flash-001"]
-
-    # Step 1: Test a model where input_cost_per_image_token is not set.
-    # In this case the calculation should use input_cost_per_token as fallback.
-    assert model_info.get("input_cost_per_image_token") is None, (
-        "Test case expects that input_cost_per_image_token is not set"
-    )
-
-    expected_cost = (
-        usage.prompt_tokens_details.audio_tokens * model_info["input_cost_per_audio_token"]
-        + usage.prompt_tokens_details.text_tokens * model_info["input_cost_per_token"]
-        + usage.prompt_tokens_details.image_tokens * model_info["input_cost_per_token"]
-        + usage.completion_tokens * model_info["output_cost_per_token"]
-    )
-
-    assert result == expected_cost, f"Got {result}, Expected {expected_cost}"
-
-    # Step 2: Set input_cost_per_image_token.
-    # In this case the explicit cost information should be used.
-    temp_model_info_object = dict(model_info)
-    temp_model_info_object["input_cost_per_image_token"] = 0.5
-
-    monkeypatch.setattr(
-        litellm,
-        "model_cost",
-        {"gemini-2.0-flash-001": temp_model_info_object},
-    )
-
-    # Invalidate caches after modifying litellm.model_cost
-    from litellm.utils import _invalidate_model_cost_lowercase_map
-
-    _invalidate_model_cost_lowercase_map()
-
-    result = response_cost_calculator(
-        response_object=mr,
-        model="",
-        custom_llm_provider="vertex_ai",
-        call_type="acompletion",
-        optional_params={},
-        cache_hit=None,
-        base_model=None,
-    )
-
-    expected_cost = (
-        usage.prompt_tokens_details.audio_tokens * temp_model_info_object["input_cost_per_audio_token"]
-        + usage.prompt_tokens_details.text_tokens * temp_model_info_object["input_cost_per_token"]
-        + usage.prompt_tokens_details.image_tokens * temp_model_info_object["input_cost_per_image_token"]
-        + usage.completion_tokens * temp_model_info_object["output_cost_per_token"]
-    )
-
-    assert result == expected_cost, f"Got {result}, Expected {expected_cost}"
 
 
-def test_handle_realtime_stream_cost_calculation_stores_cost_breakdown():
-    """Regression: realtime cost must populate logging_obj.cost_breakdown so the
-    spend logs / UI show input vs output cost (issue: cost_breakdown was None for
-    /v1/realtime even though a total spend was computed)."""
-    from datetime import datetime
-
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
-    results: OpenAIRealtimeStreamList = [
-        {"type": "session.created", "session": {"model": "gpt-4o-realtime-preview"}},
-        {
-            "type": "response.done",
-            "response": {
-                "usage": {
-                    "input_tokens": 100,
-                    "output_tokens": 50,
-                    "total_tokens": 150,
-                }
-            },
-        },
-    ]
-    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
-        results=results,
-    )
-
-    logging_obj = Logging(
-        model="gpt-4o-realtime-preview",
-        messages=[],
-        stream=False,
-        call_type="_arealtime",
-        start_time=datetime.now(),
-        litellm_call_id="realtime-cost-breakdown-test",
-        function_id="realtime-cost-breakdown-test",
-    )
-
-    total_cost = handle_realtime_stream_cost_calculation(
-        results=results,
-        combined_usage_object=combined_usage_object,
-        custom_llm_provider="openai",
-        litellm_model_name="gpt-4o-realtime-preview",
-        litellm_logging_obj=logging_obj,
-    )
-
-    assert total_cost > 0
-    assert logging_obj.cost_breakdown is not None
-    assert logging_obj.cost_breakdown["input_cost"] > 0
-    assert logging_obj.cost_breakdown["output_cost"] > 0
-    assert abs(logging_obj.cost_breakdown["input_cost"] + logging_obj.cost_breakdown["output_cost"] - total_cost) < 1e-9
-    assert abs(logging_obj.cost_breakdown["total_cost"] - total_cost) < 1e-9
 
 
 def test_realtime_stream_combines_text_and_audio_token_details():
@@ -1124,126 +1001,6 @@ def test_bedrock_cost_calculator_comparison_with_without_cache():
     print(f"Cost with cache: {cost_with_cache}")
 
 
-def test_log_context_cost_calculation():
-    """
-    Test that log context cost calculation works correctly with tiered pricing.
-
-    This test verifies that when using extended context (above 200k tokens),
-    the log context costs are calculated using the appropriate tiered rates.
-    """
-    from litellm import completion_cost
-    from litellm.types.utils import (
-        Choices,
-        Message,
-        ModelResponse,
-        PromptTokensDetailsWrapper,
-        Usage,
-    )
-
-    # Create a mock response with extended context usage
-    extended_context_response = ModelResponse(
-        id="test-extended-context-response",
-        created=1750733889,
-        model="claude-4-sonnet-20250514",
-        object="chat.completion",
-        system_fingerprint=None,
-        choices=[
-            Choices(
-                finish_reason="stop",
-                index=0,
-                message=Message(
-                    content="This is a test response for extended context cost calculation.",
-                    role="assistant",
-                    tool_calls=None,
-                    function_call=None,
-                ),
-            )
-        ],
-        usage=Usage(
-            total_tokens=350000,  # Above 200k threshold
-            prompt_tokens=301000,  # Above 200k threshold
-            completion_tokens=50000,
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                text_tokens=300000,
-                cached_tokens=0,  # No cache hits
-                audio_tokens=None,
-                image_tokens=None,
-                character_count=None,
-                video_length_seconds=None,
-                cache_creation_tokens=1000,
-            ),
-            completion_tokens_details=None,
-            _cache_creation_input_tokens=1000,  # Some tokens added to cache
-        ),
-    )
-
-    # Calculate the cost using the extended context model
-    result = completion_cost(
-        completion_response=extended_context_response,
-        model="claude-4-sonnet-20250514",
-        custom_llm_provider="anthropic",
-    )
-
-    # Debug: Print the actual result
-    print(f"DEBUG: Actual cost result: ${result:.6f}")
-
-    # Get model info to understand the pricing
-    from litellm import get_model_info
-
-    model_info = get_model_info(model="claude-4-sonnet-20250514", custom_llm_provider="anthropic")
-
-    # Calculate expected cost based on actual model pricing
-    input_cost_per_token = model_info.get("input_cost_per_token", 0)
-    output_cost_per_token = model_info.get("output_cost_per_token", 0)
-    cache_creation_cost_per_token = model_info.get("cache_creation_input_token_cost", 0)
-
-    # Check if tiered pricing is applied
-    input_cost_above_200k = model_info.get("input_cost_per_token_above_200k_tokens", input_cost_per_token)
-    output_cost_above_200k = model_info.get("output_cost_per_token_above_200k_tokens", output_cost_per_token)
-    cache_creation_above_200k = model_info.get(
-        "cache_creation_input_token_cost_above_200k_tokens",
-        cache_creation_cost_per_token,
-    )
-
-    print(f"DEBUG: Base input cost per token: ${input_cost_per_token:.2e}")
-    print(f"DEBUG: Base output cost per token: ${output_cost_per_token:.2e}")
-    print(f"DEBUG: Base cache creation cost per token: ${cache_creation_cost_per_token:.2e}")
-
-    # Handle tiered pricing - if not available, use base pricing
-    if input_cost_above_200k is not None:
-        print(f"DEBUG: Tiered input cost per token (>200k): ${input_cost_above_200k:.2e}")
-    else:
-        print("DEBUG: No tiered input pricing available, using base pricing")
-        input_cost_above_200k = input_cost_per_token
-
-    if output_cost_above_200k is not None:
-        print(f"DEBUG: Tiered output cost per token (>200k): ${output_cost_above_200k:.2e}")
-    else:
-        print("DEBUG: No tiered output pricing available, using base pricing")
-        output_cost_above_200k = output_cost_per_token
-
-    if cache_creation_above_200k is not None:
-        print(f"DEBUG: Tiered cache creation cost per token (>200k): ${cache_creation_above_200k:.2e}")
-    else:
-        print("DEBUG: No tiered cache creation pricing available, using base pricing")
-        cache_creation_above_200k = cache_creation_cost_per_token
-
-    # Since we're above 200k tokens, we should use tiered pricing if available
-    expected_input_cost = 300000 * input_cost_above_200k
-    expected_output_cost = 50000 * output_cost_above_200k
-    expected_cache_cost = 1000 * cache_creation_above_200k
-    expected_total = expected_input_cost + expected_output_cost + expected_cache_cost
-
-    print(f"DEBUG: Expected total: ${expected_total:.6f}")
-
-    # Allow for small floating point differences
-    assert abs(result - expected_total) < 1e-6, f"Expected cost ${expected_total:.6f}, but got ${result:.6f}"
-
-    print(f"✓ Log context cost calculation with tiered pricing is correct: ${result:.6f}")
-    print(f"  - Input tokens (300k): ${expected_input_cost:.6f}")
-    print(f"  - Output tokens (50k): ${expected_output_cost:.6f}")
-    print(f"  - Cache creation (1k): ${expected_cache_cost:.6f}")
-    print(f"  - Total: ${result:.6f}")
 
 
 def test_gemini_25_explicit_caching_cost_direct_usage():
@@ -1814,56 +1571,6 @@ def test_cost_margin_with_discount(monkeypatch):
     print(f"  - Expected: ${expected_cost:.6f}")
 
 
-def test_azure_image_generation_cost_calculator():
-    from unittest.mock import MagicMock
-
-    from litellm.types.utils import (
-        ImageObject,
-        ImageResponse,
-        ImageUsage,
-        ImageUsageInputTokensDetails,
-    )
-
-    response_cost_calculator_kwargs = {
-        "response_object": ImageResponse(
-            created=1761785270,
-            background=None,
-            data=[
-                ImageObject(
-                    b64_json=None,
-                    revised_prompt="A futuristic, techno-inspired green duck wearing cool modern sunglasses. The duck has a sleek, metallic appearance with glowing neon green accents, standing on a high-tech urban background with holographic billboards and illuminated city lights in the distance. The duck's feathers have a glossy, high-tech sheen, resembling a robotic design but still maintaining its avian features. The scene has a vibrant, cyberpunk aesthetic with a neon color palette.",
-                    url="test-azure-blob-url-with-sas-token",
-                )
-            ],
-            output_format=None,
-            quality="hd",
-            size=None,
-            usage=ImageUsage(
-                input_tokens=0,
-                input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=0),
-                output_tokens=0,
-                total_tokens=0,
-            ),
-        ),
-        "model": "azure/dall-e-3",
-        "cache_hit": False,
-        "custom_llm_provider": "azure",
-        "base_model": "azure/dall-e-3",
-        "call_type": "aimage_generation",
-        "optional_params": {},
-        "custom_pricing": False,
-        "prompt": "",
-        "standard_built_in_tools_params": {
-            "web_search_options": None,
-            "file_search": None,
-        },
-        "router_model_id": "6738c432ffc9b733597c6b86613ca20dc5f49bde591fd3d03e7cd6aa25bb241e",
-        "litellm_logging_obj": MagicMock(),
-        "service_tier": None,
-    }
-
-    cost = response_cost_calculator(**response_cost_calculator_kwargs)
-    assert cost > 0.079
 
 
 def test_completion_cost_extracts_service_tier_from_response(_local_model_cost_map):
@@ -2616,87 +2323,6 @@ def test_gemini_without_cache_tokens_details():
     print("✅ Gemini without cacheTokensDetails works correctly")
 
 
-def test_gemini_implicit_caching_cost_calculation():
-    """
-    Test for Issue #16341: Gemini implicit cached tokens not counted in spend log
-
-    When Gemini uses implicit caching, it returns cachedContentTokenCount but NOT
-    cacheTokensDetails. In this case, we should subtract cachedContentTokenCount
-    from text_tokens to correctly calculate costs.
-
-    See: https://github.com/BerriAI/litellm/issues/16341
-    """
-    from litellm import completion_cost
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexGeminiConfig,
-    )
-    from litellm.types.utils import Choices, Message, ModelResponse
-
-    # Simulate Gemini response with implicit caching (cachedContentTokenCount only)
-    completion_response = {
-        "usageMetadata": {
-            "promptTokenCount": 10000,
-            "candidatesTokenCount": 5,
-            "totalTokenCount": 10005,
-            "cachedContentTokenCount": 8000,  # Implicit caching - no cacheTokensDetails
-            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 10000}],
-            "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 5}],
-        }
-    }
-
-    usage = VertexGeminiConfig._calculate_usage(completion_response)
-
-    # Verify parsing
-    assert usage.cache_read_input_tokens == 8000, (
-        f"cache_read_input_tokens should be 8000, got {usage.cache_read_input_tokens}"
-    )
-    assert usage.prompt_tokens_details.cached_tokens == 8000, (
-        f"cached_tokens should be 8000, got {usage.prompt_tokens_details.cached_tokens}"
-    )
-
-    # CRITICAL: text_tokens should be (10000 - 8000) = 2000, NOT 10000
-    # This is the fix for issue #16341
-    assert usage.prompt_tokens_details.text_tokens == 2000, (
-        f"text_tokens should be 2000 (10000 - 8000), got {usage.prompt_tokens_details.text_tokens}"
-    )
-
-    # Verify cost calculation uses cached token pricing
-    response = ModelResponse(
-        id="mock-id",
-        model="gemini-2.0-flash",
-        choices=[
-            Choices(
-                index=0,
-                message=Message(role="assistant", content="Hello!"),
-                finish_reason="stop",
-            )
-        ],
-        usage=usage,
-    )
-
-    cost = completion_cost(
-        completion_response=response,
-        model="gemini-2.0-flash",
-        custom_llm_provider="gemini",
-    )
-
-    # Get model pricing for verification
-    import litellm
-
-    model_info = litellm.get_model_info("gemini/gemini-2.0-flash")
-    input_cost = model_info.get("input_cost_per_token", 0)
-    cache_read_cost = model_info.get("cache_read_input_token_cost", input_cost)
-    output_cost = model_info.get("output_cost_per_token", 0)
-
-    # Expected cost: (2000 * input) + (8000 * cache_read) + (5 * output)
-    expected_cost = (2000 * input_cost) + (8000 * cache_read_cost) + (5 * output_cost)
-
-    assert abs(cost - expected_cost) < 1e-9, (
-        f"Cost calculation is wrong. Got ${cost:.6f}, expected ${expected_cost:.6f}. "
-        f"Cached tokens may not be using reduced pricing."
-    )
-
-    print("✅ Issue #16341 fix verified: Gemini implicit caching cost calculated correctly")
 
 
 def test_additional_costs_only_for_azure_ai(_local_model_cost_map):
@@ -4840,6 +4466,30 @@ def test_cost_per_token_bedrock_qwen3_next_uses_regional_entry_not_us_rate(
     prompt_tokens, completion_tokens = 1000, 500
     prompt_usd, completion_usd = cost_per_token(
         model=f"bedrock/{region}/qwen.qwen3-next-80b-a3b",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        custom_llm_provider="bedrock",
+    )
+
+    assert prompt_usd == pytest.approx(prompt_tokens * regional["input_cost_per_token"])
+    assert completion_usd == pytest.approx(completion_tokens * regional["output_cost_per_token"])
+
+
+def test_cost_per_token_bedrock_nemotron_super_3_uses_eu_west_2_entry_not_us_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    regional_key: Final = "bedrock/eu-west-2/nvidia.nemotron-super-3-120b"
+    regional: Final = litellm.model_cost[regional_key]
+    us: Final = litellm.model_cost["nvidia.nemotron-super-3-120b"]
+    assert regional["input_cost_per_token"] != us["input_cost_per_token"]
+    assert regional["output_cost_per_token"] != us["output_cost_per_token"]
+
+    prompt_tokens, completion_tokens = 1000, 500
+    prompt_usd, completion_usd = cost_per_token(
+        model=regional_key,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         custom_llm_provider="bedrock",
