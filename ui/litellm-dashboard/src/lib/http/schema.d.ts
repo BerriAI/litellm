@@ -4356,6 +4356,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/debug/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Debug Report
+         * @description The same LiteLLM-owned environment facts the bug report link puts in a GitHub issue:
+         *     versions, deployment kind, and config flags whose keys and values LiteLLM defines.
+         *     Nothing from the operator's config values, request data, or errors
+         *
+         *     Example usage:
+         *     curl http://localhost:4000/debug/report -H "Authorization: Bearer sk-1234"
+         */
+        get: operations["get_debug_report_debug_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/delete/allowed_ip": {
         parameters: {
             query?: never;
@@ -28779,6 +28804,22 @@ export interface components {
             /** Template Id */
             template_id: string;
         };
+        /** EnvironmentReport */
+        EnvironmentReport: {
+            /** Config Lines */
+            config_lines: string[];
+            /** Deployment */
+            deployment: string | null;
+            /** Litellm Version */
+            litellm_version: string;
+            /** Python Version */
+            python_version: string;
+            /**
+             * Surface
+             * @enum {string}
+             */
+            surface: "sdk" | "proxy";
+        };
         /** ErrorResponse */
         ErrorResponse: {
             /**
@@ -31186,10 +31227,14 @@ export interface components {
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens */
             cache_creation_input_token_cost_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Batches */
+            cache_creation_input_token_cost_above_272k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Flex */
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Batches */
+            cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
             cache_creation_input_token_cost_flex?: number | null;
             /** Cache Creation Input Token Cost Priority */
@@ -31208,12 +31253,16 @@ export interface components {
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens */
             cache_read_input_token_cost_above_272k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Batches */
+            cache_read_input_token_cost_above_272k_tokens_batches?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Flex */
             cache_read_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
+            /** Cache Read Input Token Cost Batches */
+            cache_read_input_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -31282,6 +31331,8 @@ export interface components {
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
             input_cost_per_token_above_272k_tokens?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Batches */
+            input_cost_per_token_above_272k_tokens_batches?: number | null;
             /** Input Cost Per Token Above 272K Tokens Flex */
             input_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
@@ -31403,6 +31454,8 @@ export interface components {
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
             output_cost_per_token_above_272k_tokens?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Batches */
+            output_cost_per_token_above_272k_tokens_batches?: number | null;
             /** Output Cost Per Token Above 272K Tokens Flex */
             output_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
@@ -33709,6 +33762,23 @@ export interface components {
             tags: {
                 [key: string]: string | string[];
             };
+        };
+        /** ModelAccessWindow */
+        ModelAccessWindow: {
+            /**
+             * End
+             * Format: time
+             */
+            end: string;
+            /**
+             * Start
+             * Format: time
+             */
+            start: string;
+            /** Team Ids */
+            team_ids: string[];
+            /** Timezone */
+            timezone: string;
         };
         /** ModelDeprecationInfo */
         ModelDeprecationInfo: {
@@ -41867,6 +41937,8 @@ export interface components {
         };
         /** ModelInfo */
         litellm__types__router__ModelInfo: {
+            /** Access Windows */
+            access_windows?: components["schemas"]["ModelAccessWindow"][] | null;
             /** Allow Fail Open */
             allow_fail_open?: boolean | null;
             /** Base Model */
@@ -42026,10 +42098,14 @@ export interface components {
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens */
             cache_creation_input_token_cost_above_272k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Batches */
+            cache_creation_input_token_cost_above_272k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Flex */
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Batches */
+            cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
             cache_creation_input_token_cost_flex?: number | null;
             /** Cache Creation Input Token Cost Priority */
@@ -42048,12 +42124,16 @@ export interface components {
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens */
             cache_read_input_token_cost_above_272k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Batches */
+            cache_read_input_token_cost_above_272k_tokens_batches?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Flex */
             cache_read_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
+            /** Cache Read Input Token Cost Batches */
+            cache_read_input_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -42122,6 +42202,8 @@ export interface components {
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
             input_cost_per_token_above_272k_tokens?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Batches */
+            input_cost_per_token_above_272k_tokens_batches?: number | null;
             /** Input Cost Per Token Above 272K Tokens Flex */
             input_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
@@ -42243,6 +42325,8 @@ export interface components {
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
             output_cost_per_token_above_272k_tokens?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Batches */
+            output_cost_per_token_above_272k_tokens_batches?: number | null;
             /** Output Cost Per Token Above 272K Tokens Flex */
             output_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
@@ -48545,6 +48629,26 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    get_debug_report_debug_report_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentReport"];
                 };
             };
         };
