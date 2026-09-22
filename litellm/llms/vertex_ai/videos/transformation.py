@@ -70,10 +70,17 @@ def _parse_veo_operation(raw_response: httpx.Response) -> _VeoOperation:
     return operation
 
 
+def veo_video_count_from_parameters(parameters: Mapping[str, object]) -> int | None:
+    sample_count: Final = parameters.get("sampleCount")
+    if isinstance(sample_count, bool) or not isinstance(sample_count, int) or sample_count < 1:
+        return None
+    return sample_count
+
+
 def _build_vertex_video_usage_from_request_data(
     request_data: dict[str, Any] | None,
 ) -> dict[str, float | str]:
-    """Build usage metadata (duration, resolution) for video cost calculation."""
+    """Build usage metadata (duration, resolution, video count) for video cost calculation."""
     usage_data: Final[dict[str, float | str]] = {}
     if not request_data:
         return usage_data
@@ -88,6 +95,9 @@ def _build_vertex_video_usage_from_request_data(
     res: Final = parameters.get("resolution")
     if res is not None and str(res).strip() != "":
         usage_data["video_resolution"] = str(res).strip().lower()
+    video_count: Final = veo_video_count_from_parameters(parameters)
+    if video_count is not None:
+        usage_data["video_count"] = video_count
     return usage_data
 
 

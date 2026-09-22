@@ -6,11 +6,12 @@ import json
 import os
 import re
 import urllib.parse
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import partial
 from threading import Lock
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, ParamSpec, TypeVar, cast, get_args, overload
 
 import httpx
@@ -32,7 +33,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn, get_aws_dns_suffix
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.secret_managers.main import get_secret, get_secret_str
-from litellm.types.llms.bedrock import AwsSessionTag
+from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams, AwsSessionTag
 
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
@@ -94,6 +95,85 @@ def _assume_role_params(
             return _AssumeRoleParams(
                 RoleArn=aws_role_name, RoleSessionName=aws_session_name, ExternalId=external_id, Tags=tags
             )
+
+
+_SecureTransportBool = TypedDict("_SecureTransportBool", {"aws:SecureTransport": ReadOnly[Literal["true"]]})
+
+
+class _SecureTransportCondition(TypedDict):
+    Bool: ReadOnly[_SecureTransportBool]
+
+
+class _SessionPolicyStatement(TypedDict):
+    Sid: ReadOnly[str]
+    Effect: ReadOnly[Literal["Allow"]]
+    Action: ReadOnly[tuple[str, ...]]
+    Resource: ReadOnly[Literal["*"]]
+    Condition: ReadOnly[_SecureTransportCondition]
+
+
+class WebIdentitySessionPolicy(TypedDict):
+    Version: ReadOnly[Literal["2012-10-17"]]
+    Statement: ReadOnly[tuple[_SessionPolicyStatement, ...]]
+
+
+_WEB_IDENTITY_SESSION_POLICY_ACTIONS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "BedrockLiteLLM": (
+            "bedrock:InvokeModel",
+            "bedrock:InvokeModelWithResponseStream",
+            "bedrock:CountTokens",
+            "bedrock:Rerank",
+            "bedrock:Retrieve",
+            "bedrock:ListKnowledgeBases",
+            "bedrock:InvokeAgent",
+            "bedrock:ApplyGuardrail",
+            "bedrock:GetGuardrail",
+            "bedrock:ListGuardrails",
+        ),
+        "BedrockAgentCoreLiteLLM": (
+            "bedrock-agentcore:InvokeAgentRuntime",
+            "bedrock-agentcore:InvokeAgentRuntimeForUser",
+            "bedrock-agentcore:InvokeGateway",
+        ),
+        "ClaudePlatformLiteLLM": (
+            "aws-external-anthropic:CreateInference",
+            "aws-external-anthropic:CreateBatchInference",
+            "aws-external-anthropic:CancelBatchInference",
+            "aws-external-anthropic:DeleteBatchInference",
+            "aws-external-anthropic:CountTokens",
+            "aws-external-anthropic:Get*",
+            "aws-external-anthropic:List*",
+        ),
+        "BedrockMantleLiteLLM": ("bedrock-mantle:CreateInference",),
+    }
+)
+
+_SECURE_TRANSPORT_ONLY: Final = _SecureTransportCondition(Bool=_SecureTransportBool({"aws:SecureTransport": "true"}))
+
+
+def build_web_identity_session_policy() -> WebIdentitySessionPolicy:
+    return WebIdentitySessionPolicy(
+        Version="2012-10-17",
+        Statement=tuple(
+            _SessionPolicyStatement(
+                Sid=sid,
+                Effect="Allow",
+                Action=actions,
+                Resource="*",
+                Condition=_SECURE_TRANSPORT_ONLY,
+            )
+            for sid, actions in _WEB_IDENTITY_SESSION_POLICY_ACTIONS.items()
+        ),
+    )
+
+
+def pop_aws_auth_params(
+    optional_params: MutableMapping[str, object],  # mutable-ok: pops the aws_* keys out of the caller's mapping
+) -> AwsAuthParams:
+    return AwsAuthParams.model_validate(
+        MappingProxyType({key: optional_params.pop(key, None) for key in AWS_AUTH_PARAM_KEYS})
+    )
 
 
 class BedrockRequestTarget(BaseModel):
@@ -428,6 +508,32 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             )
         else:
             return self._get_or_set_cached_credentials(args, self._auth_with_env_vars)
+
+    def resolve_credentials(self, auth_params: AwsAuthParams, aws_region_name: str | None) -> Credentials:
+        return self.get_credentials(
+            aws_access_key_id=auth_params.aws_access_key_id,
+            aws_secret_access_key=auth_params.aws_secret_access_key,
+            aws_session_token=auth_params.aws_session_token,
+            aws_region_name=aws_region_name,
+            aws_session_name=auth_params.aws_session_name,
+            aws_profile_name=auth_params.aws_profile_name,
+            aws_role_name=auth_params.aws_role_name,
+            aws_web_identity_token=auth_params.aws_web_identity_token,
+            aws_sts_endpoint=auth_params.aws_sts_endpoint,
+            aws_external_id=auth_params.aws_external_id,
+            aws_session_tags=_canonical_aws_session_tags(auth_params.aws_session_tags),
+        )
+
+    def resolve_s3_credentials(self, params: Mapping[str, object], aws_region_name: str | None) -> Credentials:
+        """S3 signing identity: the s3_* static pair as-is when both are set, otherwise the resolved aws_* params."""
+        from botocore.credentials import Credentials
+
+        from litellm.llms.bedrock.common_utils import s3_static_key_pair
+
+        s3_pair: Final = s3_static_key_pair(params)
+        if s3_pair is None:
+            return self.resolve_credentials(AwsAuthParams.model_validate(params), aws_region_name)
+        return Credentials(access_key=s3_pair[0], secret_key=s3_pair[1])
 
     def _get_aws_region_from_model_arn(self, model: str | None) -> str | None:
         try:
@@ -940,60 +1046,12 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         # auth only (static creds + IRSA take other code paths).
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
-        bedrock_session_policy: Final = {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Sid": "BedrockLiteLLM",
-                    "Effect": "Allow",
-                    "Action": [
-                        "bedrock:InvokeModel",
-                        "bedrock:InvokeModelWithResponseStream",
-                        "bedrock:CountTokens",
-                        "bedrock:ApplyGuardrail",
-                        "bedrock:GetGuardrail",
-                        "bedrock:ListGuardrails",
-                    ],
-                    "Resource": "*",
-                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
-                },
-                # Claude Platform on AWS (added by #27678 for the
-                # ``bedrock/claude_platform/<model>`` route) lives under
-                # a separate IAM action namespace; without these entries
-                # the OIDC path 403s on every claude_platform request
-                # even with a fully permissive identity policy (#30200).
-                {
-                    "Sid": "ClaudePlatformLiteLLM",
-                    "Effect": "Allow",
-                    "Action": [
-                        "aws-external-anthropic:CreateInference",
-                        "aws-external-anthropic:CreateBatchInference",
-                        "aws-external-anthropic:CancelBatchInference",
-                        "aws-external-anthropic:DeleteBatchInference",
-                        "aws-external-anthropic:CountTokens",
-                        "aws-external-anthropic:Get*",
-                        "aws-external-anthropic:List*",
-                    ],
-                    "Resource": "*",
-                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
-                },
-                {
-                    "Sid": "BedrockMantleLiteLLM",
-                    "Effect": "Allow",
-                    "Action": [
-                        "bedrock-mantle:CreateInference",
-                    ],
-                    "Resource": "*",
-                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
-                },
-            ],
-        }
         assume_role_params: Final = {
             "RoleArn": aws_role_name,
             "RoleSessionName": aws_session_name,
             "WebIdentityToken": oidc_token,
             "DurationSeconds": 3600,
-            "Policy": json.dumps(bedrock_session_policy, separators=(",", ":")),
+            "Policy": json.dumps(build_web_identity_session_policy(), separators=(",", ":")),
         }
 
         # Add ExternalId parameter if provided
@@ -1491,23 +1549,10 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-        ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key: Final = optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id: Final = optional_params.pop("aws_access_key_id", None)
-        aws_session_token: Final = optional_params.pop("aws_session_token", None)
         aws_region_name: Final = self._get_aws_region_name(optional_params, model)
         optional_params.pop("aws_region_name", None)
-        aws_role_name: Final = optional_params.pop("aws_role_name", None)
-        aws_session_name: Final = optional_params.pop("aws_session_name", None)
-        aws_profile_name: Final = optional_params.pop("aws_profile_name", None)
-        aws_web_identity_token: Final = optional_params.pop("aws_web_identity_token", None)
-        aws_sts_endpoint: Final = optional_params.pop("aws_sts_endpoint", None)
-        aws_bedrock_runtime_endpoint: Final = optional_params.pop(
-            "aws_bedrock_runtime_endpoint", None
-        )  # https://bedrock-runtime.{region_name}.amazonaws.com
-        aws_external_id: Final = optional_params.pop("aws_external_id", None)
-        aws_session_tags: Final = optional_params.pop("aws_session_tags", None)
+        auth_params: Final = pop_aws_auth_params(optional_params)
+        aws_bedrock_runtime_endpoint: Final = optional_params.pop("aws_bedrock_runtime_endpoint", None)
 
         if bearer_token is not None:
             return BearerRequestTarget(
@@ -1515,19 +1560,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             )
 
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-            aws_external_id=aws_external_id,
-            aws_session_tags=aws_session_tags,
-        )
+        credentials: Final[Credentials] = self.resolve_credentials(auth_params, aws_region_name)
         return Boto3CredentialsInfo(
             credentials=credentials,
             aws_region_name=aws_region_name,
@@ -1661,33 +1694,9 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-        ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key: Final = optional_params.get("aws_secret_access_key", None)
-        aws_access_key_id: Final = optional_params.get("aws_access_key_id", None)
-        aws_session_token: Final = optional_params.get("aws_session_token", None)
-        aws_role_name: Final = optional_params.get("aws_role_name", None)
-        aws_session_name: Final = optional_params.get("aws_session_name", None)
-        aws_profile_name: Final = optional_params.get("aws_profile_name", None)
-        aws_web_identity_token: Final = optional_params.get("aws_web_identity_token", None)
-        aws_sts_endpoint: Final = optional_params.get("aws_sts_endpoint", None)
-        aws_external_id: Final = optional_params.get("aws_external_id", None)
-        aws_session_tags: Final = optional_params.get("aws_session_tags", None)
+        auth_params: Final = AwsAuthParams.model_validate(optional_params)
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
-
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-            aws_external_id=aws_external_id,
-            aws_session_tags=aws_session_tags,
-        )
+        credentials: Final[Credentials] = self.resolve_credentials(auth_params, aws_region_name)
 
         sigv4: Final = SigV4Auth(credentials, service_name, aws_region_name)
         headers = headers or {}

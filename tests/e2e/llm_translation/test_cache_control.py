@@ -24,7 +24,7 @@ service_tier lives in test_provider_features_e2e.py.
 
 The provider-native cache_control request shape is not expressible with the
 shared ``ChatBody`` (whose content is a plain string), so the cacheable body is
-built from the typed content blocks shared in ``endpoints_client.py``.
+built from the typed content blocks shared in ``models.py``.
 """
 
 from __future__ import annotations
@@ -38,13 +38,12 @@ from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import Result, UnknownApiError, unwrap
-from endpoints_client import CacheControl, RichMessage, TextBlock
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody, Usage
+from models import CacheControl, ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody, RichMessage, TextBlock, Usage
 from passthrough_client import PassthroughClient
 import os
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
 BEDROCK_MODEL = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 VERTEX_MODEL = "vertex_ai/gemini-2.5-flash"

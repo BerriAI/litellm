@@ -1,11 +1,27 @@
 import base64
-from typing import Final
+from typing import Final, NoReturn
 
 import httpx
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
-from litellm.rust_bridge import transcription as rust_transcription_bridge
+from litellm.rust_bridge import runtime
+from litellm.rust_bridge.catalog import Route, RouteContext
+from litellm.rust_bridge.timeouts import timeout_to_seconds
+from litellm.rust_bridge.transcription.native import (
+    NATIVE_ATRANSCRIPTION,
+    NATIVE_TRANSCRIPTION,
+    RustAtranscription,
+    RustTranscription,
+)
 from litellm.types.utils import FileTypes, TranscriptionResponse
+
+
+def _no_python_implementation() -> NoReturn:
+    raise NotImplementedError("Bedrock audio transcription is implemented in Rust only")
+
+
+async def _no_async_python_implementation() -> NoReturn:
+    _no_python_implementation()
 
 
 class BedrockAudioTranscriptionRustDispatch:
@@ -43,19 +59,26 @@ class BedrockAudioTranscriptionRustDispatch:
         optional_params: dict[str, object],
         timeout: float | httpx.Timeout | None,
     ) -> TranscriptionResponse:
-        rust_response: Final = rust_transcription_bridge.transcription(
-            model=model,
-            audio=self._audio_payload(audio_file),
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            optional_params=optional_params,
-            timeout=timeout,
+        def native(rust: RustTranscription) -> TranscriptionResponse:
+            return TranscriptionResponse(
+                **rust(
+                    model=model,
+                    audio=self._audio_payload(audio_file),
+                    api_key=api_key,
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    extra_headers=extra_headers,
+                    optional_params=optional_params,
+                    timeout_seconds=timeout_to_seconds(timeout),
+                )
+            )
+
+        return runtime.run(
+            RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
+            binding=NATIVE_TRANSCRIPTION,
+            native=native,
+            python=_no_python_implementation,
         )
-        if rust_response is None:
-            raise RuntimeError("Rust audio transcription bridge is unavailable")
-        return TranscriptionResponse(**rust_response)
 
     async def async_audio_transcriptions(
         self,
@@ -69,16 +92,23 @@ class BedrockAudioTranscriptionRustDispatch:
         optional_params: dict[str, object],
         timeout: float | httpx.Timeout | None,
     ) -> TranscriptionResponse:
-        rust_response: Final = await rust_transcription_bridge.atranscription(
-            model=model,
-            audio=self._audio_payload(audio_file),
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            optional_params=optional_params,
-            timeout=timeout,
+        async def native(rust: RustAtranscription) -> TranscriptionResponse:
+            return TranscriptionResponse(
+                **await rust(
+                    model=model,
+                    audio=self._audio_payload(audio_file),
+                    api_key=api_key,
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    extra_headers=extra_headers,
+                    optional_params=optional_params,
+                    timeout_seconds=timeout_to_seconds(timeout),
+                )
+            )
+
+        return await runtime.arun(
+            RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
+            binding=NATIVE_ATRANSCRIPTION,
+            native=native,
+            python=_no_async_python_implementation,
         )
-        if rust_response is None:
-            raise RuntimeError("Rust audio transcription bridge is unavailable")
-        return TranscriptionResponse(**rust_response)

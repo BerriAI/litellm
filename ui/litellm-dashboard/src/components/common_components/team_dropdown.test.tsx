@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { chooseSelectOption } from "../../../tests/test-utils";
 import type { Team } from "../key_team_helpers/key_list";
@@ -11,17 +11,42 @@ const TEAMS = [
   { team_id: "team-2", team_alias: "Beta Team" },
 ] as unknown as Team[];
 
-vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
-  useInfiniteTeams: () => ({
-    data: { pages: [{ teams: TEAMS }] },
-    fetchNextPage: vi.fn(),
-    hasNextPage: false,
-    isFetchingNextPage: false,
-    isLoading: false,
-  }),
-}));
+const mockUseInfiniteTeams = vi.hoisted(() => vi.fn());
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({ useInfiniteTeams: mockUseInfiniteTeams }));
+const teamQuery = {
+  data: { pages: [{ teams: TEAMS }] },
+  fetchNextPage: vi.fn(),
+  hasNextPage: false,
+  isFetchingNextPage: false,
+  isLoading: false,
+};
 
 describe("TeamDropdown", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseInfiniteTeams.mockReturnValue(teamQuery);
+  });
+
+  it("loads past unauthorized teams so a permitted team on the next page can be selected", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const filterTeam = (team: Team) => team.team_id === "team-2";
+    mockUseInfiniteTeams.mockReturnValue({
+      ...teamQuery,
+      data: { pages: [{ teams: [TEAMS[0]] }] },
+      hasNextPage: true,
+    });
+    const view = render(<TeamDropdown filterTeam={filterTeam} onChange={onChange} />);
+    await waitFor(() => expect(teamQuery.fetchNextPage).toHaveBeenCalledOnce());
+    mockUseInfiniteTeams.mockReturnValue(teamQuery);
+    view.rerender(<TeamDropdown filterTeam={filterTeam} onChange={onChange} />);
+    await user.click(screen.getByRole("combobox"));
+    expect(screen.queryByRole("option", { name: /Alpha Team/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: /Beta Team/ }));
+    expect(onChange).toHaveBeenCalledWith("team-2");
+    expect(teamQuery.fetchNextPage).toHaveBeenCalledOnce();
+  });
+
   it("emits the picked team's id and full object", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

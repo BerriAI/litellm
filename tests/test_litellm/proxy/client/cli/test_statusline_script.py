@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -251,9 +252,50 @@ class TestRender:
     def test_savings_header_and_bars_against_the_routers_baseline(self, config_dir):
         text = render("claude-sonnet-5", RECORDED, config_dir, use_color=False, bar_width=10)
         assert text.splitlines() == [
-            "claude-auto · Routed to: claude-sonnet-5  -63% vs Claude Opus 5",
-            "LiteLLM       ████░░░░░░ $0.14",
+            "Routed to: claude-sonnet-5  -63% vs Claude Opus 5",
+            "claude-auto   ████░░░░░░ $0.14",
             "Claude Opus 5 ██████████ $0.38",
+        ]
+
+    def test_a_long_router_name_keeps_both_cost_bars_aligned(self, config_dir: Path) -> None:
+        session: Final = RECORDED._replace(router_name="engineering-smart-router")
+        text: Final = render("claude-sonnet-5", session, config_dir, use_color=False, bar_width=10)
+        assert text.splitlines()[1:] == [
+            "engineering-smart-router ████░░░░░░ $0.14",
+            "Claude Opus 5            ██████████ $0.38",
+        ]
+
+    @pytest.mark.parametrize(
+        ("router_name", "baseline_name", "router_padding", "baseline_padding"),
+        (
+            ("路由-router", "Claude Opus 5", 3, 1),
+            ("智能模型路由器", "Claude Opus 5", 1, 2),
+            ("ＡＢＣ-router", "Claude Opus 5", 1, 1),
+            ("cafe\u0301-router", "Claude Opus 5", 3, 1),
+            ("a\u20dd-router", "Claude Opus 5", 6, 1),
+            ("カ\u3099-router", "Claude Opus 5", 5, 1),
+            ("auto", "基準モデル", 7, 1),
+            ("auto", "cafe\u0301", 1, 1),
+        ),
+    )
+    @pytest.mark.parametrize("use_color", (False, True))
+    def test_unicode_labels_align_cost_bars_by_terminal_columns(
+        self,
+        config_dir: Path,
+        router_name: str,
+        baseline_name: str,
+        router_padding: int,
+        baseline_padding: int,
+        use_color: bool,
+    ) -> None:
+        (config_dir / "cache" / "gateway-models.json").write_text(
+            json.dumps({"models": [{"id": "claude-opus-5", "display_name": baseline_name}]})
+        )
+        session: Final = RECORDED._replace(router_name=router_name)
+        text: Final = ANSI.sub("", render("claude-sonnet-5", session, config_dir, use_color, bar_width=10))
+        assert text.splitlines()[1:] == [
+            f"{router_name}{' ' * router_padding}████░░░░░░ $0.14",
+            f"{baseline_name}{' ' * baseline_padding}██████████ $0.38",
         ]
 
     def test_control_characters_in_any_externally_sourced_label_never_reach_the_terminal(self, tmp_path, config_dir):
@@ -283,12 +325,15 @@ class TestRender:
             use_color=False,
         )
 
-    def test_a_session_that_cost_more_than_its_baseline_reads_as_a_plus(self, config_dir):
-        dearer = RECORDED._replace(spend=0.50, baseline_spend=0.40)
-        assert "+25% vs Claude Opus 5" in render("m", dearer, config_dir, use_color=False)
+    @pytest.mark.parametrize("spend,delta", ((0.50, "+25%"), (0.40, "0%"), (0.4001, "0%"), (0.3999, "0%"), (0.30, "-25%")))
+    def test_rounded_cost_delta_uses_a_sign_only_for_nonzero_percentages(
+        self, config_dir: Path, spend: float, delta: str,
+    ) -> None:
+        session: Final = RECORDED._replace(spend=spend, baseline_spend=0.40)
+        assert render("m", session, config_dir, use_color=False).splitlines()[0] == f"Routed to: m  {delta} vs Claude Opus 5"
 
     def test_without_a_baseline_only_the_routed_line_shows(self, config_dir):
-        assert render("m", RECORDED._replace(baseline_model=None), config_dir, False) == "claude-auto · Routed to: m"
+        assert render("m", RECORDED._replace(baseline_model=None), config_dir, False) == "Routed to: m"
         assert render("m", None, config_dir, False) == "Routed to: m"
 
     def test_color_wraps_the_same_text(self, config_dir):
@@ -297,16 +342,63 @@ class TestRender:
 
 
 class TestClaudeCodeMode:
-    def test_the_transcript_names_the_routed_model_and_the_proxy_adds_the_savings(self, tmp_path, transcript, config_dir):
-        seen = []
+    @pytest.mark.parametrize("estimated_turns", (0, 1))
+    def test_current_estimates_keep_the_routed_model_and_compare_only_covered_turns(
+        self, tmp_path: Path, transcript: Path, config_dir: Path, estimated_turns: int
+    ) -> None:
+        session: Final = statusline_script._session_from_payload(
+            {
+                **RECORDED._asdict(),
+                "spend": 10.0,
+                "baseline_spend": None,
+                "savings_estimated_baseline_spend": 1.5 if estimated_turns else None,
+                "turns": 3,
+                "savings_estimated_turns": estimated_turns,
+                "savings_estimated_actual_spend": 2.0 if estimated_turns else 0.0,
+            }
+        )
+        assert session is not None
 
-        def fetch(credentials, session_id):
-            seen.append((credentials, session_id))
+        def fetch(credentials: Credentials, session_id: str) -> Fetched:
+            return Fetched(session, True)
+
+        first: Final = _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
+        assert first == _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
+        assert first.startswith("Routed to: claude-sonnet-5")
+        if estimated_turns:
+            assert "+33% vs Claude Opus 5 · 1 of 3 turns estimated" in first
+            assert "$2.00" in first and "$1.50" in first
+            assert "$10.00" not in first and "+567%" not in first
+        else:
+            assert "Savings unavailable" in first
+            assert "%" not in first and "$" not in first
+
+    @pytest.mark.parametrize("transcript_model", ("claude-auto", "anthropic/claude-opus-5"))
+    def test_the_session_names_the_routed_model_even_when_the_transcript_differs(
+        self, tmp_path: Path, config_dir: Path, transcript_model: str
+    ) -> None:
+        transcript: Final = tmp_path / "session.jsonl"
+        transcript.write_text(_assistant_line(transcript_model) + "\n")
+
+        def fetch(credentials: Credentials, session_id: str) -> Fetched:
+            assert credentials == Credentials("http://127.0.0.1:4000", "sk-virtual")
+            assert session_id == SESSION_ID
             return Fetched(RECORDED, definitive=True)
 
-        text = _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
-        assert text.startswith("claude-auto · Routed to: claude-sonnet-5  -63% vs Claude Opus 5\n")
-        assert seen == [(Credentials("http://127.0.0.1:4000", "sk-virtual"), SESSION_ID)]
+        text: Final = _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
+        assert text.startswith("Routed to: claude-sonnet-5  -63% vs Claude Opus 5\n")
+        assert text.splitlines()[1].startswith("claude-auto ")
+
+    def test_a_discovered_display_name_labels_the_sessions_model(
+        self, tmp_path: Path, transcript: Path, config_dir: Path
+    ) -> None:
+        session: Final = RECORDED._replace(last_model="anthropic/claude-opus-5")
+
+        def fetch(credentials: Credentials, session_id: str) -> Fetched:
+            return Fetched(session, definitive=True)
+
+        text: Final = _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
+        assert text.startswith("Routed to: Claude Opus 5  -63% vs Claude Opus 5\n")
 
     def test_an_unrecorded_session_degrades_to_the_routed_line(self, tmp_path, transcript, config_dir):
         assert _run(_payload(transcript), _env(tmp_path, config_dir), lambda c, s: Fetched(None, True)) == (
@@ -362,7 +454,8 @@ class TestCodexMode:
 
         out = _run({"hook_event_name": "Stop", "session_id": SESSION_ID, "transcript_path": "/nope"}, env, fetch)
         message = json.loads(out)["systemMessage"]
-        assert message.splitlines()[1] == "claude-auto · Routed to: claude-sonnet-5  -63% vs Claude Opus 5"
+        assert message.splitlines()[1] == "Routed to: claude-sonnet-5  -63% vs Claude Opus 5"
+        assert message.splitlines()[2].startswith("claude-auto ")
         assert message.startswith("\n")
         assert seen == [Credentials("http://127.0.0.1:4000", "sk-codex")]
 

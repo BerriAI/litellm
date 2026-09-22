@@ -39,6 +39,8 @@ def is_serializable(value):
 
 
 class LangsmithLogger(CustomBatchLogger):
+    preserve_events_added_during_flush = True
+
     def __init__(
         self,
         langsmith_api_key: str | None = None,
@@ -75,9 +77,9 @@ class LangsmithLogger(CustomBatchLogger):
         if _batch_size:
             self.batch_size = int(_batch_size)
         self.log_queue: list[LangsmithQueueObject] = []
-        self._flush_task: asyncio.Task[Any] | None = self._start_periodic_flush_task()
+        self._flush_task: asyncio.Task[None] | None = self._start_periodic_flush_task()
 
-    def _start_periodic_flush_task(self) -> asyncio.Task[Any] | None:
+    def _start_periodic_flush_task(self) -> asyncio.Task[None] | None:
         """Start the periodic flush task only when an event loop is already running."""
         try:
             loop: Final = asyncio.get_running_loop()
@@ -152,9 +154,9 @@ class LangsmithLogger(CustomBatchLogger):
 
         return self._redact_metadata(extra_metadata)
 
-    def _build_outputs_with_usage(self, payload: StandardLoggingPayload) -> dict[str, Any]:
+    def _build_outputs_with_usage(self, payload: StandardLoggingPayload) -> dict[str, object]:
         response: Final = payload["response"]
-        outputs: dict[str, Any]
+        outputs: dict[str, object]
         if isinstance(response, dict):
             outputs = {**response}
         else:
