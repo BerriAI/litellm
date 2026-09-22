@@ -1,6 +1,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use litellm_pricing::{
-    Pricing, PromptConvention, Rate, Rates, Request, ServiceTier, ThresholdPolicy, Usage, calculate,
+use litellm_cost::{
+    Pricing, PromptConvention, Rate, Rates, Request, ServiceTier, ThresholdPolicy, ThresholdRates,
+    Usage, calculate, compile,
 };
 use std::hint::black_box;
 
@@ -32,8 +33,32 @@ fn bench(c: &mut Criterion) {
         region_multiplier: None,
         billed_at_utc_minute: None,
     };
-    c.bench_function("native_text_cache_calculation", |b| {
+    let plan = compile(&pricing).unwrap();
+    c.bench_function("native_compiled_calculation", |b| {
+        b.iter(|| black_box(plan.calculate(black_box(&request)).unwrap()))
+    });
+    c.bench_function("native_full_wrapper", |b| {
         b.iter(|| black_box(calculate(black_box(&pricing), black_box(&request)).unwrap()))
+    });
+    c.bench_function("native_rate_compilation", |b| {
+        b.iter(|| black_box(compile(black_box(&pricing)).unwrap()))
+    });
+    let threshold = ThresholdRates {
+        above_prompt_tokens: 1000,
+        standard: Rates {
+            input: Rate::Value(0.000004),
+            output: Rate::Value(0.000016),
+            ..Rates::EMPTY
+        },
+        tiers: &[],
+    };
+    let threshold_pricing = Pricing {
+        thresholds: &[threshold],
+        ..pricing
+    };
+    let threshold_plan = compile(&threshold_pricing).unwrap();
+    c.bench_function("native_threshold_boundary", |b| {
+        b.iter(|| black_box(threshold_plan.calculate(black_box(&request)).unwrap()))
     });
 }
 

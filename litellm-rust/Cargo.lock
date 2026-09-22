@@ -2957,6 +2957,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-cost"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "proptest",
+]
+
+[[package]]
 name = "litellm-framing"
 version = "0.1.0"
 dependencies = [
@@ -3044,13 +3052,6 @@ dependencies = [
  "time",
  "tokio",
  "url",
-]
-
-[[package]]
-name = "litellm-pricing"
-version = "0.1.0"
-dependencies = [
- "criterion",
 ]
 
 [[package]]
