@@ -21,7 +21,6 @@ export const AGENT_CALL_TYPES = ["asend_message"];
 /** Call types that represent Batch API operations (creation and retrieval, sync and async). */
 export const BATCH_CALL_TYPES = ["acreate_batch", "create_batch", "aretrieve_batch", "retrieve_batch"];
 
-/** Human labels for the span_type filter values, matching the Type column badges. */
 export const SPAN_TYPE_LABELS: Record<string, string> = {
   llm: "LLM",
   agent: "Agent",

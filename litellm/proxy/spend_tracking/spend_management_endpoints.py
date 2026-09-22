@@ -70,6 +70,17 @@ _SESSION_GROUP_KEY_SQL: Final = f"{_SESSION_KEY_EXPR}, api_key"
 _MCP_CALL_TYPES_SQL: Final = "('call_mcp_tool', 'list_mcp_tools')"
 _AGENT_CALL_TYPE_SQL: Final = "'asend_message'"
 _BATCH_CALL_TYPES_SQL: Final = "('acreate_batch', 'create_batch', 'aretrieve_batch', 'retrieve_batch')"
+_SPAN_TYPE_SQL_CONDITIONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "mcp": f"call_type IN {_MCP_CALL_TYPES_SQL}",
+        "agent": f"call_type = {_AGENT_CALL_TYPE_SQL}",
+        "batch": f"call_type IN {_BATCH_CALL_TYPES_SQL}",
+        "llm": (
+            f"(call_type NOT IN {_MCP_CALL_TYPES_SQL} AND call_type != {_AGENT_CALL_TYPE_SQL} "
+            f"AND call_type NOT IN {_BATCH_CALL_TYPES_SQL})"
+        ),
+    }
+)
 _SPEND_LOG_LIST_COLUMNS: Final = """
                 request_id, call_type, api_key, spend, total_tokens,
                 prompt_tokens, completion_tokens, "startTime", "endTime",
@@ -2517,7 +2528,7 @@ async def ui_view_spend_logs(
             param="cache_hit_filter",
             code=status.HTTP_400_BAD_REQUEST,
         )
-    if isinstance(span_type, str) and span_type not in {"llm", "agent", "mcp", "batch"}:
+    if isinstance(span_type, str) and span_type not in _SPAN_TYPE_SQL_CONDITIONS:
         raise ProxyException(
             message=f"Invalid span_type: {span_type}. Must be one of: llm, agent, mcp, batch",
             type="bad_request",
@@ -4690,22 +4701,9 @@ def _build_status_filter_condition(status_filter: str | None) -> Mapping[str, ob
 
 
 def _span_type_sql_condition(span_type: str | None) -> str | None:
-    match span_type:
-        case None:
-            return None
-        case "mcp":
-            return f"call_type IN {_MCP_CALL_TYPES_SQL}"
-        case "agent":
-            return f"call_type = {_AGENT_CALL_TYPE_SQL}"
-        case "batch":
-            return f"call_type IN {_BATCH_CALL_TYPES_SQL}"
-        case "llm":
-            return (
-                f"(call_type NOT IN {_MCP_CALL_TYPES_SQL} AND call_type != {_AGENT_CALL_TYPE_SQL} "
-                f"AND call_type NOT IN {_BATCH_CALL_TYPES_SQL})"
-            )
-        case _:
-            return None
+    if span_type is None:
+        return None
+    return _SPAN_TYPE_SQL_CONDITIONS.get(span_type)
 
 
 def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
