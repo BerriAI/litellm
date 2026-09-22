@@ -4356,6 +4356,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/debug/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Debug Report
+         * @description The same LiteLLM-owned environment facts the bug report link puts in a GitHub issue:
+         *     versions, deployment kind, and config flags whose keys and values LiteLLM defines.
+         *     Nothing from the operator's config values, request data, or errors
+         *
+         *     Example usage:
+         *     curl http://localhost:4000/debug/report -H "Authorization: Bearer sk-1234"
+         */
+        get: operations["get_debug_report_debug_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/delete/allowed_ip": {
         parameters: {
             query?: never;
@@ -28779,6 +28804,22 @@ export interface components {
             /** Template Id */
             template_id: string;
         };
+        /** EnvironmentReport */
+        EnvironmentReport: {
+            /** Config Lines */
+            config_lines: string[];
+            /** Deployment */
+            deployment: string | null;
+            /** Litellm Version */
+            litellm_version: string;
+            /** Python Version */
+            python_version: string;
+            /**
+             * Surface
+             * @enum {string}
+             */
+            surface: "sdk" | "proxy";
+        };
         /** ErrorResponse */
         ErrorResponse: {
             /**
@@ -31435,6 +31476,8 @@ export interface components {
             output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
+            /** Provider Affinity Header */
+            provider_affinity_header?: string | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;
@@ -37377,6 +37420,11 @@ export interface components {
              */
             fields: components["schemas"]["RouterSettingsField"][];
             /**
+             * Routing Group Strategies
+             * @description Strategies supported when constructing a routing group
+             */
+            routing_group_strategies: string[];
+            /**
              * Routing Strategy Descriptions
              * @description Descriptions for each routing strategy option
              */
@@ -37418,6 +37466,11 @@ export interface components {
              */
             fields: components["schemas"]["RouterSettingsField"][];
             /**
+             * Routing Group Strategies
+             * @description Strategies supported when constructing a routing group
+             */
+            routing_group_strategies: string[];
+            /**
              * Routing Strategy Descriptions
              * @description Descriptions for each routing strategy option
              */
@@ -37439,6 +37492,13 @@ export interface components {
         RoutingGroup: {
             /** Group Name */
             group_name: string;
+            /**
+             * Model Priorities
+             * @description For priority groups, every model's priority. Lower numbers are tried first; equal numbers share traffic.
+             */
+            model_priorities?: {
+                [key: string]: number;
+            } | null;
             /** Models */
             models: string[];
             /** Routing Strategy */
@@ -42306,6 +42366,8 @@ export interface components {
             output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
+            /** Provider Affinity Header */
+            provider_affinity_header?: string | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;
@@ -48588,6 +48650,26 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    get_debug_report_debug_report_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentReport"];
                 };
             };
         };
@@ -60964,6 +61046,8 @@ export interface operations {
                 status_filter?: string | null;
                 /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
                 cache_hit_filter?: string | null;
+                /** @description Filter logs by span type: llm, agent, mcp, or batch */
+                span_type?: string | null;
                 /** @description Filter logs by model */
                 model?: string | null;
                 /** @description Filter logs by model ID (litellm model deployment id) */
@@ -61082,6 +61166,8 @@ export interface operations {
                 status_filter?: string | null;
                 /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
                 cache_hit_filter?: string | null;
+                /** @description Filter logs by span type: llm, agent, mcp, or batch */
+                span_type?: string | null;
                 /** @description Filter logs by model */
                 model?: string | null;
                 /** @description Filter logs by model ID (litellm model deployment id) */
