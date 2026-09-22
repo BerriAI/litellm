@@ -1684,10 +1684,22 @@ async def test_check_custom_key_allowed_honours_the_config_file(monkeypatch):
     assert exc_info.value.status_code == 403
 
 
-@pytest.mark.parametrize("config_value", [True, "true", "True", 1])
+@pytest.mark.parametrize(
+    ("config_value", "blocked"),
+    [
+        (True, True),
+        ("true", True),
+        ("True", True),
+        (1, True),
+        (False, False),
+        ("false", False),
+        ("False", False),
+        (0, False),
+    ],
+)
 @pytest.mark.asyncio
-async def test_check_custom_key_allowed_honours_a_non_bool_config_value(monkeypatch, config_value):
-    """A YAML value that is not a bare bool, such as a quoted \"true\", still enforces."""
+async def test_check_custom_key_allowed_coerces_a_non_bool_config_value(monkeypatch, config_value, blocked):
+    """A YAML value that is not a bare bool, such as a quoted "true", still decides the gate."""
     from fastapi import HTTPException
 
     from litellm.proxy.config_resolvers import SettingsStore
@@ -1699,25 +1711,13 @@ async def test_check_custom_key_allowed_honours_a_non_bool_config_value(monkeypa
     general_settings.load_yaml({"disable_custom_api_keys": config_value})
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
-    with pytest.raises(HTTPException) as exc_info:
+    rejected = False
+    try:
         await _check_custom_key_allowed("sk-custom-key-123456")
+    except HTTPException as e:
+        rejected = e.status_code == 403
 
-    assert exc_info.value.status_code == 403
-
-
-@pytest.mark.parametrize("config_value", [False, "false", "False", 0])
-@pytest.mark.asyncio
-async def test_check_custom_key_allowed_leaves_a_non_bool_off_value_off(monkeypatch, config_value):
-    from litellm.proxy.config_resolvers import SettingsStore
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _check_custom_key_allowed,
-    )
-
-    general_settings = SettingsStore("general_settings")
-    general_settings.load_yaml({"disable_custom_api_keys": config_value})
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
-
-    await _check_custom_key_allowed("sk-custom-key-123456")
+    assert rejected is blocked
 
 
 @pytest.mark.asyncio
