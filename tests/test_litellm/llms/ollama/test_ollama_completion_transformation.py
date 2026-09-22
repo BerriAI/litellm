@@ -1,4 +1,6 @@
 import json
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 from litellm._uuid import uuid
 from unittest.mock import MagicMock, patch
@@ -553,11 +555,12 @@ class TestOllamaConfigReasoningEffort:
         [
             ("medium", True),
             ({"effort": "medium", "summary": "auto"}, True),
+            (MappingProxyType({"effort": "medium", "summary": "auto"}), True),
             ({"effort": "none"}, False),
         ],
     )
     def test_reasoning_effort_string_or_dict_maps_to_think(
-        self, reasoning_effort: str | dict[str, str], expected_think: bool
+        self, reasoning_effort: str | Mapping[str, str], expected_think: bool
     ) -> None:
         optional_params: Final = OllamaConfig().map_openai_params(
             non_default_params={"reasoning_effort": reasoning_effort},

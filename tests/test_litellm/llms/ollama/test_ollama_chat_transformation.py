@@ -1,6 +1,8 @@
 import inspect
 import os
 import sys
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final, cast
 
 import pytest
@@ -1000,11 +1002,12 @@ class TestOllamaChatReasoningEffort:
             ("none", False),
             ({"effort": "medium"}, True),
             ({"effort": "medium", "summary": "auto"}, True),
+            (MappingProxyType({"effort": "medium", "summary": "auto"}), True),
             ({"effort": "none", "summary": "detailed"}, False),
         ],
     )
     def test_reasoning_effort_string_or_dict_maps_to_think(
-        self, reasoning_effort: str | dict[str, str], expected_think: bool
+        self, reasoning_effort: str | Mapping[str, str], expected_think: bool
     ) -> None:
         optional_params: Final = get_optional_params(
             model="ollama_chat/qwen3:8b",

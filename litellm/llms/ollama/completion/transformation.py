@@ -1,6 +1,6 @@
 import json
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
@@ -183,7 +183,7 @@ class OllamaConfig(BaseConfig):
             elif param == "stop":
                 optional_params["stop"] = value
             elif param == "reasoning_effort" and value is not None:
-                effort: Final = value.get("effort") if isinstance(value, dict) else value
+                effort: Final = value.get("effort") if isinstance(value, Mapping) else value
                 if effort is not None:
                     if model.startswith("gpt-oss"):
                         optional_params["think"] = effort
