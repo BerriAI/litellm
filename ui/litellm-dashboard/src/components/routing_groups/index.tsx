@@ -46,6 +46,7 @@ const RoutingGroups: React.FC = () => {
 
   const availableStrategies = useMemo(() => {
     if (data?.availableStrategies?.length) return data.availableStrategies;
+    if (routerFields?.routing_group_strategies?.length) return routerFields.routing_group_strategies;
     const fromFields = routerFields?.fields?.find((f) => f.field_name === "routing_strategy")?.options;
     return fromFields ?? [];
   }, [data?.availableStrategies, routerFields]);
@@ -178,8 +179,17 @@ const RoutingGroups: React.FC = () => {
             <DialogTitle>Delete routing group?</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-foreground">
-            Models in <span className="font-medium">{deletingGroup?.group_name}</span> will fall back to the
-            proxy&apos;s top-level routing strategy. This cannot be undone.
+            {deletingGroup?.routing_strategy === "priority" ? (
+              <>
+                Calls to <span className="font-medium">{deletingGroup.group_name}</span> will stop working. Direct
+                requests to its member models keep their existing routing behavior. This cannot be undone.
+              </>
+            ) : (
+              <>
+                Models in <span className="font-medium">{deletingGroup?.group_name}</span> will fall back to the
+                proxy&apos;s top-level routing strategy. This cannot be undone.
+              </>
+            )}
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeletingGroup(null)}>

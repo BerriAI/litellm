@@ -113,6 +113,22 @@ describe("RoutingGroupsTable", () => {
     expect(panel?.textContent).toContain("gpt-4o");
   });
 
+  it("uses the callable group name in every priority routing example", async () => {
+    const user = userEvent.setup();
+    render(<RoutingGroupsTable {...defaultProps} groups={[{ ...prodGroup, routing_strategy: "priority" }]} />);
+    expect(within(rowFor("prod-group")).getByText("Priority")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "prod-group" }));
+
+    expect(screen.getByRole("tabpanel")).toHaveTextContent('"model": "prod-group"');
+    await user.click(screen.getByRole("tab", { name: "Python (OpenAI SDK)" }));
+    expect(screen.getByRole("tabpanel")).toHaveTextContent('model="prod-group"');
+    await user.click(screen.getByRole("tab", { name: "JavaScript (OpenAI SDK)" }));
+    expect(screen.getByRole("tabpanel")).toHaveTextContent('model: "prod-group"');
+    expect(
+      screen.getByText(/Direct requests to a member model keep their existing routing behavior/),
+    ).toBeInTheDocument();
+  });
+
   it("should expand only the clicked group", async () => {
     const user = userEvent.setup();
     render(<RoutingGroupsTable {...defaultProps} groups={[prodGroup, devGroup]} />);
