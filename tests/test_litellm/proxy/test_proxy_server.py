@@ -3556,7 +3556,7 @@ async def test_load_config_rejects_malformed_role_permissions(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_load_config_compiles_key_alias_pattern_at_startup(tmp_path, monkeypatch):
+async def test_load_config_compiles_key_alias_pattern_at_startup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy.proxy_server import ProxyConfig
 
     monkeypatch.setattr(litellm, "key_alias_pattern", None)

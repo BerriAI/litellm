@@ -7593,6 +7593,7 @@ _KEY_ALIAS_PATTERN: Final = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-/\.@]{0,253}[a
 _KEY_ALIAS_PATTERN_MESSAGE: Final = (
     "Invalid key_alias format. Must be 2-255 characters, start/end with alphanumeric, and only contain a-zA-Z0-9_-/.@."
 )
+_KEY_ALIAS_MAX_LENGTH: Final = 255
 
 
 def parse_key_alias_pattern(value: object) -> str | None:
@@ -7613,7 +7614,8 @@ def _key_alias_rule() -> tuple[re.Pattern[str], str] | None:
     if litellm.key_alias_pattern is not None:
         return (
             re.compile(litellm.key_alias_pattern),
-            f"Invalid key_alias format. Must match the configured key_alias_pattern: {litellm.key_alias_pattern}",
+            f"Invalid key_alias format. Must be at most {_KEY_ALIAS_MAX_LENGTH} characters and match the configured"
+            f" key_alias_pattern: {litellm.key_alias_pattern}",
         )
     if litellm.enable_key_alias_format_validation:
         return (_KEY_ALIAS_PATTERN, _KEY_ALIAS_PATTERN_MESSAGE)
@@ -7625,9 +7627,10 @@ def _validate_key_alias_format(key_alias: str | None) -> None:
     Validate the format of the key_alias.
 
     Path traversal and control characters are always rejected. The alias then has to
-    fully match ``litellm.key_alias_pattern`` when one is configured, else the built-in
-    pattern when ``litellm.enable_key_alias_format_validation`` is on, else nothing
-    more is checked so existing workflows are not broken.
+    stay within ``_KEY_ALIAS_MAX_LENGTH`` and fully match ``litellm.key_alias_pattern``
+    when one is configured, else the built-in pattern when
+    ``litellm.enable_key_alias_format_validation`` is on, else nothing more is checked
+    so existing workflows are not broken.
     """
     if key_alias is None:
         return
@@ -7647,7 +7650,7 @@ def _validate_key_alias_format(key_alias: str | None) -> None:
         return
 
     pattern, message = rule
-    if pattern.fullmatch(key_alias) is None:
+    if len(key_alias) > _KEY_ALIAS_MAX_LENGTH or pattern.fullmatch(key_alias) is None:
         raise ProxyException(
             message=message,
             type=ProxyErrorTypes.bad_request_error,

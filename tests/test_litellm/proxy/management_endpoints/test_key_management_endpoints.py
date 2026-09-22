@@ -3090,7 +3090,7 @@ async def test_update_key_by_alias_only(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_update_key_changed_alias_must_match_key_alias_pattern(monkeypatch):
+async def test_update_key_changed_alias_must_match_key_alias_pattern(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         update_key_fn,
     )
@@ -10692,7 +10692,7 @@ class TestValidateKeyAliasFormat:
             assert str(exc.value.code) == "400"
             assert "Invalid key_alias format" in str(exc.value.message)
 
-    def test_configured_pattern_applies_with_flag_off(self, monkeypatch):
+    def test_configured_pattern_applies_with_flag_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             _validate_key_alias_format,
         )
@@ -10707,7 +10707,7 @@ class TestValidateKeyAliasFormat:
         assert _validate_key_alias_format("prod-key-001") is None
         assert _validate_key_alias_format(None) is None
 
-    def test_configured_pattern_must_match_the_whole_alias(self, monkeypatch):
+    def test_configured_pattern_must_match_the_whole_alias(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             _validate_key_alias_format,
         )
@@ -10718,7 +10718,7 @@ class TestValidateKeyAliasFormat:
             with pytest.raises(ProxyException):
                 _validate_key_alias_format(partial_match)
 
-    def test_configured_pattern_replaces_the_builtin_rule(self, monkeypatch):
+    def test_configured_pattern_replaces_the_builtin_rule(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             _validate_key_alias_format,
         )
@@ -10730,7 +10730,7 @@ class TestValidateKeyAliasFormat:
             _validate_key_alias_format("Uppercase")
         assert "key_alias_pattern" in str(exc.value.message)
 
-    def test_configured_pattern_keeps_the_baseline_safety_check(self, monkeypatch):
+    def test_configured_pattern_keeps_the_baseline_safety_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             _validate_key_alias_format,
         )
@@ -10740,6 +10740,18 @@ class TestValidateKeyAliasFormat:
             _validate_key_alias_format("../../../other-app/creds")
         assert str(exc.value.code) == "400"
         assert "key_alias_pattern" not in str(exc.value.message)
+
+    def test_configured_pattern_bounds_the_alias_length(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_key_alias_format,
+        )
+
+        monkeypatch.setattr(litellm, "key_alias_pattern", r"^[a-z]+$")
+        _validate_key_alias_format("a" * 255)
+        with pytest.raises(ProxyException) as exc:
+            _validate_key_alias_format("a" * 256)
+        assert str(exc.value.code) == "400"
+        assert "at most 255 characters" in str(exc.value.message)
 
 
 @pytest.mark.asyncio
@@ -12832,7 +12844,9 @@ async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(monk
 
 
 @pytest.mark.asyncio
-async def test_execute_virtual_key_regeneration_changed_alias_must_match_key_alias_pattern(monkeypatch):
+async def test_execute_virtual_key_regeneration_changed_alias_must_match_key_alias_pattern(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.proxy._types import RegenerateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _execute_virtual_key_regeneration,
