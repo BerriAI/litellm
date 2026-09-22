@@ -359,6 +359,46 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
     return {}
 
 
+def _budget_reservation_on_auth_object(user_api_key_auth: object) -> object:
+    if isinstance(user_api_key_auth, Mapping):
+        return user_api_key_auth.get("budget_reservation")
+    return getattr(user_api_key_auth, "budget_reservation", None)
+
+
+def budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dict | None:
+    stamped: Final = metadata.get("user_api_key_budget_reservation")
+    if isinstance(stamped, dict):
+        return stamped
+    on_auth_object: Final = _budget_reservation_on_auth_object(metadata.get("user_api_key_auth"))
+    return on_auth_object if isinstance(on_auth_object, dict) else None
+
+
+def _stamp_budget_reservation_callback_bound(litellm_params: Mapping[str, object], callback_bound: bool) -> None:
+    for metadata_variable_name in ("metadata", "litellm_metadata"):
+        metadata = litellm_params.get(metadata_variable_name)
+        if not isinstance(metadata, Mapping):
+            continue
+        budget_reservation = budget_reservation_from_metadata(metadata)
+        if budget_reservation is not None:
+            budget_reservation["callback_bound"] = callback_bound
+
+
+def bind_budget_reservation_to_callbacks(litellm_params: Mapping[str, object]) -> None:
+    """Mark the request's budget reservation as owned by the success callbacks of this call.
+
+    The proxy releases any reservation still unbound when the request ends; one bound here
+    is left for the cost callback, which may finish after the response has been sent. Bind
+    only where a success handler is guaranteed to run: a logging object merely existing is
+    not that, since the proxy builds one for every route before calling anything.
+    """
+    _stamp_budget_reservation_callback_bound(litellm_params, True)
+
+
+def unbind_budget_reservation_from_callbacks(litellm_params: Mapping[str, object]) -> None:
+    """Hand a failed call's reservation back to the request-end release: failure handlers never settle it."""
+    _stamp_budget_reservation_callback_bound(litellm_params, False)
+
+
 def reconstruct_model_name(
     model_name: str,
     custom_llm_provider: str | None,

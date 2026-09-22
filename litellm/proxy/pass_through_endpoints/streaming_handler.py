@@ -9,6 +9,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
@@ -218,6 +219,7 @@ class PassThroughStreamingHandler:
                 and response.status_code < 400
             ):
                 logging_scheduled = True
+                bind_budget_reservation_to_callbacks(litellm_logging_obj.litellm_params)
                 litellm_logging_obj._deferred_stream_complete_args = (_build_logging_coroutine(),)
         except Exception as e:
             verbose_proxy_logger.error("Error in chunk_processor: %s", e)
@@ -250,6 +252,8 @@ class PassThroughStreamingHandler:
                     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=_build_logging_coroutine())
                 except Exception as e:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
+                else:
+                    bind_budget_reservation_to_callbacks(litellm_logging_obj.litellm_params)
 
     @staticmethod
     async def _route_streaming_logging_to_handler(

@@ -47,6 +47,7 @@ from litellm.constants import (
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
+    bind_budget_reservation_to_callbacks,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
@@ -1637,6 +1638,7 @@ async def pass_through_request(
                     **kwargs,
                 )
             )
+            bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
         ## CUSTOM HEADERS - `x-litellm-*`
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -2561,6 +2563,7 @@ async def websocket_passthrough_request(
                     **success_kwargs,
                 )
             )
+            bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
             # Call the proxy logging success hook
             if proxy_logging_obj:
@@ -2732,6 +2735,7 @@ async def _relay_passthrough_response_bytes(
                 **success_handler_kwargs,
             )
         )
+        bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
 
 def _extract_model_from_vertex_ai_setup(setup_response: Mapping[str, object]) -> str | None:

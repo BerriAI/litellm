@@ -59,9 +59,17 @@ def setup(
     }
     supplied: Final = arguments.get("litellm_logging_obj")
     if isinstance(supplied, Logging):
-        return CallSetup(supplied, arguments)
+        return _claim_budget_reservation(CallSetup(supplied, arguments), asynchronous)
     logger, prepared = function_setup(call_type, Rules(), start_time, *args, is_async_call=asynchronous, **arguments)
-    return CallSetup(logger, prepared)
+    return _claim_budget_reservation(CallSetup(logger, prepared), asynchronous)
+
+
+def _claim_budget_reservation(call_setup: CallSetup, asynchronous: bool) -> CallSetup:
+    from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
+
+    if asynchronous and not is_internal_call():
+        bind_budget_reservation_to_callbacks(call_setup.logger.litellm_params)
+    return call_setup
 
 
 def check_limits(kwargs: Mapping[str, object]) -> None:
@@ -96,6 +104,9 @@ def finalize(
 
 
 class LoggingSurface(Protocol):
+    @property
+    def litellm_params(self) -> Mapping[str, object]: ...
+
     def update_from_kwargs(
         self,
         kwargs: dict[str, object],
@@ -236,8 +247,12 @@ def sync_success_for_async_call(
 def failure_handler(
     logger: LoggingSurface, error: Exception, start: datetime.datetime, end: datetime.datetime, asynchronous: bool
 ) -> Coroutine[object, object, None] | None:
+    from litellm.litellm_core_utils.core_helpers import unbind_budget_reservation_from_callbacks
+
     trace: Final = "".join(traceback.format_exception(error))
     if asynchronous:
+        if not is_internal_call():
+            unbind_budget_reservation_from_callbacks(logger.litellm_params)
         return logger.async_failure_handler(error, trace, start, end)
     logger.failure_handler(error, trace, start, end)
     return None

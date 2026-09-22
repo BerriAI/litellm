@@ -4984,6 +4984,100 @@ async def test_wrapper_async_fires_post_call_failure_deployment_hook_on_internal
     assert isinstance(recorder.calls[0][1], litellm.AuthenticationError)
 
 
+def _budget_reservation(callback_bound: bool = False) -> dict:
+    return {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": callback_bound}
+
+
+_BUDGET_RESERVATION_CALL_KWARGS: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
+_BUDGET_RESERVATION_REFUSAL: Final = litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o")
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_claims_the_budget_reservation_for_the_cost_callback() -> None:
+    reservation = _budget_reservation()
+
+    await litellm.acompletion(
+        **_BUDGET_RESERVATION_CALL_KWARGS,
+        mock_response="ok",
+        metadata={"user_api_key_budget_reservation": reservation},
+    )
+
+    assert reservation["callback_bound"] is True
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_claims_the_budget_reservation_before_the_stream_is_consumed() -> None:
+    reservation = _budget_reservation()
+
+    stream = await litellm.acompletion(
+        **_BUDGET_RESERVATION_CALL_KWARGS,
+        mock_response="ok",
+        stream=True,
+        metadata={"user_api_key_budget_reservation": reservation},
+    )
+
+    assert reservation["callback_bound"] is True
+    async for _ in stream:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_claims_the_budget_reservation_a_supplied_logging_object_already_saw() -> None:
+    reservation = _budget_reservation()
+    logging_obj, kwargs = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        **_BUDGET_RESERVATION_CALL_KWARGS,
+        litellm_call_id="proxy-pre-call-setup",
+        metadata={"user_api_key_budget_reservation": reservation},
+    )
+    assert reservation["callback_bound"] is False
+
+    await litellm.acompletion(**kwargs, litellm_logging_obj=logging_obj, mock_response="ok")
+
+    assert reservation["callback_bound"] is True
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_hands_the_budget_reservation_back_when_the_call_fails() -> None:
+    reservation = _budget_reservation()
+
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.acompletion(
+            **_BUDGET_RESERVATION_CALL_KWARGS,
+            mock_response=_BUDGET_RESERVATION_REFUSAL,
+            metadata={"user_api_key_budget_reservation": reservation},
+        )
+
+    assert reservation["callback_bound"] is False
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_leaves_the_budget_reservation_alone_on_internal_calls() -> None:
+    claimed_by_the_outer_call = _budget_reservation(callback_bound=True)
+    never_claimed = _budget_reservation()
+
+    token = is_internal_call.set(True)
+    try:
+        await litellm.acompletion(
+            **_BUDGET_RESERVATION_CALL_KWARGS,
+            mock_response="ok",
+            metadata={"user_api_key_budget_reservation": never_claimed},
+        )
+        with pytest.raises(litellm.AuthenticationError):
+            await litellm.acompletion(
+                **_BUDGET_RESERVATION_CALL_KWARGS,
+                mock_response=_BUDGET_RESERVATION_REFUSAL,
+                metadata={"user_api_key_budget_reservation": claimed_by_the_outer_call},
+            )
+    finally:
+        is_internal_call.reset(token)
+
+    assert never_claimed["callback_bound"] is False
+    assert claimed_by_the_outer_call["callback_bound"] is True
+
+
 @pytest.mark.asyncio
 async def test_wrapper_async_does_not_fire_failure_hook_for_pre_call_budget_error(
     monkeypatch: pytest.MonkeyPatch,

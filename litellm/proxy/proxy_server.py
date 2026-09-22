@@ -654,6 +654,9 @@ from litellm.proxy.middleware.billable_request_metrics_middleware import (
     BillableRequestMetricsMiddleware,
     BillingRecorder,
 )
+from litellm.proxy.middleware.budget_reservation_release_middleware import (
+    BudgetReservationReleaseMiddleware,
+)
 from litellm.proxy.plugin_routes import (
     register_plugins_from_config,
 )
@@ -729,7 +732,10 @@ from litellm.proxy.shutdown.scheduled_jobs import (
     pause_scheduled_jobs,
     stop_in_flight_scheduler_jobs,
 )
-from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
+from litellm.proxy.spend_tracking.budget_reservation import (
+    get_budget_window_start,
+    release_unbound_budget_reservation,
+)
 from litellm.proxy.spend_tracking.daily_global_spend_rollup import (
     run_scheduled_daily_global_spend_reconcile,
 )
@@ -2358,6 +2364,7 @@ app.add_middleware(
     # it sees prisma_client as of the first request rather than import time.
     sink_factory=lambda: gateway_request_accumulator if prisma_client is not None else None,
 )
+app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_budget_reservation)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 

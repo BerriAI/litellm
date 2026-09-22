@@ -838,3 +838,72 @@ async def test_chunk_processor_bills_partial_google_usage_on_mid_stream_exceptio
     assert failure_payload["completion_tokens"] == 12
     assert failure_payload["response_cost"] > 12 * 3.75e-06
     assert isinstance(recorder.failure_kwargs[0]["exception"], httpx.ReadTimeout)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deferred_dispatch_armed",
+    [False, True],
+    ids=["enqueued-at-end-of-stream", "parked-for-deferred-dispatch"],
+)
+async def test_chunk_processor_claims_the_budget_reservation_before_handing_it_to_the_cost_callback(
+    deferred_dispatch_armed: bool,
+):
+    reservation = {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+    response = _make_streaming_response([b"event-1", b"event-2"])
+    logging_obj = _unarmed_logging_obj()
+    logging_obj.litellm_params = {"metadata": {"user_api_key_budget_reservation": reservation}}
+    if deferred_dispatch_armed:
+        logging_obj._on_deferred_stream_complete = AsyncMock()
+    claimed_when_the_callback_ran = []
+
+    async def cost_callback(**kwargs):
+        claimed_when_the_callback_ran.append(reservation["callback_bound"])
+
+    async for _ in PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "claude-3-haiku"},
+        litellm_logging_obj=logging_obj,
+        endpoint_type=EndpointType.GENERIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/bedrock/model/claude/invoke-with-response-stream",
+        route_streaming_logging=cost_callback,
+    ):
+        pass
+
+    if deferred_dispatch_armed:
+        (parked_cost_callback,) = logging_obj._deferred_stream_complete_args
+        await parked_cost_callback
+    else:
+        await GLOBAL_LOGGING_WORKER.flush()
+
+    assert reservation["callback_bound"] is True
+    assert claimed_when_the_callback_ran == [True]
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_leaves_the_budget_reservation_for_the_request_end_release_when_the_cost_callback_cannot_be_enqueued():
+    reservation = {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+    response = _make_streaming_response([b"event-1", b"event-2"])
+    logging_obj = _unarmed_logging_obj()
+    logging_obj.litellm_params = {"metadata": {"user_api_key_budget_reservation": reservation}}
+
+    def refuse_to_enqueue(async_coroutine):
+        async_coroutine.close()
+        raise RuntimeError("logging worker is shutting down")
+
+    with patch.object(GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue", side_effect=refuse_to_enqueue):
+        async for _ in PassThroughStreamingHandler.chunk_processor(
+            response=response,
+            request_body={"model": "claude-3-haiku"},
+            litellm_logging_obj=logging_obj,
+            endpoint_type=EndpointType.GENERIC,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/bedrock/model/claude/invoke-with-response-stream",
+            route_streaming_logging=AsyncMock(),
+        ):
+            pass
+
+    assert reservation["callback_bound"] is False
