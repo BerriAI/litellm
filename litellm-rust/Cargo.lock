@@ -3047,6 +3047,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-pricing"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+]
+
+[[package]]
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
