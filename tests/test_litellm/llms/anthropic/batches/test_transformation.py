@@ -124,7 +124,7 @@ def test_openai_line_missing_custom_id_raises():
 
 
 def test_openai_line_missing_messages_raises_with_custom_id():
-    with pytest.raises(ValueError, match="req-9"):
+    with pytest.raises(TypeError, match="req-9"):
         transform_openai_batch_lines_to_anthropic_requests(
             [{"custom_id": "req-9", "body": {"model": "x"}}],
             model="claude-sonnet-4-5",

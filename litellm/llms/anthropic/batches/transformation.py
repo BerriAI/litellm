@@ -196,10 +196,10 @@ def transform_openai_batch_lines_to_anthropic_requests(
         if not custom_id:
             raise ValueError(f"OpenAI batch input line is missing 'custom_id': {line}")
         if not isinstance(body, Mapping):
-            raise ValueError(f"OpenAI batch input line for custom_id={custom_id} is missing 'body'")
+            raise TypeError(f"OpenAI batch input line for custom_id={custom_id} is missing 'body'")
         messages: Final = body.get("messages")
         if not isinstance(messages, list):
-            raise ValueError(f"OpenAI batch input line for custom_id={custom_id} is missing 'body.messages'")
+            raise TypeError(f"OpenAI batch input line for custom_id={custom_id} is missing 'body.messages'")
         non_default_params: Final[dict[str, object]] = {
             str(k): v for k, v in cast(Mapping[str, object], body).items() if k not in ("model", "messages")
         }

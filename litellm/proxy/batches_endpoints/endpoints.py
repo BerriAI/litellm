@@ -254,7 +254,7 @@ async def _create_anthropic_batch_for_managed_file(
             lines=tuple(line.model_dump() for line in parsed),
             model=bare_model,
         )
-    except ValueError as e:
+    except (ValueError, TypeError) as e:
         raise batch_error(400, str(e))
     extra_body: Final = (
         cast(  # cast-ok: extra_body is declared dict[str, str] but the Anthropic requests array is a list value
