@@ -9,7 +9,7 @@ use rustls::{
 
 use crate::{
     config::{HttpClientConfig, Verify},
-    error::Error,
+    error::{Error, TlsSource},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -197,15 +197,17 @@ impl TryFrom<&HttpClientConfig> for ClientConfig {
             Verify::BuiltInRoots => builder.with_root_certificates(RootCertStore {
                 roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
             }),
-            Verify::CaBundle(path) => builder.with_root_certificates(bundle_roots(path)?),
+            Verify::CaBundle(path) => {
+                builder.with_root_certificates(bundle_roots(path, TlsSource::CaBundle)?)
+            }
         };
         let mut tls = match &config.client_certificate {
             None => verified.with_no_client_auth(),
             Some(path) => {
-                let (chain, key) = identity(path)?;
+                let (chain, key) = identity(path, TlsSource::ClientIdentity)?;
                 verified
                     .with_client_auth_cert(chain, key)
-                    .map_err(|error| invalid_pem(path, error))?
+                    .map_err(|error| invalid_pem(path, TlsSource::ClientIdentity, error))?
             }
         };
         tls.alpn_protocols = if config.http2 {
@@ -217,47 +219,52 @@ impl TryFrom<&HttpClientConfig> for ClientConfig {
     }
 }
 
-fn bundle_roots(path: &Path) -> Result<RootCertStore, Error> {
-    let certificates = certificates(path)?;
+fn bundle_roots(path: &Path, source: TlsSource) -> Result<RootCertStore, Error> {
+    let certificates = certificates(path, source)?;
     if certificates.is_empty() {
-        return Err(invalid_pem(path, "no certificates found"));
+        return Err(invalid_pem(path, source, "no certificates found"));
     }
     let mut store = RootCertStore::empty();
     for certificate in certificates {
         store
             .add(certificate)
-            .map_err(|error| invalid_pem(path, error))?;
+            .map_err(|error| invalid_pem(path, source, error))?;
     }
     Ok(store)
 }
 
-fn identity(path: &Path) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>), Error> {
-    let chain = certificates(path)?;
+fn identity(
+    path: &Path,
+    source: TlsSource,
+) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>), Error> {
+    let chain = certificates(path, source)?;
     if chain.is_empty() {
-        return Err(invalid_pem(path, "no certificates found"));
+        return Err(invalid_pem(path, source, "no certificates found"));
     }
-    let key =
-        PrivateKeyDer::from_pem_slice(&read(path)?).map_err(|error| invalid_pem(path, error))?;
+    let key = PrivateKeyDer::from_pem_slice(&read(path, source)?)
+        .map_err(|error| invalid_pem(path, source, error))?;
     Ok((chain, key))
 }
 
-fn certificates(path: &Path) -> Result<Vec<CertificateDer<'static>>, Error> {
-    CertificateDer::pem_slice_iter(&read(path)?)
+fn certificates(path: &Path, source: TlsSource) -> Result<Vec<CertificateDer<'static>>, Error> {
+    CertificateDer::pem_slice_iter(&read(path, source)?)
         .collect::<Result<_, _>>()
-        .map_err(|error| invalid_pem(path, error))
+        .map_err(|error| invalid_pem(path, source, error))
 }
 
-fn read(path: &Path) -> Result<Vec<u8>, Error> {
+fn read(path: &Path, source: TlsSource) -> Result<Vec<u8>, Error> {
     std::fs::read(path).map_err(|error| Error::Read {
         path: path.to_path_buf(),
         message: error.to_string(),
+        tls_source: source,
     })
 }
 
-fn invalid_pem(path: &Path, message: impl fmt::Display) -> Error {
+fn invalid_pem(path: &Path, source: TlsSource, message: impl fmt::Display) -> Error {
     Error::InvalidPem {
         path: path.to_path_buf(),
         message: message.to_string(),
+        tls_source: source,
     }
 }
 
@@ -405,7 +412,11 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         assert!(matches!(
             result,
-            Err(Error::InvalidPem { path: reported, .. }) if reported == path
+            Err(Error::InvalidPem {
+                path: reported,
+                tls_source: TlsSource::ClientIdentity,
+                ..
+            }) if reported == path
         ));
     }
 }

@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timedelta
-from typing import NoReturn
+from typing import Final, NoReturn
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -1305,6 +1305,14 @@ class TestOrderedFallbackLookupGroups:
             "requested-model",
         )
 
+    def test_fallback_hop_resumes_the_original_groups_chain_last(self):
+        from litellm.router_utils.fallback_event_handlers import fallback_lookup_groups
+
+        kwargs = {"metadata": {"model_group": "fb1", "original_model_group": "primary"}}
+
+        assert fallback_lookup_groups(kwargs, "fb1") == ("fb1", "primary")
+        assert fallback_lookup_groups({"metadata": {"original_model_group": 42}}, "fb1") == ("fb1",)
+
     def test_first_resolving_group_wins_and_generic_idx_survives_a_miss(self):
         from litellm.router_utils.fallback_event_handlers import (
             get_fallback_model_group_for_lookup_groups,
@@ -1315,3 +1323,20 @@ class TestOrderedFallbackLookupGroups:
         assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "smart-router")) == (["backup-b"], None)
         assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "no-such")) == (["backup-c"], 2)
         assert get_fallback_model_group_for_lookup_groups([{"tier1": ["backup-a"]}], ("no", "nope")) == (None, None)
+
+
+class TestHasUnattemptedFallbackTarget:
+    def test_exhausted_chain_is_not_recoverable_but_a_fresh_entry_is(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            has_unattempted_fallback_target,
+        )
+
+        attempted: Final = AttemptedFallbackTargets()
+        attempted.record("primary")
+        attempted.record("fb1")
+        attempted.record("fb2")
+
+        assert has_unattempted_fallback_target(["fb1", "fb2"], {"attempted_targets": attempted}) is False
+        assert has_unattempted_fallback_target(["fb1", "fb3"], {"attempted_targets": attempted}) is True
+        assert has_unattempted_fallback_target(["fb1"], {}) is True
+        assert has_unattempted_fallback_target(None, {}) is False

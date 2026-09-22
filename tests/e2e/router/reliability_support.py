@@ -42,7 +42,7 @@ REAL_KEY = "os.environ/OPENAI_API_KEY"
 CACHING_MODEL = "anthropic/claude-haiku-4-5"
 CACHING_KEY = "os.environ/ANTHROPIC_API_KEY"
 
-CONTENT_FILTERED_MODEL = "azure/gpt-5.4-nano"
+AZURE_MODEL = "azure/gpt-5.4-nano"
 AZURE_KEY = "os.environ/AZURE_API_KEY"
 AZURE_BASE = "os.environ/AZURE_API_BASE"
 AZURE_API_VERSION = "2024-10-21"
@@ -53,6 +53,7 @@ CONTENT_POLICY_PROMPT = (
 )
 
 COOLDOWN_SECONDS = 30.0
+REPLICA_PROPAGATION_SECONDS = 15.0
 
 # The smallest-context chat model OpenAI still serves (16385 tokens). A prompt
 # past that limit comes back as a real `context_length_exceeded` 400, which is
@@ -111,12 +112,32 @@ def create_content_filtered_deployment(proxy: ProxyClient, name: str) -> str:
     return proxy.create_model(
         name,
         LiteLLMParamsBody(
-            model=CONTENT_FILTERED_MODEL,
+            model=AZURE_MODEL,
             api_key=AZURE_KEY,
             api_base=AZURE_BASE,
             api_version=AZURE_API_VERSION,
             max_retries=0,
         ),
+    )
+
+
+def create_azure_benched_on_first_failure_deployment(proxy: ProxyClient, name: str, cooldown_time: float) -> str:
+    """The live Azure OpenAI deployment holding all of the group's shuffle weight,
+    benched on its first failure of any class, with the client's own retries off."""
+    return proxy.register_model(
+        ModelNewBody(
+            model_name=name,
+            litellm_params=LiteLLMParamsBody(
+                model=AZURE_MODEL,
+                api_key=AZURE_KEY,
+                api_base=AZURE_BASE,
+                api_version=AZURE_API_VERSION,
+                max_retries=0,
+                weight=1,
+                cooldown_time=cooldown_time,
+            ),
+            model_info=ModelInfoBody(allowed_fails=0),
+        )
     )
 
 
