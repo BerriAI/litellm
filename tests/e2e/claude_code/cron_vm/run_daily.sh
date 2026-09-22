@@ -653,13 +653,17 @@ fi
 #
 # Non-fatal: a sweep failure (rate limit, transient API error) leaves
 # stale PRs for the next run to retry; it must not fail the pipeline.
+#
+# The docs repo carries a few hundred open PRs, so the list has to page
+# past gh's default 30 (and the earlier 100, which never reached a
+# week-old compat-matrix PR and left it open for good).
 log "sweeping stale compat-matrix PRs (keeping ${BRANCH_NAME})"
 set +e
 STALE_PRS="$(
   GH_TOKEN="${GITHUB_TOKEN}" gh pr list \
     --repo "${DOCS_REPO}" \
     --state open \
-    --limit 100 \
+    --limit 1000 \
     --json number,headRefName \
     --jq '.[] | select(.headRefName | startswith("compat-matrix/")) | "\(.number)\t\(.headRefName)"'
 )"
