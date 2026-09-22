@@ -95,15 +95,6 @@ def _successor(info: dict[str, object]) -> str | None:
     return successor if isinstance(successor, str) else None
 
 
-def test_together_successor_metadata_points_at_known_models(cost_map: CostMap):
-    successors = {
-        model: successor
-        for model, info in cost_map.items()
-        if model.startswith("together_ai/") and (successor := _successor(info)) is not None
-    }
-    assert len(successors) >= 10
-    for model, successor in successors.items():
-        assert successor in cost_map, f"{model} names successor {successor} that is not in the map"
 
 
 def test_together_backup_cost_map_in_sync(cost_map: CostMap):

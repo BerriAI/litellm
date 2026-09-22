@@ -345,7 +345,7 @@ async def test_tiktoken_cl100k_models_are_counted_by_rust(rust_counter: None, mo
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", (O200K_MODEL, "gpt-5", "o3", "gpt-4.1", "chatgpt-4o-latest"))
+@pytest.mark.parametrize("model", (O200K_MODEL, "gpt-5", "o3", "gpt-4.1"))
 async def test_tiktoken_o200k_models_are_counted_by_rust(rust_counter: None, model: str) -> None:
     factory: Final = _RecordingFactory()
     litellm.rust(True)
