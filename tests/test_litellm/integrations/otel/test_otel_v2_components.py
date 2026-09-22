@@ -1458,3 +1458,82 @@ def test_genai_mapper_guardrail_cost_in_spend_attr():
     billed = dict(entry)
     del billed["guardrail_cost_in_spend"]
     assert LiteLLM.GUARDRAIL_COST_IN_SPEND not in GenAIMapper().map(GuardrailSpanData.from_logging_entry(billed))
+
+
+def _sampled_span_context():
+    from opentelemetry.trace import SpanContext, TraceFlags, TraceState
+
+    return SpanContext(
+        trace_id=0x0AF7651916CD43DD8448EB211C80319C,
+        span_id=0x00F067AA0BA902B7,
+        is_remote=False,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+        trace_state=TraceState(),
+    )
+
+
+def test_operation_exception_log_event_exports_through_console_exporter():
+    """The emitted record serializes through a real SDK exporter: the console
+    exporter only handles SDK-shaped records (``to_json`` plus a resource), so
+    an API-shaped record crashed the export under the repo's pinned OTel."""
+    import io
+    import json as json_mod
+
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import ConsoleLogExporter, SimpleLogRecordProcessor
+    from opentelemetry.sdk.resources import Resource
+
+    from litellm.integrations.otel.model.semconv import ExceptionEvent, GenAIEvent
+    from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
+
+    out = io.StringIO()
+    logger_provider = LoggerProvider(resource=Resource.create({"service.name": "otel-event-test"}))
+    logger_provider.add_log_record_processor(SimpleLogRecordProcessor(ConsoleLogExporter(out=out)))
+    recorder = GenAIEventRecorder(providers.get_event_logger(logger_provider), logger_provider.resource)
+    recorder.record_operation_exception(
+        span_context=_sampled_span_context(),
+        error_type="RateLimitError",
+        message="rate limited",
+        stack_trace=None,
+        timestamp_ns=None,
+    )
+
+    exported = json_mod.loads(out.getvalue())
+    assert exported["attributes"][GenAIEvent.NAME_KEY] == GenAIEvent.OPERATION_EXCEPTION
+    assert exported["attributes"][ExceptionEvent.TYPE] == "RateLimitError"
+    assert exported["attributes"][ExceptionEvent.MESSAGE] == "rate limited"
+    assert exported["body"] == "rate limited"
+    assert exported["resource"]["attributes"]["service.name"] == "otel-event-test"
+
+
+def test_operation_exception_log_event_encodes_for_otlp():
+    """The OTLP log encoder reads ``log_record.resource`` and rejects a None
+    body on the pinned OTel line, so the event must encode into a real
+    ExportLogsServiceRequest, not only land in an in-memory exporter."""
+    from opentelemetry.exporter.otlp.proto.common._log_encoder import encode_logs
+    from opentelemetry.sdk._logs.export import InMemoryLogExporter
+
+    from litellm.integrations.otel.model.semconv import GenAIEvent
+    from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
+
+    log_exporter = InMemoryLogExporter()
+    cfg = OpenTelemetryV2Config(exporter="in_memory", enable_events=True)
+    logger_provider = providers.build_logger_provider(cfg, log_exporter=log_exporter)
+    recorder = GenAIEventRecorder(providers.get_event_logger(logger_provider), logger_provider.resource)
+    recorder.record_operation_exception(
+        span_context=_sampled_span_context(),
+        error_type="RateLimitError",
+        message="rate limited",
+        stack_trace=None,
+        timestamp_ns=None,
+    )
+
+    request = encode_logs(log_exporter.get_finished_logs())
+    (resource_logs,) = request.resource_logs
+    (scope_logs,) = resource_logs.scope_logs
+    (encoded,) = scope_logs.log_records
+    encoded_attrs = {a.key: a.value.string_value for a in encoded.attributes}
+    assert encoded_attrs[GenAIEvent.NAME_KEY] == GenAIEvent.OPERATION_EXCEPTION
+    assert encoded.body.string_value == "rate limited"
+    resource_attrs = {a.key: a.value.string_value for a in resource_logs.resource.attributes}
+    assert resource_attrs["service.name"] == logger_provider.resource.attributes["service.name"]

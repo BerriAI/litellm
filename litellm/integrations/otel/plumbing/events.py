@@ -14,14 +14,23 @@ from typing import Final
 
 from opentelemetry._logs import Logger, LogRecord
 from opentelemetry._logs.severity import SeverityNumber
+from opentelemetry.sdk.resources import Resource
 from opentelemetry.trace import SpanContext
 
 from litellm.integrations.otel.model.semconv import ExceptionEvent, GenAIEvent
+
+try:
+    from opentelemetry.sdk._logs import LogRecord as _SDKLogRecord
+except ImportError:
+    _SDKLogRecord = None
+
+SDK_LOG_RECORD: Final[type[LogRecord] | None] = _SDKLogRecord
 
 
 @dataclass(frozen=True, slots=True)
 class GenAIEventRecorder:
     event_logger: Logger
+    resource: Resource | None = None
 
     def record_operation_exception(
         self,
@@ -35,20 +44,27 @@ class GenAIEventRecorder:
         # pair and always ride the event; only the recommended stacktrace is
         # conditional on the payload carrying one.
         stacktrace: Final = ((ExceptionEvent.STACKTRACE, stack_trace),) if stack_trace else ()
-        self.event_logger.emit(
-            LogRecord(
-                timestamp=timestamp_ns or time_ns(),
-                trace_id=span_context.trace_id,
-                span_id=span_context.span_id,
-                trace_flags=span_context.trace_flags,
-                severity_number=SeverityNumber.WARN,
-                attributes=dict(
-                    (
-                        (GenAIEvent.NAME_KEY, GenAIEvent.OPERATION_EXCEPTION),
-                        (ExceptionEvent.TYPE, error_type),
-                        (ExceptionEvent.MESSAGE, message),
-                        *stacktrace,
-                    )
-                ),
-            )
+        fields: Final = dict(
+            timestamp=timestamp_ns or time_ns(),
+            trace_id=span_context.trace_id,
+            span_id=span_context.span_id,
+            trace_flags=span_context.trace_flags,
+            severity_number=SeverityNumber.WARN,
+            body=message,
+            attributes=dict(
+                (
+                    (GenAIEvent.NAME_KEY, GenAIEvent.OPERATION_EXCEPTION),
+                    (ExceptionEvent.TYPE, error_type),
+                    (ExceptionEvent.MESSAGE, message),
+                    *stacktrace,
+                )
+            ),
         )
+        # The SDK LogRecord carries the resource the 1.28 exporters require and
+        # exists only up to the pin; newer lines dropped it for the API record.
+        record: Final[LogRecord] = (
+            SDK_LOG_RECORD(**fields, resource=self.resource)
+            if SDK_LOG_RECORD is not None
+            else LogRecord(**fields)
+        )
+        self.event_logger.emit(record)
