@@ -56,6 +56,7 @@ from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
+from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.router_strategy.complexity_router.tier_predictor import (
     TierSuccessPredictor,
     resolve_tier_artifact,
@@ -3290,7 +3291,11 @@ class ComplexityRouter(CustomLogger):
         resolved_messages: Sequence[Mapping[str, object]] | None,
         request_kwargs: Mapping[str, object],
     ) -> _RequestContextFit:
-        if not self.config.enable_context_window_escalation or not resolved_messages:
+        if (
+            compaction_pending(request_kwargs)
+            or not self.config.enable_context_window_escalation
+            or not resolved_messages
+        ):
             return _RequestContextFit(EMPTY_MAPPING, None, self.config.context_window_escalation_buffer)
         names: Final = frozenset(model for pool in self._tier_pools().values() for model in pool) | frozenset(
             (self.config.default_model,) if self.config.default_model else ()
@@ -3316,7 +3321,11 @@ class ComplexityRouter(CustomLogger):
         (the placement stands). Only a real tokenizer count ever moves a request, escalation
         lands only on groups whose every deployment declares a fitting window, and a group
         with no resolvable window is never moved on faith in either direction."""
-        if not self.config.enable_context_window_escalation or not resolved_messages:
+        if (
+            compaction_pending(request_kwargs)
+            or not self.config.enable_context_window_escalation
+            or not resolved_messages
+        ):
             return None
         pools: Final = self._tier_pools()
         pool: Final = pool_override if pool_override is not None else tuple(pools.get(_tier_name(tier), ()))

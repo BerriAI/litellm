@@ -15317,6 +15317,7 @@ class TestHealthFallbackDispatch:
 
         router: Final = self._router(
             config={
+                "context_compaction": False,
                 "tiers": {"SIMPLE": "primary", "MEDIUM": "peer", "COMPLEX": "large"},
                 "enable_context_window_escalation": True,
             }
@@ -15399,6 +15400,7 @@ class TestHealthFallbackDispatch:
     async def test_modality_default_must_also_fit_context(self, default_fits: bool) -> None:
         router: Final = self._router(
             config={
+                "context_compaction": False,
                 "modality_routing": True,
                 "tiers": {"SIMPLE": "primary"},
                 "enable_context_window_escalation": True,

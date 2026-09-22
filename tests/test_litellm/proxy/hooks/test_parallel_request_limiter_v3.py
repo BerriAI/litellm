@@ -6183,10 +6183,10 @@ async def test_configured_estimate_blocks_the_overrun_the_static_floor_admits(mo
     assert await admitted({"default_estimated_output_tokens": 3000}) == 2
 
 
-def test_internal_call_origin_success_ops_are_skipped():
-    """Internal sub-calls (auto-router classifier, shadow eval shadow/judge) bill spend
-    to the caller's key but must not consume its TPM counters: the same kwargs charge
-    ops without the origin stamp and none with it."""
+@pytest.mark.parametrize("origin", ["shadow_eval_judge", "autorouter_compaction"])
+@pytest.mark.parametrize("rate_limit_type", ["input", "output", "total"])
+def test_internal_call_origin_success_ops_are_skipped(origin, rate_limit_type):
+    """Foreground compaction charges the same scopes as ordinary caller traffic."""
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache())
     )
@@ -6202,23 +6202,27 @@ def test_internal_call_origin_success_ops_are_skipped():
     def _kwargs(metadata: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "standard_logging_object": {
-                "metadata": {"user_api_key_hash": hash_token("sk-internal-origin")}
+                "metadata": {
+                    "user_api_key_hash": hash_token("sk-internal-origin"),
+                    "user_api_key_team_id": "compaction-team",
+                    "user_api_key_project_id": "compaction-project",
+                }
             },
             "litellm_params": {"metadata": metadata},
             "model": "gpt-4o-mini",
         }
 
     charged = handler._build_success_event_pipeline_operations(
-        kwargs=_kwargs({}), response_obj=response, rate_limit_type="output"
+        kwargs=_kwargs({}), response_obj=response, rate_limit_type=rate_limit_type
     )
     skipped = handler._build_success_event_pipeline_operations(
-        kwargs=_kwargs({INTERNAL_CALL_ORIGIN_METADATA_KEY: "shadow_eval_judge"}),
+        kwargs=_kwargs({INTERNAL_CALL_ORIGIN_METADATA_KEY: origin}),
         response_obj=response,
-        rate_limit_type="output",
+        rate_limit_type=rate_limit_type,
     )
 
     assert charged
-    assert skipped == []
+    assert skipped == (charged if origin == "autorouter_compaction" else [])
 
 
 def _conflicting_budget_bodies() -> Dict[str, Dict[str, object]]:

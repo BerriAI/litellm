@@ -96,6 +96,7 @@ from ..common_utils import (
     AnthropicModelInfo,
     eager_input_streaming_flag,
     process_anthropic_headers,
+    requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
 )
 
@@ -1770,7 +1771,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         return tools
 
-    def _ensure_beta_header(self, headers: dict, beta_value: str) -> None:
+    def _ensure_beta_header(self, headers: dict[str, str], beta_value: str) -> None:
         """
         Ensure a beta header value is present in the anthropic-beta header.
         Merges with existing values instead of overriding them.
@@ -1779,13 +1780,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             headers: Dictionary of headers to update
             beta_value: The beta header value to add
         """
-        existing_beta: Final = headers.get("anthropic-beta")
-        if existing_beta is None:
-            headers["anthropic-beta"] = beta_value
-            return
-        existing_values: Final = [beta.strip() for beta in existing_beta.split(",")]
-        if beta_value not in existing_values:
-            headers["anthropic-beta"] = f"{existing_beta}, {beta_value}"
+        existing_values: Final = tuple(
+            beta.strip()
+            for key, value in headers.items()
+            if key.lower() == "anthropic-beta"
+            for beta in value.split(",")
+            if beta.strip()
+        )
+        for key in tuple(headers):
+            if key.lower() == "anthropic-beta":
+                headers.pop(key)
+        headers["anthropic-beta"] = ", ".join(dict.fromkeys((*existing_values, beta_value)))
 
     def _ensure_context_management_beta_header(self, headers: dict, context_management: object) -> None:
         """
@@ -1823,7 +1828,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
             )
 
-    def update_headers_with_optional_anthropic_beta(self, headers: dict, optional_params: dict) -> dict:
+    def update_headers_with_optional_anthropic_beta(
+        self, headers: dict, optional_params: dict, messages: Sequence[object] = ()
+    ) -> dict:
         """Update headers with optional anthropic beta."""
 
         # Skip adding beta headers for Vertex requests
@@ -1831,6 +1838,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         is_vertex_request: Final = optional_params.get("is_vertex_request", False)
         if is_vertex_request:
             return headers
+
+        if requires_native_compaction_beta(self._resolved_provider, optional_params, messages):
+            self._ensure_beta_header(headers, ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
 
         _tools: Final = optional_params.get("tools", [])
         for tool in _tools:
@@ -1928,8 +1938,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             custom_llm_provider=self._resolved_provider,
         )
 
-        headers = self.update_headers_with_optional_anthropic_beta(headers=headers, optional_params=optional_params)
-
         # === Tool-name sanitization (single chokepoint) ===
         # Anthropic enforces ^[a-zA-Z0-9_-]{1,128}$ on every tool name. We
         # sanitize *here* -- not in map_openai_params -- because:
@@ -1975,6 +1983,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 status_code=400,
                 message=f"{e}\nReceived Messages={messages}",
             )  # don't use verbose_logger.exception, if exception is raised
+
+        self.update_headers_with_optional_anthropic_beta(
+            headers=headers, optional_params=optional_params, messages=anthropic_messages
+        )
 
         ## Auto-strip advisor blocks from history if advisor tool is absent.
         ## Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.

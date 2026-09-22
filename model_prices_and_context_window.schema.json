@@ -839,6 +839,9 @@
         "supports_adaptive_thinking": {
           "type": "boolean"
         },
+        "supports_anthropic_compaction": {
+          "type": "boolean"
+        },
         "supports_anthropic_thinking_payload": {
           "type": "boolean"
         },

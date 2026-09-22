@@ -216,11 +216,20 @@ class AnthropicMessagesToolUseParam(TypedDict, total=False):
     caller: ToolCaller | None
 
 
+class CompactionBlock(TypedDict, total=False):
+    """Native compaction block, signed for on-demand compaction."""
+
+    type: Required[ReadOnly[Literal["compaction"]]]
+    content: ReadOnly[str | None]
+    signature: ReadOnly[str]
+
+
 AnthropicMessagesAssistantMessageValues = (
     AnthropicMessagesTextParam
     | AnthropicMessagesToolUseParam
     | ChatCompletionThinkingBlock
     | ChatCompletionRedactedThinkingBlock
+    | CompactionBlock
 )
 
 
@@ -390,6 +399,11 @@ AllAnthropicPassThroughMessageValues: TypeAlias = (
 )
 
 
+class AnthropicCompaction(TypedDict, total=False):
+    type: Required[ReadOnly[Literal["summarize"]]]
+    instructions: ReadOnly[str]
+
+
 class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     max_tokens: int | None
     metadata: AnthropicMetadata | dict | None
@@ -405,6 +419,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     top_p: float | None
     mcp_servers: list[AnthropicMcpServerTool] | None
     context_management: dict[str, Any] | None
+    compaction: ReadOnly[AnthropicCompaction | None]
     container: dict[str, Any] | None  # Container config with skills for code execution
     output_format: AnthropicOutputSchema | None  # Structured outputs support
     speed: str | None  # Fast mode support for Opus models
@@ -564,13 +579,6 @@ class ContextManagementResponse(TypedDict, total=False):
     """Response ``context_management`` with ``applied_edits``."""
 
     applied_edits: list[AppliedEdit]
-
-
-class CompactionBlock(TypedDict, total=False):
-    """Synthesized ``compaction`` content block (compact_20260112)."""
-
-    type: Required[Literal["compaction"]]
-    content: str | None
 
 
 class UsageIteration(TypedDict, total=False):
@@ -746,6 +754,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     WEB_SEARCH_2025_03_05 = "web-search-2025-03-05"
     CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
     COMPACT_2026_01_12 = "compact-2026-01-12"
+    COMPACT_2026_09_04 = "compact-2026-09-04"
     STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
     FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"

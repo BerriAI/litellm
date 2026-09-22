@@ -79,6 +79,27 @@ _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
 
 
+def requires_native_compaction_beta(
+    custom_llm_provider: str,
+    optional_params: Mapping[str, object],
+    messages: Sequence[object],
+) -> bool:
+    return custom_llm_provider == "anthropic" and (
+        optional_params.get("compaction") is not None
+        or any(
+            isinstance(block, Mapping)
+            and block.get("type") == "compaction"
+            and isinstance(block.get("signature"), str)
+            and bool(block.get("signature"))
+            for message in messages
+            if isinstance(message, Mapping)
+            for content in (message.get("content"),)
+            if isinstance(content, (list, tuple))
+            for block in content
+        )
+    )
+
+
 def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None) -> bool:
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
     from litellm.utils import supports_prompt_caching
