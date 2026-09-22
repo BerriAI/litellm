@@ -3040,7 +3040,7 @@ def test_get_final_response_obj_stores_the_text_a_post_call_guardrail_served():
     assert untouched == raw
 
 
-def test_get_final_response_obj_redacts_the_served_text_when_message_logging_is_off(monkeypatch):
+def test_get_final_response_obj_redacts_the_served_text_when_message_logging_is_off(monkeypatch: pytest.MonkeyPatch):
     import litellm
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
     from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
