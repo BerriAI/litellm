@@ -45,7 +45,9 @@ def test_internal_request_state_does_not_reach_provider(gateway: Gateway) -> Non
 
 
 @pytest.mark.covers("other.provider_wire.internal_key_emission_observed")
-def test_internal_key_forced_into_body_is_observed_at_emission(gateway: Gateway, caplog: pytest.LogCaptureFixture) -> None:
+def test_internal_key_forced_into_body_is_observed_at_emission(
+    gateway: Gateway, caplog: pytest.LogCaptureFixture
+) -> None:
     with httpx.Client(base_url=gateway.upstream_url, trust_env=False) as upstream:
         upstream.get("/__observations").raise_for_status()
         before: Final = internal_key_leak_counter.value
