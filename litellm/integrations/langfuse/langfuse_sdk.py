@@ -82,6 +82,7 @@ _DEFAULT_FLUSH_AT: Final = 512
 _CHANNEL_RETIRE_GRACE_SECONDS: Final = 60.0
 _DEFAULT_TIMEOUT_SECONDS: Final = 20.0
 _DEFAULT_MAX_RETRIES: Final = 3
+_MAX_RETRIES: Final = 1_000
 _MAX_BACKOFF_EXPONENT: Final = 6
 _DEFAULT_PROMPT_CACHE_TTL_SECONDS: Final = 60.0
 _JSON_SAFE_INT: Final = 2**53 - 1
@@ -482,7 +483,11 @@ def configured_timeout() -> float:
 
 
 def configured_max_retries() -> int:
-    """``LANGFUSE_MAX_RETRIES`` as the number of re-sends after a failed export, the v2 SDK's knob and default."""
+    """``LANGFUSE_MAX_RETRIES`` as the number of re-sends after a failed export, the v2 SDK's knob and default.
+
+    Capped at ``_MAX_RETRIES``: with the backoff ceiling that is already hours per batch, and the exporter holds
+    one delay per re-send.
+    """
     raw: Final = os.environ.get("LANGFUSE_MAX_RETRIES")
     if raw is None:
         return _DEFAULT_MAX_RETRIES
@@ -491,7 +496,12 @@ def configured_max_retries() -> int:
             "LANGFUSE_MAX_RETRIES=%r is not a whole number; retrying %d times", raw, _DEFAULT_MAX_RETRIES
         )
         return _DEFAULT_MAX_RETRIES
-    return int(raw)
+    requested: Final = int(raw)
+    if requested > _MAX_RETRIES:
+        verbose_logger.warning(
+            "LANGFUSE_MAX_RETRIES=%d is above the ceiling; retrying %d times", requested, _MAX_RETRIES
+        )
+    return min(requested, _MAX_RETRIES)
 
 
 def configured_release() -> str | None:

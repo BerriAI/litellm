@@ -1311,9 +1311,26 @@ def test_large_retry_count_builds_an_exporter_with_capped_backoff(monkeypatch):
     and take the whole callback down at init."""
     monkeypatch.setenv("LANGFUSE_MAX_RETRIES", "1025")
     exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
-    assert len(exporter.delays) == 1025
+    assert 3 < len(exporter.delays) <= 1025
     assert exporter.delays[:4] == (1.0, 2.0, 4.0, 8.0)
     assert max(exporter.delays) == exporter.delays[-1] <= 64.0
+
+
+def test_absurd_retry_count_is_clamped_instead_of_allocating_one_delay_per_retry(monkeypatch, caplog):
+    """A retry count with twelve digits must not turn callback init into a multi-gigabyte tuple allocation."""
+    monkeypatch.setenv("LANGFUSE_MAX_RETRIES", "999999999999")
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
+    assert 3 < len(exporter.delays) <= 1025
+    assert exporter.delays[-1] <= 64.0
+    assert any("LANGFUSE_MAX_RETRIES=999999999999" in record.getMessage() for record in caplog.records)
+
+    caplog.clear()
+    monkeypatch.setenv("LANGFUSE_MAX_RETRIES", "5")
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        modest = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
+    assert len(modest.delays) == 5
+    assert not any("LANGFUSE_MAX_RETRIES" in record.getMessage() for record in caplog.records)
 
 
 def test_enable_langfuse_debug_logging_makes_deliveries_visible_on_the_langfuse_logger(caplog):
