@@ -318,11 +318,10 @@ class LLMCachingHandler:
                         start_time=start_time,
                         model=model,
                     )
-                    uncached_input: Final[list[str | list[int]]] = list(self.handle_kwargs_input_list_or_str(kwargs))
                     return CachingHandlerResponse(
                         final_embedding_cached_response=final_embedding_cached_response,
                         embedding_all_elements_cache_hit=embedding_all_elements_cache_hit,
-                        embedding_uncached_input=uncached_input,
+                        embedding_uncached_input=self.handle_kwargs_input_list_or_str(kwargs),
                     )
 
             verbose_logger.debug("CACHE RESULT: %s", cached_result)
@@ -660,15 +659,14 @@ class LLMCachingHandler:
         if _caching_handler_response.final_embedding_cached_response is None:
             return embedding_response
 
-        fresh_items: Final = iter(embedding_response.data or [])
-        final_data_list: Final = [
+        cached: Final = _caching_handler_response.final_embedding_cached_response
+        fresh_items: Final = iter(embedding_response.data or ())
+        cached.data = [  # mutable-ok: EmbeddingResponse.data is a pydantic list field
             item
             if item is not None
             else Embedding(embedding=next(fresh_items)["embedding"], index=position, object="embedding")
-            for position, item in enumerate(_caching_handler_response.final_embedding_cached_response.data)
+            for position, item in enumerate(cached.data)
         ]
-
-        _caching_handler_response.final_embedding_cached_response.data = final_data_list
         _caching_handler_response.final_embedding_cached_response._hidden_params["cache_hit"] = True
         _caching_handler_response.final_embedding_cached_response._response_ms = (
             end_time - start_time
