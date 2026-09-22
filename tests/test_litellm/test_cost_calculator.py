@@ -4489,3 +4489,30 @@ def test_cost_per_token_bedrock_qwen3_next_uses_regional_entry_not_us_rate(
 
     assert prompt_usd == pytest.approx(prompt_tokens * regional["input_cost_per_token"])
     assert completion_usd == pytest.approx(completion_tokens * regional["output_cost_per_token"])
+
+
+def test_cost_per_token_bedrock_nemotron_super_3_uses_eu_west_2_entry_not_us_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """eu-west-2 Nemotron Super 3 120B must not fall back to the US on-demand rate."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    regional_key: Final = "bedrock/eu-west-2/nvidia.nemotron-super-3-120b"
+    regional: Final = litellm.model_cost[regional_key]
+    us: Final = litellm.model_cost["nvidia.nemotron-super-3-120b"]
+    assert regional["input_cost_per_token"] == pytest.approx(2.3e-07)
+    assert regional["output_cost_per_token"] == pytest.approx(1.01e-06)
+    assert regional["input_cost_per_token"] != us["input_cost_per_token"]
+    assert regional["output_cost_per_token"] != us["output_cost_per_token"]
+
+    prompt_tokens, completion_tokens = 1000, 500
+    prompt_usd, completion_usd = cost_per_token(
+        model=regional_key,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        custom_llm_provider="bedrock",
+    )
+
+    assert prompt_usd == pytest.approx(prompt_tokens * regional["input_cost_per_token"])
+    assert completion_usd == pytest.approx(completion_tokens * regional["output_cost_per_token"])
