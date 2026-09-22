@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React from "react";
+import { parseAsString, useQueryState } from "nuqs";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Combobox,
@@ -19,7 +20,9 @@ interface TestVectorStoreTabProps {
 const storeLabel = (store: VectorStore) => store.vector_store_name || store.vector_store_id;
 
 const TestVectorStoreTab: React.FC<TestVectorStoreTabProps> = ({ accessToken, vectorStores }) => {
-  const [selectedVectorStore, setSelectedVectorStore] = useState<VectorStore | null>(vectorStores[0] ?? null);
+  const [selectedVectorStoreId, setSelectedVectorStoreId] = useQueryState("test_vector_store", parseAsString);
+  const selectedVectorStore =
+    vectorStores.find((store) => store.vector_store_id === selectedVectorStoreId) ?? vectorStores[0] ?? null;
 
   if (!accessToken) {
     return (
@@ -55,7 +58,7 @@ const TestVectorStoreTab: React.FC<TestVectorStoreTabProps> = ({ accessToken, ve
           <Combobox
             items={vectorStores}
             value={selectedVectorStore}
-            onValueChange={setSelectedVectorStore}
+            onValueChange={(store: VectorStore | null) => void setSelectedVectorStoreId(store?.vector_store_id ?? null)}
             itemToStringLabel={storeLabel}
           >
             <ComboboxInput className="w-full" placeholder="Select a vector store" />
