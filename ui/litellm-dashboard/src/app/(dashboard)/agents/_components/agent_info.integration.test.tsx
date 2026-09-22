@@ -26,6 +26,10 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
 
 vi.mock("./agent_card_discovery", () => ({ default: () => <div data-testid="agent-card-discovery" /> }));
 
+vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
+  useAccessGroups: () => ({ data: [], isLoading: false, isError: false }),
+}));
+
 const A2A_AGENT = {
   agent_id: "agent-1",
   agent_name: "my-agent",
@@ -152,7 +156,7 @@ describe("AgentInfoView update payload", () => {
       .mockResolvedValue({} as never);
   });
 
-  it("prefills the saved Entra binding and preserves it and runtime settings when renaming", async () => {
+  it("preserves the Entra binding, access groups, and runtime settings when renaming", async () => {
     const user = setup();
     const identity = {
       provider: "microsoft_entra",
@@ -160,7 +164,11 @@ describe("AgentInfoView update payload", () => {
       client_id: "22222222-2222-4222-8222-222222222222",
     };
     const params = { ...A2A_AGENT.litellm_params, identity, require_trace_id_on_calls_by_agent: true };
-    vi.mocked(networking.getAgentInfo).mockResolvedValue({ ...A2A_AGENT, litellm_params: params } as never);
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...A2A_AGENT,
+      litellm_params: params,
+      access_group_ids: ["ag-entra"],
+    } as never);
     vi.mocked(networking.apiClient.get).mockImplementation(async (path) =>
       path.endsWith("/providers")
         ? [`https://login.microsoftonline.com/${identity.tenant_id}/v2.0`]
@@ -174,6 +182,7 @@ describe("AgentInfoView update payload", () => {
     await save(user);
     expect(patchedPayload().agent_name).toBe("Renamed agent");
     expect(patchedPayload().litellm_params).toEqual(params);
+    expect(patchedPayload().access_group_ids).toEqual(["ag-entra"]);
     expect(networking.patchAgentCall).toHaveBeenCalledWith(
       "tok",
       "agent-1",
@@ -206,6 +215,7 @@ describe("AgentInfoView update payload", () => {
       session_tpm_limit: 333,
       session_rpm_limit: 444,
       object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
+      access_group_ids: [],
     });
   });
 
@@ -247,6 +257,7 @@ describe("AgentInfoView update payload", () => {
       session_tpm_limit: 333,
       session_rpm_limit: 444,
       object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
+      access_group_ids: [],
     });
   });
 
@@ -325,6 +336,7 @@ describe("AgentInfoView update payload", () => {
         model: "langgraph/asst_1",
       },
       object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
+      access_group_ids: [],
     });
   });
 

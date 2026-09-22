@@ -14,7 +14,7 @@ import hashlib
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
@@ -1617,6 +1617,7 @@ class JWTAuthManager:
         team_object: LiteLLM_TeamTable | None,
         route: str,
         request_method: str | None = None,
+        team_allowed_routes: Collection[str] = (),
     ) -> bool:
         normalized_request_method: Final = request_method.upper() if isinstance(request_method, str) else None
         if not RouteChecks.is_auth_enforced_pass_through_route(
@@ -1625,8 +1626,11 @@ class JWTAuthManager:
         ):
             return True
 
+        if RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=team_allowed_routes):
+            return True
+
         # JWT team selection is team-scoped; key metadata is not available here,
-        # so passthrough access is granted only by the selected team's metadata.
+        # so beyond the JWT config grant above, only the selected team's metadata grants access.
         return RouteChecks.check_passthrough_route_access(
             route=route,
             user_api_key_dict=UserAPIKeyAuth(team_metadata=(team_object.metadata or {}) if team_object else {}),
@@ -1704,6 +1708,7 @@ class JWTAuthManager:
                             team_object=team_object,
                             route=route,
                             request_method=request_method,
+                            team_allowed_routes=jwt_handler.litellm_jwtauth.team_allowed_routes,
                         ):
                             is_allowed = False
                             denied_auth_enforced_pass_through_route = True
@@ -1882,7 +1887,7 @@ class JWTAuthManager:
 
     @staticmethod
     def get_team_id_from_header(
-        request_headers: dict | None,
+        request_headers: Mapping[str, str] | None,
         allowed_team_ids: set[str],
         fallback_to_db_teams: bool = False,
     ) -> str | None:
@@ -2052,7 +2057,7 @@ class JWTAuthManager:
     async def _attach_team_from_header_for_admin(
         admin_result: JWTAuthBuilderResult,
         route: str,
-        request_headers: dict | None,
+        request_headers: Mapping[str, str] | None,
         jwt_handler: JWTHandler,
         prisma_client: PrismaClient | None,
         user_api_key_cache: UserApiKeyCache,
@@ -2308,7 +2313,7 @@ class JWTAuthManager:
         user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
-        request_headers: dict | None = None,
+        request_headers: Mapping[str, str] | None = None,
         request_method: str | None = None,
     ) -> JWTAuthBuilderResult:
         return await JWTAuthManager.authorize_jwt(
@@ -2405,7 +2410,7 @@ class JWTAuthManager:
         user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
-        request_headers: dict[str, str] | None = None,
+        request_headers: Mapping[str, str] | None = None,
         request_method: str | None = None,
         provisioning: _JWTProvisioning | None = None,
     ) -> JWTAuthBuilderResult:
@@ -2483,7 +2488,22 @@ class JWTAuthManager:
                     jwt_valid_token, handler, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj
                 )
                 return {**admin_result, "user_object": identity.user_object}
-            return admin_result
+            if prisma_client is None:
+                return admin_result
+            try:
+                admin_user: Final = await get_user_object(
+                    user_id=user_id,
+                    user_email=user_email,
+                    sso_user_id=user_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    user_id_upsert=False,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except UserNotFoundError:
+                return admin_result
+            return {**admin_result, "user_object": admin_user}
 
         # Get team with model access
         ## Check if team_id is specified via x-litellm-team-id header
@@ -2584,6 +2604,7 @@ class JWTAuthManager:
             team_object=team_object,
             route=route,
             request_method=request_method,
+            team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes,
         ):
             JWTAuthManager._raise_team_passthrough_route_denial(route=route)
 
@@ -2653,6 +2674,7 @@ class JWTAuthManager:
                 team_object=team_object,
                 route=route,
                 request_method=request_method,
+                team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes,
             ):
                 JWTAuthManager._raise_team_passthrough_route_denial(route=route)
         elif team_id is None:
