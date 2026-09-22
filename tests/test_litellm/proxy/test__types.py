@@ -24,6 +24,7 @@ SERVER_ONLY_MARKERS = (
     "mcp_source_team_rpm_limits",
     "mcp_session_resource_server_id",
     "via_virtual_key",
+    "via_jwt_auth",
 )
 
 

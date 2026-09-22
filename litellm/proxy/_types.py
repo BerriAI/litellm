@@ -3284,6 +3284,14 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             "narrow the agent's access."
         ),
     )
+    via_jwt_auth: bool = Field(
+        default=False,
+        exclude=True,
+        description=(
+            "Server-only marker set exclusively by JWT auth on the token it builds. Stripped from validated input so "
+            "custom auth handlers cannot forge it. Gates the `litellm_jwtauth.team_allowed_routes` pass-through grant."
+        ),
+    )
     budget_reservation: dict[str, Any] | None = Field(default=None, exclude=True)
     team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
     user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
@@ -3317,6 +3325,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
         values.pop("agent_caller", None)
+        values.pop("via_jwt_auth", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
             if isinstance(values.get("api_key"), str):

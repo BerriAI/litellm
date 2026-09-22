@@ -268,6 +268,7 @@ def test_an_llm_backed_injection_check_needs_the_call_it_would_make():
         ("mcp_source_team_rpm_limits", {"team-1": 10_000}, None),
         ("mcp_session_resource_server_id", "server-1", None),
         ("via_virtual_key", "sk-someone-elses-key", False),
+        ("via_jwt_auth", True, False),
     ],
 )
 def test_a_server_only_marker_is_not_taken_from_the_caller(field, forged, default):

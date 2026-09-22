@@ -5232,7 +5232,12 @@ async def test_centralized_common_checks_runs_for_passthrough_endpoint_with_auth
             setattr(_proxy_server_mod, k, v)
 
 
-async def _centralized_denial_for_jwt_caller_on_auth_passthrough(jwt_handler):
+_JWT_TEAM_TOKEN = UserAPIKeyAuth(team_id="team-a", jwt_claims={"sub": "user-1"}).model_copy(
+    update={"via_jwt_auth": True}
+)
+
+
+async def _centralized_denial_for_jwt_caller_on_auth_passthrough(jwt_handler, token=_JWT_TEAM_TOKEN):
     import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import HTTPException, Request
     from starlette.datastructures import URL
@@ -5270,7 +5275,7 @@ async def _centralized_denial_for_jwt_caller_on_auth_passthrough(jwt_handler):
     ):
         try:
             await _run_centralized_common_checks(
-                user_api_key_auth_obj=UserAPIKeyAuth(team_id="team-a", jwt_claims={"sub": "user-1"}),
+                user_api_key_auth_obj=token,
                 request=request,
                 request_data={},
                 route=route,
@@ -5300,6 +5305,27 @@ async def test_centralized_common_checks_grant_auth_passthrough_from_the_live_jw
     assert await _centralized_denial_for_jwt_caller_on_auth_passthrough(
         JWTHandler()
     ) == (
+        "Key/team not allowed to access passthrough route /model-host/v1/demographics-extractor/predict. "
+        "Configure `allowed_passthrough_routes` on the team or key."
+    )
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_withhold_jwt_team_allowed_routes_from_a_custom_auth_lookalike_token():
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
+    configured = JWTHandler()
+    configured.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(team_allowed_routes=["/model-host/*"]),
+    )
+    custom_auth_result = UserAPIKeyAuth.model_validate(
+        {"team_id": "team-a", "jwt_claims": {"sub": "user-1"}, "via_jwt_auth": True}
+    )
+
+    assert await _centralized_denial_for_jwt_caller_on_auth_passthrough(configured, token=custom_auth_result) == (
         "Key/team not allowed to access passthrough route /model-host/v1/demographics-extractor/predict. "
         "Configure `allowed_passthrough_routes` on the team or key."
     )

@@ -3,11 +3,13 @@ from typing import Final
 import pytest
 
 from litellm.proxy._types import (
+    JWTAuthBuilderResult,
     LiteLLM_JWTAuth,
     LiteLLM_TeamTable,
     LiteLLMRoutes,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.handle_jwt import JWTAuthManager
 from litellm.proxy.auth.pass_through_access import (
     Denied,
     Granted,
@@ -32,6 +34,27 @@ def _never_enforced(*, route: str, method: str | None) -> bool:
 
 def _jwt_auth(*team_allowed_routes: str) -> LiteLLM_JWTAuth:
     return LiteLLM_JWTAuth(team_allowed_routes=list(team_allowed_routes))
+
+
+def _token_from_jwt_auth(team_id: str | None) -> UserAPIKeyAuth:
+    return JWTAuthManager.user_api_key_auth_from_result(
+        JWTAuthBuilderResult(
+            is_proxy_admin=False,
+            team_object=None,
+            user_object=None,
+            end_user_object=None,
+            org_object=None,
+            token="header.payload.signature",
+            team_id=team_id,
+            user_id="user-1",
+            user_email=None,
+            end_user_id=None,
+            org_id=None,
+            team_membership=None,
+            jwt_claims=JWT_CLAIMS,
+            agent_id=None,
+        )
+    )
 
 
 @pytest.mark.parametrize(
@@ -130,15 +153,26 @@ def test_a_non_empty_key_allowlist_shadows_the_team_allowlist(key_allowlist, tea
 @pytest.mark.parametrize(
     "token, expected",
     [
-        (UserAPIKeyAuth(team_id="team-a", jwt_claims=JWT_CLAIMS), Granted()),
+        (_token_from_jwt_auth(team_id="team-a"), Granted()),
+        (
+            UserAPIKeyAuth.model_validate({"team_id": "team-a", "jwt_claims": JWT_CLAIMS, "via_jwt_auth": True}),
+            Denied(),
+        ),
         (UserAPIKeyAuth(token="sk-virtual-key", team_id="team-a"), Denied()),
         (UserAPIKeyAuth(token="sk-jwt-mapped-key", team_id="team-a", jwt_claims=JWT_CLAIMS), Denied()),
         (UserAPIKeyAuth(team_id="team-a"), Denied()),
-        (UserAPIKeyAuth(jwt_claims=JWT_CLAIMS), Denied()),
+        (_token_from_jwt_auth(team_id=None), Denied()),
     ],
-    ids=["jwt-team-caller", "virtual-key", "jwt-mapped-virtual-key", "keyless-non-jwt-caller", "jwt-without-team"],
+    ids=[
+        "jwt-team-caller",
+        "custom-auth-lookalike",
+        "virtual-key",
+        "jwt-mapped-virtual-key",
+        "keyless-non-jwt-caller",
+        "jwt-without-team",
+    ],
 )
-def test_only_a_keyless_jwt_token_with_a_team_receives_the_jwt_config_grants(token, expected):
+def test_only_a_team_token_built_by_jwt_auth_receives_the_jwt_config_grants(token, expected):
     grants = PassThroughGrants.for_token(token=token, jwt_auth=_jwt_auth("/model-host/*"))
 
     assert (
@@ -148,16 +182,14 @@ def test_only_a_keyless_jwt_token_with_a_team_receives_the_jwt_config_grants(tok
 
 
 def test_a_jwt_token_without_a_jwt_config_has_no_config_grants():
-    jwt_caller = UserAPIKeyAuth(team_id="team-a", jwt_claims=JWT_CLAIMS)
+    jwt_caller = _token_from_jwt_auth(team_id="team-a")
 
     assert PassThroughGrants.for_token(token=jwt_caller, jwt_auth=None).covers(SUBPATH) is False
 
 
 def test_jwt_caller_metadata_and_config_grants_are_both_honored():
-    token = UserAPIKeyAuth(
-        team_id="team-a",
-        jwt_claims=JWT_CLAIMS,
-        team_metadata={"allowed_passthrough_routes": ["/team-route"]},
+    token = _token_from_jwt_auth(team_id="team-a").model_copy(
+        update={"team_metadata": {"allowed_passthrough_routes": ["/team-route"]}}
     )
     grants = PassThroughGrants.for_token(token=token, jwt_auth=_jwt_auth("/model-host/*"))
 

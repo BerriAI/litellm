@@ -9304,7 +9304,9 @@ async def _common_checks_for_jwt_caller_on_model_host_route(route: str, team_all
             route=route,
             llm_router=None,
             proxy_logging_obj=MagicMock(),
-            valid_token=UserAPIKeyAuth(team_id="team-a", jwt_claims={"sub": "user-1"}),
+            valid_token=UserAPIKeyAuth(team_id="team-a", jwt_claims={"sub": "user-1"}).model_copy(
+                update={"via_jwt_auth": True}
+            ),
             request=request,
             jwt_auth=LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes),
         )

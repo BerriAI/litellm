@@ -2765,4 +2765,4 @@ class JWTAuthManager:
                 team_membership=result.get("team_membership"),
                 user_id=result["user_id"],
             ),
-        )
+        ).model_copy(update={"via_jwt_auth": True})

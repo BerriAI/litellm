@@ -1302,27 +1302,21 @@ def _check_model_host_route_as(valid_token: UserAPIKeyAuth, team_allowed_routes:
         )
 
 
-def test_non_proxy_admin_allows_auth_pass_through_for_jwt_team_allowed_routes_wildcard():
-    jwt_token: Final = UserAPIKeyAuth(
-        user_id="test_user",
-        user_role=LitellmUserRoles.INTERNAL_USER.value,
-        team_id="team-a",
-        jwt_claims={"sub": "test_user"},
-    )
+_JWT_TEAM_TOKEN: Final = UserAPIKeyAuth(
+    user_id="test_user",
+    user_role=LitellmUserRoles.INTERNAL_USER.value,
+    team_id="team-a",
+    jwt_claims={"sub": "test_user"},
+).model_copy(update={"via_jwt_auth": True})
 
-    _check_model_host_route_as(jwt_token, team_allowed_routes=["openai_routes", "/model-host/*"])
+
+def test_non_proxy_admin_allows_auth_pass_through_for_jwt_team_allowed_routes_wildcard():
+    _check_model_host_route_as(_JWT_TEAM_TOKEN, team_allowed_routes=["openai_routes", "/model-host/*"])
 
 
 def test_non_proxy_admin_denies_auth_pass_through_for_jwt_when_only_route_groups_configured():
-    jwt_token: Final = UserAPIKeyAuth(
-        user_id="test_user",
-        user_role=LitellmUserRoles.INTERNAL_USER.value,
-        team_id="team-a",
-        jwt_claims={"sub": "test_user"},
-    )
-
     with pytest.raises(HTTPException) as exc_info:
-        _check_model_host_route_as(jwt_token, team_allowed_routes=["openai_routes", "mapped_pass_through_routes"])
+        _check_model_host_route_as(_JWT_TEAM_TOKEN, team_allowed_routes=["openai_routes", "mapped_pass_through_routes"])
 
     assert exc_info.value.status_code == 403, exc_info.value.detail
     assert "allowed_passthrough_routes" in exc_info.value.detail

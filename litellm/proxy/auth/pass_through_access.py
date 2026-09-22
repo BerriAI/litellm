@@ -49,10 +49,10 @@ def _jwt_team_routes(jwt_auth: LiteLLM_JWTAuth | None) -> tuple[str, ...]:
 
 def _is_jwt_team_caller(token: UserAPIKeyAuth) -> bool:
     """
-    A keyless JWT token with a team. ``team_allowed_routes`` is a team grant, and JWT-mapped virtual keys carry
-    ``jwt_claims`` too but stay scoped to their key.
+    A team token built by JWT auth. ``via_jwt_auth`` is server-only, so custom auth results and JWT-mapped virtual
+    keys never pick up the JWT config grants, whatever ``jwt_claims`` they carry.
     """
-    return token.jwt_claims is not None and token.token is None and token.team_id is not None
+    return token.via_jwt_auth and token.team_id is not None
 
 
 @dataclass(frozen=True, slots=True)
