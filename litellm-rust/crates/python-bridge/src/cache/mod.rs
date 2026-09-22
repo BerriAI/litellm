@@ -5,6 +5,7 @@ mod embedder;
 mod facade;
 mod future;
 mod handle;
+mod identity;
 mod native;
 mod request;
 mod resolver;
