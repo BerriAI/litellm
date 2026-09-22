@@ -61,8 +61,6 @@ class GenAIEventRecorder:
             ),
         )
         record: Final[LogRecord] = (
-            SDK_LOG_RECORD(**fields, resource=self.resource)
-            if SDK_LOG_RECORD is not None
-            else LogRecord(**fields)
+            SDK_LOG_RECORD(**fields, resource=self.resource) if SDK_LOG_RECORD is not None else LogRecord(**fields)
         )
         self.event_logger.emit(record)
