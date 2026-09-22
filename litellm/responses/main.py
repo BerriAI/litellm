@@ -1223,7 +1223,15 @@ def responses(
             effective_extra_headers: Final = (
                 add_provider_affinity_header(
                     headers=extra_headers or MappingProxyType({}),
-                    litellm_params=litellm_params,
+                    litellm_params=MappingProxyType(
+                        {
+                            "provider_affinity_header": litellm_params.provider_affinity_header,
+                            "litellm_session_id": kwargs.get("litellm_session_id"),
+                            "session_id": kwargs.get("session_id"),
+                            "metadata": metadata,
+                            "litellm_metadata": kwargs.get("litellm_metadata"),
+                        }
+                    ),
                 )
                 if litellm_params.provider_affinity_header is not None
                 else extra_headers

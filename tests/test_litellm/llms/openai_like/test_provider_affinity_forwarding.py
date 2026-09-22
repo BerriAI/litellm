@@ -245,6 +245,31 @@ def test_dynamic_provider_receives_affinity_header_for_responses():
     )
 
 
+def test_dynamic_provider_uses_metadata_session_id_for_responses():
+    JSONProviderRegistry._providers = {"db_only_provider": _provider(responses=True)}
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_responses_payload())
+
+    http_client = httpx.Client(transport=httpx.MockTransport(respond))
+    try:
+        litellm.responses(
+            model="db_only_provider/test-model",
+            input="hello",
+            api_key="test-key",
+            metadata={"session_id": "session-from-metadata"},
+            provider_affinity_header="X-Conversation-Id",
+            litellm_logging_obj=MagicMock(),
+            client=HTTPHandler(client=http_client),
+        )
+    finally:
+        http_client.close()
+
+    assert requests[0].headers["X-Conversation-Id"] == "session-from-metadata"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
 async def test_dynamic_provider_receives_affinity_header_for_async_responses(stream: bool):
