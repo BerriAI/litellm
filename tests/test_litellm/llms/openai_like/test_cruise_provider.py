@@ -1,7 +1,3 @@
-"""
-Tests for BytesBrains Cruise provider configuration and integration.
-"""
-
 import litellm
 
 
@@ -24,14 +20,13 @@ class TestCruiseProviderConfig:
         assert cruise.api_key_env == "CRUISE_API_KEY"
         assert cruise.api_base_env == "CRUISE_API_BASE"
 
-    def test_cruise_in_openai_compatible_providers(self):
-        from litellm.constants import openai_compatible_providers
+    def test_cruise_not_routed_to_openai_audio_transcription(self):
+        from litellm.constants import OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS, openai_compatible_providers
 
-        assert "cruise" in openai_compatible_providers
+        assert "cruise" not in openai_compatible_providers
+        assert "cruise" not in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS
 
     def test_cruise_provider_resolution_keeps_upstream_prefix(self):
-        """Cruise model ids carry their own provider prefix, e.g. `anthropic/claude-sonnet-5`.
-        Only the leading `cruise/` is LiteLLM's; the rest must reach Cruise intact."""
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
@@ -78,7 +73,6 @@ class TestCruiseProviderConfig:
         assert api_key == "cru_test"
 
     def test_cruise_max_completion_tokens_passed_through(self):
-        """Cruise accepts `max_completion_tokens` as sent, so no mapping to `max_tokens`."""
         from litellm.llms.openai_like.dynamic_config import create_config_class
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
@@ -129,3 +123,23 @@ class TestCruiseEndpointSupport:
         assert root["cruise"] == backup["cruise"]
         assert root["cruise"]["endpoints"]["chat_completions"] is True
         assert root["cruise"]["endpoints"]["responses"] is False
+
+
+class TestCruiseDashboardRegistration:
+    def test_cruise_is_selectable_in_the_add_model_form(self):
+        import json
+        from pathlib import Path
+
+        path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+        with open(path) as f:
+            entries = [e for e in json.load(f) if e["litellm_provider"] == "cruise"]
+
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["provider"] == "CRUISE"
+        assert entry["default_model_placeholder"].startswith("cruise/")
+
+        fields = {f["key"]: f for f in entry["credential_fields"]}
+        assert fields["api_key"]["required"] is True
+        assert fields["api_key"]["field_type"] == "password"
+        assert fields["api_base"]["required"] is False
