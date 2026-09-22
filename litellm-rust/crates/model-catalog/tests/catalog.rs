@@ -1,19 +1,55 @@
+use std::path::{Path, PathBuf};
+
 use litellm_model_catalog::{AliasIssue, Catalog, Error, IntegrityLimits, Provenance};
+use rstest::{fixture, rstest};
 use serde_json::json;
 
-fn parse(body: &str) -> Catalog {
-    Catalog::parse(body.as_bytes(), Provenance::default()).unwrap()
+#[fixture]
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
 }
 
-#[test]
-fn preserves_fields_metadata_and_snapshot_isolation() {
+#[fixture]
+fn current_catalog(repo_root: PathBuf) -> Catalog {
+    let body = std::fs::read(repo_root.join("model_prices_and_context_window.json")).unwrap();
+    Catalog::parse(&body, Provenance::default()).unwrap()
+}
+
+#[fixture]
+fn backup_catalog(repo_root: PathBuf) -> Catalog {
+    let body = std::fs::read(repo_root.join("litellm/model_prices_and_context_window_backup.json"))
+        .unwrap();
+    Catalog::parse(&body, Provenance::default()).unwrap()
+}
+
+#[fixture]
+fn fixture_catalog() -> Catalog {
+    Catalog::parse(
+        br#"{
+            "sample_spec":{"explanation":"example"},
+            "fallback_generalizations":{"rules":[{"name":"family","pattern":"^new-","model_info":{"mode":"chat"}}]},
+            "Alpha":{"litellm_provider":"test","aliases":["short"],"price":0,"enabled":false,
+                     "optional":null,"unknown":{"nested":[1,{"x":true}]}}
+        }"#,
+        Provenance {
+            source: Some("fixture".into()),
+            revision: Some("rev".into()),
+            etag: None,
+        },
+    )
+    .unwrap()
+}
+
+#[rstest]
+fn preserves_fields_metadata_and_snapshot_isolation(fixture_catalog: Catalog) {
     let mut source = br#"{
         "sample_spec":{"explanation":"example"},
         "fallback_generalizations":{"rules":[{"name":"family","pattern":"^new-","model_info":{"mode":"chat"}}]},
         "Alpha":{"litellm_provider":"test","aliases":["short"],"price":0,"enabled":false,
                  "optional":null,"unknown":{"nested":[1,{"x":true}]}}
-    }"#.to_vec();
-    let catalog = Catalog::parse(
+    }"#
+    .to_vec();
+    let snapshot = Catalog::parse(
         &source,
         Provenance {
             source: Some("fixture".into()),
@@ -24,6 +60,8 @@ fn preserves_fields_metadata_and_snapshot_isolation() {
     .unwrap();
     source.fill(b' ');
 
+    assert_eq!(fixture_catalog.model_count(), snapshot.model_count());
+    let catalog = snapshot;
     let entry = catalog.lookup("SHORT").unwrap();
     assert_eq!(entry.canonical_key, "Alpha");
     assert_eq!(entry.matched_key, "short");
@@ -36,10 +74,7 @@ fn preserves_fields_metadata_and_snapshot_isolation() {
         Some(&json!({"nested":[1,{"x":true}]}))
     );
     assert_eq!(entry.entry.field("aliases"), None);
-    assert_eq!(
-        entry.entry.info().litellm_provider.as_deref(),
-        Some("test")
-    );
+    assert_eq!(entry.entry.info().litellm_provider.as_deref(), Some("test"));
     assert_eq!(
         catalog.sample_spec(),
         Some(&json!({"explanation":"example"}))
@@ -49,20 +84,26 @@ fn preserves_fields_metadata_and_snapshot_isolation() {
     assert_eq!(catalog.model_count(), 1);
 }
 
-#[test]
-fn alias_collisions_and_case_fallback_follow_python_order() {
-    let catalog = parse(
-        r#"{
-        "First":{"aliases":["Shared","Second","first"],"value":1},
-        "Second":{"aliases":["Shared","sHaReD"],"value":2},
-        "SHARED":{"value":3}
-    }"#,
-    );
-    assert_eq!(catalog.lookup("Shared").unwrap().canonical_key, "First");
-    assert_eq!(catalog.lookup("Second").unwrap().canonical_key, "Second");
-    assert_eq!(catalog.lookup("shared").unwrap().canonical_key, "Second");
-    assert_eq!(catalog.lookup("FIRST").unwrap().canonical_key, "First");
-    assert_eq!(catalog.lookup("sHaReD").unwrap().canonical_key, "Second");
+#[rstest]
+#[case("Shared", "First")]
+#[case("Second", "Second")]
+#[case("shared", "Second")]
+#[case("FIRST", "First")]
+#[case("sHaReD", "Second")]
+fn alias_collisions_and_case_fallback_follow_python_order(
+    #[case] lookup: &str,
+    #[case] expected: &str,
+) {
+    let catalog = Catalog::parse(
+        br#"{
+            "First":{"aliases":["Shared","Second","first"],"value":1},
+            "Second":{"aliases":["Shared","sHaReD"],"value":2},
+            "SHARED":{"value":3}
+        }"#,
+        Provenance::default(),
+    )
+    .unwrap();
+    assert_eq!(catalog.lookup(lookup).unwrap().canonical_key, expected);
     assert_eq!(catalog.alias_count(), 3);
     assert!(
         catalog
@@ -82,62 +123,98 @@ fn alias_collisions_and_case_fallback_follow_python_order() {
     );
 }
 
-#[test]
-fn integrity_uses_canonical_count_and_strict_shrink_boundary() {
-    let catalog = parse(
-        r#"{"sample_spec":{},"fallback_generalizations":{},
-        "a":{"aliases":["b","c"]}}"#,
-    );
-    assert!(
-        catalog
-            .validate(IntegrityLimits {
-                backup_model_count: 2,
-                min_model_count: 1,
-                min_backup_ratio: 0.5,
-            })
-            .is_ok()
-    );
-    assert!(matches!(
-        catalog.validate(IntegrityLimits {
-            backup_model_count: 3,
-            min_model_count: 1,
-            min_backup_ratio: 0.5,
-        }),
-        Err(Error::Shrunk { actual: 1, .. })
-    ));
-    assert!(matches!(
-        catalog.validate(IntegrityLimits {
-            backup_model_count: 0,
-            min_model_count: 2,
-            min_backup_ratio: 0.5,
-        }),
-        Err(Error::BelowMinimum { actual: 1, .. })
-    ));
-    assert!(matches!(
-        catalog.validate(IntegrityLimits {
-            backup_model_count: 0,
-            min_model_count: 0,
-            min_backup_ratio: f64::NAN,
-        }),
-        Err(Error::InvalidRatio)
-    ));
+#[derive(Debug)]
+enum ValidationOutcome {
+    Ok,
+    Shrunk,
+    BelowMinimum,
+    InvalidRatio,
 }
 
-#[test]
-fn malformed_input_and_aliases_have_typed_outcomes() {
-    assert!(matches!(
-        Catalog::parse(b"{}", Provenance::default()),
-        Err(Error::Empty)
-    ));
-    assert!(matches!(
-        Catalog::parse(b"{", Provenance::default()),
-        Err(Error::Json(_))
-    ));
-    assert!(matches!(
-        Catalog::parse(b"{\"a\":1}", Provenance::default()),
-        Err(Error::EntryNotObject { .. })
-    ));
-    let catalog = parse(r#"{"a":{"aliases":"bad"},"b":{"aliases":[9,"ok"]}}"#);
+#[rstest]
+#[case(
+    IntegrityLimits {
+        backup_model_count: 2,
+        min_model_count: 1,
+        min_backup_ratio: 0.5,
+    },
+    ValidationOutcome::Ok
+)]
+#[case(
+    IntegrityLimits {
+        backup_model_count: 3,
+        min_model_count: 1,
+        min_backup_ratio: 0.5,
+    },
+    ValidationOutcome::Shrunk
+)]
+#[case(
+    IntegrityLimits {
+        backup_model_count: 0,
+        min_model_count: 2,
+        min_backup_ratio: 0.5,
+    },
+    ValidationOutcome::BelowMinimum
+)]
+#[case(
+    IntegrityLimits {
+        backup_model_count: 0,
+        min_model_count: 0,
+        min_backup_ratio: f64::NAN,
+    },
+    ValidationOutcome::InvalidRatio
+)]
+fn integrity_uses_canonical_count_and_strict_shrink_boundary(
+    #[case] limits: IntegrityLimits,
+    #[case] expected: ValidationOutcome,
+) {
+    let catalog = Catalog::parse(
+        br#"{"sample_spec":{},"fallback_generalizations":{},"a":{"aliases":["b","c"]}}"#,
+        Provenance::default(),
+    )
+    .unwrap();
+    let actual = catalog.validate(limits);
+    match expected {
+        ValidationOutcome::Ok => assert!(actual.is_ok()),
+        ValidationOutcome::Shrunk => {
+            assert!(matches!(actual, Err(Error::Shrunk { actual: 1, .. })))
+        }
+        ValidationOutcome::BelowMinimum => {
+            assert!(matches!(actual, Err(Error::BelowMinimum { actual: 1, .. })))
+        }
+        ValidationOutcome::InvalidRatio => assert!(matches!(actual, Err(Error::InvalidRatio))),
+    }
+}
+
+#[derive(Debug)]
+enum MalformedOutcome {
+    Empty,
+    Json,
+    EntryNotObject,
+}
+
+#[rstest]
+#[case::empty(b"{}", MalformedOutcome::Empty)]
+#[case::invalid_json(b"{", MalformedOutcome::Json)]
+#[case::entry_not_object(br#"{"a":1}"#, MalformedOutcome::EntryNotObject)]
+fn malformed_input_and_aliases_have_typed_outcomes(
+    #[case] body: &[u8],
+    #[case] expected: MalformedOutcome,
+) {
+    let actual = Catalog::parse(body, Provenance::default());
+    match expected {
+        MalformedOutcome::Empty => assert!(matches!(actual, Err(Error::Empty))),
+        MalformedOutcome::Json => assert!(matches!(actual, Err(Error::Json(_)))),
+        MalformedOutcome::EntryNotObject => {
+            assert!(matches!(actual, Err(Error::EntryNotObject { .. })))
+        }
+    }
+
+    let catalog = Catalog::parse(
+        br#"{"a":{"aliases":"bad"},"b":{"aliases":[9,"ok"]}}"#,
+        Provenance::default(),
+    )
+    .unwrap();
     assert_eq!(
         catalog.alias_issues(),
         &[
@@ -149,29 +226,24 @@ fn malformed_input_and_aliases_have_typed_outcomes() {
     assert!(catalog.lookup("missing").is_none());
 }
 
-#[test]
-fn parses_current_and_packaged_catalogs_without_pinning_counts() {
-    let current = Catalog::parse(
-        include_bytes!("../../../../model_prices_and_context_window.json"),
-        Provenance::default(),
-    )
-    .unwrap();
-    let backup = Catalog::parse(
-        include_bytes!("../../../../litellm/model_prices_and_context_window_backup.json"),
-        Provenance::default(),
-    )
-    .unwrap();
-    assert!(current.model_count() > 0);
-    assert!(backup.model_count() > 0);
-    assert!(current.sample_spec().is_some());
-    assert!(backup.sample_spec().is_some());
+#[rstest]
+fn parses_current_and_packaged_catalogs_without_pinning_counts(
+    current_catalog: Catalog,
+    backup_catalog: Catalog,
+) {
+    assert!(current_catalog.model_count() > 0);
+    assert!(backup_catalog.model_count() > 0);
+    assert!(current_catalog.sample_spec().is_some());
+    assert!(backup_catalog.sample_spec().is_some());
     assert!(
-        current
-            .validate(IntegrityLimits::python_defaults(backup.model_count()))
+        current_catalog
+            .validate(IntegrityLimits::python_defaults(
+                backup_catalog.model_count()
+            ))
             .is_ok()
     );
-    for name in current.model_names() {
-        let entry = current.lookup(name).unwrap().entry;
+    for name in current_catalog.model_names() {
+        let entry = current_catalog.lookup(name).unwrap().entry;
         assert_eq!(
             entry.info().litellm_provider.is_some(),
             entry.field("litellm_provider").is_some()

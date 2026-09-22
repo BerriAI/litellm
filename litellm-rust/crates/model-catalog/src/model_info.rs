@@ -1,5 +1,3 @@
-// Mirror of `model_prices_and_context_window.schema.json` `$defs.modelEntry`.
-// Field types follow the schema; unknown keys stay on `ModelEntry::fields()`.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
