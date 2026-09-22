@@ -19,4 +19,6 @@ vector_store_registry:
     litellm_params:
       vector_store_id: vs_integration_config_store
       custom_llm_provider: openai
+      api_base: os.environ/INTEGRATION_UPSTREAM_URL
+      api_key: integration-provider-key
       vector_store_description: declared in tests/integration/proxy_config.yaml

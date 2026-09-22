@@ -1770,6 +1770,27 @@
     ],
     "tests/integration/management/test_vector_store_config_ownership.py::test_config_store_refuses_new_update_and_delete": [
       "mgmt.vector_store.write.config_store_is_read_only"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_db_store_lifecycle_is_unchanged_beside_config_store": [
+      "mgmt.vector_store.write.db_store_lifecycle_unchanged_beside_config_store"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_chat_with_config_store_searches_upstream_and_injects_context_after_listing": [
+      "other.vector_store.chat.config_store_search_reaches_upstream_after_listing"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_passthrough_search_on_config_store_uses_yaml_credentials_after_listing": [
+      "other.vector_store.search.config_store_passthrough_uses_yaml_credentials_after_listing"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_non_admin_key_access_to_config_store_follows_grants_after_admin_listing": [
+      "authz.vector_store.list.non_admin_key_access_to_config_store_follows_grants"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_peer_process_keeps_config_store_and_sees_db_store_created_elsewhere": [
+      "mgmt.vector_store.list.peer_process_keeps_config_store_and_sees_db_store"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_concurrent_burst_keeps_config_store_and_refuses_every_config_write": [
+      "mgmt.vector_store.chaos.concurrent_burst_keeps_config_store_across_workers"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_redis_outage_keeps_config_store_served_and_recovers": [
+      "mgmt.vector_store.chaos.redis_outage_keeps_config_store_and_recovers"
     ]
   },
   "browser": {
