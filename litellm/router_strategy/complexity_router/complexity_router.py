@@ -46,11 +46,14 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.tier_predictor import (
     TierSuccessPredictor,
     resolve_tier_artifact,
 )
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
@@ -81,7 +84,16 @@ from .config import (
     ClassificationRubric,
     ComplexityRouterConfig,
     ComplexityTier,
+    JevClassifierConfig,
     TierDefinition,
+)
+from .jev_classifier import (
+    DEFAULT_JEV_INSTRUCTIONS,
+    HttpJevClassifierClient,
+    JevClassifierClient,
+    JevVerdict,
+    build_jev_request,
+    jev_classifier_cost,
 )
 from .stall_detector import detect_stalled_task
 
@@ -132,6 +144,16 @@ _CLASSIFICATION_TIER_CRITERIA: Final[Mapping[ComplexityTier, str]] = MappingProx
             "open-ended analysis, proofs, famous hard problems, step-by-step reasoning, tradeoffs, or anything "
             "where a correct answer requires careful thought rather than a quick lookup."
         ),
+    }
+)
+
+_JEV_TIER_CRITERIA: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "NON_REASONING": "Relaying, reformatting, or extracting stated information without judgment",
+        ComplexityTier.SIMPLE.value: "Greetings, chitchat, or short factual lookups with known answers",
+        ComplexityTier.MEDIUM.value: "Everyday requests needing explanation, light reasoning, or minor technical work",
+        ComplexityTier.COMPLEX.value: "Non-trivial code, architecture, multi-step work, or specialized domain depth",
+        ComplexityTier.REASONING.value: "Open-ended analysis, proofs, tradeoffs, or tasks requiring careful thought",
     }
 )
 
@@ -904,6 +926,7 @@ class ClassificationOutcome(NamedTuple):
         "heuristic_v2",
         "reasoning_override",
         "llm_classifier",
+        "jev_classifier",
         "heuristic_first_short_circuit",
         "hybrid_short_circuit",
         "housekeeping",
@@ -912,10 +935,25 @@ class ClassificationOutcome(NamedTuple):
         "default_model_fallback",
     ]
     classifier_cost: float | None = None
+    jev_verdict: JevVerdict | None = None
 
 
 def _with_signal(outcome: ClassificationOutcome, signal: str | None) -> ClassificationOutcome:
     return outcome if signal is None else outcome._replace(signals=(*outcome.signals, signal))
+
+
+def _with_classifier_forecast(
+    decision: StandardLoggingRoutingDecision, outcome: ClassificationOutcome
+) -> StandardLoggingRoutingDecision:
+    """Attach validated forecasts and their applied policy to the routing decision."""
+    if outcome.jev_verdict is not None:
+        forecasted_decision: Final[StandardLoggingRoutingDecision] = {
+            **decision,
+            "classifier_probabilities": outcome.jev_verdict.probabilities,
+            "classifier_confidence": outcome.jev_verdict.confidence,
+        }
+        return forecasted_decision
+    return decision
 
 
 class _ClassifierCircuitBreaker:
@@ -1066,6 +1104,18 @@ class ComplexityRouter(CustomLogger):
     - Question complexity (multiple questions)
     """
 
+    @staticmethod
+    def _build_jev_client(config: JevClassifierConfig) -> JevClassifierClient:
+        api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
+        if not api_key:
+            raise ValueError("jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'")
+        api_base: Final = config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+        return HttpJevClassifierClient(
+            api_key=api_key,
+            api_base=api_base,
+            http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
+        )
+
     def __init__(
         self,
         model_name: str,
@@ -1073,6 +1123,7 @@ class ComplexityRouter(CustomLogger):
         complexity_router_config: dict[str, Any] | None = None,
         default_model: str | None = None,
         derive_savings_baseline: bool = True,
+        jev_client: JevClassifierClient | None = None,
     ):
         """
         Initialize ComplexityRouter.
@@ -1099,6 +1150,15 @@ class ComplexityRouter(CustomLogger):
         # Override default_model if provided
         if default_model:
             self.config.default_model = default_model
+
+        jev_config: Final = self.config.jev_classifier_config
+        self._jev_client: JevClassifierClient | None = (
+            jev_client
+            if jev_client is not None
+            else self._build_jev_client(jev_config)
+            if self.config.classifier_type == "jev" and jev_config is not None
+            else None
+        )
 
         # Checked here rather than on the config model because the deployment's
         # complexity_router_default_model arrives outside complexity_router_config and is
@@ -1166,14 +1226,19 @@ class ComplexityRouter(CustomLogger):
             if llm_classifier_configured
             else None
         )
-        self._classifier_circuit_breaker: _ClassifierCircuitBreaker | None = (
-            _ClassifierCircuitBreaker(self.config.classifier_llm_config.circuit_breaker_cooldown_seconds)
+        circuit_breaker_cooldown: Final[float | None] = (
+            self.config.classifier_llm_config.circuit_breaker_cooldown_seconds
             if (
                 llm_classifier_configured
                 and self.config.classifier_llm_config is not None
                 and self.config.classifier_llm_config.circuit_breaker_enabled
             )
+            else jev_config.circuit_breaker_cooldown_seconds
+            if (self.config.classifier_type == "jev" and jev_config is not None and jev_config.circuit_breaker_enabled)
             else None
+        )
+        self._classifier_circuit_breaker: _ClassifierCircuitBreaker | None = (
+            _ClassifierCircuitBreaker(circuit_breaker_cooldown) if circuit_breaker_cooldown is not None else None
         )
         self._tier_success_predictor: TierSuccessPredictor | None = (
             TierSuccessPredictor(resolve_tier_artifact(self.config.heuristic_v2_artifact))
@@ -1574,6 +1639,8 @@ class ComplexityRouter(CustomLogger):
             return self._classify_with_heuristic_v2(prompt)
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
+        if self.config.classifier_type == "jev":
+            return await self._jev_classifier_outcome(prompt, system_prompt)
         if self.config.classifier_type == "heuristic_first" and self.config.classifier_llm_config is not None:
             return await self._classify_heuristic_first(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type == "hybrid" and self.config.classifier_llm_config is not None:
@@ -1731,6 +1798,88 @@ class ComplexityRouter(CustomLogger):
             if breaker is not None and permit is not None:
                 breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
             return self._classifier_failure_outcome(f"LLM classifier failed ({e})", prompt, system_prompt, scored)
+
+    async def _jev_classifier_outcome(self, prompt: str, system_prompt: str | None) -> ClassificationOutcome:
+        config: Final = self.config.jev_classifier_config
+        client: Final = self._jev_client
+        if config is None or client is None:
+            return self._classifier_failure_outcome("jev classifier is not configured", prompt, system_prompt)
+        breaker: Final = self._classifier_circuit_breaker
+        permit: Final = breaker.acquire_permit() if breaker is not None else None
+        if breaker is not None and permit is None:
+            return self._classifier_failure_outcome(
+                "jev classifier circuit is open",
+                prompt,
+                system_prompt,
+                signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
+            )
+        criteria: Final[Mapping[str, str]] = (
+            MappingProxyType(
+                {
+                    definition.name: definition.description
+                    or _JEV_TIER_CRITERIA.get(definition.name.upper(), definition.name)
+                    for definition in self.config.tier_definitions
+                }
+            )
+            if self.config.tier_definitions is not None
+            else MappingProxyType(
+                {label: _JEV_TIER_CRITERIA[tier.value] for tier, label in self.config.labeled_tiers()}
+            )
+        )
+        timeout_s: Final = config.timeout_ms / 1000
+        request: Final = build_jev_request(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=config.model,
+            instructions=config.instructions or DEFAULT_JEV_INSTRUCTIONS,
+            criteria=criteria,
+        )
+        try:
+            response: Final = await asyncio.wait_for(client.evaluate(request, timeout_s), timeout_s)
+            answer: Final = response.answers.get("tier")
+            if answer is None:
+                raise ValueError("Jev response is missing the 'tier' answer")
+            tier: Final = self.config.resolve_classified_tier(answer.choice)
+            if tier is None:
+                raise ValueError(f"Jev classifier returned unknown tier {answer.choice!r}")
+            tier_name: Final = _tier_name(tier)
+            if not self._tier_pools().get(tier_name):
+                raise ValueError(f"Jev classifier returned tier {tier_name!r}, which has no models configured")
+            model: Final = response.model or config.model
+            verdict: Final = JevVerdict(
+                label=answer.choice,
+                probabilities=answer.probabilities,
+                confidence=answer.confidence,
+                model=model,
+                cost=jev_classifier_cost(response, config.model),
+            )
+            if breaker is not None and permit is not None:
+                breaker.record_success(permit)
+            return ClassificationOutcome(
+                tier=tier,
+                score=None,
+                signals=(
+                    f"jev-classifier:{tier_name}",
+                    f"jev-confidence={answer.confidence:.6f}",
+                    *(
+                        f"tier-probability:{label}={probability:.6f}"
+                        for label, probability in answer.probabilities.items()
+                    ),
+                ),
+                cause="jev_classifier",
+                classifier_cost=verdict.cost,
+                jev_verdict=verdict,
+            )
+        except asyncio.CancelledError:
+            if breaker is not None and permit is not None:
+                breaker.record_failure(permit, is_timeout=False)
+            raise
+        except Exception as e:  # noqa: BLE001 -- external Jev call can fail in many distinct ways
+            if breaker is not None and permit is not None:
+                breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
+            return self._classifier_failure_outcome(
+                f"jev classifier failed ({type(e).__name__})", prompt, system_prompt
+            )
 
     def _classifier_failure_outcome(
         self,
@@ -3689,7 +3838,9 @@ class ComplexityRouter(CustomLogger):
 
         tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model)
         classifier_model: Final = (
-            self.config.classifier_llm_config.model
+            f"typesafe/{outcome.jev_verdict.model}"
+            if outcome.cause == "jev_classifier" and outcome.jev_verdict is not None
+            else self.config.classifier_llm_config.model
             if outcome.cause == "llm_classifier" and self.config.classifier_llm_config is not None
             else None
         )
@@ -3713,23 +3864,24 @@ class ComplexityRouter(CustomLogger):
         decision_keyword: Final = (
             plan_mode_sentinel if plan_floored else (housekeeping_sentinel if outcome.cause == "housekeeping" else None)
         )
+        routing_decision: Final = self._build_routing_decision(
+            routed_model=routed_model,
+            conversation_continuing=conversation_continuing,
+            cause=decision_cause,
+            tier=classified_pool_tier,
+            score=score,
+            signals=decision_signals,
+            matched_keyword=decision_keyword,
+            escalation_keyword=escalation_keyword,
+            escalated=escalated,
+            classifier_model=classifier_model,
+            classifier_cost=outcome.classifier_cost,
+            tier_litellm_params=tier_litellm_params,
+            context_escalation_original_tier=context_original_tier,
+        )
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages if has_original_messages else None,
             litellm_params=tier_litellm_params,
-            routing_decision=self._build_routing_decision(
-                routed_model=routed_model,
-                conversation_continuing=conversation_continuing,
-                cause=decision_cause,
-                tier=classified_pool_tier,
-                score=score,
-                signals=decision_signals,
-                matched_keyword=decision_keyword,
-                escalation_keyword=escalation_keyword,
-                escalated=escalated,
-                classifier_model=classifier_model,
-                classifier_cost=outcome.classifier_cost,
-                tier_litellm_params=tier_litellm_params,
-                context_escalation_original_tier=context_original_tier,
-            ),
+            routing_decision=_with_classifier_forecast(routing_decision, outcome),
         )

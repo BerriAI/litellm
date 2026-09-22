@@ -569,6 +569,47 @@ class ClassifierLLMConfig(BaseModel):
         return self
 
 
+class JevClassifierConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model: str = "jev-latest"
+    api_key: str | None = Field(default=None, description="TypeSafe API key, falling back to TYPESAFE_API_KEY")
+    api_base: str | None = Field(
+        default=None,
+        description="TypeSafe API base, falling back to TYPESAFE_API_BASE and then https://api.typesafe.ai",
+    )
+    timeout_ms: int = Field(default=3000, ge=1)
+    instructions: str | None = Field(
+        default=None,
+        description="Replaces the built-in Jev question instructions",
+    )
+    circuit_breaker_enabled: bool = True
+    circuit_breaker_cooldown_seconds: float = Field(default=30.0, gt=0.0)
+
+    @field_validator("instructions")
+    @classmethod
+    def _reject_blank_instructions(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("jev_classifier_config.instructions must be non-empty; omit it to use the default")
+        return value
+
+    @field_validator("api_key")
+    @classmethod
+    def _reject_blank_api_key(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("jev_classifier_config.api_key must be non-empty; omit it to use TYPESAFE_API_KEY")
+        return value
+
+    @model_validator(mode="after")
+    def _keep_the_environment_key_on_the_environment_base(self) -> "JevClassifierConfig":
+        if self.api_base is not None and self.api_key is None:
+            raise ValueError(
+                "jev_classifier_config.api_base requires jev_classifier_config.api_key: TYPESAFE_API_KEY is only sent "
+                "to TYPESAFE_API_BASE or https://api.typesafe.ai"
+            )
+        return self
+
+
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
@@ -592,7 +633,7 @@ class ComplexityRouterConfig(BaseModel):
             "becomes that tier's rubric bullet; entries named after a built-in tier may omit the "
             "description and inherit the built-in criteria. List order is ascending severity and "
             "decides which tier wins when several keyword_tier_rules match. Requires classifier_type "
-            "'llm' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, "
+            "'llm', 'jev' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, "
             "adaptive selection, session affinity, plugins, tier_labels, and the calibration-example "
             "rubric presets are unavailable with a custom tier set: the first four are built on the "
             "built-in tier ladder, and the last two rename or exemplify tiers the set replaces."
@@ -713,13 +754,13 @@ class ComplexityRouterConfig(BaseModel):
     )
 
     # Classifier strategy
-    classifier_type: Literal["heuristic", "heuristic_v2", "llm", "custom", "heuristic_first", "hybrid"] = Field(
+    classifier_type: Literal["heuristic", "heuristic_v2", "llm", "custom", "heuristic_first", "hybrid", "jev"] = Field(
         default="heuristic",
         description=(
             "Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, "
             "an LLM call, a custom classifier plugin, 'heuristic_first', which scores locally and only pays "
             "for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', "
-            "which trusts the local scorer everywhere except when its score lands near a tier boundary"
+            "which trusts the local scorer everywhere except when its score lands near a tier boundary, or 'jev', a TypeSafe AI Jev structured choice call"
         ),
     )
     heuristic_v2_artifact: TrainedTierArtifact | Literal["ultrafeedback"] = Field(
@@ -736,6 +777,7 @@ class ComplexityRouterConfig(BaseModel):
             "'heuristic_first' or 'hybrid'"
         ),
     )
+    jev_classifier_config: JevClassifierConfig | None = None
     heuristic_first_max_tier: str | None = Field(
         default=None,
         description=(
@@ -1245,6 +1287,17 @@ class ComplexityRouterConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_jev_classifier_config(self) -> "ComplexityRouterConfig":
+        jev: Final = self.jev_classifier_config
+        if self.classifier_type != "jev":
+            if jev is not None:
+                raise ValueError("jev_classifier_config requires classifier_type 'jev'; otherwise it has no effect")
+            return self
+        if jev is None:
+            raise ValueError("jev_classifier_config is required when classifier_type is 'jev'")
+        return self
+
     @field_validator("heuristic_first_max_tier", mode="before")
     @classmethod
     def _coerce_heuristic_first_max_tier(cls, value: object) -> object:
@@ -1455,7 +1508,7 @@ class ComplexityRouterConfig(BaseModel):
             raise ValueError(f"tier_definitions names must be unique (case-insensitive): {', '.join(duplicated)}")
         if self.classifier_type in ("heuristic", "heuristic_v2", "heuristic_first", "hybrid"):
             raise ValueError(
-                "tier_definitions requires classifier_type 'llm' or 'custom': the heuristic scorer only "
+                "tier_definitions requires classifier_type 'llm', 'jev' or 'custom': the heuristic scorer only "
                 "produces the four built-in tiers, as does heuristic_v2"
             )
         conflicts: Final = self._tier_definition_conflicts()
