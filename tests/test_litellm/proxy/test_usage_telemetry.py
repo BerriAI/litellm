@@ -334,12 +334,24 @@ class _FakeConfigTable:
 
 @dataclass
 class _FakeDb:
-    litellm_config: _FakeConfigTable
+    litellm_config: object
+
+
+class _ReplicaTable:
+    """Stands in for the read replica: any access through it is a bug, because
+    a row just written to the primary may not be visible on the replica yet."""
+
+    async def find_unique(self, *, where: dict) -> None:
+        raise AssertionError("read went through the replica (db) instead of writer_db")
+
+    async def create(self, *, data: dict) -> None:
+        raise AssertionError("write went through the replica (db) instead of writer_db")
 
 
 @dataclass
 class _FakePrisma:
-    db: _FakeDb
+    writer_db: _FakeDb
+    db: _FakeDb = field(default_factory=lambda: _FakeDb(_ReplicaTable()))
 
 
 async def test_resolve_instance_id_without_db_returns_uuid() -> None:
@@ -356,29 +368,33 @@ async def test_resolve_instance_id_persists_new_id() -> None:
     prisma: Final = _FakePrisma(_FakeDb(_FakeConfigTable()))
     resolved: Final = await ut.resolve_instance_id(prisma)
     assert str(uuid.UUID(resolved)) == resolved
-    (created,) = prisma.db.litellm_config.created
+    (created,) = prisma.writer_db.litellm_config.created
     assert created["param_name"] == ut.INSTANCE_ID_CONFIG_KEY
     assert json.loads(created["param_value"]) == {"instance_id": resolved}
 
 
 async def test_resolve_instance_id_insert_race_returns_winner_row() -> None:
     """When two workers miss the row and race the create, the loser must adopt
-    the winner's persisted id rather than falling back to a per-process uuid."""
+    the winner's persisted id rather than falling back to a per-process uuid.
+    Every read goes through writer_db so the winner's row is visible despite
+    replica lag."""
     winner: Final = _FakeRow({"instance_id": "winner-id"})
 
     class _RaceTable:
         def __init__(self) -> None:
-            self._find_calls: Final[list] = []
+            self.find_calls: Final[list] = []
 
         async def find_unique(self, *, where: dict) -> _FakeRow | None:
-            self._find_calls.append(where)
-            return None if len(self._find_calls) == 1 else winner
+            self.find_calls.append(where)
+            return None if len(self.find_calls) == 1 else winner
 
         async def create(self, *, data: dict) -> None:
             raise RuntimeError("duplicate key")
 
-    prisma: Final = type("P", (), {"db": type("DB", (), {"litellm_config": _RaceTable()})()})()
+    race_table: Final = _RaceTable()
+    prisma: Final = _FakePrisma(_FakeDb(race_table))
     assert await ut.resolve_instance_id(prisma) == "winner-id"
+    assert len(race_table.find_calls) == 2
 
 
 async def test_resolve_instance_id_falls_back_on_db_error() -> None:
@@ -386,6 +402,6 @@ async def test_resolve_instance_id_falls_back_on_db_error() -> None:
         async def find_unique(self, *, where: dict) -> None:
             raise RuntimeError("db down")
 
-    prisma: Final = type("P", (), {"db": type("DB", (), {"litellm_config": _ExplodingTable()})()})()
+    prisma: Final = _FakePrisma(_FakeDb(_ExplodingTable()))
     resolved: Final = await ut.resolve_instance_id(prisma)
     assert str(uuid.UUID(resolved)) == resolved

@@ -145,6 +145,7 @@ class UsageTelemetryRecorder(CustomLogger):
     """
 
     def __init__(self, provider: MeterProvider) -> None:
+        super().__init__()
         self._provider = provider
         meter: Final = provider.get_meter(METER_NAME)
         self._requests = meter.create_counter(
@@ -259,7 +260,7 @@ async def resolve_instance_id(prisma_client: "PrismaClient | None") -> str:
         return str(uuid.uuid4())
     try:
         where: Final[_ConfigParamWhere] = {"param_name": INSTANCE_ID_CONFIG_KEY}
-        existing: Final = _instance_id_from_row(await prisma_client.db.litellm_config.find_unique(where=where))
+        existing: Final = _instance_id_from_row(await prisma_client.writer_db.litellm_config.find_unique(where=where))
         if existing is not None:
             return existing
         instance_id: Final = str(uuid.uuid4())
@@ -269,9 +270,9 @@ async def resolve_instance_id(prisma_client: "PrismaClient | None") -> str:
             "param_value": json.dumps(instance_value),
         }
         try:
-            await prisma_client.db.litellm_config.create(data=data)
+            await prisma_client.writer_db.litellm_config.create(data=data)
         except Exception:  # noqa: BLE001 -- a concurrent worker won the insert; read its row instead
-            raced: Final = _instance_id_from_row(await prisma_client.db.litellm_config.find_unique(where=where))
+            raced: Final = _instance_id_from_row(await prisma_client.writer_db.litellm_config.find_unique(where=where))
             if raced is not None:
                 return raced
             raise
