@@ -1024,6 +1024,90 @@ def test_moderation_results_without_a_verdict_produce_no_output() -> None:
     assert data.choices_out == ()
 
 
+def test_rerank_results_become_ranked_indices_and_scores_with_the_document_text() -> None:
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _route_payload(
+            "arerank",
+            "rerank-v4.0-fast",
+            {
+                "id": "rr-1",
+                "results": [
+                    {"index": 2, "relevance_score": 0.91, "document": {"text": "Paris is the capital of France."}},
+                    {"index": 0, "relevance_score": 0.07},
+                    {"index": 1, "relevance_score": 0.02, "document": "not-a-document"},
+                ],
+                "meta": {"billed_units": {"search_units": 1}},
+            },
+        ),
+        capture_content=True,
+    )
+
+    assert data.choices_out == (_assistant_choice("[2] 0.91\nParis is the capital of France.\n\n[0] 0.07\n\n[1] 0.02"),)
+    assert data.finish_reasons == ()
+    assert data.response_id == "rr-1"
+
+
+def test_rerank_output_follows_the_content_capture_gate() -> None:
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _route_payload("arerank", "rerank-v4.0-fast", {"results": [{"index": 0, "relevance_score": 0.5}]})
+    )
+
+    assert data.choices_out == ()
+
+
+def test_rerank_results_without_an_index_and_score_produce_no_output() -> None:
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _route_payload(
+            "arerank",
+            "rerank-v4.0-fast",
+            {"results": [{"index": 0, "document": {"text": "x"}}, {"relevance_score": 0.5}, "not-a-result"]},
+        ),
+        capture_content=True,
+    )
+
+    assert data.choices_out == ()
+
+
+def test_search_results_become_title_url_and_snippet_blocks_in_result_order() -> None:
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _route_payload(
+            "asearch",
+            "exa-search",
+            {
+                "object": "search",
+                "results": [
+                    {"title": "Eiffel Tower", "url": "https://example.com/eiffel", "snippet": "A lattice tower."},
+                    {"url": "https://example.com/bare", "date": "2024-01-01"},
+                    {"title": "no url", "snippet": "dropped"},
+                ],
+            },
+        ),
+        capture_content=True,
+    )
+
+    assert data.choices_out == (
+        _assistant_choice("Eiffel Tower\nhttps://example.com/eiffel\nA lattice tower.\n\nhttps://example.com/bare"),
+    )
+    assert data.finish_reasons == ()
+
+
+def test_search_output_follows_the_content_capture_gate() -> None:
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _route_payload("asearch", "exa-search", {"results": [{"url": "https://example.com"}]})
+    )
+
+    assert data.choices_out == ()
+
+
+def test_search_results_without_a_url_produce_no_output() -> None:
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _route_payload("asearch", "exa-search", {"results": [{"title": "t", "snippet": "s"}, "not-a-result"]}),
+        capture_content=True,
+    )
+
+    assert data.choices_out == ()
+
+
 def test_image_data_becomes_a_size_summary_and_never_carries_the_base64_payload() -> None:
     encoded: Final = "QUJDRA=="
     data: Final = LLMCallSpanData.from_standard_logging_payload(

@@ -35,6 +35,7 @@ from importlib import resources
 from inspect import iscoroutine
 from io import StringIO
 from os.path import abspath, dirname, join
+from pathlib import PurePath
 from types import MappingProxyType
 
 import dotenv
@@ -886,6 +887,24 @@ async def _run_success_deployment_hook_on_converted_chat_stream(
     )
 
 
+def _ocr_document_summary(document: object) -> str:
+    """The OCR document as logged input: its URL, or the file's name, MIME type or size; never the bytes."""
+    if not isinstance(document, Mapping):
+        return "default-message-value"
+    doc: Final = cast(Mapping[str, object], document)  # cast-ok: ocr()/aocr() type the document as Mapping[str, object]
+    location: Final = doc.get("document_url") or doc.get("image_url")
+    if isinstance(location, str):
+        return location
+    file_input: Final = doc.get("file")
+    mime_type: Final = doc.get("mime_type")
+    kind: Final = f"file ({mime_type})" if isinstance(mime_type, str) else "file"
+    if isinstance(file_input, PurePath):
+        return f"{kind} {file_input.name}"
+    if isinstance(file_input, bytes):
+        return f"{kind} {len(file_input)} bytes"
+    return kind
+
+
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
 def function_setup(
     original_function: str,
@@ -1126,6 +1145,13 @@ def function_setup(
             messages = args[0] if len(args) > 0 else kwargs["prompt"]
         elif call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value:
             messages = kwargs.get("query")
+        elif call_type in (CallTypes.search.value, CallTypes.asearch.value):
+            search_query: Final = args[0] if len(args) > 0 else kwargs.get("query")
+            messages = "\n".join(search_query) if isinstance(search_query, list) else search_query
+        elif call_type in (CallTypes.image_edit.value, CallTypes.aimage_edit.value):
+            messages = args[1] if len(args) > 1 else kwargs.get("prompt")
+        elif call_type in (CallTypes.ocr.value, CallTypes.aocr.value):
+            messages = _ocr_document_summary(args[1] if len(args) > 1 else kwargs.get("document"))
         elif call_type == CallTypes.atranscription.value or call_type == CallTypes.transcription.value:
             _file_obj: Final[FileTypes] = args[1] if len(args) > 1 else kwargs["file"]
             # Lazy import audio_utils.utils only when needed for transcription calls

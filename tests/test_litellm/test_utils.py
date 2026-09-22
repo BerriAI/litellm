@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import contextvars
+import io
 import json
 import logging
 import os
@@ -9,6 +10,7 @@ import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from pathlib import PurePath
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1632,7 +1634,6 @@ class TestProxyFunctionCalling:
         # For now, we expect False (current behavior), but document the limitation
         assert proxy_result is False, f"Current limitation: {proxy_model_with_hints} returns False without inference"
 
-
     def test_litellm_utils_supports_function_calling_import(self):
         """Test that supports_function_calling can be imported from litellm.utils."""
         try:
@@ -1651,7 +1652,6 @@ class TestProxyFunctionCalling:
             assert callable(litellm.supports_function_calling)
         except Exception as e:
             pytest.fail(f"Failed to access litellm.supports_function_calling: {e}")
-
 
     def test_edge_cases_and_malformed_proxy_models(self):
         """Test edge cases and malformed proxy model names."""
@@ -4998,7 +4998,9 @@ def _budget_reservation(callback_bound: bool = False) -> dict:
 
 
 _BUDGET_RESERVATION_CALL_KWARGS: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
-_BUDGET_RESERVATION_REFUSAL: Final = litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o")
+_BUDGET_RESERVATION_REFUSAL: Final = litellm.AuthenticationError(
+    message="bad key", llm_provider="openai", model="gpt-4o"
+)
 
 
 @pytest.mark.asyncio
@@ -5998,3 +6000,59 @@ def test_calculate_max_parallel_requests_precedence(
         )
         == expected
     )
+
+
+def _logged_request_messages(original_function: str, *args: object, **kwargs: object) -> object:
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function,
+        litellm.utils.Rules(),
+        datetime.now(),
+        *args,
+        litellm_call_id="request-text-call",
+        **kwargs,
+    )
+    return logging_obj.messages
+
+
+@pytest.mark.parametrize(
+    ("original_function", "args", "kwargs", "expected"),
+    [
+        ("search", (), {"query": "Eiffel Tower"}, "Eiffel Tower"),
+        ("asearch", ("Eiffel Tower",), {}, "Eiffel Tower"),
+        ("asearch", (), {"query": ["Eiffel Tower", "Louvre"]}, "Eiffel Tower\nLouvre"),
+        ("image_edit", (), {"prompt": "make it blue", "image": b"png"}, "make it blue"),
+        ("aimage_edit", (b"png", "make it blue"), {}, "make it blue"),
+        (
+            "aocr",
+            (),
+            {"document": {"type": "document_url", "document_url": "https://x.test/a.pdf"}},
+            "https://x.test/a.pdf",
+        ),
+        (
+            "ocr",
+            ("mistral-ocr-latest", {"type": "image_url", "image_url": "https://x.test/a.png"}),
+            {},
+            "https://x.test/a.png",
+        ),
+        (
+            "aocr",
+            (),
+            {"document": {"type": "file", "file": PurePath("/tmp/hello.pdf"), "mime_type": "application/pdf"}},
+            "file (application/pdf) hello.pdf",
+        ),
+        ("aocr", (), {"document": {"type": "file", "file": b"%PDF"}}, "file 4 bytes"),
+        ("aocr", (), {"document": {"type": "file", "file": io.BytesIO(b"%PDF")}}, "file"),
+        ("aocr", (), {"document": "not-a-document"}, "default-message-value"),
+    ],
+)
+def test_function_setup_logs_the_search_query_edit_prompt_and_ocr_document_summary_as_the_request(
+    original_function: str, args: tuple[object, ...], kwargs: dict[str, object], expected: str
+) -> None:
+    assert _logged_request_messages(original_function, *args, **kwargs) == [{"role": "user", "content": expected}]
+
+
+def test_function_setup_never_logs_the_ocr_file_bytes() -> None:
+    content: Final = b"%PDF-1.4 secret document body"
+    logged: Final = _logged_request_messages("aocr", document={"type": "file", "file": content})
+
+    assert logged == [{"role": "user", "content": "file 29 bytes"}]
