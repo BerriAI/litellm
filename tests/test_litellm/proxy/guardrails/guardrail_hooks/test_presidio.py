@@ -2448,11 +2448,11 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_without_pii_are_for
 
 
 @pytest.mark.asyncio
-async def test_apply_to_output_streaming_anthropic_sse_bytes_are_replayed_when_presidio_is_unreachable():
+async def test_apply_to_output_streaming_anthropic_sse_bytes_fail_closed_when_presidio_is_unreachable():
     """
     The raw SSE stream is fully drained before masking, so a Presidio outage
-    must replay the buffered frames instead of ending the response empty,
-    matching the ModelResponseStream fallback.
+    must surface as an error to the caller: replaying the unscanned frames
+    would hand over whatever PII the model generated.
     """
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
@@ -2483,14 +2483,19 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_are_replayed_when_p
             yield b
 
     collected = []
-    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
-        response=mock_stream(),
-        request_data={},
-    ):
-        collected.append(chunk)
 
-    assert collected == byte_chunks
+    async def collect_masked_stream():
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=mock_stream(),
+            request_data={},
+        ):
+            collected.append(chunk)
+
+    with pytest.raises(Exception, match="Presidio PII analysis failed"):
+        await collect_masked_stream()
+
+    assert collected == []
 
 
 @pytest.mark.asyncio
