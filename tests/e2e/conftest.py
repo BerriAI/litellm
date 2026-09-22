@@ -31,7 +31,6 @@ from e2e_config import (
     MANAGED_FILES_OPT_IN_ENV,
     MCP_OAUTH_LIVE_OPT_IN_ENV,
     OTEL_V2_OPT_IN_ENV,
-    OWNED_GATEWAY_OPT_IN_ENV,
     PROMPT_CACHING_OPT_IN_ENV,
     PROVIDER_EDGE_HOST_OPT_IN_ENV,
     PROXY_BASE_URL,
@@ -64,7 +63,6 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
         "provider_edge_host": PROVIDER_EDGE_HOST_OPT_IN_ENV,
         "otel_v2": OTEL_V2_OPT_IN_ENV,
-        "owned_gateway": OWNED_GATEWAY_OPT_IN_ENV,
     }
 )
 
@@ -134,11 +132,6 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "prompt_caching_stack: needs a proxy running with router_settings.optional_pre_call_checks including "
         "prompt_caching; deselected unless E2E_PROMPT_CACHING_STACK is set",
-    )
-    config.addinivalue_line(
-        "markers",
-        "owned_gateway: boots its own proxy from this checkout's litellm package, which the "
-        "Buildkite e2e container does not ship; deselected unless E2E_OWNED_GATEWAY is set",
     )
     config.addinivalue_line(
         "markers",
