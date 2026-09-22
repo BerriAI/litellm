@@ -2,6 +2,7 @@
 Tests for JSON-based provider configuration system.
 """
 
+import json
 import os
 import sys
 from unittest.mock import patch
@@ -509,3 +510,239 @@ if __name__ == "__main__":
     print("\n" + "=" * 50)
     print("✓ All tests passed!")
     print("=" * 50)
+
+
+class TestCoralBricks:
+    def test_coralbricks_json_config_exists(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        coralbricks = JSONProviderRegistry.get("coralbricks")
+        assert coralbricks is not None
+        assert coralbricks.base_url == "https://inference.coralbricks.ai/v1"
+        assert coralbricks.api_key_env == "CORALBRICKS_API_KEY"
+        assert coralbricks.api_base_env == "CORALBRICKS_API_BASE"
+        assert coralbricks.param_mappings.get("max_completion_tokens") == "max_tokens"
+
+    def test_coralbricks_provider_resolution(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="coralbricks/glm-5.3-fp4",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert model == "glm-5.3-fp4"
+        assert provider == "coralbricks"
+        assert api_key is None
+        assert api_base == "https://inference.coralbricks.ai/v1"
+
+    def test_coralbricks_dynamic_config(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("coralbricks")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://inference.coralbricks.ai/v1"
+
+    def test_coralbricks_is_selectable_in_the_add_model_form(self):
+        path = os.path.join(
+            os.path.dirname(litellm.__file__), "proxy", "public_endpoints", "provider_create_fields.json"
+        )
+        with open(path) as f:
+            entries = [e for e in json.load(f) if e["litellm_provider"] == "coralbricks"]
+        assert len(entries) == 1, "coralbricks must appear exactly once in provider_create_fields.json"
+
+        entry = entries[0]
+        assert entry["provider"] == "CORALBRICKS"
+        assert entry["provider_display_name"] == "CoralBricks"
+        assert entry["default_model_placeholder"] == "coralbricks/glm-5.3-fp4"
+
+        fields = {f["key"]: f for f in entry["credential_fields"]}
+        assert fields["api_key"]["required"] is True
+        assert fields["api_key"]["field_type"] == "password"
+        assert fields["api_base"]["required"] is False
+        assert fields["api_base"]["placeholder"] == "https://inference.coralbricks.ai/v1"
+
+
+class TestCoralBricksPricing:
+    """Regression coverage for the CoralBricks cost map (Greptile P2):
+    the pricing records and the zero-cost cached-input behavior."""
+
+    EXPECTED = {
+        "coralbricks/glm-5.3-fp4": (1.12e-06, 4.4e-06),
+        "coralbricks/glm-5.3-flash-fp4": (1.5e-07, 5e-07),
+        "coralbricks/deepseek-v4.1-flash-fast-fp4": (3e-07, 1.2e-06),
+    }
+    # First-time prompt tokens come back as cache writes and bill at the published
+    # cache-write rate (coralbricks.ai/pricing): 1.5x input, 0.3x on DeepSeek V4.1 Flash.
+    CACHE_WRITE = {
+        "coralbricks/glm-5.3-fp4": 1.68e-06,
+        "coralbricks/glm-5.3-flash-fp4": 2.3e-07,
+        "coralbricks/deepseek-v4.1-flash-fast-fp4": 9e-08,
+    }
+
+    def test_pricing_records_present(self):
+        """The shipped cost map carries every served model with free cache reads."""
+        prices_path = os.path.join(
+            workspace_path, "model_prices_and_context_window.json"
+        )
+        with open(prices_path) as fh:
+            prices = json.load(fh)
+        for model, (inp, out) in self.EXPECTED.items():
+            row = prices[model]
+            assert row["litellm_provider"] == "coralbricks"
+            assert row["input_cost_per_token"] == inp
+            assert row["output_cost_per_token"] == out
+            assert row["cache_read_input_token_cost"] == 0.0
+            assert row["cache_creation_input_token_cost"] == self.CACHE_WRITE[model]
+            assert row["mode"] == "chat"
+
+    def test_capability_flags_match_the_served_models(self):
+        """Vision and reasoning flags track what /v1/models reports.
+
+        DeepSeek V4.1 Flash shipped text-only and gained image input on
+        2026-09-21; the row said supports_vision: false until this was
+        checked against a live request.
+        """
+        prices_path = os.path.join(
+            workspace_path, "model_prices_and_context_window.json"
+        )
+        with open(prices_path) as fh:
+            prices = json.load(fh)
+        vision = {
+            "coralbricks/glm-5.3-fp4": False,
+            "coralbricks/glm-5.3-flash-fp4": True,
+            "coralbricks/deepseek-v4.1-flash-fast-fp4": True,
+        }
+        for model, expected in vision.items():
+            assert prices[model]["supports_vision"] is expected, model
+            # Every model CoralBricks serves reasons; on DeepSeek it is opt-in
+            # (reasoning_effort), on the others it is on by default.
+            assert prices[model]["supports_reasoning"] is True, model
+
+    def test_completion_cost_with_free_cached_reads(self):
+        """completion_cost prices cached input tokens at zero for coralbricks."""
+        from litellm import ModelResponse, Usage, completion_cost
+
+        model = "coralbricks/glm-5.3-fp4"
+        inp, out = self.EXPECTED[model]
+        # register_model makes the test deterministic regardless of which
+        # cost map (local backup vs remote) the environment loaded.
+        litellm.register_model(
+            {
+                model: {
+                    "litellm_provider": "coralbricks",
+                    "mode": "chat",
+                    "input_cost_per_token": inp,
+                    "output_cost_per_token": out,
+                    "cache_read_input_token_cost": 0.0,
+                }
+            }
+        )
+        resp = ModelResponse(
+            model=model,
+            usage=Usage(
+                prompt_tokens=1000,
+                completion_tokens=100,
+                prompt_tokens_details={"cached_tokens": 800},
+            ),
+        )
+        resp._hidden_params["custom_llm_provider"] = "coralbricks"
+        cost = completion_cost(completion_response=resp)
+        # 200 uncached input tokens at full rate + 800 cached at 0 + output.
+        expected = 200 * inp + 800 * 0.0 + 100 * out
+        assert abs(cost - expected) < 1e-12, (cost, expected)
+
+    def test_completion_cost_bills_cache_writes_at_the_write_rate(self):
+        """First-time prompt tokens come back as cache writes and cost the
+        cache-write rate, so they are never priced at zero."""
+        from litellm import ModelResponse, Usage, completion_cost
+
+        model = "coralbricks/glm-5.3-flash-fp4"
+        inp, out = self.EXPECTED[model]
+        write = self.CACHE_WRITE[model]
+        litellm.register_model(
+            {
+                model: {
+                    "litellm_provider": "coralbricks",
+                    "mode": "chat",
+                    "input_cost_per_token": inp,
+                    "output_cost_per_token": out,
+                    "cache_read_input_token_cost": 0.0,
+                    "cache_creation_input_token_cost": write,
+                }
+            }
+        )
+        resp = ModelResponse(
+            model=model,
+            usage=Usage(
+                prompt_tokens=1000,
+                completion_tokens=100,
+                prompt_tokens_details={
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 1000,
+                    "cache_creation_tokens": 1000,
+                },
+            ),
+        )
+        resp._hidden_params["custom_llm_provider"] = "coralbricks"
+        cost = completion_cost(completion_response=resp)
+        expected = 1000 * write + 100 * out
+        assert abs(cost - expected) < 1e-12, (cost, expected)
+
+    def test_completion_cost_bills_deepseek_cache_writes_at_the_write_rate(self):
+        """DeepSeek V4.1 Flash prices first-time prompt tokens at its cache-write
+        rate instead of input: 1,691 fresh tokens and 2 output tokens cost
+        $0.00015459, the figure the endpoint reported for the same usage."""
+        from litellm import ModelResponse, Usage, completion_cost
+
+        model = "coralbricks/deepseek-v4.1-flash-fast-fp4"
+        inp, out = self.EXPECTED[model]
+        write = self.CACHE_WRITE[model]
+        litellm.register_model(
+            {
+                model: {
+                    "litellm_provider": "coralbricks",
+                    "mode": "chat",
+                    "input_cost_per_token": inp,
+                    "output_cost_per_token": out,
+                    "cache_read_input_token_cost": 0.0,
+                    "cache_creation_input_token_cost": write,
+                }
+            }
+        )
+        resp = ModelResponse(
+            model=model,
+            usage=Usage(
+                prompt_tokens=1691,
+                completion_tokens=2,
+                prompt_tokens_details={
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 1691,
+                    "cache_creation_tokens": 1691,
+                },
+            ),
+        )
+        resp._hidden_params["custom_llm_provider"] = "coralbricks"
+        cost = completion_cost(completion_response=resp)
+        assert abs(cost - 0.00015459) < 1e-12, cost
+
+    def test_add_known_models_registers_coralbricks(self):
+        """Covers the coralbricks branch in add_known_models: cost-map rows
+        with litellm_provider=coralbricks land in the provider model set."""
+        litellm.add_known_models(
+            {
+                "coralbricks/test-model": {
+                    "litellm_provider": "coralbricks",
+                    "mode": "chat",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                }
+            }
+        )
+        assert "coralbricks/test-model" in litellm.coralbricks_models

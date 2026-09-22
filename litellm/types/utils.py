@@ -4047,6 +4047,7 @@ class LlmProviders(str, Enum):
     COGNITION = "cognition"
     SCX_AI = "scx-ai"
     DARKBLOOM = "darkbloom"
+    CORALBRICKS = "coralbricks"
     META = "meta"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
