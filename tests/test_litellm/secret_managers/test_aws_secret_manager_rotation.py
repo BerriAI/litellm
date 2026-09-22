@@ -217,6 +217,8 @@ class FakeSecretsManagerState:
     live: Mapping[str, str]
     scheduled_for_deletion: frozenset[str] = frozenset()
     actions: tuple[str, ...] = ()
+    descriptions: Mapping[str, str] = MappingProxyType({})
+    failing_actions: frozenset[str] = frozenset()
 
 
 class FakeSecretsManagerService:
@@ -228,12 +230,28 @@ class FakeSecretsManagerService:
         body: Final = json.loads(request.content)
         name: Final = str(body.get("Name") or body.get("SecretId"))
         self.state = replace(self.state, actions=(*self.state.actions, f"{action}:{name}"))
+        if action in self.state.failing_actions:
+            return self._error("InternalServiceError", f"injected failure for {action}")
         match action:
             case "CreateSecret":
                 if name in self.state.live:
                     return self._error("ResourceExistsException", f"The secret {name} already exists")
                 self.state = replace(
-                    self.state, live=MappingProxyType({**self.state.live, name: str(body["SecretString"])})
+                    self.state,
+                    live=MappingProxyType({**self.state.live, name: str(body["SecretString"])}),
+                    descriptions=MappingProxyType({**self.state.descriptions, name: str(body.get("Description", ""))}),
+                )
+                return httpx.Response(200, json={"ARN": f"arn:fake:{name}", "Name": name})
+            case "UpdateSecret":
+                if name in self.state.scheduled_for_deletion:
+                    return self._error(
+                        "InvalidRequestException",
+                        "You can't perform this operation on the secret because it was marked for deletion.",
+                    )
+                self.state = replace(
+                    self.state,
+                    live=MappingProxyType({**self.state.live, name: str(body["SecretString"])}),
+                    descriptions=MappingProxyType({**self.state.descriptions, name: str(body.get("Description", ""))}),
                 )
                 return httpx.Response(200, json={"ARN": f"arn:fake:{name}", "Name": name})
             case "DescribeSecret":
@@ -308,6 +326,25 @@ async def test_rotate_secret_back_to_name_inside_recovery_window_restores_and_st
         assert await manager.async_read_secret(secret_name=alias_a) == "value-3"
         assert await manager.async_read_secret(secret_name=alias_b) is None
         assert fake.state.scheduled_for_deletion == frozenset({alias_b})
+        assert fake.state.descriptions[alias_a] == f"Rotated from {alias_b}"
+
+
+@pytest.mark.asyncio
+async def test_write_secret_to_name_inside_recovery_window_reschedules_deletion_when_update_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    alias: Final = "synthetic/deleted-alias"
+    with fake_secrets_manager(monkeypatch) as fake:
+        manager: Final = AWSSecretsManagerV2(aws_region_name="us-east-1")
+        await manager.async_write_secret(secret_name=alias, secret_value="value-1")
+        await manager.async_delete_secret(secret_name=alias, recovery_window_in_days=7)
+        fake.state = replace(fake.state, failing_actions=frozenset({"UpdateSecret"}))
+
+        with pytest.raises(ValueError, match="injected failure for UpdateSecret"):
+            await manager.async_write_secret(secret_name=alias, secret_value="value-2")
+
+        assert fake.state.scheduled_for_deletion == frozenset({alias})
+        assert fake.state.live[alias] == "value-1"
 
 
 @pytest.mark.asyncio

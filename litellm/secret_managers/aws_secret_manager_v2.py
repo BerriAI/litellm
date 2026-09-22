@@ -16,6 +16,8 @@ Requires:
 
 import json
 import os
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -296,7 +298,6 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
 
         create_response: Final = await self._async_create_or_restore_secret(
             secret_name=secret_name,
-            secret_value=secret_value,
             request_data=data,
             optional_params=optional_params,
             timeout=timeout,
@@ -328,11 +329,10 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
     async def _async_create_or_restore_secret(
         self,
         secret_name: str,
-        secret_value: str,
-        request_data: dict[str, object],
+        request_data: Mapping[str, object],
         optional_params: dict | None,
         timeout: float | httpx.Timeout | None,
-    ) -> dict:
+    ) -> dict[str, object]:
         try:
             return await self._async_post_action(
                 action="CreateSecret",
@@ -341,18 +341,16 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 optional_params=optional_params,
                 timeout=timeout,
             )
-        except httpx.HTTPStatusError as err:
+        except ValueError:
             if not await self._async_is_scheduled_for_deletion(
                 secret_name=secret_name,
                 optional_params=optional_params,
                 timeout=timeout,
             ):
-                raise ValueError(f"HTTP error occurred: {err.response.text}")
-        except httpx.TimeoutException:
-            raise ValueError("Timeout error occurred")
+                raise
 
         verbose_logger.info(
-            "Secret %s is scheduled for deletion, restoring and updating in place (RestoreSecret + PutSecretValue)",
+            "Secret %s is scheduled for deletion, restoring and updating in place (RestoreSecret + UpdateSecret)",
             secret_name,
         )
         await self._async_post_action(
@@ -362,12 +360,30 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             optional_params=optional_params,
             timeout=timeout,
         )
-        return await self.async_put_secret_value(
-            secret_name=secret_name,
-            secret_value=secret_value,
-            optional_params=optional_params,
-            timeout=timeout,
+        update_data: Final = MappingProxyType(
+            {("SecretId" if key == "Name" else key): value for key, value in request_data.items() if key != "Tags"}
         )
+        tags: Final = request_data.get("Tags")
+        try:
+            updated: Final = await self._async_post_action(
+                action="UpdateSecret",
+                secret_name=secret_name,
+                request_data=update_data,
+                optional_params=optional_params,
+                timeout=timeout,
+            )
+            if tags is not None:
+                await self._async_post_action(
+                    action="TagResource",
+                    secret_name=secret_name,
+                    request_data=MappingProxyType({"SecretId": secret_name, "Tags": tags}),
+                    optional_params=optional_params,
+                    timeout=timeout,
+                )
+        except ValueError:
+            await self.async_delete_secret(secret_name=secret_name, optional_params=optional_params, timeout=timeout)
+            raise
+        return updated
 
     async def _async_is_scheduled_for_deletion(
         self,
@@ -383,7 +399,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 optional_params=optional_params,
                 timeout=timeout,
             )
-        except (httpx.HTTPStatusError, httpx.TimeoutException):
+        except ValueError:
             return False
         return described.get("DeletedDate") is not None
 
@@ -391,23 +407,28 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         self,
         action: str,
         secret_name: str,
-        request_data: dict[str, object] | None,
+        request_data: Mapping[str, object] | None,
         optional_params: dict | None,
         timeout: float | httpx.Timeout | None,
-    ) -> dict:
+    ) -> dict[str, object]:
         endpoint_url, headers, body = self._prepare_request(
             action=action,
             secret_name=secret_name,
             optional_params=optional_params,
-            request_data=request_data,
+            request_data=dict(request_data) if request_data is not None else None,
         )
         async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"timeout": timeout},
         )
-        response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
-        response.raise_for_status()
-        return response.json()
+        try:
+            response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as err:
+            raise ValueError(f"HTTP error occurred: {err.response.text}")
+        except httpx.TimeoutException:
+            raise ValueError("Timeout error occurred")
 
     async def async_replicate_secret(
         self,
