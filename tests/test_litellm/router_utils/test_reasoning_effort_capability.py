@@ -418,6 +418,25 @@ class TestGpt6AstraAdvertisesItsDocumentedLevels:
         )
 
 
+class TestGpt6SolAndLunaAdvertiseNoneThroughMax:
+    @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna"])
+    def test_the_entry_advertises_none_through_max(self, local_model_cost_map, model):
+        """OpenAI documents none, low, medium (default), high, xhigh and max for both. Unlike
+        gpt-6-astra they take none."""
+        from litellm.utils import _get_model_info_helper
+
+        model_info = dict(_get_model_info_helper(model=model, custom_llm_provider="openai"))
+
+        assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        )
+
+
 class TestNearestDeclaredReasoningEffort:
     def test_a_declared_level_is_kept(self):
         assert nearest_declared_reasoning_effort("high", ("none", "high")) == "high"
