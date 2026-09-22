@@ -1282,7 +1282,7 @@ async def test_route_request_routing_group_name_passes_model_gate():
 
 
 @pytest.mark.asyncio
-async def test_route_request_a2a_agent_miss_does_not_consume_model_read_through(monkeypatch):
+async def test_route_request_a2a_agent_miss_does_not_consume_model_read_through(fresh_agent_read_through, monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
