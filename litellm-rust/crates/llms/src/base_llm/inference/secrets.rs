@@ -17,3 +17,26 @@ impl SecretSource for EnvironmentSecrets {
         Box::pin(async { Ok(Arc::new(ProcessEnvironment) as Secrets) })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::{EnvironmentSecrets, SecretSource};
+
+    #[rstest]
+    #[case::lowercase_true("LITELLM_ENVIRONMENT_SECRETS_TRUE", "true", None)]
+    #[case::padded_false("LITELLM_ENVIRONMENT_SECRETS_FALSE", " FALSE ", None)]
+    #[case::text("LITELLM_ENVIRONMENT_SECRETS_TEXT", "secret", Some("secret"))]
+    #[tokio::test]
+    async fn boolean_environment_values_are_absent_like_get_secret_str(
+        #[case] name: &'static str,
+        #[case] value: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        unsafe { std::env::set_var(name, value) };
+        let secret = EnvironmentSecrets.resolve(&[name]).await.unwrap().get(name);
+        unsafe { std::env::remove_var(name) };
+        assert_eq!(secret.as_deref(), expected);
+    }
+}

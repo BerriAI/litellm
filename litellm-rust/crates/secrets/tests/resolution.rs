@@ -1,7 +1,9 @@
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
 
+use litellm_core_utils::settings::Lookup;
 use litellm_secrets::{
-    Error, OidcResolver, Secret, SecretManagerState, SecretResolver, SecretValue,
+    Error, ExternalSecretManager, FailurePolicy, KeyManagementSettings, KeyManagementSystem,
+    OidcResolver, Secret, SecretManager, SecretManagerState, SecretResolver, SecretValue,
     secret_manager_would_be_consulted,
 };
 
@@ -15,76 +17,59 @@ fn resolver(value: Option<&str>) -> SecretResolver {
 }
 
 #[rstest::rstest]
-#[case("true", Some(true))]
-#[case(" FALSE ", Some(false))]
-#[case("(True)", None)]
-#[case("False # comment", None)]
-#[case("1", None)]
-#[case("secret", None)]
+#[case::lowercase_true("true", Some(true))]
+#[case::padded_false(" FALSE ", Some(false))]
+#[case::capitalized_true("True", Some(true))]
+#[case::parenthesized("(True)", None)]
+#[case::commented("False # comment", None)]
+#[case::number("1", None)]
+#[case::text("secret", None)]
 #[tokio::test]
-async fn conversion_is_explicit_and_independent_of_manager_configuration(
+async fn environment_values_are_coerced_like_str_to_bool(
     #[case] input: &str,
     #[case] boolean: Option<bool>,
 ) {
     let resolver = resolver(Some(input));
     assert_eq!(
         resolver.get_secret("key", None).await.unwrap(),
-        Some(Secret::String(SecretValue::new(input)))
+        Some(boolean.map_or_else(|| Secret::String(SecretValue::new(input)), Secret::Bool))
     );
     assert_eq!(
         resolver
             .get_secret_str("key", None)
             .await
             .unwrap()
-            .unwrap()
-            .expose(),
-        input
+            .as_ref()
+            .map(SecretValue::expose),
+        boolean.is_none().then_some(input)
     );
-    match boolean {
-        Some(value) => assert_eq!(
-            resolver.get_secret_bool("key", None).await.unwrap(),
-            Some(value)
-        ),
-        None => assert!(matches!(
-            resolver.get_secret_bool("key", Some(true)).await,
-            Err(Error::TypeMismatch {
-                expected: "boolean"
-            })
-        )),
-    }
+    assert_eq!(
+        resolver.get_secret_bool("key", Some(true)).await.unwrap(),
+        boolean
+    );
 }
 
-#[rstest::rstest]
 #[tokio::test]
-async fn defaults_apply_only_to_absence() {
+async fn defaults_never_replace_an_absent_secret() {
     let missing = resolver(None);
-    assert_eq!(missing.get_secret("key", None).await.unwrap(), None);
+    assert_eq!(
+        missing
+            .get_secret("key", Some(Secret::Bool(false)))
+            .await
+            .unwrap(),
+        None
+    );
     assert_eq!(
         missing.get_secret_bool("key", Some(false)).await.unwrap(),
-        Some(false)
+        None
     );
     assert_eq!(
         missing
             .get_secret_str("key", Some(SecretValue::new("default")))
             .await
-            .unwrap()
-            .unwrap()
-            .expose(),
-        "default"
+            .unwrap(),
+        None
     );
-    for value in [
-        Secret::Bool(false),
-        Secret::from_json(serde_json::json!({"key":1})),
-        Secret::from_json(serde_json::Value::Null),
-    ] {
-        assert_eq!(
-            missing
-                .get_secret("key", Some(value.clone()))
-                .await
-                .unwrap(),
-            Some(value)
-        );
-    }
     assert_eq!(
         resolver(Some(""))
             .get_secret_str("key", Some(SecretValue::new("default")))
@@ -93,6 +78,112 @@ async fn defaults_apply_only_to_absence() {
             .unwrap()
             .expose(),
         ""
+    );
+}
+
+struct FixedManager(Result<Option<Secret>, ()>);
+
+impl ExternalSecretManager for FixedManager {
+    fn system(&self) -> KeyManagementSystem {
+        KeyManagementSystem::Custom
+    }
+
+    fn read_secret<'a>(
+        &'a self,
+        _name: &'a str,
+        _settings: &'a KeyManagementSettings,
+        _environment: &'a (dyn Lookup + Send + Sync),
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Secret>, Error>> + Send + 'a>> {
+        Box::pin(async move { self.0.clone().map_err(|()| Error::MissingCiphertext) })
+    }
+}
+
+fn managed(reply: Result<Option<Secret>, ()>, environment: Option<&'static str>) -> SecretResolver {
+    SecretResolver::new(
+        Arc::new(SecretManagerState::new(
+            SecretManager::External(Arc::new(FixedManager(reply))),
+            KeyManagementSettings::default(),
+        )),
+        Arc::new(move |_: &str| environment.map(str::to_owned)),
+        OidcResolver::default(),
+    )
+    .with_failure_policy(FailurePolicy::EnvironmentFallback)
+}
+
+#[tokio::test]
+async fn manager_absence_is_final_even_with_environment_and_default() {
+    assert_eq!(
+        managed(Ok(None), Some("environment"))
+            .get_secret("key", Some(Secret::Bool(true)))
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[rstest::rstest]
+#[case::capitalized_true("True", Some(Secret::Bool(true)), Some(true))]
+#[case::parenthesized_false("(False)", Some(Secret::Bool(false)), Some(false))]
+#[case::lowercase_true("true", None, Some(true))]
+#[case::number("1", None, None)]
+#[case::text("secret", None, None)]
+#[tokio::test]
+async fn manager_strings_are_coerced_like_literal_eval(
+    #[case] input: &'static str,
+    #[case] literal: Option<Secret>,
+    #[case] boolean: Option<bool>,
+) {
+    let resolver = managed(Ok(Some(Secret::String(SecretValue::new(input)))), None);
+    assert_eq!(
+        resolver.get_secret("key", None).await.unwrap(),
+        Some(
+            literal
+                .clone()
+                .unwrap_or_else(|| Secret::String(SecretValue::new(input)))
+        )
+    );
+    assert_eq!(
+        resolver
+            .get_secret_str("key", None)
+            .await
+            .unwrap()
+            .as_ref()
+            .map(SecretValue::expose),
+        literal.is_none().then_some(input)
+    );
+    assert_eq!(
+        resolver.get_secret_bool("key", None).await.unwrap(),
+        boolean
+    );
+}
+
+#[rstest::rstest]
+#[case::boolean(Secret::Bool(false))]
+#[case::object(Secret::from_json(serde_json::json!({"key": 1})))]
+#[case::null(Secret::from_json(serde_json::Value::Null))]
+#[tokio::test]
+async fn non_string_manager_values_resolve_to_none(#[case] value: Secret) {
+    let resolver = managed(Ok(Some(value)), Some("environment"));
+    assert_eq!(resolver.get_secret("key", None).await.unwrap(), None);
+    assert_eq!(resolver.get_secret_str("key", None).await.unwrap(), None);
+    assert_eq!(resolver.get_secret_bool("key", None).await.unwrap(), None);
+}
+
+#[rstest::rstest]
+#[case::capitalized_true(Some("True"), Some(Secret::Bool(true)))]
+#[case::lowercase_true(Some("true"), Some(Secret::String(SecretValue::new("true"))))]
+#[case::missing(None, None)]
+#[tokio::test]
+async fn manager_failures_fall_back_to_the_environment_like_literal_eval(
+    #[case] environment: Option<&'static str>,
+    #[case] expected: Option<Secret>,
+) {
+    assert_eq!(
+        managed(Err(()), environment)
+            .get_secret("key", Some(Secret::Bool(false)))
+            .await
+            .unwrap(),
+        expected
     );
 }
 
@@ -132,9 +223,7 @@ async fn resolver_future_can_run_on_a_tokio_worker() {
 #[cfg(feature = "aws")]
 mod aws {
     use super::*;
-    use litellm_secrets::{
-        AccessMode, FailurePolicy, KeyManagementSettings, SecretManager, aws::AwsSecretsManagerV2,
-    };
+    use litellm_secrets::{AccessMode, aws::AwsSecretsManagerV2};
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     fn state(server: &MockServer, settings: KeyManagementSettings) -> SecretManagerState {
@@ -153,14 +242,13 @@ mod aws {
     }
 
     #[rstest::rstest]
-    #[case::missing(400, serde_json::json!({"__type":"ResourceNotFoundException"}), false)]
-    #[case::denied(400, serde_json::json!({"__type":"AccessDeniedException"}), true)]
-    #[case::malformed(200, serde_json::json!({}), true)]
+    #[case::missing(400, serde_json::json!({"__type":"ResourceNotFoundException"}))]
+    #[case::denied(400, serde_json::json!({"__type":"AccessDeniedException"}))]
+    #[case::malformed(200, serde_json::json!({}))]
     #[tokio::test]
-    async fn failure_policy_preserves_errors_and_fallback_precedence(
+    async fn read_failures_resolve_to_none_without_environment_or_default(
         #[case] status: u16,
         #[case] body: serde_json::Value,
-        #[case] fails: bool,
         #[values(FailurePolicy::Propagate, FailurePolicy::EnvironmentFallback)]
         policy: FailurePolicy,
         #[values(None, Some("environment"))] environment: Option<&'static str>,
@@ -178,15 +266,13 @@ mod aws {
             OidcResolver::default(),
         )
         .with_failure_policy(policy);
-        let result = resolver
-            .get_secret_str("KEY", default.map(SecretValue::new))
-            .await;
-        let fallback = environment.or(default);
-        if fails && (policy == FailurePolicy::Propagate || fallback.is_none()) {
-            assert!(matches!(result, Err(Error::Aws(_))));
-        } else {
-            assert_eq!(result.unwrap().as_ref().map(SecretValue::expose), fallback);
-        }
+        assert_eq!(
+            resolver
+                .get_secret_str("KEY", default.map(SecretValue::new))
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     #[rstest::rstest]
@@ -195,7 +281,7 @@ mod aws {
     #[case::null(serde_json::Value::Null)]
     #[case::string(serde_json::json!("true"))]
     #[tokio::test]
-    async fn typed_values_survive_resolution_and_accessors_reject_wrong_types(
+    async fn primary_secret_values_other_than_strings_resolve_to_none(
         #[case] value: serde_json::Value,
     ) {
         let server = MockServer::start().await;
@@ -215,44 +301,27 @@ mod aws {
             Arc::new(|_: &str| Some("fallback".into())),
             OidcResolver::default(),
         );
+        let text = value.as_str();
         assert_eq!(
             resolver
                 .get_secret("KEY", Some(Secret::Bool(true)))
                 .await
                 .unwrap(),
-            Some(Secret::from_json(value.clone()))
+            text.map(|text| Secret::String(SecretValue::new(text)))
         );
-        match &value {
-            serde_json::Value::String(text) => assert_eq!(
-                resolver
-                    .get_secret_str("KEY", None)
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .expose(),
-                text
-            ),
-            _ => assert!(matches!(
-                resolver.get_secret_str("KEY", None).await,
-                Err(Error::TypeMismatch { expected: "string" })
-            )),
-        }
-        match value {
-            serde_json::Value::Bool(boolean) => assert_eq!(
-                resolver.get_secret_bool("KEY", None).await.unwrap(),
-                Some(boolean)
-            ),
-            serde_json::Value::String(_) => assert_eq!(
-                resolver.get_secret_bool("KEY", None).await.unwrap(),
-                Some(true)
-            ),
-            _ => assert!(matches!(
-                resolver.get_secret_bool("KEY", None).await,
-                Err(Error::TypeMismatch {
-                    expected: "boolean"
-                })
-            )),
-        }
+        assert_eq!(
+            resolver
+                .get_secret_str("KEY", None)
+                .await
+                .unwrap()
+                .as_ref()
+                .map(SecretValue::expose),
+            text
+        );
+        assert_eq!(
+            resolver.get_secret_bool("KEY", None).await.unwrap(),
+            text.map(|_| true)
+        );
     }
 
     #[rstest::rstest]

@@ -145,31 +145,72 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manager_failure_falls_back_to_environment() {
+    async fn manager_failure_resolves_to_none_instead_of_the_environment() {
         let name = "LITELLM_RUST_BRIDGE_MANAGER_FAILURE";
         unsafe { std::env::set_var(name, "env-key") };
         let server = MockServer::start().await;
         Mock::given(header("x-amz-target", "secretsmanager.GetSecretValue"))
             .respond_with(ResponseTemplate::new(500))
-            .expect(1)
+            .expect(2)
             .mount(&server)
             .await;
         let result = resolve(state(&server, KeyManagementSettings::default()), name).await;
+        let missing = resolve(
+            state(&server, KeyManagementSettings::default()),
+            "LITELLM_RUST_BRIDGE_MANAGER_FAILURE_MISSING",
+        )
+        .await;
         unsafe { std::env::remove_var(name) };
-        assert_eq!(result.as_deref(), Some("env-key"));
-        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        assert_eq!(result, None);
+        assert_eq!(missing, None);
+    }
 
-        let missing_server = MockServer::start().await;
+    #[rstest::rstest]
+    #[case::capitalized_true("True")]
+    #[case::parenthesized_false("(False)")]
+    #[tokio::test]
+    async fn boolean_manager_values_are_absent_like_get_secret_str(#[case] value: &str) {
+        let name = "LITELLM_RUST_BRIDGE_BOOLEAN_VALUE";
+        let server = MockServer::start().await;
         Mock::given(header("x-amz-target", "secretsmanager.GetSecretValue"))
-            .respond_with(ResponseTemplate::new(500))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"SecretString": value})))
             .expect(1)
-            .mount(&missing_server)
+            .mount(&server)
             .await;
-        let missing =
-            ResolvedSecrets::from_state(state(&missing_server, KeyManagementSettings::default()))
-                .resolve(&["LITELLM_RUST_BRIDGE_MANAGER_FAILURE_MISSING"])
-                .await;
-        assert!(matches!(missing, Err(litellm_secrets::Error::Aws(_))));
+        assert_eq!(
+            resolve(state(&server, KeyManagementSettings::default()), name).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn undeclared_names_are_read_from_the_manager() {
+        let declared = "LITELLM_RUST_BRIDGE_DECLARED";
+        let undeclared = "LITELLM_RUST_BRIDGE_UNDECLARED_MANAGED";
+        unsafe { std::env::set_var(undeclared, "env-key") };
+        let server = MockServer::start().await;
+        Mock::given(header("x-amz-target", "secretsmanager.GetSecretValue"))
+            .and(body_partial_json(json!({"SecretId": declared})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"SecretString": "declared-key"})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(header("x-amz-target", "secretsmanager.GetSecretValue"))
+            .and(body_partial_json(json!({"SecretId": undeclared})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"SecretString": "manager-key"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let secrets = ResolvedSecrets::from_state(state(&server, KeyManagementSettings::default()))
+            .resolve(&[declared])
+            .await
+            .unwrap();
+        let result = secrets.get(undeclared);
+        unsafe { std::env::remove_var(undeclared) };
+        assert_eq!(result.as_deref(), Some("manager-key"));
     }
 
     #[tokio::test]

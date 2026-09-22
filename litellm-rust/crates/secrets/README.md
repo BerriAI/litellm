@@ -11,3 +11,7 @@ Backend failures propagate by default. To allow fallback during a backend failur
 Provider payloads remain strings unless explicitly selecting a field from an AWS primary JSON secret. Google caches only successfully decoded string payloads, so reads have identical values and types before and after caching. Confirmed absence and failed reads are not cached. AWS resource-not-found responses and Google HTTP 404 responses indicate absence. Other provider errors remain errors, and successful responses without the required payload are malformed responses rather than missing secrets
 
 The HashiCorp Vault backend is enabled with the `hashicorp` feature and reads KV v2 values from `HCP_VAULT_*` environment variables. It supports static tokens, AppRole authentication, and TLS certificate authentication
+
+## Divergences from Python
+
+`hosted_keys` excludes a name for every backend. Python's `get_secret` hands an excluded name to `get_secret_from_manager` as `key_manager="local"`, but that handler recognizes Azure `SecretClient` and Google `KeyManagementServiceClient` instances by type before it reaches the `local` branch, so Python still reads excluded names from Azure Key Vault and Google KMS. We treat that as a Python bug. `test_rust_hosted_keys_exclude_azure_sdk_clients_too` in `tests/test_litellm/rust_bridge/ocr/test_secrets.py` pins it
