@@ -1427,16 +1427,16 @@ async def test_connection_error_retry_forwards_content(method: str):
         captured.append(request.content)
         return httpx.Response(200, request=request)
 
-    handler = _RetryClientHandler(
-        first=httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error)),
-        retry=httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed)),
-    )
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
 
-    body = b'{"post": ["run1"]}'
-    await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
+        body = b'{"post": ["run1"]}'
+        await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
 
-    assert captured == [body], "the retried request must carry the same content= body"
-    await handler.close()
+        assert captured == [body], "the retried request must carry the same content= body"
+        await handler.close()
 
 
 
