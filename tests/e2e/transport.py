@@ -314,6 +314,7 @@ CONTROL_PLANE_PREFIXES: tuple[str, ...] = (
     "/guardrails",
     "/credentials",
     "/router/settings",
+    "/audit",
     "/public",
     "/v2/login",
     "/openapi.json",
