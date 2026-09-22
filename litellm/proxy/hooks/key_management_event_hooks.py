@@ -242,7 +242,6 @@ class KeyManagementEventHooks:
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
         )
-        # delete the keys from the secret manager
         await KeyManagementEventHooks._delete_virtual_keys_from_secret_manager(keys_being_deleted=keys_being_deleted)
 
     @staticmethod

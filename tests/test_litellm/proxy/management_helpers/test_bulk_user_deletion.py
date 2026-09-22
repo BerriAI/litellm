@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import json
 from collections.abc import Callable, Mapping, Sequence
@@ -7,10 +8,9 @@ from typing import Final
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTable, LitellmTableNames, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.list_api.common import ManagementProblem
 from litellm.proxy.management_helpers.bulk_user_deletion import bulk_delete_users, bulk_remove_team_members
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkDeleteUserRequest
@@ -753,8 +753,6 @@ def test_request_models_reject_unknown_fields():
 
 @pytest.mark.asyncio
 async def test_bulk_delete_writes_deleted_audit_log_for_deleted_keys(mocker):
-    """Bulk /user/delete hard-deletes the user's keys without going through /key/delete,
-    so it must write the same LiteLLM_VerificationToken deleted audit rows after the tx."""
     prisma = _FakePrisma(
         users=[_user("u1", "t1"), _user("keep", "t1")],
         teams=[_team("t1", "u1", "keep")],
@@ -765,14 +763,27 @@ async def test_bulk_delete_writes_deleted_audit_log_for_deleted_keys(mocker):
         ],
     )
 
-    mock_audit = mocker.patch.object(KeyManagementEventHooks, "create_key_deleted_audit_logs")
-    await _delete(prisma, ["u1"])
+    captured: Final[list] = []
 
-    mock_audit.assert_called_once()
-    call_kwargs = mock_audit.call_args.kwargs
-    assert {k.token for k in call_kwargs["keys_being_deleted"]} == {"team-key", "personal-key"}
-    assert call_kwargs["user_api_key_dict"] is ADMIN
-    assert call_kwargs["litellm_changed_by"] is None
+    async def _capture(request_data):
+        captured.append(request_data)
+
+    mocker.patch("litellm.store_audit_logs", True)
+    mocker.patch(
+        "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+        new=_capture,
+    )
+    await _delete(prisma, ["u1"])
+    for _ in range(100):
+        if len([r for r in captured if r.table_name == LitellmTableNames.KEY_TABLE_NAME]) >= 2:
+            break
+        await asyncio.sleep(0.01)
+
+    key_rows: Final = [r for r in captured if r.table_name == LitellmTableNames.KEY_TABLE_NAME]
+    assert {r.object_id for r in key_rows} == {"team-key", "personal-key"}
+    assert {r.action for r in key_rows} == {"deleted"}
+    assert all(r.changed_by for r in key_rows)
+    assert {json.loads(r.before_value)["token"] for r in key_rows} == {"team-key", "personal-key"}
 
 
 @pytest.mark.asyncio
@@ -786,14 +797,29 @@ async def test_bulk_member_delete_writes_deleted_audit_log_for_removed_team_keys
         ],
     )
 
-    mock_audit = mocker.patch.object(KeyManagementEventHooks, "create_key_deleted_audit_logs")
-    await _remove(prisma, "t1", [{"user_id": "u1"}])
+    captured: Final[list] = []
 
-    mock_audit.assert_called_once()
-    call_kwargs = mock_audit.call_args.kwargs
-    assert [k.token for k in call_kwargs["keys_being_deleted"]] == ["team-key"]
-    assert call_kwargs["user_api_key_dict"] is ADMIN
-    assert call_kwargs["litellm_changed_by"] is None
+    async def _capture(request_data):
+        captured.append(request_data)
+
+    mocker.patch("litellm.store_audit_logs", True)
+    mocker.patch(
+        "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+        new=_capture,
+    )
+    await _remove(prisma, "t1", [{"user_id": "u1"}])
+    for _ in range(100):
+        if captured:
+            break
+        await asyncio.sleep(0.01)
+
+    key_rows: Final = [r for r in captured if r.table_name == LitellmTableNames.KEY_TABLE_NAME]
+    assert len(key_rows) == 1
+    audit_row: Final = key_rows[0]
+    assert audit_row.action == "deleted"
+    assert audit_row.object_id == "team-key"
+    assert audit_row.changed_by
+    assert json.loads(audit_row.before_value)["token"] == "team-key"
 
 
 @pytest.mark.asyncio
@@ -806,9 +832,13 @@ async def test_bulk_delete_skips_the_key_audit_log_when_the_tx_rolls_back(mocker
     )
     cache = _cache_with("k1")
 
-    mock_audit = mocker.patch.object(KeyManagementEventHooks, "create_key_deleted_audit_logs")
+    mocker.patch("litellm.store_audit_logs", True)
+    mock_audit_write = mocker.patch(
+        "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+        new=mocker.AsyncMock(),
+    )
     results = await _delete(prisma, ["u1", "u2"], cache=cache)
 
     assert [(r.user_id, r.success) for r in results] == [("u1", False), ("u2", False)]
     assert [t["token"] for t in prisma.db.litellm_verificationtoken.rows] == ["k1"]
-    mock_audit.assert_not_called()
+    mock_audit_write.assert_not_called()

@@ -705,9 +705,6 @@ class TestKeyUpdatedAuditLogObjectId:
 
 @pytest.mark.asyncio
 async def test_key_deleted_hook_writes_audit_log_for_alias_deletion():
-    """A /key/delete addressed by key_aliases must write the same deleted audit row
-    as a delete addressed by keys: the audit writer used to sit behind
-    `data.keys is not None`, which an alias delete never satisfies."""
     from litellm.proxy._types import (
         KeyRequest,
         LiteLLM_AuditLogs,

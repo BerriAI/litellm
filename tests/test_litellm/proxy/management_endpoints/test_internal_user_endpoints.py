@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import logging
@@ -4783,14 +4784,12 @@ def test_user_routes_answer_503_no_db_connection_when_the_callers_user_read_hits
 
 @pytest.mark.asyncio
 async def test_delete_user_writes_deleted_audit_log_for_user_keys(mocker):
-    """/user/delete hard-deletes the user's keys without going through /key/delete, so
-    each deleted key must also get the LiteLLM_VerificationToken deleted audit row."""
     from litellm.proxy._types import (
         DeleteUserRequest,
         LiteLLM_VerificationToken,
+        LitellmTableNames,
         UserAPIKeyAuth,
     )
-    from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
     from litellm.proxy.management_endpoints.internal_user_endpoints import delete_user
 
     mock_prisma_client = mocker.MagicMock()
@@ -4815,12 +4814,28 @@ async def test_delete_user_writes_deleted_audit_log_for_user_keys(mocker):
     mock_prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(return_value=1)
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    mock_audit = mocker.patch.object(KeyManagementEventHooks, "create_key_deleted_audit_logs")
+    mocker.patch("litellm.store_audit_logs", True)
+    captured: Final[list] = []
+
+    async def _capture(request_data):
+        captured.append(request_data)
+
+    mocker.patch(
+        "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+        new=_capture,
+    )
 
     caller = UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
     await delete_user(data=DeleteUserRequest(user_ids=["doomed-user"]), user_api_key_dict=caller)
+    for _ in range(100):
+        if captured:
+            break
+        await asyncio.sleep(0.01)
 
-    mock_audit.assert_called_once()
-    call_kwargs = mock_audit.call_args.kwargs
-    assert list(call_kwargs["keys_being_deleted"]) == [user_key]
-    assert call_kwargs["user_api_key_dict"] is caller
+    key_rows: Final = [r for r in captured if r.table_name == LitellmTableNames.KEY_TABLE_NAME]
+    assert len(key_rows) == 1
+    audit_row: Final = key_rows[0]
+    assert audit_row.action == "deleted"
+    assert audit_row.object_id == user_key.token
+    assert audit_row.changed_by
+    assert json.loads(audit_row.before_value)["token"] == user_key.token
