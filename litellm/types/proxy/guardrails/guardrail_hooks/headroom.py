@@ -31,11 +31,11 @@ class HeadroomGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
         description="Inject the Headroom retrieval tool for hashes declared by the compression service.",
     )
     min_tokens: int = Field(
-        default=1000,
+        default=0,
         ge=0,
         description=(
             "Skip the compression round trip when the compressible messages total fewer than this many tokens. "
-            "0 always calls the compression service."
+            "The default of 0 always calls the compression service."
         ),
     )
 

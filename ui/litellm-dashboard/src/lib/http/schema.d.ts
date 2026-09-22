@@ -32341,8 +32341,8 @@ export interface components {
             } | null;
             /**
              * Min Tokens
-             * @description Skip the compression round trip when the compressible messages total fewer than this many tokens. 0 always calls the compression service.
-             * @default 1000
+             * @description Skip the compression round trip when the compressible messages total fewer than this many tokens. The default of 0 always calls the compression service.
+             * @default 0
              */
             min_tokens: number;
             /**

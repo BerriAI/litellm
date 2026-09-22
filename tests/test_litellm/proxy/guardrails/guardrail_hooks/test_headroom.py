@@ -33,7 +33,6 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
-    DEFAULT_MIN_TOKENS,
     HEADROOM_RETRIEVE_TOOL_NAME,
     HeadroomGuardrail,
     has_headroom_retrieve_tool,
@@ -1138,7 +1137,7 @@ def test_initialize_guardrail_passes_min_tokens(monkeypatch: pytest.MonkeyPatch)
     )
 
     assert configured_guardrail.min_tokens == 42
-    assert default_guardrail.min_tokens == DEFAULT_MIN_TOKENS
+    assert default_guardrail.min_tokens == 0
 
 
 @pytest.mark.asyncio

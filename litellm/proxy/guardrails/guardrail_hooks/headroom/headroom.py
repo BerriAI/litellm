@@ -56,7 +56,6 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 BYPASS_HEADER: Final = "x-headroom-bypass"
-DEFAULT_MIN_TOKENS: Final = 1000
 _STREAM_CONVERTIBLE_CALL_TYPES: Final = frozenset(
     (CallTypes.completion, CallTypes.acompletion, CallTypes.responses, CallTypes.aresponses)
 )
@@ -515,7 +514,7 @@ class HeadroomGuardrail(CustomGuardrail):
         unreachable_fallback: str | None = None,
         timeout: float | None = None,
         ccr_retrieval: bool = True,
-        min_tokens: int | None = None,
+        min_tokens: int = 0,
     ):
         self.headroom_api_base = (api_base or get_secret_str("HEADROOM_API_BASE") or "").rstrip("/")
         if not self.headroom_api_base:
@@ -530,7 +529,7 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         self.timeout: httpx.Timeout = self._resolve_timeout(timeout)
         self.ccr_retrieval = ccr_retrieval
-        self.min_tokens: int = DEFAULT_MIN_TOKENS if min_tokens is None else min_tokens
+        self.min_tokens = min_tokens
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
