@@ -50,6 +50,7 @@ from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
     cache_byok_credential,
     get_cached_byok_credential,
 )
+from litellm.proxy._experimental.mcp_server.catalog import with_mcp_catalog
 from litellm.proxy._experimental.mcp_server.contracts import (
     AuthorizedToolCall,
     OperationContext,
@@ -614,6 +615,7 @@ def apply_tool_overrides(
     return tools
 
 
+@with_mcp_catalog
 async def _get_allowed_mcp_servers(
     user_api_key_auth: UserAPIKeyAuth | None,
     mcp_servers: Sequence[str] | None,
@@ -1435,6 +1437,7 @@ async def filter_tools_by_key_team_permissions(
     ]
 
 
+@with_mcp_catalog
 async def _list_mcp_tools(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -1485,6 +1488,7 @@ async def _list_mcp_tools(
         return AggregateToolListing(tools=[], outcomes={})
 
 
+@with_mcp_catalog
 async def _list_mcp_prompts(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -1526,6 +1530,7 @@ async def _list_mcp_prompts(
     return managed_prompts
 
 
+@with_mcp_catalog
 async def _list_mcp_resources(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -1555,6 +1560,7 @@ async def _list_mcp_resources(
     return managed_resources
 
 
+@with_mcp_catalog
 async def _list_mcp_resource_templates(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -3055,6 +3061,7 @@ class GatewayOperations:
     @overload
     async def execute(self, operation: ReadResourceRequest, context: OperationContext) -> ReadResourceResult: ...
 
+    @with_mcp_catalog
     async def execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
         match operation:
             case AuthorizedToolCall():

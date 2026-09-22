@@ -1495,6 +1495,7 @@ class TestListToolsRestAPI:
             mcp_info={"server_name": "stub"},
         )
         stub_server.available_on_public_internet = True
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "registry", {"server-1": stub_server})
 
         mock_transport_ctx = AsyncMock()
         mock_transport_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))

@@ -14516,3 +14516,209 @@ async def test_client_sampling_does_not_fill_explicit_context_from_another_ambie
         assert captured["client_ip"] is None
     finally:
         auth_context_var.reset(token)
+
+
+def _catalog_row(name="initial"):
+    return LiteLLM_MCPServerTable(
+        server_id="catalog-server",
+        server_name=name,
+        transport="http",
+        url="https://upstream.example/mcp",
+        created_at=datetime(2026, 1, 1),
+        updated_at=datetime(2026, 1, 1 if name == "initial" else 2),
+    )
+
+
+def _catalog_database(monkeypatch, read_rows):
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+
+    client = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=SimpleNamespace(find_many=read_rows)))
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+
+
+@pytest.mark.asyncio
+async def test_catalog_pins_one_snapshot_and_next_operation_reads_current_rows(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    async with manager.catalog.operation():
+        initial = manager.get_mcp_server_by_id("catalog-server")
+        read_rows.return_value = [_catalog_row("updated")]
+        async with manager.catalog.operation():
+            assert await manager.catalog.resolve("initial") is initial
+            assert tuple((await manager.catalog.list()).values()) == (initial,)
+        read_rows.assert_awaited_once()
+    async with manager.catalog.operation():
+        assert manager.get_mcp_server_by_id("catalog-server").name == "updated"
+        assert await manager.catalog.resolve("initial") is None
+    assert manager.catalog.current is None
+    assert read_rows.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_catalog_database_failure_keeps_registry_but_rejects_operation(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    snapshot = await manager.catalog.list()
+    read_rows.side_effect = RuntimeError("private connection detail")
+    with pytest.raises(HTTPException) as exc:
+        async with manager.catalog.operation():
+            pytest.fail("An unverified database snapshot must not execute")
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "MCP server configuration could not be refreshed"
+    assert manager.registry == dict(snapshot)
+    assert manager.catalog.current is None
+
+
+@pytest.mark.asyncio
+async def test_catalog_serializes_background_and_operation_refreshes(monkeypatch):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def first_read(**kwargs):
+        entered.set()
+        await release.wait()
+        return [_catalog_row()]
+
+    read_rows = AsyncMock(side_effect=first_read)
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    first = asyncio.create_task(manager.reload_servers_from_database())
+    await entered.wait()
+    read_rows.side_effect = None
+    read_rows.return_value = [_catalog_row("updated")]
+    second = asyncio.create_task(manager.catalog.list())
+    await asyncio.sleep(0)
+    assert read_rows.await_count == 1
+    release.set()
+    await first
+    latest = await second
+    assert latest["catalog-server"].name == "updated"
+    assert manager.registry["catalog-server"].name == "updated"
+
+
+@pytest.mark.asyncio
+async def test_catalog_cancellation_releases_refresh_lock(monkeypatch):
+    entered = asyncio.Event()
+    blocked = asyncio.Event()
+
+    async def blocked_read(**kwargs):
+        entered.set()
+        await blocked.wait()
+        return []
+
+    read_rows = AsyncMock(side_effect=blocked_read)
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    task = asyncio.create_task(manager.catalog.list())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    read_rows.side_effect = None
+    read_rows.return_value = [_catalog_row()]
+    snapshot = await asyncio.wait_for(manager.catalog.list(), timeout=1)
+    assert tuple(snapshot) == ("catalog-server",)
+    assert manager.catalog.current is None
+
+
+@pytest.mark.asyncio
+async def test_catalog_child_operation_does_not_inherit_stale_session_snapshot(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    release = asyncio.Event()
+
+    async def child_operation():
+        await release.wait()
+        async with manager.catalog.operation():
+            return manager.get_mcp_server_by_id("catalog-server")
+
+    async with manager.catalog.operation():
+        child = asyncio.create_task(child_operation())
+    read_rows.return_value = [_catalog_row("updated")]
+    release.set()
+    assert (await child).name == "updated"
+    assert read_rows.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_catalog_config_only_snapshot_cleans_up_after_error(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    manager = MCPServerManager()
+    configured = MCPServer(server_id="configured", name="configured", transport="stdio", command="echo")
+    manager.config_mcp_servers = {configured.server_id: configured}
+    async def fail_operation():
+        async with manager.catalog.operation():
+            assert await manager.catalog.resolve("configured") is configured
+            raise ValueError("stop operation")
+
+    with pytest.raises(ValueError, match="stop operation"):
+        await fail_operation()
+    assert manager.catalog.current is None
+    assert dict(await manager.catalog.list()) == {"configured": configured}
+
+
+@pytest.mark.asyncio
+async def test_catalog_delete_drops_derived_tool_mapping(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    await manager.catalog.list()
+    manager.tool_name_to_mcp_server_name_mapping = {"initial-echo": "initial"}
+    read_rows.return_value = []
+    assert not await manager.catalog.list()
+    assert manager.tool_name_to_mcp_server_name_mapping == {}
+
+
+@pytest.mark.asyncio
+async def test_catalog_unchanged_read_preserves_derived_initialize_instructions(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    await manager.catalog.list()
+    manager._upstream_initialize_instructions_by_server_id = {"catalog-server": "cached instructions"}
+    manager._upstream_initialize_instructions_probed_at = {"catalog-server": 123.0}
+    await manager.catalog.list()
+    assert manager._upstream_initialize_instructions_by_server_id == {"catalog-server": "cached instructions"}
+    assert manager._upstream_initialize_instructions_probed_at == {"catalog-server": 123.0}
+
+
+@pytest.mark.asyncio
+async def test_catalog_reuses_openapi_tools_until_configuration_or_background_refresh(monkeypatch, tmp_path):
+    from litellm.proxy._experimental.mcp_server import openapi_to_mcp_generator, tool_registry
+
+    registry = tool_registry.MCPToolRegistry()
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    spec_path = tmp_path / "catalog.json"
+    spec_path.write_text(json.dumps({
+        "openapi": "3.0.0", "info": {"title": "Catalog", "version": "1"},
+        "paths": {"/echo": {"get": {"operationId": "echo"}}},
+    }))
+    row = _catalog_row().model_copy(update={"spec_path": str(spec_path)})
+    read_rows = AsyncMock(return_value=[row])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    with patch.object(
+        openapi_to_mcp_generator, "load_openapi_spec_async",
+        wraps=openapi_to_mcp_generator.load_openapi_spec_async,
+    ) as load_spec:
+        await manager.catalog.list()
+        first_tools = tuple(registry.list_tools())
+        assert len(first_tools) == 1
+        await manager.catalog.list()
+        assert load_spec.await_count == 1
+        assert [tool.name for tool in registry.list_tools()] == [tool.name for tool in first_tools]
+        await manager.reload_servers_from_database()
+        assert load_spec.await_count == 2
+        read_rows.return_value = [row.model_copy(update={"updated_at": datetime(2026, 1, 2)})]
+        await manager.catalog.list()
+        assert load_spec.await_count == 3
+        read_rows.return_value = []
+        await manager.catalog.list()
+        assert registry.list_tools() == []

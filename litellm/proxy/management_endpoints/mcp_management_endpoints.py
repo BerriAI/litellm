@@ -45,6 +45,8 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.proxy._experimental.mcp_server.catalog import with_mcp_catalog
+
 try:
     from prisma.errors import RecordNotFoundError, UniqueViolationError
 except ImportError:
@@ -1043,6 +1045,7 @@ if MCP_AVAILABLE:
         tags=["mcp"],
         description="MCP registry endpoint. Spec: https://github.com/modelcontextprotocol/registry",
     )
+    @with_mcp_catalog
     async def get_mcp_registry(request: Request):
         if not _is_public_registry_enabled():
             raise HTTPException(
@@ -1166,6 +1169,7 @@ if MCP_AVAILABLE:
         dependencies=[Depends(user_api_key_auth)],
         response_model=list[LiteLLM_MCPServerTable],
     )
+    @with_mcp_catalog
     async def fetch_all_mcp_servers(
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         team_id: str | None = Query(
@@ -1284,6 +1288,7 @@ if MCP_AVAILABLE:
         description="Health check for MCP servers",
         dependencies=[Depends(user_api_key_auth)],
     )
+    @with_mcp_catalog
     async def health_check_servers(
         server_ids: list[str] | None = Query(
             None,
@@ -1959,6 +1964,7 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials(temp_record)
 
+    @with_mcp_catalog
     async def _mcp_oauth_user_api_key_auth(request: Request) -> UserAPIKeyAuth:
         """
         Auth dependency for MCP OAuth browser-navigation endpoints (/authorize, /token).
@@ -2059,6 +2065,7 @@ if MCP_AVAILABLE:
             request_data=request_data,
         )
 
+    @with_mcp_catalog
     async def _get_cached_temporary_mcp_server_or_404(
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth,

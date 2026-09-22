@@ -738,7 +738,8 @@ async def test_token_endpoint_forwards_code_verifier():
 
 
 @pytest.mark.asyncio
-async def test_register_client_without_mcp_server_name_returns_dummy():
+@pytest.mark.parametrize("server_name", [None, "missing"])
+async def test_register_client_without_mcp_server_name_returns_dummy(server_name):
     try:
         from fastapi import Request
 
@@ -761,17 +762,18 @@ async def test_register_client_without_mcp_server_name_returns_dummy():
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
         new=AsyncMock(return_value={}),
     ):
-        result = await register_client(request=mock_request)
+        result = await register_client(request=mock_request, mcp_server_name=server_name)
 
     assert result == {
-        "client_id": "dummy_client",
+        "client_id": server_name or "dummy_client",
         "client_secret": "dummy",
         "redirect_uris": ["https://proxy.litellm.example/callback"],
     }
 
 
 @pytest.mark.asyncio
-async def test_register_client_returns_existing_server_credentials():
+@pytest.mark.parametrize("use_root", [False, True])
+async def test_register_client_returns_existing_server_credentials(use_root):
     try:
         from fastapi import Request
 
@@ -811,7 +813,9 @@ async def test_register_client_returns_existing_server_credentials():
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
             new=AsyncMock(return_value={}),
         ):
-            result = await register_client(request=mock_request, mcp_server_name=oauth2_server.server_name)
+            result = await register_client(
+                request=mock_request, mcp_server_name=None if use_root else oauth2_server.server_name
+            )
     finally:
         global_mcp_server_manager.registry.clear()
 
@@ -12347,3 +12351,61 @@ async def test_identity_bound_authorize_unrelated_bearer_uses_browser_session(
     proxy_server.prisma_client.db.litellm_mcpusercredentials.upsert.assert_not_called()
     proxy_server.prisma_client.db.litellm_usertable.create.assert_not_called()
     proxy_server.prisma_client.db.litellm_teamtable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["create", "update", "delete"])
+async def test_authorize_observes_committed_peer_server_changes(monkeypatch, change):
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException, Request
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "catalog-consistency-test-key")
+    stamp = datetime.now(timezone.utc)
+    old_server = _create_id_lookup_oauth2_server()
+    old_server.updated_at = stamp
+    row = LiteLLM_MCPServerTable(
+        server_id=old_server.server_id,
+        server_name=old_server.server_name,
+        alias=old_server.alias,
+        url="https://upstream.example/mcp",
+        transport="http",
+        auth_type="oauth2",
+        authorization_url="https://new-provider.example/authorize",
+        token_url="https://new-provider.example/token",
+        scopes=["read"],
+        credentials={"client_id": "current-client", "client_secret": "current-secret"},
+        created_at=stamp,
+        updated_at=stamp + timedelta(seconds=1),
+    )
+    read_rows = AsyncMock(return_value=[] if change == "delete" else [row])
+    prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=SimpleNamespace(find_many=read_rows)))
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(
+        global_mcp_server_manager, "registry", {} if change == "create" else {old_server.server_id: old_server}
+    )
+    monkeypatch.setattr(global_mcp_server_manager, "config_mcp_servers", {})
+    request = Request(
+        {"type": "http", "scheme": "https", "server": ("gateway.example", 443), "path": "/authorize", "headers": []}
+    )
+
+    if change == "delete":
+        with pytest.raises(HTTPException) as exc:
+            await discoverable_endpoints.authorize(
+                request, "http://localhost/callback", mcp_server_name=old_server.server_id
+            )
+        assert exc.value.status_code == 404
+    else:
+        response = await discoverable_endpoints.authorize(
+            request, "http://localhost/callback", mcp_server_name=old_server.server_id
+        )
+        assert response.status_code == 307
+        assert response.headers["location"].startswith("https://new-provider.example/authorize?")
+        assert "client_id=current-client" in response.headers["location"]
+    read_rows.assert_awaited_once()

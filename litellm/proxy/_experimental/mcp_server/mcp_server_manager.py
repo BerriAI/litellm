@@ -73,6 +73,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPServerAccess,
     _is_mcp_admitted_user_subject,
 )
+from litellm.proxy._experimental.mcp_server.catalog import TargetCatalog
 from litellm.proxy._experimental.mcp_server.contracts import OperationContext
 from litellm.proxy._experimental.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
@@ -1860,6 +1861,7 @@ class MCPServerManager:
         self._template_discovery_cache = _DiscoveryCache[ResourceTemplate](
             discovery_ttl, discovery_clock, TypeAdapter(tuple[ResourceTemplate, ...])
         )
+        self.catalog = TargetCatalog(self)
         self.registry: dict[str, MCPServer] = {}
         self._openapi_health_probes: Callable[[str], _OpenAPIHealthProbe] = lru_cache(maxsize=128)(_OpenAPIHealthProbe)
         self.config_mcp_servers: dict[str, MCPServer] = {}
@@ -2287,11 +2289,12 @@ class MCPServerManager:
                 e,
             )
 
-    def get_registry(self) -> dict[str, MCPServer]:
+    def get_registry(self) -> Mapping[str, MCPServer]:
         """
         Get the registered MCP Servers from the registry and union with the config MCP Servers
         """
-        return self.config_mcp_servers | self.registry
+        snapshot: Final = self.catalog.current
+        return snapshot if snapshot is not None else self.config_mcp_servers | self.registry
 
     def is_config_declared_server(self, server_id: str) -> bool:
         """True when server_id was declared in config.yaml (present in the in-memory config map).
@@ -6507,14 +6510,15 @@ class MCPServerManager:
         return None
 
     async def reload_servers_from_database(self):
+        await self.catalog.refresh()
+
+    async def _reload_servers_from_database(self, *, reuse_unchanged: bool = False):
         """Re-synchronize the in-memory MCP server registry with the database."""
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             get_prisma_client_or_throw,
         )
 
         verbose_logger.debug("Loading MCP servers from database into registry...")
-        self._upstream_initialize_instructions_by_server_id.clear()
-        self._upstream_initialize_instructions_probed_at.clear()
 
         # perform authz check to filter the mcp servers user has access to
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
@@ -6593,7 +6597,8 @@ class MCPServerManager:
                 # Register OpenAPI tools *after* the final short prefix is assigned
                 # so the tools are stored in the global registry under the same
                 # prefix that lookups will use.
-                await self._maybe_register_openapi_tools(new_server, initialize_mapping=False)
+                if not reuse_unchanged or new_server is not previous_registry.get(server_id):
+                    await self._maybe_register_openapi_tools(new_server, initialize_mapping=False)
                 registered_registry[server_id] = new_server
                 if new_server.spec_path:
                     registered_openapi_tools = True
@@ -6607,10 +6612,13 @@ class MCPServerManager:
 
         dropped_registry_keys: Final = previous_registry.keys() - registered_registry.keys()
         for registry_key in dropped_registry_keys:
+            self._cleanup_server_tool_routing_artifacts(previous_registry[registry_key])
             self._invalidate_oauth_discovery_state(previous_registry[registry_key].server_id)
 
         for server_id in previous_registry.keys() | registered_registry.keys():
             if previous_registry.get(server_id) != registered_registry.get(server_id):
+                self._upstream_initialize_instructions_by_server_id.pop(server_id, None)
+                self._upstream_initialize_instructions_probed_at.pop(server_id, None)
                 self._invalidate_discovery_lists(server_id)
         self.registry = registered_registry
         # A discovery task may have published into ``previous_registry`` while
@@ -6834,7 +6842,7 @@ class MCPServerManager:
                 return server
         return None
 
-    def get_filtered_registry(self, client_ip: str | None = None) -> dict[str, MCPServer]:
+    def get_filtered_registry(self, client_ip: str | None = None) -> Mapping[str, MCPServer]:
         """
         Get registry filtered by client IP access control.
 

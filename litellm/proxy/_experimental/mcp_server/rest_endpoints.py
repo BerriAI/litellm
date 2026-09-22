@@ -22,6 +22,7 @@ from litellm.exceptions import (
     GuardrailRaisedException,
     ModifyResponseException,
 )
+from litellm.proxy._experimental.mcp_server.catalog import with_mcp_catalog
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
     MCPServerURLCredentialsError,
@@ -861,6 +862,7 @@ if MCP_AVAILABLE:
         return await _apply_toolset_scope(user_api_key_dict, toolset.toolset_id)
 
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
+    @with_mcp_catalog
     async def list_tool_rest_api(
         request: Request,
         server_id: str | None = Query(None, description="The server id to list tools for"),
@@ -1085,6 +1087,7 @@ if MCP_AVAILABLE:
             }
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
+    @with_mcp_catalog
     async def call_tool_rest_api(
         request: Request,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),

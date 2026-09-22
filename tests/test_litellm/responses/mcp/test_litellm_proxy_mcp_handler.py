@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import subprocess
 import sys
 import textwrap
@@ -28,10 +29,11 @@ class _DummyMCPResult:
 
 def _setup_mcp_call_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     """Patch MCP globals so _execute_tool_calls can run in tests."""
-    proxy_module = types.SimpleNamespace(proxy_logging_obj=object())
+    proxy_module = types.SimpleNamespace(proxy_logging_obj=object(), prisma_client=None)
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
 
     fake_manager = types.SimpleNamespace(
+        catalog=types.SimpleNamespace(operation=nullcontext),
         get_registry=MagicMock(return_value={}),
         call_tool=AsyncMock(return_value=_DummyMCPResult()),
         # Newer logging path calls this to enrich spend logs metadata
@@ -49,7 +51,7 @@ def _setup_proxy_logging(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     """Patch proxy_logging_obj so failure hook can be asserted."""
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.post_call_failure_hook = AsyncMock()
-    proxy_module = types.SimpleNamespace(proxy_logging_obj=proxy_logging_obj)
+    proxy_module = types.SimpleNamespace(proxy_logging_obj=proxy_logging_obj, prisma_client=None)
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
     return proxy_logging_obj.post_call_failure_hook
 
@@ -378,6 +380,7 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
     post_call_failure_hook = _setup_proxy_logging(monkeypatch)
 
     fake_manager = types.SimpleNamespace(
+        catalog=types.SimpleNamespace(operation=nullcontext),
         get_registry=MagicMock(return_value={}),
         call_tool=AsyncMock(side_effect=HTTPException(status_code=500, detail="boom"))
     )
@@ -506,6 +509,7 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
 
     # Patch manager methods used by _get_mcp_tools_from_manager to avoid needing full UserAPIKeyAuth fields.
     fake_manager = types.SimpleNamespace(
+        catalog=types.SimpleNamespace(operation=nullcontext),
         get_registry=MagicMock(return_value={}),
         get_allowed_mcp_servers=AsyncMock(return_value=[]),
         get_mcp_servers_from_ids=MagicMock(return_value=[]),
@@ -559,6 +563,7 @@ async def test_get_mcp_tools_from_manager_forwards_request_tags(monkeypatch):
         mock_get_tools,
     )
     fake_manager = types.SimpleNamespace(
+        catalog=types.SimpleNamespace(operation=nullcontext),
         get_registry=MagicMock(return_value={}),
         get_allowed_mcp_servers=AsyncMock(return_value=[]),
         get_mcp_servers_from_ids=MagicMock(return_value=[]),

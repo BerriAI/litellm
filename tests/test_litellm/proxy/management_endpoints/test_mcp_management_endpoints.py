@@ -136,7 +136,7 @@ def create_mcp_router_test_client() -> TestClient:
 
 
 def patch_proxy_general_settings(settings: dict):
-    fake_proxy_server_module = types.SimpleNamespace(general_settings=settings)
+    fake_proxy_server_module = types.SimpleNamespace(general_settings=settings, prisma_client=None)
     return patch.dict(
         sys.modules,
         {"litellm.proxy.proxy_server": fake_proxy_server_module},
@@ -2552,7 +2552,7 @@ class TestTemporaryMCPSessionEndpoints:
         expected_auth = generate_mock_user_api_key_auth(
             user_role=LitellmUserRoles.PROXY_ADMIN, api_key=api_key_in_cookie
         )
-        fake_proxy_server = types.SimpleNamespace(master_key=master_key)
+        fake_proxy_server = types.SimpleNamespace(master_key=master_key, prisma_client=None)
 
         with (
             patch.dict(sys.modules, {"litellm.proxy.proxy_server": fake_proxy_server}),
@@ -2629,7 +2629,7 @@ class TestTemporaryMCPSessionEndpoints:
         mock_manager = MagicMock()
         mock_manager.get_mcp_server_by_id.return_value = non_oauth_server
         mock_manager.get_mcp_server_by_name.return_value = None
-        fake_proxy_server = types.SimpleNamespace(master_key=None)
+        fake_proxy_server = types.SimpleNamespace(master_key=None, prisma_client=None)
 
         with (
             patch.dict(sys.modules, {"litellm.proxy.proxy_server": fake_proxy_server}),
@@ -2681,7 +2681,7 @@ class TestTemporaryMCPSessionEndpoints:
         mock_manager = MagicMock()
         mock_manager.get_mcp_server_by_id.return_value = internal_server
         mock_manager.get_mcp_server_by_name.return_value = None
-        fake_proxy_server = types.SimpleNamespace(master_key=None)
+        fake_proxy_server = types.SimpleNamespace(master_key=None, prisma_client=None)
 
         with (
             patch.dict(sys.modules, {"litellm.proxy.proxy_server": fake_proxy_server}),

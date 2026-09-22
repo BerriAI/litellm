@@ -689,7 +689,7 @@ async def byok_authorize_get(
                 global_mcp_server_manager,
             )
 
-            registry: Final = global_mcp_server_manager.get_registry()
+            registry: Final = await global_mcp_server_manager.catalog.list()
             if server_id in registry:
                 srv: Final = registry[server_id]
                 server_name = srv.server_name or srv.name
