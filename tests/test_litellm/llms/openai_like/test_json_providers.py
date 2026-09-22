@@ -571,13 +571,12 @@ class TestCoralBricks:
 
 class TestCoralBricksPricing:
     """Regression coverage for the CoralBricks cost map (Greptile P2):
-    the four pricing records and the zero-cost cached-input behavior."""
+    the pricing records and the zero-cost cached-input behavior."""
 
     EXPECTED = {
         "coralbricks/glm-5.3-fp4": (1.12e-06, 4.4e-06),
         "coralbricks/glm-5.3-flash-fp4": (1.5e-07, 5e-07),
         "coralbricks/deepseek-v4.1-flash-fast-fp4": (3e-07, 1.2e-06),
-        "coralbricks/gpt-oss-120b": (1.2e-07, 6e-07),
     }
     # First-time prompt tokens come back as cache writes and bill at the published
     # cache-write rate (coralbricks.ai/pricing): 1.5x input, 0.3x on DeepSeek V4.1 Flash.
@@ -585,11 +584,10 @@ class TestCoralBricksPricing:
         "coralbricks/glm-5.3-fp4": 1.68e-06,
         "coralbricks/glm-5.3-flash-fp4": 2.3e-07,
         "coralbricks/deepseek-v4.1-flash-fast-fp4": 9e-08,
-        "coralbricks/gpt-oss-120b": 1.8e-07,
     }
 
     def test_pricing_records_present(self):
-        """The shipped cost map carries all four models with free cache reads."""
+        """The shipped cost map carries every served model with free cache reads."""
         prices_path = os.path.join(
             workspace_path, "model_prices_and_context_window.json"
         )
@@ -620,7 +618,6 @@ class TestCoralBricksPricing:
             "coralbricks/glm-5.3-fp4": False,
             "coralbricks/glm-5.3-flash-fp4": True,
             "coralbricks/deepseek-v4.1-flash-fast-fp4": True,
-            "coralbricks/gpt-oss-120b": False,
         }
         for model, expected in vision.items():
             assert prices[model]["supports_vision"] is expected, model
