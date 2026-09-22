@@ -235,6 +235,9 @@
     "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_provider_hanging_up_on_the_result_probe_keeps_the_completed_status": [
       "other.provider_wire.fal_ai.video_result_probe_hangup_stays_completed"
     ],
+    "tests/integration/providers/test_openai_chat_wire.py::test_openai_chat_tool_choice_without_tools_is_not_forwarded": [
+      "providers.openai_chat_wire.tool_choice_without_tools_is_dropped_before_the_wire"
+    ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_saved_headers_reach_real_mcp_tool_and_survive_unrelated_edit": [
       "mcp.call_tool.saved_headers.reach_actual_transport"
     ],
