@@ -787,6 +787,7 @@ class SpendLogMetadata(BaseModel):
 
 class SpendLogRow(BaseModel):
     request_id: str | None = None
+    startTime: str | None = None
     api_key: str | None = None
     model: str | None = None
     spend: float | None = None

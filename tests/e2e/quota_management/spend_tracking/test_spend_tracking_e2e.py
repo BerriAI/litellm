@@ -17,7 +17,7 @@ fails the test; a pricing or token-count drift does not.
 
 import time
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import date, timedelta
 from math import isclose
 from typing import Final
 
@@ -517,7 +517,8 @@ def test_spend_logs_single_day_range_returns_that_days_spend(
     """start_date == end_date on /spend/logs must return the spend logged on that
     day, both as the daily summary (default) and as the individual rows
     (summarize=false). The end date is a calendar day, so its rows after
-    midnight belong to the range."""
+    midnight belong to the range; the window is the calendar day of the
+    stored spend row."""
     chat = unwrap(
         client.chat(
             scoped_key,
@@ -526,22 +527,27 @@ def test_spend_logs_single_day_range_returns_that_days_spend(
             max_tokens=16,
         )
     )
+    assert chat.id, f"chat response carried no id: {chat}"
     rows = client.poll_logs_for_key(
-        scoped_key, predicate=lambda rs: any((r.spend or 0) > 0 for r in rs)
+        scoped_key,
+        predicate=lambda rs: any(
+            r.request_id == chat.id and (r.spend or 0) > 0 for r in rs
+        ),
     )
-    today = datetime.now(timezone.utc).date().isoformat()
-    window = SpendLogsDateRangeParams(start_date=today, end_date=today, api_key=scoped_key)
+    logged = next(r for r in rows if r.request_id == chat.id)
+    assert logged.startTime, f"spend row carries no startTime: {logged}"
+    day: Final = logged.startTime[:10]
+    window = SpendLogsDateRangeParams(start_date=day, end_date=day, api_key=scoped_key)
 
     summary = client.proxy.spend_logs_daily(window)
     assert [r.startTime for r in summary] == [
-        today
+        day
     ], f"single-day window must yield exactly that day: {summary}"
     assert summary[0].spend > 0, (
         f"the end day's spend was dropped from the window: {summary}"
     )
 
     raw = client.proxy.spend_logs_in_window(window.model_copy(update={"summarize": False}))
-    assert chat.id, f"chat response carried no id: {chat}"
     assert any(r.request_id == chat.id for r in raw), (
         f"summarize=false window missing request {chat.id}: "
         f"{_summarize(raw)}; polled rows {_summarize(rows)}"
@@ -552,9 +558,9 @@ def test_spend_logs_single_day_range_returns_that_days_spend(
 def test_spend_logs_multi_day_range_includes_final_day(
     client: SpendClient, scoped_key: str
 ) -> None:
-    """A multi-day window ending today reports today's real spend as its final
-    row, never a zero pad."""
-    _ = unwrap(
+    """A multi-day window ending on the calendar day of the stored spend row
+    reports that day's real spend as its final row, never a zero pad."""
+    chat = unwrap(
         client.chat(
             scoped_key,
             "gemini-2.5-flash",
@@ -562,10 +568,16 @@ def test_spend_logs_multi_day_range_includes_final_day(
             max_tokens=16,
         )
     )
-    _ = client.poll_logs_for_key(
-        scoped_key, predicate=lambda rs: any((r.spend or 0) > 0 for r in rs)
+    assert chat.id, f"chat response carried no id: {chat}"
+    rows = client.poll_logs_for_key(
+        scoped_key,
+        predicate=lambda rs: any(
+            r.request_id == chat.id and (r.spend or 0) > 0 for r in rs
+        ),
     )
-    end = datetime.now(timezone.utc).date()
+    logged = next(r for r in rows if r.request_id == chat.id)
+    assert logged.startTime, f"spend row carries no startTime: {logged}"
+    end: Final = date.fromisoformat(logged.startTime[:10])
     start = end - timedelta(days=2)
 
     summary = client.proxy.spend_logs_daily(
