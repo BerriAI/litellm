@@ -102,7 +102,16 @@ _INCREMENT_WITH_FLOOR_LUA: Final = (
     "return count"
 )
 
+_SEED_SPEND_COUNTER_LUA: Final = (
+    "local cur = redis.call('GET', KEYS[1]) "
+    "if cur == false then redis.call('SET', KEYS[1], ARGV[1]) "
+    "elseif tonumber(cur) < tonumber(ARGV[1]) then redis.call('INCRBYFLOAT', KEYS[1], ARGV[1]) end "
+    "if tonumber(ARGV[2]) > 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end "
+    "return redis.call('GET', KEYS[1])"
+)
+
 _LUA_COUNT: Final = TypeAdapter(int)
+_LUA_FLOAT: Final = TypeAdapter(float)
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
 
 
@@ -1447,6 +1456,16 @@ class RedisCache(BaseCache):
         if isinstance(result, bytes):
             result = result.decode()
         return float(result)
+
+    @_redis_circuit_breaker_guard
+    async def async_seed_spend_counter(self, key: str, base: float) -> float:
+        """Atomically seed a spend counter with ``base``: set it when absent, add ``base`` when it holds
+        less (only increments that landed before any seed), and keep it when a seed already reached it."""
+        _redis_client: Final = self._async_commands()
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
+        ttl: Final = int(self.get_ttl() or 0)
+        result: Final = await _redis_client.eval(_SEED_SPEND_COUNTER_LUA, 1, namespaced_key, str(base), str(ttl))
+        return _LUA_FLOAT.validate_python(result.decode("utf-8") if isinstance(result, bytes) else result)
 
     @_redis_circuit_breaker_guard
     async def async_increment_with_floor(self, key: str, value: int, ttl: int) -> int:

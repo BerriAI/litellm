@@ -1274,38 +1274,6 @@ async def test_ensure_spend_counter_initialized_warm_skips_reseed_and_source(
     }
 
 
-@pytest.mark.asyncio
-async def test_ensure_spend_counter_initialized_cold_seeds_from_source_cache(
-    monkeypatch,
-):
-    fake_cache = _make_spend_counter_cache(redis_get_value=None, redis_increment_value=7.0)
-    fake_user_cache = _make_user_api_key_cache(get_value={"spend": 7.0})
-    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
-    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
-    monkeypatch.setattr(ps, "prisma_client", None)
-    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
-
-    await ps._ensure_spend_counter_initialized(
-        counter_key="spend:user:u",
-        source_cache_key="u",
-    )
-
-    observed = {
-        "source_cache_called": fake_user_cache.async_get_cache.called,
-        "seed_set_max_value": fake_cache.redis_cache.async_set_max.call_args.kwargs["value"] == 7.0,
-        "seed_increment_called": fake_cache.redis_cache.async_increment.called,
-        "in_memory_seeded_value": fake_cache.in_memory_cache.set_cache.call_args.kwargs["value"],
-        "warm_check_done": fake_cache.redis_cache.async_get_cache.called,
-    }
-    assert normalize(observed) == {
-        "source_cache_called": True,
-        "seed_set_max_value": True,
-        "seed_increment_called": False,
-        "in_memory_seeded_value": 7.0,
-        "warm_check_done": True,
-    }
-
-
 class _DbDownSpendTable:
     def __init__(self) -> None:
         self.read_started: Final = asyncio.Event()
@@ -1345,62 +1313,125 @@ async def test_ensure_spend_counter_initialized_concurrent_cold_seeds_converge_w
     assert cache.in_memory_cache.get_cache(key=counter_key) == cached_spend
 
 
-class _FakeSetMaxRedis:
-    def __init__(self, existing: float | None = None) -> None:
-        self.value = existing
+class _FakeSpendCounterRedis:
+    def __init__(self, seed_error: Exception | None = None) -> None:
+        self.store: dict[str, float] = {}  # mutable-ok: stands in for Redis keyspace state
+        self._seed_error: Final = seed_error
+
+    def get_ttl(self) -> int:
+        return 60
 
     async def async_get_cache(self, key: str) -> float | None:
-        return self.value
+        return self.store.get(key)
 
-    async def async_set_max(self, key: str, value: float) -> float:
-        self.value = value if self.value is None else max(self.value, value)
-        return self.value
+    async def async_seed_spend_counter(self, key: str, base: float) -> float:
+        if self._seed_error is not None:
+            raise self._seed_error
+        current: Final = self.store.get(key)
+        self.store[key] = base if current is None else (current if current >= base else current + base)
+        return self.store[key]
+
+    async def async_increment(self, key: str, value: float, refresh_ttl: bool = False) -> float:
+        self.store[key] = self.store.get(key, 0.0) + value
+        return self.store[key]
+
+    async def async_increment_pipeline(self, increment_list: list[Mapping[str, object]]) -> list[float]:
+        return [
+            await self.async_increment(key=str(op["key"]), value=float(str(op["increment_value"])))
+            for op in increment_list
+        ]
+
+    async def async_delete_cache(self, key: str) -> None:
+        self.store.pop(key, None)
 
 
-class _DbDownSpendTableWhileAnotherPodSeeds:
-    def __init__(self, redis: _FakeSetMaxRedis, counter_key: str, other_pod_spend: float | None) -> None:
+class _DbDownSpendTableWhileAnotherPodWrites:
+    def __init__(self, redis: _FakeSpendCounterRedis, counter_key: str, other_pod_seeds: bool, delta: float) -> None:
         self._redis: Final = redis
         self._counter_key: Final = counter_key
-        self._other_pod_spend: Final = other_pod_spend
+        self._other_pod_seeds: Final = other_pod_seeds
+        self._delta: Final = delta
 
     async def find_unique(self, where: Mapping[str, object]) -> SimpleNamespace:
-        if self._other_pod_spend is not None:
-            await self._redis.async_set_max(key=self._counter_key, value=self._other_pod_spend)
+        if self._other_pod_seeds:
+            await self._redis.async_seed_spend_counter(key=self._counter_key, base=6.0)
+        if self._delta:
+            await self._redis.async_increment(key=self._counter_key, value=self._delta)
         raise ConnectionError("database unavailable")
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "other_pod_spend",
-    [None, 9.5, 2.5],
-    ids=["cold", "another_pod_seeded_higher", "another_pod_seeded_lower"],
-)
-async def test_ensure_spend_counter_initialized_cold_seed_from_source_cache_is_monotonic_across_pods(
-    monkeypatch: pytest.MonkeyPatch, other_pod_spend: float | None
-) -> None:
-    redis: Final = _FakeSetMaxRedis(existing=None)
+def _db_down_spend_counter_setup(
+    monkeypatch: pytest.MonkeyPatch, redis: _FakeSpendCounterRedis | None, table: object, cached_spend: float
+) -> DualCache:
     cache: Final = DualCache(
         in_memory_cache=InMemoryCache(),
         redis_cache=redis,  # pyright: ignore[reportArgumentType]  # duck-typed fake standing in for RedisCache
     )
-    counter_key: Final = "spend:user:db-down-multi-pod-user"
-    cached_spend: Final = 6.0
-    table: Final = _DbDownSpendTableWhileAnotherPodSeeds(
-        redis=redis, counter_key=counter_key, other_pod_spend=other_pod_spend
-    )
     user_cache: Final = DualCache(in_memory_cache=InMemoryCache())
-    user_cache.in_memory_cache.set_cache(key="db-down-multi-pod-user", value={"spend": cached_spend})
+    user_cache.in_memory_cache.set_cache(key="db-down-user", value={"spend": cached_spend})
     monkeypatch.setattr(ps, "spend_counter_cache", cache)
     monkeypatch.setattr(ps, "user_api_key_cache", user_cache)
     monkeypatch.setattr(ps, "prisma_client", SimpleNamespace(db=SimpleNamespace(litellm_usertable=table)))
+    return cache
 
-    await ps._ensure_spend_counter_initialized(
-        counter_key=counter_key, source_cache_key="db-down-multi-pod-user"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("other_pod_seeds", "delta", "expected"),
+    [(False, 0.0, 6.0), (True, 0.0, 6.0), (True, 0.5, 6.5), (False, 0.5, 6.5)],
+    ids=["cold", "another_pod_already_seeded", "another_pod_seeded_then_spent", "unseeded_spend_landed_first"],
+)
+async def test_db_down_cold_seed_counts_cached_spend_once_and_keeps_spend_that_raced_it(
+    monkeypatch: pytest.MonkeyPatch, other_pod_seeds: bool, delta: float, expected: float
+) -> None:
+    counter_key: Final = "spend:user:db-down-user"
+    redis: Final = _FakeSpendCounterRedis()
+    table: Final = _DbDownSpendTableWhileAnotherPodWrites(
+        redis=redis, counter_key=counter_key, other_pod_seeds=other_pod_seeds, delta=delta
     )
+    cache: Final = _db_down_spend_counter_setup(monkeypatch, redis=redis, table=table, cached_spend=6.0)
 
-    expected: Final = cached_spend if other_pod_spend is None else max(other_pod_spend, cached_spend)
-    assert redis.value == expected
-    assert cache.in_memory_cache.get_cache(key=counter_key) == cached_spend
+    await ps._ensure_spend_counter_initialized(counter_key=counter_key, source_cache_key="db-down-user")
+
+    assert (redis.store[counter_key], cache.in_memory_cache.get_cache(key=counter_key)) == (expected, expected)
+
+
+@pytest.mark.asyncio
+async def test_db_down_cold_seed_falls_back_to_increment_when_the_atomic_seed_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter_key: Final = "spend:user:db-down-user"
+    redis: Final = _FakeSpendCounterRedis(seed_error=Exception("NOPERM this user has no permissions to run 'eval'"))
+    table: Final = _DbDownSpendTableWhileAnotherPodWrites(
+        redis=redis, counter_key=counter_key, other_pod_seeds=False, delta=0.0
+    )
+    _db_down_spend_counter_setup(monkeypatch, redis=redis, table=table, cached_spend=90.0)
+
+    pending: Final = await ps._prepare_spend_counter_increment(
+        counter_key=counter_key, source_cache_key="db-down-user", increment=1.0
+    )
+    await ps._apply_spend_counter_increments(pending=(pending,))
+
+    assert redis.store.get(counter_key) == 91.0, f"cached spend lost from the counter: {redis.store}"
+
+
+@pytest.mark.asyncio
+async def test_db_down_cold_seed_without_redis_keeps_spend_that_landed_during_the_db_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter_key: Final = "spend:user:db-down-user"
+    table: Final = _DbDownSpendTable()
+    cache: Final = _db_down_spend_counter_setup(monkeypatch, redis=None, table=table, cached_spend=6.0)
+
+    seed: Final = asyncio.create_task(
+        ps._ensure_spend_counter_initialized(counter_key=counter_key, source_cache_key="db-down-user")
+    )
+    await asyncio.wait_for(table.read_started.wait(), timeout=5)
+    cache.in_memory_cache.set_cache(key=counter_key, value=0.5)
+    table.resume_read.set()
+    await asyncio.wait_for(seed, timeout=5)
+
+    assert cache.in_memory_cache.get_cache(key=counter_key) == 6.5
 
 
 # ---------------------------------------------------------------------------
