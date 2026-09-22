@@ -24,6 +24,17 @@ export interface RoutingDecision {
   matched_keyword?: string;
   escalation_keyword?: string;
   classifier_model?: string;
+  classifier_p_solve?: number;
+  classifier_calibrated_p_solve?: number;
+  classifier_threshold?: number;
+  classifier_capability_boundary?: string;
+  classifier_primary_rule?: string;
+  classifier_calibration_version?: string;
+  classifier_efficient_p_solve?: number;
+  classifier_capable_p_solve?: number;
+  classifier_calibrated_efficient_p_solve?: number;
+  classifier_calibrated_capable_p_solve?: number;
+  classifier_max_quality_gap?: number;
   classifier_confidence?: number;
   classifier_probabilities?: Record<string, number>;
   classifier_cost?: number;
@@ -94,6 +105,10 @@ function describeReasoningOverride(tierLabel: string | undefined, floor: number 
 const CONSTANT_CAUSE_LABELS: Record<string, string> = {
   heuristic_scorer: "Heuristic scorer",
   heuristic_v2: "Heuristic v2",
+  capability_classifier: "Capability",
+  capability_classifier_fallback: "Capable tier, Capability classifier failed",
+  llm_v2_classifier: "FUSE v2",
+  llm_v2_fallback: "Capable tier, FUSE v2 classifier failed",
   heuristic_first_short_circuit: "Heuristic scorer, classifier skipped",
   hybrid_short_circuit: "Heuristic scorer, score clear of every boundary",
   classifier_plugin: "Custom classifier plugin",
@@ -157,6 +172,71 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     <div className="flex gap-3 py-1 text-sm">
       <span className="w-28 shrink-0 text-muted-foreground">{label}</span>
       <span className="min-w-0 break-words">{children}</span>
+    </div>
+  );
+}
+
+function PercentageRow({ label, value, unit = "%" }: { label: string; value?: number; unit?: string }) {
+  if (value === undefined) return null;
+  return (
+    <Row label={label}>
+      <span className="tabular-nums">{`${(value * 100).toFixed(1)}${unit}`}</span>
+    </Row>
+  );
+}
+
+function CapabilityForecast({ decision }: { decision: RoutingDecision }) {
+  const {
+    classifier_p_solve: raw,
+    classifier_calibrated_p_solve: calibrated,
+    classifier_threshold: threshold,
+    classifier_capability_boundary: boundary,
+    classifier_primary_rule: rule,
+    classifier_calibration_version: version,
+  } = decision;
+  if ([raw, calibrated, threshold, boundary, rule].every((value) => value === undefined)) return null;
+
+  return (
+    <div className="mt-3 border-t pt-3">
+      <div className="mb-1 text-sm font-medium">Capability estimates</div>
+      <div className="mb-2 text-xs text-muted-foreground">Efficient model solve chance</div>
+      <PercentageRow label="Raw" value={raw} />
+      <PercentageRow label="Calibrated" value={calibrated} />
+      <PercentageRow label="Threshold" value={threshold} />
+      {boundary && <Row label="Boundary">{boundary}</Row>}
+      {rule && <Row label="Rule">{rule}</Row>}
+      {version && <Row label="Calibration">{version}</Row>}
+    </div>
+  );
+}
+
+function FuseV2Forecast({ decision }: { decision: RoutingDecision }) {
+  const {
+    classifier_efficient_p_solve: rawEfficient,
+    classifier_capable_p_solve: rawCapable,
+    classifier_calibrated_efficient_p_solve: calibratedEfficient,
+    classifier_calibrated_capable_p_solve: calibratedCapable,
+    classifier_max_quality_gap: allowedGap,
+    classifier_calibration_version: version,
+  } = decision;
+  if ([rawEfficient, rawCapable, calibratedEfficient, calibratedCapable, allowedGap].every((v) => v === undefined)) {
+    return null;
+  }
+  const isCalibrated = [calibratedEfficient, calibratedCapable, version].some((value) => value !== undefined);
+  const efficient = isCalibrated ? calibratedEfficient : rawEfficient;
+  const capable = isCalibrated ? calibratedCapable : rawCapable;
+  const gap = efficient !== undefined && capable !== undefined ? capable - efficient : undefined;
+
+  return (
+    <div className="mt-3 border-t pt-3">
+      <div className="mb-1 text-sm font-medium">FUSE v2 estimates</div>
+      <PercentageRow label="Efficient (raw)" value={rawEfficient} />
+      <PercentageRow label="Capable (raw)" value={rawCapable} />
+      <PercentageRow label="Efficient (calibrated)" value={calibratedEfficient} />
+      <PercentageRow label="Capable (calibrated)" value={calibratedCapable} />
+      <PercentageRow label="Applied gap" value={gap} unit=" percentage points" />
+      <PercentageRow label="Allowed gap" value={allowedGap} unit=" percentage points" />
+      {version && <Row label="Calibration">{version}</Row>}
     </div>
   );
 }
@@ -265,6 +345,9 @@ export function RoutingDecisionCard({
             <Row label="Request type">{forecast.request_type}</Row>
           </div>
         )}
+
+        <CapabilityForecast decision={decision} />
+        <FuseV2Forecast decision={decision} />
 
         {signals && signals.length > 0 && (
           <Row label="Signals">
