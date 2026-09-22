@@ -3,7 +3,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from enum import Enum
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -703,6 +703,13 @@ def _get_batch_job_usage_from_response_body(
         usage_object: Final = response_body.get("usage", None) or {}
         if custom_llm_provider == "bedrock" and AmazonConverseConfig.is_converse_usage_shape(usage_object):
             return AmazonConverseConfig().usage_from_batch_output(usage_object)
+        if (
+            custom_llm_provider == "anthropic"
+            and usage_object
+            and "input_tokens" not in usage_object
+            and "output_tokens" not in usage_object
+        ):
+            return Usage(**cast(dict[str, object], usage_object))
         anthropic_usage: Final = AnthropicConfig().calculate_usage(
             usage_object=usage_object,
             reasoning_content=None,
@@ -740,7 +747,7 @@ def _get_response_from_batch_job_output_file(
     """
     Get the response from the batch job output file
     """
-    if custom_llm_provider == "anthropic":
+    if custom_llm_provider == "anthropic" and "result" in batch_job_output_file:
         return _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("message", None) or {}
     if custom_llm_provider == "bedrock":
         return batch_job_output_file.get("modelOutput", None) or {}
@@ -759,7 +766,7 @@ def _batch_response_was_successful(
     message batch results lines report ``result.type == "succeeded"``; Bedrock
     batch output lines report ``modelOutput`` (and no ``error``).
     """
-    if custom_llm_provider == "anthropic":
+    if custom_llm_provider == "anthropic" and "result" in batch_job_output_file:
         return _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("type") == "succeeded"
     if custom_llm_provider == "bedrock":
         return batch_job_output_file.get("modelOutput") is not None and batch_job_output_file.get("error") is None

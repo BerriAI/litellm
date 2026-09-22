@@ -632,6 +632,11 @@ def _router_with_executed_batch_model() -> Router:
                 "litellm_params": {"model": "gemini/gemini-2.0-flash"},
                 "model_info": {"id": "gemini-2.0-flash-id"},
             },
+            {
+                "model_name": "my-claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-ant"},
+                "model_info": {"id": "my-claude-id"},
+            },
         ]
     )
 
@@ -819,6 +824,42 @@ def test_upload_with_an_explicit_target_storage_goes_where_the_caller_said_witho
     assert kwargs["target_storage"] == "azure_storage"
     assert tuple(kwargs["target_model_names"]) == ("my-vllm",)
     assert kwargs["purpose"] == purpose
+
+
+def test_batch_upload_for_an_anthropic_model_is_kept_by_litellm(batch_upload_seams):
+    stored, provider_upload, _ = batch_upload_seams
+
+    response = _upload_batch_file({"x-litellm-model": "my-claude"}, {})
+
+    assert response.status_code == 200, response.text
+    provider_upload.assert_not_awaited()
+    stored.assert_awaited_once()
+    kwargs = stored.call_args.kwargs
+    assert kwargs["target_storage"] == "litellm_db"
+    assert tuple(kwargs["target_model_names"]) == ("my-claude",)
+    assert kwargs["purpose"] == "batch"
+
+
+def test_non_batch_upload_for_an_anthropic_model_goes_to_the_provider(batch_upload_seams):
+    stored, provider_upload, _ = batch_upload_seams
+
+    response = _upload_batch_file({"x-litellm-model": "my-claude"}, {"purpose": "user_data"})
+
+    assert response.status_code == 200, response.text
+    stored.assert_not_awaited()
+    provider_upload.assert_awaited_once()
+    assert provider_upload.call_args.kwargs["custom_llm_provider"] == "anthropic"
+
+
+def test_batch_upload_for_an_anthropic_model_through_target_model_names_is_kept_by_litellm(batch_upload_seams):
+    stored, provider_upload, _ = batch_upload_seams
+
+    response = _upload_batch_file({}, {"target_model_names": "my-claude"})
+
+    assert response.status_code == 200, response.text
+    provider_upload.assert_not_awaited()
+    stored.assert_awaited_once()
+    assert stored.call_args.kwargs["target_storage"] == "litellm_db"
 
 
 def test_upload_with_an_explicit_target_storage_still_refuses_a_key_without_the_executed_model(batch_upload_seams):

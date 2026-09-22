@@ -1603,6 +1603,59 @@ async def test_calculate_batch_cost_and_usage_anthropic_end_to_end():
     assert result.models == ["claude-sonnet-4-5"]
 
 
+def _translated_openai_succeeded_row(model="claude-sonnet-4-5", usage=None):
+    """An Anthropic result line after /results translation into OpenAI output shape."""
+    return {
+        "custom_id": "req-1",
+        "response": {
+            "status_code": 200,
+            "request_id": "msg_1",
+            "body": {
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "model": model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": usage or {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        },
+        "error": None,
+    }
+
+
+def _translated_openai_errored_row():
+    return {
+        "custom_id": "req-2",
+        "response": {"status_code": 429, "request_id": None, "body": {"type": "rate_limit_error"}},
+        "error": {"code": "rate_limit_error", "message": "slow down"},
+    }
+
+
+def test_anthropic_translated_openai_line_success_check():
+    assert (
+        bu._batch_response_was_successful(_translated_openai_succeeded_row(), custom_llm_provider="anthropic") is True
+    )
+    assert bu._batch_response_was_successful(_translated_openai_errored_row(), custom_llm_provider="anthropic") is False
+
+
+def test_anthropic_translated_openai_line_body_and_usage():
+    row = _translated_openai_succeeded_row()
+    body = bu._get_response_from_batch_job_output_file(row, custom_llm_provider="anthropic")
+    assert body["object"] == "chat.completion"
+    usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="anthropic")
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (10, 5, 15)
+
+
+def test_anthropic_translated_openai_lines_aggregate(monkeypatch):
+    import litellm.cost_calculator as cc
+
+    monkeypatch.setattr(cc, "batch_cost_calculator", lambda **kw: (0.1, 0.2))
+    rows = [_translated_openai_succeeded_row(), _translated_openai_errored_row()]
+    result = bu._aggregate_batch_cost_usage_models(entries=rows, custom_llm_provider="anthropic")
+    assert (result.successful_requests, result.failed_requests) == (1, 1)
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (10, 5, 15)
+    assert result.models == ["claude-sonnet-4-5"]
+
+
 def test_extract_credentials_forwards_the_trusted_model_credential_snapshot():
     """Bedrock resolves a batch's output bucket only from the immutable server-side
     snapshot, never from a request param, so cost accounting on the retrieve path cannot

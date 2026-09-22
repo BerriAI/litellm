@@ -108,7 +108,7 @@ async def acreate_batch(
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses", "/v1/ocr"],
     input_file_id: str,
     custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "mistral"
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic", "mistral"
     ] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
@@ -160,7 +160,7 @@ def create_batch(
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses", "/v1/ocr"],
     input_file_id: str,
     custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "mistral"
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic", "mistral"
     ] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
@@ -221,9 +221,9 @@ def create_batch(
         )
         if output_expires_after is not None:
             _create_batch_request["output_expires_after"] = cast(FileExpiresAfter, output_expires_after)
-        if model is not None:
+        if model is not None or custom_llm_provider == "anthropic":
             provider_config = ProviderConfigManager.get_provider_batches_config(
-                model=model,
+                model=model or "",
                 provider=LlmProviders(custom_llm_provider),
             )
         else:
@@ -240,7 +240,7 @@ def create_batch(
                 _is_async=_is_async,
                 client=(client if client is not None and isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else None),
                 timeout=timeout,
-                model=model,
+                model=model or "",
             )
             return response
         api_base: str | None = None
@@ -815,6 +815,26 @@ def list_batches(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
             )
+        elif custom_llm_provider == "anthropic":
+            api_base = (
+                optional_params.api_base
+                or litellm.api_base
+                or get_secret_str("ANTHROPIC_API_BASE")
+                or get_secret_str("ANTHROPIC_BASE_URL")
+            )
+            api_key = (
+                optional_params.api_key or litellm.api_key or litellm.azure_key or get_secret_str("ANTHROPIC_API_KEY")
+            )
+
+            response = anthropic_batches_instance.list_batches(
+                _is_async=_is_async,
+                after=after,
+                limit=limit,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support {} for 'list_batch'. Supported providers: {}.".format(
@@ -837,7 +857,7 @@ def list_batches(
 async def acancel_batch(
     batch_id: str,
     model: str | None = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "litellm_proxy"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "litellm_proxy", "anthropic"] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
@@ -883,7 +903,8 @@ async def acancel_batch(
 def cancel_batch(
     batch_id: str,
     model: str | None = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "litellm_proxy"] | str = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "litellm_proxy", "anthropic"]
+    | str = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
@@ -1004,6 +1025,25 @@ def cancel_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
             )
+        elif custom_llm_provider == "anthropic":
+            api_base = (
+                optional_params.api_base
+                or litellm.api_base
+                or get_secret_str("ANTHROPIC_API_BASE")
+                or get_secret_str("ANTHROPIC_BASE_URL")
+            )
+            api_key = (
+                optional_params.api_key or litellm.api_key or litellm.azure_key or get_secret_str("ANTHROPIC_API_KEY")
+            )
+
+            response = anthropic_batches_instance.cancel_batch(
+                _is_async=_is_async,
+                batch_id=batch_id,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+            )
         elif custom_llm_provider == "bedrock":
             response = BedrockBatchesHandler.cancel_batch(
                 batch_id=batch_id,
@@ -1011,7 +1051,7 @@ def cancel_batch(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message=f"LiteLLM doesn't support {custom_llm_provider} for 'cancel_batch'. Only 'openai', 'azure', 'vertex_ai', and 'bedrock' are supported.",
+                message=f"LiteLLM doesn't support {custom_llm_provider} for 'cancel_batch'. Only 'openai', 'azure', 'vertex_ai', 'bedrock', and 'anthropic' are supported.",
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(

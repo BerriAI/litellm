@@ -17,17 +17,23 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
+from litellm.llms.anthropic.batches.transformation import (
+    transform_openai_batch_lines_to_anthropic_requests,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
 from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     LITELLM_EXECUTED_BATCH_UPLOAD_GUIDANCE,
+    InvalidBatchInput,
     LiteLLMExecutedBatchRunner,
     ManagedBatchStore,
     batch_error,
+    download_stored_batch_input,
     executed_batch_runner_lost,
     litellm_executed_provider_for,
-    resolve_litellm_executed_provider,
+    litellm_stored_batch_input_provider_of,
+    parse_batch_input,
 )
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -208,6 +214,60 @@ async def _create_provider_batch_for_managed_file(
         **create_batch_data,
         "input_file_id": resolved_storage_url or input_file_id,
         "disable_fallbacks": True,
+    }
+    response: Final = await llm_router.acreate_batch(**request)
+    response.input_file_id = input_file_id
+    response._hidden_params["unified_file_id"] = unified_file_id
+    return response
+
+
+async def _create_anthropic_batch_for_managed_file(
+    llm_router: Router,
+    create_batch_data: LiteLLMBatchCreateRequest,
+    input_file_id: str,
+    unified_file_id: str,
+    model: str,
+    credentials: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+) -> LiteLLMBatch:
+    if create_batch_data.get("endpoint") != "/v1/chat/completions":
+        raise batch_error(400, "Anthropic message batches only support the /v1/chat/completions endpoint")
+    runner: Final = _litellm_executed_batch_runner(llm_router, proxy_logging_obj)
+    content: Final = await download_stored_batch_input(
+        runner.managed_files,
+        runner.storage_backend_factory,
+        runner.prisma_client,
+        input_file_id,
+        user_api_key_dict,
+    )
+    parsed: Final = parse_batch_input(content, "/v1/chat/completions")
+    if isinstance(parsed, InvalidBatchInput):
+        raise batch_error(400, f"Invalid batch input file: {parsed.describe()}")
+    raw_model: Final = credentials.get("model")
+    bare_model: Final = litellm.get_llm_provider(
+        model=raw_model if isinstance(raw_model, str) else model,
+        custom_llm_provider="anthropic",
+    )[0]
+    try:
+        requests: Final = transform_openai_batch_lines_to_anthropic_requests(
+            lines=tuple(line.model_dump() for line in parsed),
+            model=bare_model,
+        )
+    except ValueError as e:
+        raise batch_error(400, str(e))
+    extra_body: Final = (
+        cast(  # cast-ok: extra_body is declared dict[str, str] but the Anthropic requests array is a list value
+            "dict[str, str]",
+            {**(create_batch_data.get("extra_body") or {}), "requests": list(requests)},
+        )
+    )
+    request: Final[LiteLLMBatchCreateRequest] = {
+        **create_batch_data,
+        "model": model,
+        "input_file_id": input_file_id,
+        "disable_fallbacks": True,
+        "extra_body": extra_body,
     }
     response: Final = await llm_router.acreate_batch(**request)
     response.input_file_id = input_file_id
@@ -416,11 +476,16 @@ async def create_batch(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
-            executed_provider: Final = await resolve_litellm_executed_provider(
-                llm_router, model, user_api_key_dict.team_id
+            deployment_credentials: Final = llm_router.get_deployment_credentials_with_provider(
+                model_id=model, team_id=user_api_key_dict.team_id
             )
-            response = (
-                await _litellm_executed_batch_runner(llm_router, proxy_logging_obj).create(
+            executed_provider: Final = (
+                await litellm_executed_provider_for(deployment_credentials)
+                if deployment_credentials is not None
+                else None
+            )
+            if executed_provider is not None:
+                response = await _litellm_executed_batch_runner(llm_router, proxy_logging_obj).create(
                     create_request=_create_batch_data,
                     unified_input_file_id=input_file_id,
                     model=model,
@@ -428,11 +493,24 @@ async def create_batch(
                     user_api_key_dict=user_api_key_dict,
                     request_tags=_request_tags(_create_batch_data),
                 )
-                if executed_provider is not None
-                else await _create_provider_batch_for_managed_file(
+            elif (
+                deployment_credentials is not None
+                and litellm_stored_batch_input_provider_of(deployment_credentials) is not None
+            ):
+                response = await _create_anthropic_batch_for_managed_file(
+                    llm_router=llm_router,
+                    create_batch_data=_create_batch_data,
+                    input_file_id=input_file_id,
+                    unified_file_id=unified_file_id,
+                    model=model,
+                    credentials=deployment_credentials,
+                    user_api_key_dict=user_api_key_dict,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            else:
+                response = await _create_provider_batch_for_managed_file(
                     llm_router, _create_batch_data, input_file_id, unified_file_id
                 )
-            )
         else:
             # Check if model specified via header/query/body param
             model_param: Final = (
