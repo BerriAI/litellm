@@ -14,6 +14,7 @@ import json
 import os
 import sys
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -2275,3 +2276,72 @@ def test_create_anthropic_model_list_response_lists_ids_as_told():
     assert (gpt["id"], gpt["display_name"], gpt["max_input_tokens"]) == ("claude-router-gpt-4o[1m]", "GPT 4o", 1000000)
     assert (haiku["id"], haiku["display_name"]) == ("claude-haiku-4-5", "claude-haiku-4-5")
     assert (response["first_id"], response["last_id"]) == ("claude-router-gpt-4o[1m]", "claude-haiku-4-5")
+
+
+class TestMalformedContentListItems:
+    @pytest.mark.parametrize(
+        "content",
+        [
+            pytest.param(["what type of file is this?"], id="string_containing_type"),
+            pytest.param(["how do I set cache_control?"], id="string_containing_cache_control"),
+            pytest.param([None], id="none_item"),
+            pytest.param([5], id="int_item"),
+            pytest.param([["nested"]], id="list_item"),
+        ],
+    )
+    def test_beta_headers_resolve_for_non_dict_content_items(self, content: list[object]) -> None:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config: Final = AnthropicModelInfo()
+        messages: Final = [{"role": "user", "content": content}]
+
+        headers: Final = config.validate_environment(
+            headers={},
+            model="claude-sonnet-4-5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            api_key=FAKE_REGULAR_KEY,
+        )
+
+        assert headers["x-api-key"] == FAKE_REGULAR_KEY
+        assert config.is_cache_control_set(messages) is False
+        assert config.is_pdf_used(messages) is False
+
+    def test_real_content_parts_still_set_their_beta_headers(self) -> None:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config: Final = AnthropicModelInfo()
+
+        assert config.is_pdf_used([{"role": "user", "content": [{"type": "image", "source": {}}]}]) is True
+        assert config.is_pdf_used([{"role": "user", "content": [{"type": "text", "text": "hi"}]}]) is False
+        assert (
+            config.is_cache_control_set(
+                [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}],
+                    }
+                ]
+            )
+            is True
+        )
+
+    def test_mixed_list_keeps_detecting_the_valid_part(self) -> None:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config: Final = AnthropicModelInfo()
+        messages: Final = [{"role": "user", "content": ["what type of file is this?", {"type": "image", "source": {}}]}]
+
+        assert config.is_pdf_used(messages) is True
+
+    def test_litellm_completion_rejects_bare_string_content_item_as_bad_request(self) -> None:
+        import litellm
+
+        with pytest.raises(litellm.BadRequestError):
+            litellm.completion(
+                model="anthropic/claude-haiku-4-5-20251001",
+                messages=[{"role": "user", "content": ["what type of file is this?"]}],
+                api_key=FAKE_REGULAR_KEY,
+                max_tokens=5,
+            )
