@@ -1,8 +1,8 @@
 import asyncio
 import json
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Sequence
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.config_sync_pubsub import (
@@ -101,11 +101,15 @@ async def publish_auth_cache_invalidation(
         verbose_proxy_logger.warning("auth cache invalidation publish for %s failed: %s", cache_key, e)
 
 
+class _PublishInvalidation(Protocol):
+    def __call__(self, cache_key: str) -> Awaitable[None]: ...
+
+
 async def evict_and_broadcast(
     cache_keys: Sequence[str],
     user_api_key_cache: "UserApiKeyCache",
     *,
-    publish: Callable[[str], Awaitable[None]] = publish_auth_cache_invalidation,
+    publish: _PublishInvalidation | None = None,
 ) -> None:
     """
     Drop cached management objects here and on every other worker.
@@ -117,6 +121,7 @@ async def evict_and_broadcast(
     bounded by ``_PUBLISH_TIMEOUT_SECONDS`` so a Redis that accepts connections but never replies
     cannot hold the request handler.
     """
+    broadcaster: Final = publish_auth_cache_invalidation if publish is None else publish
     for cache_key in cache_keys:
         try:
             await user_api_key_cache.async_delete_cache(key=cache_key)
@@ -127,7 +132,7 @@ async def evict_and_broadcast(
                 e,
             )
         try:
-            await asyncio.wait_for(publish(cache_key), timeout=_PUBLISH_TIMEOUT_SECONDS)
+            await asyncio.wait_for(broadcaster(cache_key=cache_key), timeout=_PUBLISH_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             verbose_proxy_logger.warning(
                 "auth cache invalidation publish for %s timed out after %.1fs; "
