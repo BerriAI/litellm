@@ -1767,6 +1767,9 @@
     ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[bearer]": [
       "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
+    ],
+    "tests/integration/routing/test_priority_rate_limit_headers.py::test_non_streaming_v1_messages_success_carries_v3_priority_rate_limit_headers": [
+      "other.routing.priority_rate_limits.v1_messages_success_exposes_v3_priority_headers"
     ]
   },
   "browser": {
