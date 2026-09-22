@@ -34,20 +34,26 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling, CeilingResolver
+from litellm.types.agents import AgentCaller
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _cache_management_object,
     _can_object_call_model,
     _can_object_call_vector_stores,
+    _check_agent_access_group_model_access,
     _check_end_user_budget,
     _check_team_member_budget,
     _fetch_key_object_from_db_with_reconnect,
     _get_fuzzy_user_object,
+    CallerTeamLoader,
+    CallerUserLoader,
     _get_team_db_check,
     _log_budget_lookup_failure,
     _tag_max_budget_check,
     _team_max_budget_check,
     _virtual_key_max_budget_alert_check,
+    _check_agent_caller_model_access,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
     get_key_object,
@@ -8930,6 +8936,69 @@ def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() 
     assert request_skips_budget_checks(route="/v1/chat/completions", model=None, llm_router=None) is False
 
 
+def _agent_model_ceiling_resolver(
+    models: frozenset[str] | None,
+) -> tuple[CeilingResolver, list[str]]:
+    """Resolver that records the agent ids it was asked about and answers with a fixed model
+    ceiling, or None when the agent has no access groups attached."""
+    asked: Final[list[str]] = []
+
+    async def resolve(agent_id: str) -> AgentAccessGroupCeiling | None:
+        asked.append(agent_id)
+        if models is None:
+            return None
+        return AgentAccessGroupCeiling(
+            access_group_ids=("ag-1",), models=models, mcp_server_ids=frozenset(), agent_ids=frozenset()
+        )
+
+    return resolve, asked
+
+
+@pytest.mark.asyncio
+async def test_agent_access_groups_cap_models_even_when_key_allows_them():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5", "claude-sonnet"])
+    resolve, asked = _agent_model_ceiling_resolver(frozenset({"gpt-5"}))
+
+    assert await _check_agent_access_group_model_access("gpt-5", agent_key, None, resolve) is True
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_agent_access_group_model_access("claude-sonnet", agent_key, None, resolve)
+
+    assert exc_info.value.type == ProxyErrorTypes.agent_model_access_denied
+    assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+    assert asked == ["agent-1", "agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_agent_access_groups_naming_no_model_deny_every_model():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=[])
+    resolve, _ = _agent_model_ceiling_resolver(frozenset())
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_agent_access_group_model_access("gpt-5", agent_key, None, resolve)
+
+    assert exc_info.value.type == ProxyErrorTypes.agent_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_agent_without_access_groups_adds_no_model_ceiling():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5", "claude-sonnet"])
+    resolve, asked = _agent_model_ceiling_resolver(None)
+
+    assert await _check_agent_access_group_model_access("gpt-5", agent_key, None, resolve) is True
+    assert await _check_agent_access_group_model_access("claude-sonnet", agent_key, None, resolve) is True
+    assert asked == ["agent-1", "agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_key_without_agent_never_consults_agent_access_groups():
+    plain_key: Final = UserAPIKeyAuth(token="plain-token", models=["gpt-5"])
+    resolve, asked = _agent_model_ceiling_resolver(frozenset())
+
+    assert await _check_agent_access_group_model_access("gpt-5", plain_key, None, resolve) is True
+    assert asked == []
+
+
 @pytest.mark.asyncio
 async def test_team_member_budget_check_temp_budget_increase_extends_cap():
     """Spend above max_budget but below max_budget + active temp increase
@@ -9086,3 +9155,117 @@ async def test_team_member_budget_check_adds_temp_increase_to_live_team_default(
                 proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
             )
     assert exc_info.value.max_budget == expected_cap
+
+
+def _agent_key_acting_for(user_id: str | None, team_id: str | None) -> UserAPIKeyAuth:
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5", "claude-sonnet"])
+    agent_key.agent_caller = AgentCaller(user_id=user_id, team_id=team_id)
+    return agent_key
+
+
+def _caller_loaders(
+    team: LiteLLM_TeamTable | None,
+    user: LiteLLM_UserTable | None,
+) -> tuple[CallerTeamLoader, CallerUserLoader, list[str]]:
+    """Loaders that hand back fixed caller rows and record the agent_caller they were asked about."""
+    asked: Final[list[str]] = []
+
+    async def load_team(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTable | None:
+        asked.append(f"team:{valid_token.agent_caller.team_id if valid_token.agent_caller else None}")
+        return team
+
+    async def load_user(valid_token: UserAPIKeyAuth) -> LiteLLM_UserTable | None:
+        asked.append(f"user:{valid_token.agent_caller.user_id if valid_token.agent_caller else None}")
+        return user
+
+    return load_team, load_user, asked
+
+
+async def _cache_with_membership(user_id: str, team_id: str, allowed_models: list[str] | None) -> UserApiKeyCache:
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        value=LiteLLM_TeamMembership(
+            user_id=user_id,
+            team_id=team_id,
+            litellm_budget_table=LiteLLM_BudgetTable(allowed_models=allowed_models) if allowed_models else None,
+        ),
+        model_type=LiteLLM_TeamMembership,
+    )
+    return cache
+
+
+async def _check_caller_models(
+    agent_key: UserAPIKeyAuth,
+    model: str,
+    load_team: CallerTeamLoader,
+    load_user: CallerUserLoader,
+    cache: UserApiKeyCache | None = None,
+) -> None:
+    await _check_agent_caller_model_access(
+        model=model,
+        valid_token=agent_key,
+        llm_router=None,
+        prisma_client=None,
+        user_api_key_cache=cache or UserApiKeyCache(),
+        proxy_logging_obj=MagicMock(),
+        load_team=load_team,
+        load_user=load_user,
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_key_acting_for_a_team_is_capped_at_that_teams_models():
+    """LIT-8014: the invoking team may only call gpt-5, so the agent's own claude grant does not help."""
+    agent_key: Final = _agent_key_acting_for(user_id="alice", team_id="team-a")
+    load_team, load_user, asked = _caller_loaders(LiteLLM_TeamTable(team_id="team-a", models=["gpt-5"]), None)
+    cache: Final = await _cache_with_membership("alice", "team-a", allowed_models=None)
+
+    await _check_caller_models(agent_key, "gpt-5", load_team, load_user, cache)
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_caller_models(agent_key, "claude-sonnet", load_team, load_user, cache)
+
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+    assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+    assert asked == ["team:team-a", "team:team-a"]
+
+
+@pytest.mark.asyncio
+async def test_agent_key_acting_for_a_team_member_is_capped_at_the_members_scope():
+    agent_key: Final = _agent_key_acting_for(user_id="alice", team_id="team-a")
+    load_team, load_user, _ = _caller_loaders(
+        LiteLLM_TeamTable(team_id="team-a", models=["gpt-5", "claude-sonnet"]), None
+    )
+    cache: Final = await _cache_with_membership("alice", "team-a", allowed_models=["gpt-5"])
+
+    await _check_caller_models(agent_key, "gpt-5", load_team, load_user, cache)
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_caller_models(agent_key, "claude-sonnet", load_team, load_user, cache)
+
+    assert "User=alice, Team=team-a" in exc_info.value.internal_message
+
+
+@pytest.mark.asyncio
+async def test_agent_key_acting_for_a_teamless_user_is_capped_at_that_users_models():
+    agent_key: Final = _agent_key_acting_for(user_id="alice", team_id=None)
+    load_team, load_user, asked = _caller_loaders(None, LiteLLM_UserTable(user_id="alice", models=["gpt-5"]))
+
+    await _check_caller_models(agent_key, "gpt-5", load_team, load_user)
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_caller_models(agent_key, "claude-sonnet", load_team, load_user)
+
+    assert exc_info.value.type == ProxyErrorTypes.user_model_access_denied
+    assert asked == ["team:None", "user:alice", "team:None", "user:alice"]
+
+
+@pytest.mark.asyncio
+async def test_agent_key_without_an_echoed_caller_keeps_its_own_models():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5", "claude-sonnet"])
+    load_team, load_user, asked = _caller_loaders(LiteLLM_TeamTable(team_id="team-a", models=[]), None)
+
+    await _check_caller_models(agent_key, "claude-sonnet", load_team, load_user)
+
+    assert asked == []
