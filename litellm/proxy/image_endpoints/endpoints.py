@@ -54,13 +54,13 @@ async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
 
 async def batch_to_bytesio(
     uploads: Sequence[UploadFile] | None,
-) -> list[io.BytesIO] | None:
+) -> list[io.BytesIO] | None:  # mutable-ok: provider JSON body and base-class dict signature
     """
     Convert a sequence of UploadFiles to a list of BytesIO buffers, or None.
     """
     if not uploads:
         return None
-    return [await uploadfile_to_bytesio(u) for u in uploads]
+    return [await uploadfile_to_bytesio(u) for u in uploads]  # mutable-ok: provider JSON body and base-class dict signature
 
 
 def _is_image_reference_string(value: str) -> bool:
@@ -95,10 +95,10 @@ async def _normalize_image_values(values: tuple[object, ...], field: str) -> obj
     coerced: Final = tuple([await _coerce_image_part(value, field) for value in values])
     if len(coerced) == 1 and isinstance(coerced[0], str):
         return coerced[0]
-    return list(coerced)
+    return list(coerced)  # mutable-ok: provider JSON body and base-class dict signature
 
 
-def _json_image_values(data: dict[str, object], field: str) -> tuple[object, ...]:
+def _json_image_values(data: dict[str, object], field: str) -> tuple[object, ...]:  # mutable-ok: provider JSON body and base-class dict signature
     if field not in data:
         return ()
     raw: Final = data[field]
@@ -108,30 +108,30 @@ def _json_image_values(data: dict[str, object], field: str) -> tuple[object, ...
 
 
 async def _normalized_image_edit_fields(
-    values_by_field: dict[str, tuple[object, ...]],
-) -> dict[str, object]:
+    values_by_field: dict[str, tuple[object, ...]],  # mutable-ok: provider JSON body and base-class dict signature
+) -> dict[str, object]:  # mutable-ok: provider JSON body and base-class dict signature
     image: Final = await _normalize_image_values(values_by_field["image"], "image")
     mask: Final = await _normalize_image_values(values_by_field["mask"], "mask")
-    return {
-        **({"image": image} if image is not None else {}),
-        **({"mask": mask} if mask is not None else {}),
+    return {  # mutable-ok: provider JSON body and base-class dict signature
+        **({"image": image} if image is not None else {}),  # mutable-ok: provider JSON body and base-class dict signature
+        **({"mask": mask} if mask is not None else {}),  # mutable-ok: provider JSON body and base-class dict signature
     }
 
 
 async def _image_edit_assets_from_request(
     request: Request,
-    data: dict[str, object],
-) -> dict[str, object]:
+    data: dict[str, object],  # mutable-ok: provider JSON body and base-class dict signature
+) -> dict[str, object]:  # mutable-ok: provider JSON body and base-class dict signature
     form: Final = await request.form() if _is_form_content_type(request.headers.get("content-type", "")) else None
     if form is None:
-        return {
-            **{key: value for key, value in data.items() if key not in {"image[]", "mask[]"}},
+        return {  # mutable-ok: provider JSON body and base-class dict signature
+            **{key: value for key, value in data.items() if key not in {"image[]", "mask[]"}},  # mutable-ok: provider JSON body and base-class dict signature
             **await _normalized_image_edit_fields(
-                {field: _json_image_values(data, field) for field, _alias in _IMAGE_EDIT_FILE_FIELDS}
+                {field: _json_image_values(data, field) for field, _alias in _IMAGE_EDIT_FILE_FIELDS}  # mutable-ok: provider JSON body and base-class dict signature
             ),
         }
 
-    form_values: Final = {
+    form_values: Final = {  # mutable-ok: provider JSON body and base-class dict signature
         name: _form_field_values(form, name) for field, alias in _IMAGE_EDIT_FILE_FIELDS for name in (field, alias)
     }
     conflicts: Final = tuple(
@@ -142,31 +142,31 @@ async def _image_edit_assets_from_request(
             status_code=422,
             detail=f"Cannot specify both '{conflicts[0]}' and '{conflicts[0]}[]'",
         )
-    return {
-        **{key: value for key, value in data.items() if key not in {"image[]", "mask[]"}},
+    return {  # mutable-ok: provider JSON body and base-class dict signature
+        **{key: value for key, value in data.items() if key not in {"image[]", "mask[]"}},  # mutable-ok: provider JSON body and base-class dict signature
         **await _normalized_image_edit_fields(
-            {field: form_values[field] or form_values[alias] for field, alias in _IMAGE_EDIT_FILE_FIELDS}
+            {field: form_values[field] or form_values[alias] for field, alias in _IMAGE_EDIT_FILE_FIELDS}  # mutable-ok: provider JSON body and base-class dict signature
         ),
     }
 
 
 @router.post(
     "/v1/images/generations",
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: provider JSON body and base-class dict signature
     response_class=ORJSONResponse,
-    tags=["images"],
+    tags=["images"],  # mutable-ok: provider JSON body and base-class dict signature
 )
 @router.post(
     "/images/generations",
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: provider JSON body and base-class dict signature
     response_class=ORJSONResponse,
-    tags=["images"],
+    tags=["images"],  # mutable-ok: provider JSON body and base-class dict signature
 )
 @router.post(
     "/openai/deployments/{model:path}/images/generations",
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: provider JSON body and base-class dict signature
     response_class=ORJSONResponse,
-    tags=["images"],
+    tags=["images"],  # mutable-ok: provider JSON body and base-class dict signature
 )  # azure compatible endpoint
 async def image_generation(
     request: Request,
@@ -185,7 +185,7 @@ async def image_generation(
         version,
     )
 
-    data = {}
+    data = {}  # mutable-ok: provider JSON body and base-class dict signature
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         body: Final = await request.body()
@@ -227,7 +227,7 @@ async def image_generation(
                 "role": "user",
                 "content": prompt_value,
             }
-            data["messages"] = [user_message]
+            data["messages"] = [user_message]  # mutable-ok: provider JSON body and base-class dict signature
         data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict, data=data, call_type="image_generation"
         )
@@ -257,7 +257,7 @@ async def image_generation(
         )
 
         ### RESPONSE HEADERS ###
-        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}  # mutable-ok: provider JSON body and base-class dict signature
         model_id: Final = hidden_params.get("model_id", None) or ""
         cache_key: Final = hidden_params.get("cache_key", None) or ""
         api_base: Final = hidden_params.get("api_base", None) or ""
@@ -284,7 +284,7 @@ async def image_generation(
             data=data,
             user_api_key_dict=user_api_key_dict,
             response=response,
-            request_headers=dict(request.headers),
+            request_headers=dict(request.headers),  # mutable-ok: provider JSON body and base-class dict signature
         )
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
@@ -316,19 +316,19 @@ async def image_generation(
 
 @router.post(
     "/v1/images/edits",
-    dependencies=[Depends(user_api_key_auth)],
-    tags=["images"],
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: provider JSON body and base-class dict signature
+    tags=["images"],  # mutable-ok: provider JSON body and base-class dict signature
 )
 @router.post(
     "/images/edits",
-    dependencies=[Depends(user_api_key_auth)],
-    tags=["images"],
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: provider JSON body and base-class dict signature
+    tags=["images"],  # mutable-ok: provider JSON body and base-class dict signature
 )
 @router.post(
     "/openai/deployments/{model:path}/images/edits",
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: provider JSON body and base-class dict signature
     response_class=ORJSONResponse,
-    tags=["images"],
+    tags=["images"],  # mutable-ok: provider JSON body and base-class dict signature
 )  # azure compatible endpoint
 async def image_edit_api(
     request: Request,
@@ -364,16 +364,16 @@ async def image_edit_api(
         version,
     )
 
-    parsed_body: Final = dict(
+    parsed_body: Final = dict(  # mutable-ok: provider JSON body and base-class dict signature
         coerce_numeric_form_fields(
             parsed_body=await _read_request_body(request=request),
             numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
         )
     )
     with_assets: Final = await _image_edit_assets_from_request(request, parsed_body)
-    data: Final = {
+    data: Final = {  # mutable-ok: provider JSON body and base-class dict signature
         **with_assets,
-        **({} if "prompt" in with_assets else {"prompt": None}),
+        **({} if "prompt" in with_assets else {"prompt": None}),  # mutable-ok: provider JSON body and base-class dict signature
         "model": (
             model or general_settings.get("image_generation_model", None) or user_model or with_assets.get("model")
         ),

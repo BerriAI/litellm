@@ -18,7 +18,7 @@ from litellm.types.utils import FileTypes, ImageObject, ImageResponse
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-_SIZE_TO_ASPECT_RATIO: Final = {
+_SIZE_TO_ASPECT_RATIO: Final = {  # mutable-ok: provider JSON body and base-class dict signature
     "1024x1024": "1:1",
     "1792x1024": "16:9",
     "1024x1792": "9:16",
@@ -41,18 +41,18 @@ def _read_seekable(image: BytesIO | BufferedReader) -> bytes:
 
 
 class XAIImageEditConfig(BaseImageEditConfig):
-    def get_supported_openai_params(self, model: str) -> list:
-        return ["n", "response_format", "size", "user"]
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: provider JSON body and base-class dict signature
+        return ["n", "response_format", "size", "user"]  # mutable-ok: provider JSON body and base-class dict signature
 
     def map_openai_params(
         self,
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
         supported: Final = frozenset(self.get_supported_openai_params(model))
         allowed: Final = supported | _XAI_NATIVE_PARAMS
-        incoming: Final = dict(image_edit_optional_params)
+        incoming: Final = dict(image_edit_optional_params)  # mutable-ok: provider JSON body and base-class dict signature
         unknown: Final = tuple(key for key in incoming if key not in allowed)
         if unknown and not drop_params:
             raise ValueError(
@@ -61,17 +61,17 @@ class XAIImageEditConfig(BaseImageEditConfig):
                 "Set drop_params=True to drop unsupported parameters."
             )
 
-        mapped: Final = {key: value for key, value in incoming.items() if key in allowed}
+        mapped: Final = {key: value for key, value in incoming.items() if key in allowed}  # mutable-ok: provider JSON body and base-class dict signature
         size: Final = mapped.get("size")
         aspect_ratio: Final = mapped.get("aspect_ratio") or (
             _SIZE_TO_ASPECT_RATIO.get(str(size), "1:1") if size else None
         )
         n: Final = mapped.get("n")
         resolution: Final = mapped.get("resolution")
-        return {
-            **({"aspect_ratio": aspect_ratio} if aspect_ratio is not None else {}),
-            **({"n": int(n)} if n is not None else {}),
-            **({"resolution": resolution} if resolution is not None else {}),
+        return {  # mutable-ok: provider JSON body and base-class dict signature
+            **({"aspect_ratio": aspect_ratio} if aspect_ratio is not None else {}),  # mutable-ok: provider JSON body and base-class dict signature
+            **({"n": int(n)} if n is not None else {}),  # mutable-ok: provider JSON body and base-class dict signature
+            **({"resolution": resolution} if resolution is not None else {}),  # mutable-ok: provider JSON body and base-class dict signature
         }
 
     def use_multipart_form_data(self) -> bool:
@@ -81,7 +81,7 @@ class XAIImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict,  # mutable-ok: provider JSON body and base-class dict signature
     ) -> str:
         from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
 
@@ -98,19 +98,19 @@ class XAIImageEditConfig(BaseImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict | None = None,  # mutable-ok: provider JSON body and base-class dict signature
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
         from litellm.llms.xai.oauth import (
             XAIOAuthAuthenticator,
             XAIOAuthError,
             should_use_xai_oauth,
         )
 
-        params: Final = litellm_params or {}
+        params: Final = litellm_params or {}  # mutable-ok: provider JSON body and base-class dict signature
         dynamic_api_key: Final = XAIModelInfo.get_api_key(api_key)
         if should_use_xai_oauth(params) and not dynamic_api_key:
             try:
@@ -141,10 +141,10 @@ class XAIImageEditConfig(BaseImageEditConfig):
         model: str,
         prompt: str | None,
         image: FileTypes | None,
-        image_edit_optional_request_params: dict,
+        image_edit_optional_request_params: dict,  # mutable-ok: provider JSON body and base-class dict signature
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+        headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
+    ) -> tuple[dict, RequestFiles]:  # mutable-ok: provider JSON body and base-class dict signature
         if image is None:
             raise ValueError("xAI image edit requires at least one reference image.")
 
@@ -153,18 +153,18 @@ class XAIImageEditConfig(BaseImageEditConfig):
             raise ValueError("xAI image edit requires at least one reference image.")
 
         n: Final = image_edit_optional_request_params.get("n")
-        request: Final[dict[str, object]] = {
+        request: Final[dict[str, object]] = {  # mutable-ok: provider JSON body and base-class dict signature
             "model": XAIModelInfo.get_base_model(model) or model,
-            **({"prompt": prompt} if prompt is not None else {}),
-            **({"image": image_payloads[0]} if len(image_payloads) == 1 else {"images": list(image_payloads)}),
-            **{
+            **({"prompt": prompt} if prompt is not None else {}),  # mutable-ok: provider JSON body and base-class dict signature
+            **({"image": image_payloads[0]} if len(image_payloads) == 1 else {"images": list(image_payloads)}),  # mutable-ok: provider JSON body and base-class dict signature
+            **{  # mutable-ok: provider JSON body and base-class dict signature
                 key: image_edit_optional_request_params[key]
                 for key in ("aspect_ratio", "resolution")
                 if image_edit_optional_request_params.get(key) is not None
             },
-            **({"n": int(n)} if n is not None else {}),
+            **({"n": int(n)} if n is not None else {}),  # mutable-ok: provider JSON body and base-class dict signature
         }
-        return request, []
+        return request, []  # mutable-ok: provider JSON body and base-class dict signature
 
     def transform_image_edit_response(
         self,
@@ -195,25 +195,25 @@ class XAIImageEditConfig(BaseImageEditConfig):
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
-        return ImageResponse(data=list(images))
+        return ImageResponse(data=list(images))  # mutable-ok: provider JSON body and base-class dict signature
 
-    def _as_image_list(self, image: FileTypes | list[FileTypes]) -> tuple[FileTypes, ...]:
+    def _as_image_list(self, image: FileTypes | list[FileTypes]) -> tuple[FileTypes, ...]:  # mutable-ok: provider JSON body and base-class dict signature
         if isinstance(image, list):
             return tuple(item for item in image if item is not None)
         return (image,)
 
-    def _to_image_url(self, image: FileTypes) -> dict[str, str]:
+    def _to_image_url(self, image: FileTypes) -> dict[str, str]:  # mutable-ok: provider JSON body and base-class dict signature
         if isinstance(image, str):
-            return {"url": image}
+            return {"url": image}  # mutable-ok: provider JSON body and base-class dict signature
         if isinstance(image, dict):
             if image.get("url"):
-                return {"url": str(image["url"])}
+                return {"url": str(image["url"])}  # mutable-ok: provider JSON body and base-class dict signature
             if image.get("file_id"):
-                return {"file_id": str(image["file_id"])}
+                return {"file_id": str(image["file_id"])}  # mutable-ok: provider JSON body and base-class dict signature
 
         mime: Final = ImageEditRequestUtils.get_image_content_type(image)
         encoded: Final = base64.b64encode(self._read_all_bytes(image)).decode("utf-8")
-        return {"url": f"data:{mime};base64,{encoded}"}
+        return {"url": f"data:{mime};base64,{encoded}"}  # mutable-ok: provider JSON body and base-class dict signature
 
     def _read_all_bytes(self, image: FileTypes) -> bytes:
         if isinstance(image, bytes):

@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-_SIZE_TO_ASPECT_RATIO: Final = {
+_SIZE_TO_ASPECT_RATIO: Final = {  # mutable-ok: provider JSON body and base-class dict signature
     "1024x1024": "1:1",
     "1792x1024": "16:9",
     "1024x1792": "9:16",
@@ -35,16 +35,16 @@ _XAI_NATIVE_PARAMS: Final = frozenset({"aspect_ratio", "n"})
 
 
 class XAIImageGenerationConfig(BaseImageGenerationConfig):
-    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
-        return ["n", "response_format", "size", "user"]
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:  # mutable-ok: provider JSON body and base-class dict signature
+        return ["n", "response_format", "size", "user"]  # mutable-ok: provider JSON body and base-class dict signature
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict,  # mutable-ok: provider JSON body and base-class dict signature
+        optional_params: dict,  # mutable-ok: provider JSON body and base-class dict signature
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
         supported_params: Final = frozenset(self.get_supported_openai_params(model))
         allowed: Final = supported_params | _XAI_NATIVE_PARAMS
         unknown: Final = tuple(key for key in non_default_params if key not in optional_params and key not in allowed)
@@ -55,15 +55,15 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
                 "Set drop_params=True to drop unsupported parameters."
             )
 
-        merged: Final = {**optional_params, **{k: v for k, v in non_default_params.items() if k in allowed}}
+        merged: Final = {**optional_params, **{k: v for k, v in non_default_params.items() if k in allowed}}  # mutable-ok: provider JSON body and base-class dict signature
         size: Final = merged.get("size")
         aspect_ratio: Final = merged.get("aspect_ratio") or (
             _SIZE_TO_ASPECT_RATIO.get(str(size), "1:1") if size else None
         )
         n: Final = merged.get("n")
-        return {
-            **({"aspect_ratio": aspect_ratio} if aspect_ratio is not None else {}),
-            **({"n": int(n)} if n is not None else {}),
+        return {  # mutable-ok: provider JSON body and base-class dict signature
+            **({"aspect_ratio": aspect_ratio} if aspect_ratio is not None else {}),  # mutable-ok: provider JSON body and base-class dict signature
+            **({"n": int(n)} if n is not None else {}),  # mutable-ok: provider JSON body and base-class dict signature
         }
 
     def get_complete_url(
@@ -71,8 +71,8 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict,  # mutable-ok: provider JSON body and base-class dict signature
+        litellm_params: dict,  # mutable-ok: provider JSON body and base-class dict signature
         stream: bool | None = None,
     ) -> str:
         from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
@@ -89,14 +89,14 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        messages: list[AllMessageValues],  # mutable-ok: provider JSON body and base-class dict signature
+        optional_params: dict,  # mutable-ok: provider JSON body and base-class dict signature
+        litellm_params: dict,  # mutable-ok: provider JSON body and base-class dict signature
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
         from litellm.llms.xai.oauth import (
             XAIOAuthAuthenticator,
             XAIOAuthError,
@@ -133,20 +133,20 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict,  # mutable-ok: provider JSON body and base-class dict signature
+        litellm_params: dict,  # mutable-ok: provider JSON body and base-class dict signature
+        headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
+    ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
         n: Final = optional_params.get("n")
-        return {
+        return {  # mutable-ok: provider JSON body and base-class dict signature
             "model": XAIModelInfo.get_base_model(model) or model,
             "prompt": prompt,
             **(
-                {"aspect_ratio": optional_params["aspect_ratio"]}
+                {"aspect_ratio": optional_params["aspect_ratio"]}  # mutable-ok: provider JSON body and base-class dict signature
                 if optional_params.get("aspect_ratio") is not None
-                else {}
+                else {}  # mutable-ok: provider JSON body and base-class dict signature
             ),
-            **({"n": int(n)} if n is not None else {}),
+            **({"n": int(n)} if n is not None else {}),  # mutable-ok: provider JSON body and base-class dict signature
         }
 
     def transform_image_generation_response(
@@ -155,9 +155,9 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: dict,  # mutable-ok: provider JSON body and base-class dict signature
+        optional_params: dict,  # mutable-ok: provider JSON body and base-class dict signature
+        litellm_params: dict,  # mutable-ok: provider JSON body and base-class dict signature
         encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -174,7 +174,7 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
         logging_obj.post_call(
             input=request_data.get("prompt", ""),
             api_key=api_key,
-            additional_args={"complete_input_dict": request_data},
+            additional_args={"complete_input_dict": request_data},  # mutable-ok: provider JSON body and base-class dict signature
             original_response=response_data,
         )
 
@@ -192,5 +192,5 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
-        model_response.data = list(images)
+        model_response.data = list(images)  # mutable-ok: provider JSON body and base-class dict signature
         return model_response

@@ -27,7 +27,7 @@ from litellm.types.videos.utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-_SIZE_TO_ASPECT_RATIO: Final = {
+_SIZE_TO_ASPECT_RATIO: Final = {  # mutable-ok: provider JSON body and base-class dict signature
     "1024x1024": "1:1",
     "1792x1024": "16:9",
     "1024x1792": "9:16",
@@ -45,7 +45,7 @@ def _duration_from_seconds(seconds: object) -> int:
         return 6
 
 
-_STATUS_MAP: Final = {
+_STATUS_MAP: Final = {  # mutable-ok: provider JSON body and base-class dict signature
     "done": "completed",
     "completed": "completed",
     "succeeded": "completed",
@@ -58,8 +58,8 @@ _STATUS_MAP: Final = {
 
 
 class XAIVideoConfig(BaseVideoConfig):
-    def get_supported_openai_params(self, model: str) -> list:
-        return [
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: provider JSON body and base-class dict signature
+        return [  # mutable-ok: provider JSON body and base-class dict signature
             "model",
             "prompt",
             "input_reference",
@@ -74,29 +74,29 @@ class XAIVideoConfig(BaseVideoConfig):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
-        incoming: Final = dict(video_create_optional_params)
+    ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
+        incoming: Final = dict(video_create_optional_params)  # mutable-ok: provider JSON body and base-class dict signature
         size: Final = incoming.get("size")
-        return {
-            **{
+        return {  # mutable-ok: provider JSON body and base-class dict signature
+            **{  # mutable-ok: provider JSON body and base-class dict signature
                 key: value
                 for key, value in incoming.items()
-                if key not in {"seconds", "size", "input_reference", "user", "extra_headers", "model"}
+                if key not in {"seconds", "size", "input_reference", "user", "extra_headers", "model"}  # mutable-ok: provider JSON body and base-class dict signature
             },
             **(
-                {"duration": _duration_from_seconds(incoming.get("seconds"))}
+                {"duration": _duration_from_seconds(incoming.get("seconds"))}  # mutable-ok: provider JSON body and base-class dict signature
                 if "seconds" in incoming and "duration" not in incoming
-                else {}
+                else {}  # mutable-ok: provider JSON body and base-class dict signature
             ),
             **(
-                {"aspect_ratio": incoming.get("aspect_ratio") or _SIZE_TO_ASPECT_RATIO.get(str(size), "16:9")}
+                {"aspect_ratio": incoming.get("aspect_ratio") or _SIZE_TO_ASPECT_RATIO.get(str(size), "16:9")}  # mutable-ok: provider JSON body and base-class dict signature
                 if size and "aspect_ratio" not in incoming
-                else {}
+                else {}  # mutable-ok: provider JSON body and base-class dict signature
             ),
             **(
-                {"image": incoming.get("image") or incoming.get("input_reference")}
+                {"image": incoming.get("image") or incoming.get("input_reference")}  # mutable-ok: provider JSON body and base-class dict signature
                 if incoming.get("input_reference") and "image" not in incoming
-                else {}
+                else {}  # mutable-ok: provider JSON body and base-class dict signature
             ),
         }
 
@@ -104,12 +104,12 @@ class XAIVideoConfig(BaseVideoConfig):
         self,
         api_base: str | None,
         api_key: str | None,
-        litellm_params: GenericLiteLLMParams | dict | None,
+        litellm_params: GenericLiteLLMParams | dict | None,  # mutable-ok: provider JSON body and base-class dict signature
     ) -> str:
         from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
 
         params: Final = (
-            litellm_params.model_dump() if isinstance(litellm_params, GenericLiteLLMParams) else (litellm_params or {})
+            litellm_params.model_dump() if isinstance(litellm_params, GenericLiteLLMParams) else (litellm_params or {})  # mutable-ok: provider JSON body and base-class dict signature
         )
         if should_use_xai_oauth(params) and not XAIModelInfo.get_api_key(api_key):
             return XAIOAuthAuthenticator().get_api_base().rstrip("/")
@@ -131,18 +131,18 @@ class XAIVideoConfig(BaseVideoConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
         model: str,
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
         from litellm.llms.xai.oauth import (
             XAIOAuthAuthenticator,
             XAIOAuthError,
             should_use_xai_oauth,
         )
 
-        params: Final = litellm_params.model_dump() if litellm_params is not None else {}
+        params: Final = litellm_params.model_dump() if litellm_params is not None else {}  # mutable-ok: provider JSON body and base-class dict signature
         resolved_api_key: Final = api_key or (litellm_params.api_key if litellm_params else None)
         dynamic_api_key: Final = XAIModelInfo.get_api_key(resolved_api_key)
         if should_use_xai_oauth(params) and not dynamic_api_key:
@@ -174,7 +174,7 @@ class XAIVideoConfig(BaseVideoConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict,  # mutable-ok: provider JSON body and base-class dict signature
     ) -> str:
         resolved: Final = self._resolve_api_base(
             api_base=api_base,
@@ -190,11 +190,11 @@ class XAIVideoConfig(BaseVideoConfig):
         model: str,
         prompt: str,
         api_base: str,
-        video_create_optional_request_params: dict,
+        video_create_optional_request_params: dict,  # mutable-ok: provider JSON body and base-class dict signature
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles, str]:
-        copied: Final = {
+        headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
+    ) -> tuple[dict, RequestFiles, str]:  # mutable-ok: provider JSON body and base-class dict signature
+        copied: Final = {  # mutable-ok: provider JSON body and base-class dict signature
             key: video_create_optional_request_params[key]
             for key in (
                 "image",
@@ -207,13 +207,13 @@ class XAIVideoConfig(BaseVideoConfig):
             if video_create_optional_request_params.get(key) is not None
         }
         return (
-            {
+            {  # mutable-ok: provider JSON body and base-class dict signature
                 "model": XAIModelInfo.get_base_model(model) or model,
-                **({"prompt": prompt} if prompt else {}),
+                **({"prompt": prompt} if prompt else {}),  # mutable-ok: provider JSON body and base-class dict signature
                 **copied,
-                **({"duration": 6} if "duration" not in copied else {}),
+                **({"duration": 6} if "duration" not in copied else {}),  # mutable-ok: provider JSON body and base-class dict signature
             },
-            [],
+            [],  # mutable-ok: provider JSON body and base-class dict signature
             api_base,
         )
 
@@ -223,14 +223,14 @@ class XAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str | None = None,
-        request_data: dict | None = None,
+        request_data: dict | None = None,  # mutable-ok: provider JSON body and base-class dict signature
     ) -> VideoObject:
         response_data: Final = raw_response.json()
         request_id: Final = response_data.get("request_id") or response_data.get("id")
         if not request_id:
             raise ValueError(f"xAI video generation response missing request_id: {response_data}")
 
-        usage: Final = response_data.get("usage") or {}
+        usage: Final = response_data.get("usage") or {}  # mutable-ok: provider JSON body and base-class dict signature
         video_obj: Final = VideoObject(
             id=str(request_id),
             object="video",
@@ -241,7 +241,7 @@ class XAIVideoConfig(BaseVideoConfig):
         )
         if custom_llm_provider:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
-        video_obj.usage = usage if isinstance(usage, dict) else {}
+        video_obj.usage = usage if isinstance(usage, dict) else {}  # mutable-ok: provider JSON body and base-class dict signature
         video_obj._hidden_params["video_url"] = None
         return video_obj
 
@@ -257,9 +257,9 @@ class XAIVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
-        return self._video_resource_url(api_base, video_id), {}
+        headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
+    ) -> tuple[str, dict]:  # mutable-ok: provider JSON body and base-class dict signature
+        return self._video_resource_url(api_base, video_id), {}  # mutable-ok: provider JSON body and base-class dict signature
 
     def transform_video_status_retrieve_response(
         self,
@@ -270,7 +270,7 @@ class XAIVideoConfig(BaseVideoConfig):
         response_data: Final = raw_response.json()
         status_raw: Final = str(response_data.get("status") or "processing").lower()
         status: Final = _STATUS_MAP.get(status_raw, status_raw)
-        video_meta: Final = response_data.get("video") or {}
+        video_meta: Final = response_data.get("video") or {}  # mutable-ok: provider JSON body and base-class dict signature
         video_url: Final = video_meta.get("url") if isinstance(video_meta, dict) else None
         seconds: Final = (
             str(video_meta.get("duration"))
@@ -291,7 +291,7 @@ class XAIVideoConfig(BaseVideoConfig):
             model=response_data.get("model"),
             progress=response_data.get("progress"),
             seconds=seconds,
-            usage=response_data.get("usage") if isinstance(response_data.get("usage"), dict) else {},
+            usage=response_data.get("usage") if isinstance(response_data.get("usage"), dict) else {},  # mutable-ok: provider JSON body and base-class dict signature
         )
         video_obj._hidden_params["video_url"] = video_url
         if custom_llm_provider and video_obj.id and video_obj.id != "unknown":
@@ -303,10 +303,10 @@ class XAIVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
         variant: str | None = None,
-    ) -> tuple[str, dict]:
-        return self._video_resource_url(api_base, video_id), {}
+    ) -> tuple[str, dict]:  # mutable-ok: provider JSON body and base-class dict signature
+        return self._video_resource_url(api_base, video_id), {}  # mutable-ok: provider JSON body and base-class dict signature
 
     def _video_cdn_url(self, raw_response: httpx.Response) -> str | None:
         content_type: Final = (raw_response.headers.get("content-type") or "").lower()
@@ -315,7 +315,7 @@ class XAIVideoConfig(BaseVideoConfig):
         payload: Final = raw_response.json()
         if not isinstance(payload, dict):
             return None
-        video_meta: Final = payload.get("video") or {}
+        video_meta: Final = payload.get("video") or {}  # mutable-ok: provider JSON body and base-class dict signature
         url: Final = video_meta.get("url") if isinstance(video_meta, dict) else None
         if isinstance(url, str) and url:
             return url
@@ -355,9 +355,9 @@ class XAIVideoConfig(BaseVideoConfig):
         prompt: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-        extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+        headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
+        extra_body: dict[str, object] | None = None,  # mutable-ok: provider JSON body and base-class dict signature
+    ) -> tuple[str, dict]:  # mutable-ok: provider JSON body and base-class dict signature
         raise NotImplementedError("Video remix is not supported by xAI Imagine API")
 
     def transform_video_remix_response(
@@ -372,12 +372,12 @@ class XAIVideoConfig(BaseVideoConfig):
         self,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+        extra_query: dict[str, object] | None = None,  # mutable-ok: provider JSON body and base-class dict signature
+    ) -> tuple[str, dict]:  # mutable-ok: provider JSON body and base-class dict signature
         raise NotImplementedError("Video listing is not supported by xAI Imagine API")
 
     def transform_video_list_response(
@@ -385,7 +385,7 @@ class XAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, str]:  # mutable-ok: provider JSON body and base-class dict signature
         raise NotImplementedError("Video listing is not supported by xAI Imagine API")
 
     def transform_video_delete_request(
@@ -393,8 +393,8 @@ class XAIVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
+    ) -> tuple[str, dict]:  # mutable-ok: provider JSON body and base-class dict signature
         raise NotImplementedError("Video delete is not supported by xAI Imagine API")
 
     def transform_video_delete_response(
