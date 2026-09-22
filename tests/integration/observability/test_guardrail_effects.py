@@ -214,3 +214,79 @@ def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway:
                     assert len(calls) == 1
                     assert calls[0]["body"]["params"]["name"] == tool
                     assert calls[0]["body"]["params"]["arguments"] == arguments
+
+
+@pytest.mark.covers("other.observability.guardrails.post_call_masks_responses_custom_tool_call_input")
+def test_post_call_guardrail_masks_responses_custom_tool_call_input(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    tool_call_item: Final = {
+        "type": "custom_tool_call",
+        "id": "ctc_" + identity,
+        "call_id": "call_" + identity,
+        "name": "exec",
+        "input": "echo persimmon",
+        "status": "completed",
+    }
+
+    def provider(request: Request) -> Reply:
+        assert request.target == "/v1/responses"
+        body: Final = json.loads(request.body)
+        assert body["input"] == "run the synthetic command"
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "resp_" + identity,
+                    "object": "response",
+                    "created_at": 1700000000,
+                    "status": "completed",
+                    "model": "gpt-4o-mini",
+                    "output": [tool_call_item],
+                    "parallel_tool_calls": True,
+                    "tool_choice": "auto",
+                    "tools": [{"type": "custom", "name": "exec"}],
+                    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                }
+            ).encode()
+        )
+
+    with wire_server(provider) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["guardrails"] = [
+            {
+                "guardrail_name": identity,
+                "litellm_params": {
+                    "guardrail": "custom_code",
+                    "mode": "post_call",
+                    "default_on": True,
+                    "custom_code": (
+                        "def apply_guardrail(inputs, request_data, input_type):\n"
+                        '    calls = inputs.get("tool_calls") or []\n'
+                        "    if not calls:\n"
+                        "        return allow()\n"
+                        "    return modify(tool_calls=[\n"
+                        "        {\n"
+                        '            "id": call["id"],\n'
+                        '            "type": "function",\n'
+                        '            "function": {\n'
+                        '                "name": call["function"]["name"],\n'
+                        '                "arguments": call["function"]["arguments"].replace("persimmon", "[KEYWORD_REDACTED]"),\n'
+                        "            },\n"
+                        "        }\n"
+                        "        for call in calls\n"
+                        "    ])\n"
+                    ),
+                },
+            }
+        ]
+        path: Final = tmp_path / "mask-tool-call.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(api_base=upstream.url + "/v1")
+            response: Final = candidate.request(
+                "POST",
+                "/v1/responses",
+                {"model": model, "input": "run the synthetic command", "tools": [{"type": "custom", "name": "exec"}]},
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["output"] == [{**tool_call_item, "input": "echo [KEYWORD_REDACTED]"}], response.text
+            assert len(upstream.drain()) == 1
