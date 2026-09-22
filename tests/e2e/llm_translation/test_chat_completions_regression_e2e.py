@@ -18,14 +18,21 @@ from __future__ import annotations
 
 import base64
 import os
+import socket
+import subprocess
+import sys
+import time
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import pytest
+import yaml
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
-from e2e_http import StreamingResponse, unwrap
+from e2e_http import NoBody, StreamingResponse, assert_client_error, unwrap
 from lifecycle import ResourceManager
 from models import (
     ChatBody,
@@ -40,6 +47,7 @@ from models import (
     ThinkingParam,
 )
 from passthrough_client import PassthroughClient
+from transport import HttpTransport
 
 pytestmark = pytest.mark.e2e
 
@@ -175,6 +183,111 @@ def _assert_weather_tool_call(response: ChatResponse) -> None:
     assert weather.function.arguments, f"get_weather call carried no arguments: {weather}"
     args = _WeatherArgs.model_validate_json(weather.function.arguments)
     assert args.location.strip(), f"get_weather arguments missing location: {weather.function.arguments}"
+
+
+class _StringItemMessage(BaseModel):
+    role: str
+    content: list[str]
+
+
+class _StringItemChatBody(BaseModel):
+    model: str
+    messages: list[_StringItemMessage]
+    max_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
+class _DblessProxy:
+    transport: HttpTransport
+    model: str
+    log: Path
+
+
+_DBLESS_ENV_DROP: Final = frozenset(
+    {
+        "DATABASE_URL",
+        "DATABASE_HOST",
+        "DATABASE_USERNAME",
+        "DATABASE_PASSWORD",
+        "DATABASE_NAME",
+        "STORE_MODEL_IN_DB",
+    }
+)
+
+
+def _await_dbless_liveness(transport: HttpTransport, proc: subprocess.Popen[bytes], log: Path) -> None:
+    deadline: Final = time.monotonic() + 120
+    while time.monotonic() < deadline and proc.poll() is None:
+        if transport.probe("/health/liveliness", params=NoBody()).healthy:
+            return
+        time.sleep(0.5)
+    proc.terminate()
+    tail: Final = log.read_text(errors="replace")[-4000:] if log.exists() else "<no proxy log>"
+    pytest.fail(f"DB-less proxy did not become live within 120s (exit={proc.poll()}); log tail:\n{tail}")
+
+
+@pytest.fixture(scope="module")
+def dbless_anthropic_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_DblessProxy]:
+    """A proxy booted from this checkout with no database: the enterprise managed-files
+    hook never registers, so malformed chat bodies reach the Anthropic translator
+    itself, which is the surface the bare-string 500 was reported on."""
+    if "ANTHROPIC_API_KEY" not in os.environ:
+        pytest.fail("ANTHROPIC_API_KEY must be set: the DB-less Anthropic proxy hits the real provider")
+    workdir: Final = tmp_path_factory.mktemp("dbless")
+    repo_root: Final = Path(__file__).resolve().parents[3]
+    model: Final = f"e2e-anthropic-dbless-{unique_marker()}"
+    master_key: Final = "sk-e2e-dbless-" + unique_marker()
+    config: Final = workdir / "config.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "model_list": [
+                    {
+                        "model_name": model,
+                        "litellm_params": {"model": ANTHROPIC_BACKEND, "api_key": "os.environ/ANTHROPIC_API_KEY"},
+                    }
+                ],
+                "general_settings": {"master_key": master_key},
+            }
+        )
+    )
+    with socket.socket() as probe_sock:
+        probe_sock.bind(("127.0.0.1", 0))
+        port: Final = cast(int, probe_sock.getsockname()[1])
+    transport: Final = HttpTransport(base_url=f"http://127.0.0.1:{port}", master_key=master_key)
+    env: Final = {
+        **{key: value for key, value in os.environ.items() if key not in _DBLESS_ENV_DROP},
+        "PYTHONPATH": str(repo_root),
+    }
+    log: Final = workdir / "proxy.log"
+    with log.open("w") as log_file:
+        proc: Final = subprocess.Popen(
+            (
+                sys.executable,
+                "-m",
+                "litellm.proxy.proxy_cli",
+                "--config",
+                str(config),
+                "--port",
+                str(port),
+                "--host",
+                "127.0.0.1",
+            ),
+            env=env,
+            cwd=repo_root,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            _await_dbless_liveness(transport, proc, log)
+            yield _DblessProxy(transport=transport, model=model, log=log)
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
 
 
 class _Person(BaseModel):
@@ -1076,6 +1189,66 @@ class TestAnthropicChatCompletions:
 
         response = unwrap(client.proxy.chat(key, ChatBody(model=model, messages=_vision_messages(), max_tokens=32)))
         _assert_describes_cat(response)
+
+    @pytest.mark.covers(
+        "llm.chat_completions.anthropic.input_validation.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    def test_anthropic_chat_rejects_bare_string_content_item_as_client_error(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-anthropic-str-item")
+        key = resources.key()
+
+        for text in (f"what type of file is this? {unique_marker()}", f"hello {unique_marker()}"):
+            result = client.proxy.transport.send(
+                "/chat/completions",
+                headers=client.proxy.transport.bearer(key),
+                json=_StringItemChatBody(
+                    model=model,
+                    messages=[_StringItemMessage(role="user", content=[text])],
+                    max_tokens=16,
+                ),
+            )
+            assert_client_error(result, f"bare string content item {text!r}")
+
+    @pytest.mark.covers(
+        "llm.chat_completions.anthropic.input_validation.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    def test_anthropic_chat_without_database_rejects_bare_string_content_item_as_client_error(
+        self, dbless_anthropic_proxy: _DblessProxy
+    ) -> None:
+        control: Final = unwrap(
+            dbless_anthropic_proxy.transport.post(
+                "/chat/completions",
+                headers=dbless_anthropic_proxy.transport.master,
+                json=ChatBody(
+                    model=dbless_anthropic_proxy.model,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content=[TextContentPart(text=f"say hi {unique_marker()}")],
+                        )
+                    ],
+                    max_tokens=16,
+                ),
+                response_type=ChatResponse,
+            )
+        )
+        assert control.choices, f"DB-less proxy returned no choices: {control}"
+
+        for text in (f"what type of file is this? {unique_marker()}", f"hello {unique_marker()}"):
+            result = dbless_anthropic_proxy.transport.send(
+                "/chat/completions",
+                headers=dbless_anthropic_proxy.transport.master,
+                json=_StringItemChatBody(
+                    model=dbless_anthropic_proxy.model,
+                    messages=[_StringItemMessage(role="user", content=[text])],
+                    max_tokens=16,
+                ),
+            )
+            assert_client_error(result, f"bare string content item {text!r} on a DB-less proxy")
 
     @pytest.mark.covers(
         "llm.chat_completions.anthropic.basic.stream.works",

@@ -356,6 +356,21 @@ def test_get_file_ids_from_messages_file_field_not_dict():
     assert get_file_ids_from_messages(messages) == []
 
 
+def test_get_file_ids_from_messages_skips_bare_string_content_items():
+    """A bare string in the content list must not crash; a real file part is still found (#42094)."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                "what type of file is this?",
+                {"type": "file", "file": {"file_id": "file-abc"}},
+            ],
+        }
+    ]
+
+    assert get_file_ids_from_messages(messages) == ["file-abc"]
+
+
 def test_update_messages_with_model_file_ids_skips_non_openai_file_blocks():
     """`update_messages_with_model_file_ids` is also called on user content
     before provider dispatch. It must tolerate non-OpenAI file blocks the same
