@@ -2,6 +2,7 @@ use std::{path::PathBuf, time::Duration};
 
 use litellm_auth_aws::AwsAuthConfig;
 use litellm_cache::CacheType;
+use litellm_cache_qdrant_semantic::{OpenAiEmbedderConfig, QdrantSemanticConfig, Quantization};
 use litellm_cache_redis::{RedisNode, RedisTopology};
 use litellm_cache_s3::{S3CacheConfig, S3Endpoint};
 use pyo3::{
@@ -125,6 +126,27 @@ pub(super) struct ValkeySemanticCacheConfig {
     pub(super) connection: RedisConnectionConfig,
 }
 
+pub(super) struct QdrantSemanticCacheConfig {
+    pub(super) grpc_url: String,
+    pub(super) api_key: Option<String>,
+    pub(super) collection_name: String,
+    pub(super) similarity_threshold: f64,
+    pub(super) vector_size: u64,
+    pub(super) embedding: OpenAiEmbedderConfig,
+    pub(super) quantization: Quantization,
+}
+
+impl QdrantSemanticCacheConfig {
+    pub(super) fn to_qdrant_config(&self) -> QdrantSemanticConfig {
+        QdrantSemanticConfig {
+            collection_name: self.collection_name.clone(),
+            similarity_threshold: self.similarity_threshold,
+            vector_size: self.vector_size,
+            quantization: self.quantization.clone(),
+        }
+    }
+}
+
 pub(super) enum CacheBackendConfig {
     Memory(MemoryCacheConfig),
     Redis(Box<RedisCacheConfig>),
@@ -134,6 +156,7 @@ pub(super) enum CacheBackendConfig {
     Disk(DiskCacheConfig),
     AzureBlob(AzureBlobCacheConfig),
     RedisSemantic(Box<RedisSemanticCacheConfig>),
+    QdrantSemantic(Box<QdrantSemanticCacheConfig>),
 }
 
 #[allow(dead_code, reason = "consumed by the cache activation follow-up")]
@@ -153,6 +176,8 @@ pub(super) enum UnsupportedCacheConfig {
     S3Option,
     GcsBucket,
     DiskStore,
+    QdrantEndpoint,
+    SemanticEmbedding,
 }
 
 impl UnsupportedCacheConfig {
@@ -168,6 +193,10 @@ impl UnsupportedCacheConfig {
             Self::S3Option => "native S3 configuration requires Python",
             Self::GcsBucket => "native GCS cache requires a configured bucket name",
             Self::DiskStore => "native disk cache requires the built-in diskcache store",
+            Self::QdrantEndpoint => {
+                "native Qdrant requires the default REST port so the gRPC port can be derived"
+            }
+            Self::SemanticEmbedding => "native semantic embedding requires Python",
         }
     }
 }
@@ -238,6 +267,13 @@ impl NativeCacheConfig {
                 }))),
                 Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
             },
+            Some(CacheType::QdrantSemantic) => match project_qdrant_semantic(&backend)? {
+                Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::QdrantSemantic(Box::new(backend)),
+                }))),
+                Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
+            },
             Some(CacheType::AzureBlob) => project_azure_blob(&backend).map(|backend| {
                 CacheConfigProjection::Native(Box::new(Self {
                     policy,
@@ -250,7 +286,7 @@ impl NativeCacheConfig {
                     backend: CacheBackendConfig::RedisSemantic(Box::new(backend)),
                 }))
             }),
-            Some(CacheType::QdrantSemantic) | None => Ok(CacheConfigProjection::Unsupported(
+            None => Ok(CacheConfigProjection::Unsupported(
                 UnsupportedCacheConfig::Backend,
             )),
         }
@@ -265,7 +301,8 @@ impl NativeCacheConfig {
             CacheBackendConfig::Disk(_)
             | CacheBackendConfig::AzureBlob(_)
             | CacheBackendConfig::Gcs(_)
-            | CacheBackendConfig::RedisSemantic(_) => None,
+            | CacheBackendConfig::RedisSemantic(_)
+            | CacheBackendConfig::QdrantSemantic(_) => None,
         };
         if !matches!(self.backend, CacheBackendConfig::ValkeySemantic(_))
             && service.default_ttl() != default_ttl
@@ -373,11 +410,36 @@ impl NativeCacheConfig {
                 Some("facade and native backend index names must match")
             }
             CacheBackendConfig::RedisSemantic(config)
-                if service.similarity_threshold() != Some(config.similarity_threshold as f32) =>
+                if service.similarity_threshold()
+                    != Some(f64::from(config.similarity_threshold as f32)) =>
             {
                 Some("facade and native backend similarity thresholds must match")
             }
             CacheBackendConfig::RedisSemantic(_) => None,
+            CacheBackendConfig::QdrantSemantic(config) if service.kind() != "qdrant_semantic" => {
+                Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::QdrantSemantic(config)
+                if service.collection_name() != Some(config.collection_name.as_str()) =>
+            {
+                Some("facade and native backend collections must match")
+            }
+            CacheBackendConfig::QdrantSemantic(config)
+                if service.similarity_threshold() != Some(config.similarity_threshold) =>
+            {
+                Some("facade and native backend similarity thresholds must match")
+            }
+            CacheBackendConfig::QdrantSemantic(config)
+                if service.vector_size() != Some(config.vector_size) =>
+            {
+                Some("facade and native backend vector sizes must match")
+            }
+            CacheBackendConfig::QdrantSemantic(config)
+                if service.embedding_model() != Some(config.embedding.model.as_str()) =>
+            {
+                Some("facade and native backend embedding models must match")
+            }
+            CacheBackendConfig::QdrantSemantic(_) => None,
             CacheBackendConfig::AzureBlob(config) => match service.azure_blob_identity() {
                 None => Some("facade and native backend types must match"),
                 Some((account_url, container))
@@ -388,6 +450,105 @@ impl NativeCacheConfig {
                 Some(_) => None,
             },
         }
+    }
+}
+
+#[inline(never)]
+fn project_qdrant_semantic(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<Result<QdrantSemanticCacheConfig, UnsupportedCacheConfig>> {
+    let rest_url = backend.getattr("qdrant_api_base")?.extract::<String>()?;
+    let parsed = match url::Url::parse(&rest_url) {
+        Ok(value) => value,
+        Err(_) => return Ok(Err(UnsupportedCacheConfig::QdrantEndpoint)),
+    };
+    if !matches!(parsed.scheme(), "http" | "https")
+        || (!parsed.path().is_empty() && parsed.path() != "/")
+        || parsed.query().is_some()
+        || parsed.host_str().is_none()
+        || parsed.port() != Some(6333)
+    {
+        return Ok(Err(UnsupportedCacheConfig::QdrantEndpoint));
+    }
+    let mut grpc_url = parsed;
+    if grpc_url.set_port(Some(6334)).is_err() {
+        return Ok(Err(UnsupportedCacheConfig::QdrantEndpoint));
+    }
+    grpc_url.set_path("");
+    grpc_url.set_query(None);
+
+    if optional_attribute(backend, "embedding_max_input_tokens")?
+        .is_some_and(|value| !value.is_none())
+    {
+        return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+    }
+    let configured_model = backend.getattr("embedding_model")?.extract::<String>()?;
+    let embedding_model = configured_model
+        .strip_prefix("openai/")
+        .unwrap_or(&configured_model)
+        .to_owned();
+    if !embedding_model.starts_with("text-embedding-") {
+        return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+    }
+    let proxy_server = py_sys_module(backend.py())?;
+    if let Some(proxy_server) = proxy_server {
+        let router = proxy_server.getattr("llm_router")?;
+        let model_list = proxy_server.getattr("llm_model_list")?;
+        let embedding_router = backend.py().import("litellm.caching._embedding_router")?;
+        if !embedding_router
+            .getattr("resolve_embedding_router")?
+            .call1((configured_model.as_str(), router, model_list))?
+            .is_none()
+        {
+            return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+        }
+    }
+    let litellm = backend.py().import("litellm")?;
+    for name in ["api_key", "openai_key", "api_base"] {
+        if !litellm.getattr(name)?.is_none() {
+            return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+        }
+    }
+    let Ok(embedding_api_key) = std::env::var("OPENAI_API_KEY") else {
+        return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+    };
+    if embedding_api_key.is_empty() {
+        return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+    }
+    let embedding_api_base = std::env::var("OPENAI_BASE_URL")
+        .or_else(|_| std::env::var("OPENAI_API_BASE"))
+        .unwrap_or_else(|_| "https://api.openai.com/v1".to_owned());
+    let timeout = optional_attribute(backend, "embedding_timeout")?
+        .map(|value| value.extract::<Option<f64>>())
+        .transpose()?
+        .flatten()
+        .map(duration)
+        .transpose()?;
+    Ok(Ok(QdrantSemanticCacheConfig {
+        grpc_url: grpc_url.to_string().trim_end_matches('/').to_owned(),
+        api_key: optional_string(backend.getattr("qdrant_api_key")?)?,
+        collection_name: backend.getattr("collection_name")?.extract()?,
+        similarity_threshold: backend.getattr("similarity_threshold")?.extract()?,
+        vector_size: backend.getattr("vector_size")?.extract::<u64>()?,
+        embedding: OpenAiEmbedderConfig {
+            api_base: embedding_api_base,
+            api_key: embedding_api_key,
+            model: embedding_model,
+            timeout,
+        },
+        quantization: Quantization::Binary,
+    }))
+}
+
+fn py_sys_module(py: Python<'_>) -> PyResult<Option<Bound<'_, PyAny>>> {
+    match py
+        .import("sys")?
+        .getattr("modules")?
+        .get_item("litellm.proxy.proxy_server")
+    {
+        Ok(module) => Ok(Some(module)),
+        Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -1017,12 +1178,13 @@ mod tests {
     use pyo3::{prelude::*, types::PyDict};
 
     use litellm_cache_redis::{RedisNode, RedisTopology};
+    use litellm_cache_redis_semantic::RedisSemanticConfig;
 
     use super::{
-        CacheBackendConfig, CacheConfigProjection, CertificateRequirement, GcsCacheConfig,
-        NativeCacheConfig, RedisProtocol, UnsupportedCacheConfig,
+        CacheBackendConfig, CacheConfigProjection, CachePolicy, CertificateRequirement,
+        GcsCacheConfig, NativeCacheConfig, RedisProtocol, UnsupportedCacheConfig,
     };
-    use crate::cache::native::NativeResponseCache;
+    use crate::cache::{embedder::PythonEmbedder, native::NativeResponseCache};
 
     fn cluster_facade<'py>(py: Python<'py>, startup_nodes: &str, hook: &str) -> Bound<'py, PyAny> {
         facade(
@@ -1092,6 +1254,49 @@ mod tests {
                 matching_config.service_mismatch(&mismatched),
                 Some("facade and native backend item limits must match")
             );
+        });
+    }
+
+    #[test]
+    fn redis_semantic_service_mismatch_accepts_backend_precision_threshold() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = facade(
+                py,
+                "backend = SimpleNamespace(_redis_url='redis://127.0.0.1/', _index_name='semantic_idx', similarity_threshold=0.8, embedding_model='text-embedding-3-small', embedding_max_input_tokens=None, embedding_timeout=None)\n\
+                 facade = SimpleNamespace(type='redis-semantic', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+            );
+            let backend = facade.getattr("cache").unwrap();
+            let embedder = PythonEmbedder::new(backend.clone().unbind());
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("Redis semantic cache should be supported");
+            };
+            let CacheBackendConfig::RedisSemantic(config) = config.backend else {
+                panic!("expected Redis semantic configuration");
+            };
+            let service = NativeResponseCache::redis_semantic(
+                &config.redis_url,
+                embedder,
+                RedisSemanticConfig {
+                    index_name: config.index_name.clone(),
+                    similarity_threshold: config.similarity_threshold as f32,
+                },
+            )
+            .unwrap();
+            let matching_config = NativeCacheConfig {
+                policy: CachePolicy {
+                    mode: "default-on".into(),
+                    ttl: None,
+                    namespace: None,
+                    supported_call_types: None,
+                    redis_flush_size: None,
+                    semantic_cache_scope: "key".into(),
+                },
+                backend: CacheBackendConfig::RedisSemantic(config),
+            };
+            assert_eq!(matching_config.service_mismatch(&service), None);
         });
     }
 

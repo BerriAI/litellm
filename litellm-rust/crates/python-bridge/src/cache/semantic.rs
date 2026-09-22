@@ -101,7 +101,7 @@ impl ExecutionBody for SemanticBody {
                         let (request, _) = self.pending.as_ref().ok_or_else(|| {
                             PyRuntimeError::new_err("semantic execution has no pending operation")
                         })?;
-                        let semantic = NativeResponseCache::redis_semantic_request(request);
+                        let semantic = NativeResponseCache::semantic_request(request);
                         let Some(prompt) = prompt_from_context(&semantic.context) else {
                             return self.backend_step(py, Err(Error::Unavailable));
                         };
