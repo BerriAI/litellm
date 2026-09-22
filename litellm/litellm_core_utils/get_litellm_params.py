@@ -4,6 +4,7 @@ from typing import Final
 
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.types.router import CustomPricingLiteLLMParams
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     {
@@ -23,10 +24,7 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     }
 )
 
-# Keys `completion()` forwards from its own kwargs into `get_litellm_params`,
-# which are otherwise invisible to it because that call site passes explicit
-# named arguments rather than `**kwargs`.
-FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS
+PROVIDER_AFFINITY_HEADER_KWARG_KEY: Final = "provider_affinity_header"
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -62,9 +60,11 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "itpm",
             "otpm",
             "use_xai_oauth",
+            PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
+    | frozenset(CustomPricingLiteLLMParams.model_fields)
 )
 
 # Backward-compatible alias for existing imports/tests.

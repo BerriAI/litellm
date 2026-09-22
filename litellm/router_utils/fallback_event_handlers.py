@@ -498,7 +498,12 @@ async def _is_fallback_target_authorized(
 ) -> bool:
     access_check: Final = litellm_router.fallback_access_check
     target: Final = _get_fallback_target_model_group(fallback_entry)
-    if access_check is None or target is None or target == original_model_group:
+    if (
+        access_check is None
+        or target is None
+        or target == original_model_group
+        or target == get_pre_routing_selection(kwargs)
+    ):
         return True
     if await access_check(model=target, request_kwargs=kwargs, llm_router=litellm_router):
         return True

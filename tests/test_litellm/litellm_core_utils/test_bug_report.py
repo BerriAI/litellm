@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_issue_url,
     bug_report_notice,
     build_bug_report,
+    build_environment_report,
     should_report_bug,
     strip_bug_report_notice,
 )
@@ -202,3 +203,28 @@ def test_oversized_config_is_trimmed_from_the_end_before_any_frame():
     assert all(frame in description for frame in report.litellm_frames)
     assert "general_settings.flag_0000 = true" in description
     assert "general_settings.flag_0399 = true" not in description
+
+
+def test_issue_url_carries_exactly_the_environment_report_fields():
+    report = build_bug_report(
+        RuntimeError("boom"),
+        surface="proxy",
+        config_lines=("litellm_settings.drop_params = true",),
+    )
+    environment = report.environment
+    query = parse_qs(urlparse(bug_report_issue_url(report)).query)
+    description = query["description"][0]
+
+    assert environment == build_environment_report(
+        surface="proxy", config_lines=("litellm_settings.drop_params = true",)
+    )
+    assert query["version"] == [environment.litellm_version]
+    assert f"Surface: {environment.surface}\n" in description
+    assert f"LiteLLM: {environment.litellm_version}\n" in description
+    assert f"Python: {environment.python_version}\n" in description
+    assert "\nlitellm_settings.drop_params = true\n" in description
+    assert query.get("deployment") == (None if environment.deployment is None else [environment.deployment])
+
+
+def test_sdk_environment_reports_the_pip_deployment():
+    assert build_environment_report(surface="sdk").deployment == "pip / Python SDK"

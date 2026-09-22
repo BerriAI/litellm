@@ -8057,7 +8057,6 @@ def test_model_has_no_cost_mapping_no_model_or_router_is_false():
     [
         "azure/speech/azure-tts",
         "mistral/mistral-ocr-latest",
-        "vertex_ai/imagen-3.0-generate-001",
         "dashscope/qwen-flash",
     ],
 )
