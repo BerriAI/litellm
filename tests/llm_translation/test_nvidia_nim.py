@@ -15,7 +15,7 @@ import litellm
 from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
 from litellm import completion
 from base_rerank_unit_tests import BaseLLMRerankTest
-from capturing_transport import CapturingTransport
+from tests.capturing_transport import CapturingTransport
 
 
 def test_completion_nvidia_nim():

@@ -18,7 +18,7 @@ from openai import AsyncOpenAI, OpenAI
 from openai.types import CreateEmbeddingResponse, Embedding
 from openai.types.create_embedding_response import Usage
 
-from capturing_transport import CapturingTransport
+from tests.capturing_transport import CapturingTransport
 from tests._vcr_conftest_common import rewound_new_episodes_cassette
 
 
