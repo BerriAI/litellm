@@ -349,6 +349,49 @@ async def test_post_call_failure_hook_fires_without_router_attribution(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model", [123, ["internal-model"], {"name": "internal-model"}, None])
+async def test_post_call_failure_hook_fires_for_non_string_model(
+    proxy_logging, make_user_api_key_auth, monkeypatch, model: object
+):
+    """A body whose ``model`` is not a string is rejected by the proxy before routing; its
+    failure callback must still fire, unattributed, instead of a TypeError escaping the hook."""
+    from litellm.proxy import proxy_server
+
+    recorded: list[dict] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            recorded.append(kwargs)
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "internal-model",
+                    "litellm_params": {"model": "openai/gpt-4.1", "api_key": "sk-test"},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
+    proxy_logging.alert_types = []
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={"model": model, "messages": [{"role": "user", "content": "hi"}]},
+        original_exception=HTTPException(status_code=400, detail="'model' must be a string."),
+        user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions"),
+        route="/chat/completions",
+    )
+
+    assert len(recorded) == 1
+    kwargs = recorded[0]
+    assert kwargs.get("custom_llm_provider") is None
+    assert "model_info" not in (kwargs["litellm_params"].get("metadata") or {})
+
+
+@pytest.mark.asyncio
 async def test_post_call_failure_hook_callback_returns_http_exception(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):

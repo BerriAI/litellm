@@ -993,11 +993,11 @@ def _stamp_deployment_attribution(litellm_params: dict[str, object], model_group
     return attribution
 
 
-def _deployment_attribution_for_model_group(model_group: str | None) -> Mapping[str, object]:
+def _deployment_attribution_for_model_group(model_group: object) -> Mapping[str, object]:
     """Provider fields the router would have stamped had it reached a deployment:
     ``custom_llm_provider`` when every deployment in the group resolves to the same
     provider, plus ``model_info`` and ``deployment`` when the group has exactly one."""
-    if model_group is None:
+    if not isinstance(model_group, str):
         return _EMPTY_LIFT
 
     from litellm.proxy.proxy_server import llm_router
