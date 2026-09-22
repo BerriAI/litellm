@@ -33,6 +33,9 @@
     "tests/integration/management/test_key_updates.py::test_update_preserves_independent_fields_and_serving": [
       "mgmt.key.update.preserves_independent_fields"
     ],
+    "tests/integration/management/test_budget_updates.py::test_shortening_budget_duration_moves_reset_at_onto_the_new_schedule": [
+      "mgmt.budget.update.duration_change_recomputes_reset_at"
+    ],
     "tests/integration/pricing/test_configured_prices.py::test_custom_price_is_reported_and_charged": [
       "quota_management.spend_tracking.custom_price.matches_input_rates"
     ],
