@@ -3056,6 +3056,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-logger"
+version = "0.1.0"
+dependencies = [
+ "fancy-regex 0.19.2",
+ "percent-encoding",
+ "rstest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
@@ -3067,19 +3080,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.19",
-]
-
-[[package]]
-name = "litellm-logger"
-version = "0.1.0"
-dependencies = [
- "fancy-regex 0.19.2",
- "percent-encoding",
- "rstest",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
