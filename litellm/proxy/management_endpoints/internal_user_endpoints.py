@@ -2812,6 +2812,7 @@ async def ui_view_users(
         raise
     except Exception as e:
         if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
+            verbose_proxy_logger.warning("Database unavailable during user search: %s", type(e).__name__)
             raise PrismaDBExceptionHandler.service_unavailable_proxy_exception(e) from e
         verbose_proxy_logger.exception("Error searching users: %s", e)
         raise HTTPException(status_code=500, detail=f"Error searching users: {e}")

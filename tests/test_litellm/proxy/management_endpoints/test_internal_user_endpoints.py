@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -4724,7 +4725,7 @@ async def test_resolve_org_filter_for_user_search_propagates_a_db_outage_instead
 
 
 @pytest.mark.asyncio
-async def test_ui_view_users_answers_a_db_outage_as_503_no_db_connection_not_as_its_own_500(mocker):
+async def test_ui_view_users_answers_a_db_outage_as_503_no_db_connection_not_as_its_own_500(mocker, caplog):
     prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
     mocker.patch(
         "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
@@ -4736,7 +4737,7 @@ async def test_ui_view_users_answers_a_db_outage_as_503_no_db_connection_not_as_
     mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
     mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj)
 
-    with pytest.raises(ProxyException) as raised:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"), pytest.raises(ProxyException) as raised:
         await ui_view_users(
             user_api_key_dict=_db_unavailable_fallback_identity("/user/filter/ui"),
             user_id=None,
@@ -4749,6 +4750,8 @@ async def test_ui_view_users_answers_a_db_outage_as_503_no_db_connection_not_as_
     assert raised.value.code == "503"
     assert raised.value.type == ProxyErrorTypes.no_db_connection
     assert isinstance(raised.value.__cause__, httpx.ConnectError)
+    outage_logs: Final = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and "ConnectError" in r.getMessage()]
+    assert outage_logs == ["Database unavailable during user search: ConnectError"]
 
 
 @pytest.mark.parametrize(
