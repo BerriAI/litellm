@@ -7470,8 +7470,6 @@ def test_get_assembled_streaming_response_without_usage_cost_leaves_pricing_to_t
 
 
 def test_response_cost_calculator_prices_terminal_responses_event_from_its_response():
-    """A terminal Responses stream event carries no usage itself; pricing must unwrap
-    it so the stored cost_breakdown is not overwritten with zeros."""
     logging_obj: Final = _responses_stream_logging_obj()
     inner_response: Final = ResponsesAPIResponse(
         id="resp-priced",
