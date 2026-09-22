@@ -544,8 +544,8 @@ class TestResolveAllMigrationsLedger:
         tmp_path,
         partitioned,
         execute_fails,
-        diff_fails=False,
-        execute_stderr="boom",
+        diff_fails: bool = False,
+        execute_stderr: str = "boom",
     ):
         import subprocess as subprocess_module
 
