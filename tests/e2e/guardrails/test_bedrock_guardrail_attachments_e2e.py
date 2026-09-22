@@ -40,6 +40,7 @@ from models import (
     ConverseMessage,
     FileContentBody,
     FileContentPart,
+    GuardrailRunRecord,
     ImageContentPart,
     ImageUrl,
     ResponsesApiBody,
@@ -135,6 +136,16 @@ def _has_pre_call_record(rows: list[SpendLogRow]) -> bool:
     return any(record.guardrail_mode == "pre_call" for record in records)
 
 
+def _images_scanned_total(record: GuardrailRunRecord) -> int:
+    response = record.guardrail_response
+    if not isinstance(response, dict):
+        return 0
+    coverage = response.get("guardrailCoverage")
+    images = coverage.get("images") if isinstance(coverage, dict) else None
+    total = images.get("total") if isinstance(images, dict) else None
+    return total if isinstance(total, int) else 0
+
+
 class TestBedrockGuardrailAttachments:
     def _chat(
         self, client: GuardrailsClient, key: str, content: list[ContentPart], guardrails: list[str]
@@ -186,16 +197,14 @@ class TestBedrockGuardrailAttachments:
         )
         rows = client.proxy.poll_logs_for_request_id(request_id, predicate=_has_pre_call_record)
         records = (rows[0].metadata.guardrail_information if rows[0].metadata else None) or []
-        image_units = [
-            record.guardrail_usage.get("contentPolicyImageUnits")
+        images_covered = [
+            total
             for record in records
-            if record.guardrail_mode == "pre_call" and record.guardrail_usage
+            if record.guardrail_mode == "pre_call"
+            for total in [_images_scanned_total(record)]
+            if total >= 1
         ]
-        # AWS ApplyGuardrail reports scanned images in usage.contentPolicyImageUnits
-        # (checked 2026-09-22 against the ApplyGuardrail response schema)
-        assert any(isinstance(units, int) and units >= 1 for units in image_units), (
-            f"expected a pre_call scan with contentPolicyImageUnits >= 1; got records: {records}"
-        )
+        assert images_covered, f"expected a pre_call scan covering the png; got records: {records}"
 
     @pytest.mark.covers("guardrail.bedrock.attachments.openai_file.blocks", exercised_on=["chat_completions"])
     def test_chat_completions_file_part_blocks(
