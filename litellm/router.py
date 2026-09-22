@@ -2536,6 +2536,7 @@ class Router:
                 "client": model_client,
                 **kwargs,
             }
+            input_kwargs.pop("model_alias_map", None)
             response: Final = litellm.completion(**input_kwargs)
             verbose_router_logger.info("litellm.completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
@@ -3634,6 +3635,7 @@ class Router:
                 "client": model_client,
                 **kwargs,
             }
+            input_kwargs.pop("model_alias_map", None)
             input_kwargs.pop("silent_model", None)
             input_kwargs.pop("include_fallback_errors", None)
 
