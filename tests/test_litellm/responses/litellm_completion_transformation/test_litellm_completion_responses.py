@@ -438,12 +438,11 @@ class TestLiteLLMCompletionResponsesConfig:
         # The opaque token must survive verbatim, else Anthropic rejects the replay.
         assert json.loads(compaction_items[0].encrypted_content) == block
 
-    def test_multiple_compactions_in_one_response_extract_all_then_replay_latest(self):
-        """Server-tool loops can compact several times in one request, so one response's
-        content carries multiple progressive compaction blocks (the last is the final
-        state). Stage 1 (extraction) surfaces all of them in order, matching the native
-        extract_response_content; stage 2 (replay) then keeps only the latest, so exactly
-        one block reaches the next Anthropic request."""
+    def test_multiple_compactions_in_one_response_surface_latest(self):
+        """Server-tool loops can compact several times in one response, producing multiple
+        progressive blocks where the last reflects the final state and supersedes the
+        rest. The bridge surfaces the newest block as the compaction output item, and
+        replaying it reaches the next Anthropic request as that same block."""
         comp1 = {"type": "compaction", "content": "first pass", "encrypted_content": "tok-1"}
         comp2 = {"type": "compaction", "content": "final summary", "encrypted_content": "tok-2"}
         chat_completion_response = ModelResponse(
@@ -470,7 +469,7 @@ class TestLiteLLMCompletionResponsesConfig:
             chat_completion_response=chat_completion_response,
         )
         compaction_items = [item for item in response.output if item.type == "compaction"]
-        assert [json.loads(item.encrypted_content) for item in compaction_items] == [comp1, comp2]
+        assert [json.loads(item.encrypted_content) for item in compaction_items] == [comp2]
         assert response.output[0].type == "compaction" and response.output[-1].type == "message"
 
         replay_input = [json.loads(item.model_dump_json(exclude_none=True)) for item in response.output]
@@ -528,6 +527,32 @@ class TestLiteLLMCompletionResponsesConfig:
         )
         assert [i for i in response.output if i.type == "compaction"] == []
 
+    def test_compaction_summary_is_scannable_for_inspection_callers(self):
+        """Guardrails, DLP, token counting and rate limits call with replay_reasoning=False
+        and must see the compaction summary as visible content, not hidden in the opaque
+        block, so a replayed compaction item cannot smuggle blocked text past inspection.
+        The provider-bound path (replay_reasoning=True) still gets the opaque block."""
+        block = {"type": "compaction", "content": "policy-relevant summary", "encrypted_content": "tok"}
+        item = {"type": "compaction", "id": "cmp_x", "encrypted_content": json.dumps(block)}
+
+        inspection = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[item], responses_api_request={}, replay_reasoning=False
+        )
+        assert [m.get("content") for m in inspection if m.get("role") == "assistant"] == ["policy-relevant summary"]
+        assert not any(
+            isinstance(m.get("provider_specific_fields"), dict)
+            and m["provider_specific_fields"].get("compaction_blocks")
+            for m in inspection
+            if isinstance(m, dict)
+        )
+
+        provider_bound = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[item], responses_api_request={}, replay_reasoning=True
+        )
+        assistant = [m for m in provider_bound if m.get("role") == "assistant"][0]
+        assert assistant.get("content") == ""
+        assert assistant["provider_specific_fields"]["compaction_blocks"] == [block]
+
     def test_compaction_input_item_round_trips_to_anthropic_block(self):
         """#41456: a replayed compaction input item must be rebuilt onto an assistant
         message carrying compaction_blocks, so the prompt factory fronts the exact block
@@ -580,6 +605,50 @@ class TestLiteLLMCompletionResponsesConfig:
             replay_reasoning=True,
         )
         assert [m for m in messages if m.get("role") == "assistant"] == []
+
+    @pytest.mark.parametrize(
+        "item",
+        [
+            {"type": "compaction", "id": "cmp_a"},
+            {"type": "compaction", "id": "cmp_b", "encrypted_content": ""},
+            {"type": "compaction", "id": "cmp_c", "encrypted_content": json.dumps({"type": "text", "text": "x"})},
+        ],
+    )
+    def test_unreplayable_compaction_input_items_are_dropped(self, item):
+        """A compaction input item that this deployment did not write (no encrypted_content,
+        empty, or not a compaction block once decoded) must not reach the request."""
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[item], responses_api_request={}, replay_reasoning=True
+        )
+        assert [m for m in messages if m.get("role") == "assistant"] == []
+
+    def test_extract_skips_malformed_block_and_uses_latest_valid(self):
+        """A non-dict entry in compaction_blocks is skipped, and the newest valid block
+        still surfaces, so junk in the provider list never blocks a real compaction."""
+        good = {"type": "compaction", "content": "real", "encrypted_content": "tok"}
+        chat_completion_response = ModelResponse(
+            id="r",
+            created=1,
+            model="claude-sonnet-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="c",
+                        role="assistant",
+                        provider_specific_fields={"compaction_blocks": ["not-a-dict", good]},
+                    ),
+                )
+            ],
+        )
+        response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="hi", responses_api_request={}, chat_completion_response=chat_completion_response
+        )
+        items = [i for i in response.output if i.type == "compaction"]
+        assert len(items) == 1
+        assert json.loads(items[0].encrypted_content) == good
 
     def test_replay_keeps_only_latest_compaction_block(self):
         """Threshold compaction can fire several times, but the newest block reflects the

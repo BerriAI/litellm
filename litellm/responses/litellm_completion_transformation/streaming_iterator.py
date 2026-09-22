@@ -624,16 +624,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._pending_response_events.append(self.create_content_part_added_event())
 
     def _leading_reasoning_index(self) -> int:
-        # A compaction item, when present, always leads the output at index 0, so
-        # every other leading item (reasoning, message) shifts down by one.
         return 1 if self._compaction_present else 0
 
     def _chunk_is_compaction_only(self, chunk: ModelResponseStream) -> bool:
         if not chunk.choices:
             return False
         delta: Final = chunk.choices[0].delta
-        if getattr(delta, "content", None) or getattr(delta, "reasoning_content", None) or getattr(
-            delta, "tool_calls", None
+        if (
+            getattr(delta, "content", None)
+            or getattr(delta, "reasoning_content", None)
+            or getattr(delta, "tool_calls", None)
         ):
             return False
         for src in (
@@ -649,18 +649,21 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _maybe_queue_compaction_events(self) -> None:
         if self._compaction_present:
             return
-        encoded: Final = LiteLLMCompletionResponsesConfig.first_encoded_compaction_block(
+        encoded: Final = LiteLLMCompletionResponsesConfig.latest_encoded_compaction_block(
             self._accumulated_provider_specific_fields.get("compaction_blocks")
         )
         if encoded is None:
             return
         self._compaction_present = True
         self._cached_compaction_item_id = f"cmp_{uuid.uuid4()}"
-        # Reserve index 0 for compaction and index 1 for the leading reasoning/message
-        # item, so tool calls (allocated from here) never collide with either.
+        # index 0 is the compaction item, 1 the leading message/reasoning item; tools start at 2
         self._next_tool_output_index = max(self._next_tool_output_index, 2)
         item_id: Final = self._cached_compaction_item_id
-        added_item: Final = {"id": item_id, "type": "compaction", "status": "in_progress"}  # mutable-ok: dynamic compaction item payload
+        added_item: Final = {
+            "id": item_id,
+            "type": "compaction",
+            "status": "in_progress",
+        }  # mutable-ok: dynamic compaction item payload
         added: Final = OutputItemAddedEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
             output_index=0,
@@ -993,13 +996,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return
         delta: Final = chunk.choices[0].delta
 
-        # A compaction block streams as its own content block with no visible text.
-        # Don't let it claim the message item; wait for the real content chunk.
         if self._chunk_is_compaction_only(chunk):
             return
 
-        # The compaction block has fully streamed by the first real item, so flush its
-        # output item now: ahead of this item and carrying the complete block.
         self._maybe_queue_compaction_events()
         self._sequence_number += 1
         self.sent_output_item_added_event = True

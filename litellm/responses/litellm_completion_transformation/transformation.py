@@ -795,7 +795,9 @@ class LiteLLMCompletionResponsesConfig:
         nothing else. ``content`` is empty so the prompt factory adds no text block,
         leaving the signed compaction block as the sole content of the assistant turn."""
         message: Final = ChatCompletionResponseMessage(role="assistant", content="")
-        message["provider_specific_fields"] = {"compaction_blocks": [block]}  # mutable-ok: message provider_specific_fields contract
+        message["provider_specific_fields"] = {
+            "compaction_blocks": [block]
+        }  # mutable-ok: message provider_specific_fields contract
         return message
 
     @staticmethod
@@ -1467,13 +1469,18 @@ class LiteLLMCompletionResponsesConfig:
                 )
             ]
         elif input_item.get("type") == "compaction":
-            # A compaction item replays Anthropic's signed summary block. Decode it
-            # back onto an empty-content assistant message so the prompt factory can
-            # front the block on the Anthropic request; Anthropic then drops the
-            # history the block summarizes.
             block: Final = LiteLLMCompletionResponsesConfig._decode_compaction_block_from_input_item(input_item)
             if block is None:
                 return []  # mutable-ok: empty drop result
+            if not replay_reasoning:
+                # Inspection callers (guardrails, DLP, token counting, rate limits) must
+                # see the summary as scannable content, not hidden in the opaque block.
+                summary: Final = block.get("content")
+                if not isinstance(summary, str) or not summary:
+                    return []  # mutable-ok: nothing scannable to surface
+                return [  # mutable-ok: single message result
+                    GenericChatCompletionMessage(role="assistant", content=summary)
+                ]
             return [  # mutable-ok: single message result
                 LiteLLMCompletionResponsesConfig._compaction_only_assistant_message(block)
             ]
@@ -2678,10 +2685,11 @@ class LiteLLMCompletionResponsesConfig:
         return json.dumps(block_map, separators=(",", ":"), sort_keys=True)
 
     @staticmethod
-    def first_encoded_compaction_block(compaction_blocks: object) -> str | None:
-        """Return the ``encrypted_content`` for the first replayable compaction block
-        in a provider's ``compaction_blocks`` list, or None when there is none. Keeps
-        the untyped-provider-field handling in one place for the streaming bridge."""
+    def latest_encoded_compaction_block(compaction_blocks: object) -> str | None:
+        """Return the ``encrypted_content`` for the newest replayable compaction block,
+        or None when there is none. Server-tool loops can compact several times in one
+        response, and each block summarizes the prior summary plus everything after, so
+        the last one supersedes the rest and is the state a client replays."""
         try:
             blocks: Final = _OBJECT_LIST_ADAPTER.validate_python(compaction_blocks)
         except ValidationError:
@@ -2689,7 +2697,7 @@ class LiteLLMCompletionResponsesConfig:
         return next(
             (
                 encoded
-                for block in blocks
+                for block in reversed(blocks)
                 if (encoded := LiteLLMCompletionResponsesConfig._encode_compaction_block(block)) is not None
             ),
             None,
@@ -2705,26 +2713,25 @@ class LiteLLMCompletionResponsesConfig:
                 provider_fields = _STR_KEY_DICT_ADAPTER.validate_python(
                     getattr(getattr(choice, "message", None), "provider_specific_fields", None)
                 )
-                blocks = _OBJECT_LIST_ADAPTER.validate_python(provider_fields.get("compaction_blocks"))
             except ValidationError:
                 continue
-            status = LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                choice.finish_reason
+            encoded = LiteLLMCompletionResponsesConfig.latest_encoded_compaction_block(
+                provider_fields.get("compaction_blocks")
             )
-            items = tuple(
+            if encoded is None:
+                continue
+            return (
                 GenericResponseOutputItem(
                     type="compaction",
                     id=f"cmp_{uuid.uuid4()}",
-                    status=status,
+                    status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                        choice.finish_reason
+                    ),
                     role="assistant",
                     content=[],  # mutable-ok: GenericResponseOutputItem.content is a required list field
                     encrypted_content=encoded,  # pyright: ignore[reportCallIssue]  # extra field on this extra="allow" model, same as reasoning items
-                )
-                for block in blocks
-                if (encoded := LiteLLMCompletionResponsesConfig._encode_compaction_block(block)) is not None
+                ),
             )
-            if items:
-                return items
         return ()
 
     @staticmethod

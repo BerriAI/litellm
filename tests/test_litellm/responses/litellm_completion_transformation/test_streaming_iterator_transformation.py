@@ -1153,9 +1153,17 @@ def _compaction_chunk(blocks, extra_key, extra_val) -> ModelResponseStream:
     )
 
 
-def test_streaming_emits_compaction_item_before_message():
+def _compaction_item_type(event: BaseLiteLLMOpenAIResponseObject) -> str | None:
+    item = getattr(event, "item", None)
+    return getattr(item, "type", None) if item is not None else None
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_emits_compaction_item_before_message(sync_mode: bool):
     """#41456: threshold compaction must stream a compaction output item (added + done)
-    at index 0, ahead of the message item, and list it first in response.completed."""
+    at index 0, ahead of the message item, and list it first in response.completed. The
+    summary arrives in compaction_delta after the start, so the item must carry it."""
     block_full = {"type": "compaction", "content": "Summary of prior turns.", "encrypted_content": "OPAQUE-s"}
     chunks = [
         _compaction_chunk(
@@ -1168,14 +1176,12 @@ def test_streaming_emits_compaction_item_before_message():
         _chunk("", finish_reason="stop"),
     ]
 
-    events = list(_build_iterator(chunks))
-
-    def _item_type(event):
-        item = getattr(event, "item", None)
-        return getattr(item, "type", None) if item is not None else None
+    events = await _collect_events(_build_iterator(chunks), sync_mode)
 
     added_types = [
-        _item_type(e) for e in events if getattr(e, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+        _compaction_item_type(e)
+        for e in events
+        if getattr(e, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     ]
     assert added_types[0] == "compaction", added_types
     assert "message" in added_types
@@ -1184,16 +1190,46 @@ def test_streaming_emits_compaction_item_before_message():
     compaction_added = next(
         e
         for e in events
-        if getattr(e, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and _item_type(e) == "compaction"
+        if getattr(e, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+        and _compaction_item_type(e) == "compaction"
     )
     assert compaction_added.output_index == 0
 
     compaction_done = next(
         e
         for e in events
-        if getattr(e, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _item_type(e) == "compaction"
+        if getattr(e, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        and _compaction_item_type(e) == "compaction"
     )
     assert json.loads(compaction_done.item.encrypted_content) == block_full
+
+    completed = next(e for e in events if getattr(e, "type", None) == "response.completed")
+    assert completed.response.output[0].type == "compaction"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_compaction_precedes_reasoning_and_message(sync_mode: bool):
+    """When a compacted response also streams reasoning, the compaction item leads at
+    index 0 and every later leading item shifts down: reasoning at 1, message at 2."""
+    block = {"type": "compaction", "content": "Summary.", "encrypted_content": "OPAQUE-r"}
+    chunks = [
+        _compaction_chunk([block], "compaction_delta", {"type": "compaction_delta", "content": block["content"]}),
+        _reasoning_chunk("thinking"),
+        _chunk("Answer."),
+        _chunk("", finish_reason="stop"),
+    ]
+
+    events = await _collect_events(_build_iterator(chunks), sync_mode)
+
+    index_by_type = {
+        _compaction_item_type(e): e.output_index
+        for e in events
+        if getattr(e, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    }
+    assert index_by_type["compaction"] == 0
+    assert index_by_type["reasoning"] == 1
+    assert index_by_type["message"] == 2
 
     completed = next(e for e in events if getattr(e, "type", None) == "response.completed")
     assert completed.response.output[0].type == "compaction"

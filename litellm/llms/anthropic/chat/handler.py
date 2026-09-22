@@ -722,8 +722,6 @@ class ModelResponseIterator:
                 "type": "compaction_delta",
                 "content": delta_content,
             }
-            # Fold the summary into the open block: replaying an empty-content block
-            # fails Anthropic's compaction_content_mismatch check.
             if self.compaction_blocks:
                 open_block: Final = self.compaction_blocks[-1]
                 merged_content: Final = f"{open_block.get('content') or ''}{delta_content}"
