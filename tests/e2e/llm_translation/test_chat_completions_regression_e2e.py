@@ -264,6 +264,7 @@ def dbless_anthropic_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator
         proc: Final = subprocess.Popen(
             (
                 sys.executable,
+                "-P",
                 "-m",
                 "litellm.proxy.proxy_cli",
                 "--config",
