@@ -40,6 +40,10 @@ def test_shipped_decisions(
         enabled: Final = environment == "1" if environment is not None else process is not False
         assert catalog.rollout(context) is Rollout.RUST_OPT_OUT
         assert catalog.decision(context) is (Decision.RUST_WITH_FALLBACK if enabled else Decision.PYTHON)
+    elif route is Route.MESSAGES:
+        enabled: Final = environment == "1" if environment is not None else process is True
+        assert catalog.rollout(context) is Rollout.RUST_OPT_IN
+        assert catalog.decision(context) is (Decision.RUST_WITH_FALLBACK if enabled else Decision.PYTHON)
     elif route is Route.TRANSCRIPTION and provider == "bedrock":
         assert catalog.rollout(context) is Rollout.RUST_REQUIRED
         assert catalog.decision(context) is Decision.RUST_REQUIRED
@@ -81,3 +85,15 @@ def test_first_matching_rule_respects_every_constraint(context: Context, expecte
     )
 
     assert catalog.decision(context, rules) is expected
+
+
+@pytest.mark.parametrize("process", (None, False, True))
+@pytest.mark.parametrize("environment", (None, "0", "1"))
+def test_textract_ocr_has_no_python_path_to_opt_out_to(
+    monkeypatch: pytest.MonkeyPatch, process: bool | None, environment: str | None
+) -> None:
+    configuration.rust(process)
+    if environment is not None:
+        monkeypatch.setenv("LITELLM_RUST", environment)
+
+    assert catalog.decision(Context(Route.OCR, provider="aws_textract", model="m")) is Decision.RUST_REQUIRED

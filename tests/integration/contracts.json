@@ -24,6 +24,9 @@
     ],
     "sdk": [
       "sdk"
+    ],
+    "cost": [
+      "cost_calculation"
     ]
   },
   "tests": {
@@ -92,6 +95,12 @@
     "tests/integration/pricing/test_price_precedence.py::test_same_upstream_aliases_keep_distinct_prices_after_reload": [
       "quota_management.spend_tracking.alias_prices.remain_independent_on_reload"
     ],
+    "tests/integration/pricing/test_off_peak_pricing.py::test_open_off_peak_window_bills_off_peak_rates": [
+      "quota_management.spend_tracking.off_peak_pricing.open_window_bills_off_peak_rates"
+    ],
+    "tests/integration/pricing/test_off_peak_pricing.py::test_closed_off_peak_window_bills_standard_rates": [
+      "quota_management.spend_tracking.off_peak_pricing.closed_window_bills_standard_rates"
+    ],
     "tests/integration/spend/test_cache_and_quota.py::test_generated_cache_sequences_preserve_content_usage_and_zero_hit_cost": [
       "quota_management.response_cache.generated_sequences_preserve_content_and_accounting"
     ],
@@ -157,6 +166,24 @@
       "other.provider_wire.anthropic.tool_history_system_cache_and_internal_fields",
       "quota_management.spend_tracking.cache_tokens.disjoint_classes_use_explicit_rates"
     ],
+    "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_video_create_status_and_content_follow_queue_wire_contract": [
+      "other.provider_wire.fal_ai.video_queue_create_status_and_content_download"
+    ],
+    "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_video_failed_result_reports_failed_status_and_fal_error": [
+      "other.provider_wire.fal_ai.video_failed_result_surfaces_fal_error"
+    ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_generation_sends_quality_and_size_and_charges_keyed_row": [
+      "other.provider_wire.fal_ai.gpt_image_generation_quality_size_wire_and_keyed_pricing"
+    ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_flux_dev_generation_targets_dev_endpoint_and_charges_per_image": [
+      "other.provider_wire.fal_ai.flux_dev_endpoint_and_per_image_pricing"
+    ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_edit_inlines_upload_as_data_url_and_charges_keyed_row": [
+      "other.provider_wire.fal_ai.image_edit_json_data_urls_and_keyed_pricing"
+    ],
+    "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_h3_video_create_uses_canonical_body_and_status_path": [
+      "other.provider_wire.fal_ai.video_queue_create_status_and_content_download"
+    ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_saved_headers_reach_real_mcp_tool_and_survive_unrelated_edit": [
       "mcp.call_tool.saved_headers.reach_actual_transport"
     ],
@@ -216,6 +243,1476 @@
     ],
     "tests/integration/sdk/test_http2_wire.py::test_sync_handler_negotiates_http2_only_when_enabled": [
       "other.sdk_wire.http2.sync_handler_negotiates_h2_only_when_enabled"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_batch_costs[gpt-5.6-batch-halved_rates_when_map_has_no_batch_keys]": [
+      "quota_management.spend_tracking.batch_costs.fallback_rates"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_batch_costs[gpt-5.6-batch-cached_input_halved]": [
+      "quota_management.spend_tracking.batch_costs.cached_input"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_batch_costs[gpt-5.4-batch-explicit_batch_rates_bill_cached_at_batch_input_rate]": [
+      "quota_management.spend_tracking.batch_costs.explicit_rates"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_batch_costs[gpt-5.6-batch-all_requests_failed_zero_spend]": [
+      "quota_management.spend_tracking.batch_costs.failed_requests"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_realtime_costs[gpt-realtime-mini-2025-12-15-realtime-single_turn_text_audio_cached]": [
+      "quota_management.spend_tracking.realtime_costs.single_turn"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_realtime_costs[gpt-realtime-mini-2025-12-15-realtime-two_turns_summed_into_one_row]": [
+      "quota_management.spend_tracking.realtime_costs.multiple_turns"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_realtime_costs[gpt-realtime-mini-2025-12-15-realtime-priced_from_session_created_model]": [
+      "quota_management.spend_tracking.realtime_costs.session_model"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_realtime_costs[gpt-realtime-mini-2025-12-15-realtime-session_without_turns_zero_spend]": [
+      "quota_management.spend_tracking.realtime_costs.session_without_turns"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-cache_write_5m]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-cache_write_1h]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-service_tier_flex]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-audio_input]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-audio_output]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-reasoning]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-service_tier_flex]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-web_search_medium]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-web_search_low]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-web_search_high]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.4-mini-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-audio_input]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-audio_output]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-reasoning]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-service_tier_flex]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-web_search_medium]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-web_search_low]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-web_search_high]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_native_json]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-upstream_500_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-upstream_429_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-cache_write_5m]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-cache_write_1h]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-anthropic_us_inference]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-web_search_medium]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-cache_write_5m]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-cache_write_1h]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-tiered_input_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-tiered_cache_read_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-tiered_cache_write_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-anthropic_fast_mode]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-anthropic_us_inference]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-web_search_medium]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-opus-5-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-cache_write_5m]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-cache_write_1h]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-tiered_input_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-tiered_cache_read_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-tiered_cache_write_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-anthropic_us_inference]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-web_search_medium]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-fallback_cache_read_at_half_input_rate]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-kimi-k3-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-kimi-k3-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-kimi-k3-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-kimi-k3-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-kimi-k3-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-kimi-k3-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-kimi-k3-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-kimi-k3-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-kimi-k3-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-kimi-k3-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-kimi-k3-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-qwen3p8-max-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-qwen3p8-max-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-qwen3p8-max-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-qwen3p8-max-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-qwen3p8-max-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-qwen3p8-max-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-qwen3p8-max-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-qwen3p8-max-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-qwen3p8-max-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-qwen3p8-max-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks_ai-accounts-fireworks-models-qwen3p8-max-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-audio_input]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-image_input]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-reasoning]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-tiered_input_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-tiered_cache_read_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-service_tier_flex]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-web_search_medium]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-google_maps_grounding]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-fallback_video_tokens_at_input_rate]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-prompt_blocked]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-stream_prompt_blocked]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-audio_input]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-audio_output]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-video_input]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-service_tier_flex]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-web_search_per_prompt]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-google_maps_grounding]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-fallback_reasoning_at_output_rate]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-fallback_image_tokens_at_input_rate]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-prompt_blocked]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-stream_prompt_blocked]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.8-flash-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-audio_input]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-image_input]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-video_input]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-reasoning]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-tiered_input_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-tiered_cache_read_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-service_tier_flex]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-web_search_medium]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-google_maps_grounding]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-prompt_blocked]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-stream_prompt_blocked]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.1-pro-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-audio_input]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-audio_output]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-image_input]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-video_input]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-reasoning]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-service_tier_flex]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-web_search_per_prompt]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-google_maps_grounding]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-prompt_blocked]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-stream_prompt_blocked]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-reasoning]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-service_tier_flex]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-web_search_medium]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-web_search_low]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-web_search_high]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-file_search]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-stream_incomplete]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-stream_no_usage_incomplete]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-stream_unvalidated]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-stream_no_usage_unvalidated]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-audio_input]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-audio_output]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-reasoning]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-service_tier_flex]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-web_search_medium]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-web_search_low]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-web_search_high]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.4-mini-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-reasoning]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-service_tier_flex]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-web_search_medium]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-web_search_low]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-web_search_high]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-file_search]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-stream_incomplete]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-stream_no_usage_incomplete]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-stream_unvalidated]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-stream_no_usage_unvalidated]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.5-pro-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-audio_input]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-audio_output]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-reasoning]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-service_tier_flex]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-web_search_medium]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-web_search_low]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-web_search_high]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[meta.llama4-maverick-17b-instruct-v1:0-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[meta.llama4-maverick-17b-instruct-v1:0-fallback_cache_read_at_input_rate]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[meta.llama4-maverick-17b-instruct-v1:0-fallback_cache_write_at_input_rate]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[meta.llama4-maverick-17b-instruct-v1:0-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[meta.llama4-maverick-17b-instruct-v1:0-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[meta.llama4-maverick-17b-instruct-v1:0-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[meta.llama4-maverick-17b-instruct-v1:0-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[meta.llama4-maverick-17b-instruct-v1:0-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[meta.llama4-maverick-17b-instruct-v1:0-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[meta.llama4-maverick-17b-instruct-v1:0-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[meta.llama4-maverick-17b-instruct-v1:0-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[meta.llama4-maverick-17b-instruct-v1:0-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-moonshotai-Kimi-K3-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-moonshotai-Kimi-K3-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-moonshotai-Kimi-K3-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-moonshotai-Kimi-K3-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-moonshotai-Kimi-K3-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-moonshotai-Kimi-K3-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-moonshotai-Kimi-K3-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-moonshotai-Kimi-K3-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-moonshotai-Kimi-K3-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-moonshotai-Kimi-K3-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-zai-org-GLM-5.3-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-zai-org-GLM-5.3-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-zai-org-GLM-5.3-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-zai-org-GLM-5.3-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-zai-org-GLM-5.3-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-zai-org-GLM-5.3-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-zai-org-GLM-5.3-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-zai-org-GLM-5.3-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-zai-org-GLM-5.3-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together_ai-zai-org-GLM-5.3-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-cache_write_5m]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-cache_write_1h]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-tiered_input_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-tiered_cache_read_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-tiered_cache_write_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-service_tier_flex]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-stream_no_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-stream_no_usage_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-stream_no_usage_image_input]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-stream_response_model_override]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-stream_tool_call]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-stream_full_usage]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[whisper-next-transcriptions-per-second]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[whisper-verbose-next-transcriptions-duration]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-4o-transcribe-next-transcriptions-tokens]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[nova-next-transcriptions-per-second]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-whisper-next-transcriptions-deployment]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[tts-next-speech-per-character]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[tts-next-hd-speech-per-character]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-tts-next-speech-deployment]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[dall-e-3-next-images-standard]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[dall-e-3-next-images-hd]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[dall-e-3-next-images-wide]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[dall-e-3-next-images-two]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-image-next-images-low]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[imagen-next-images-one]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[amazon-nova-canvas-next-images-one]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-image-next-images-edit]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-text-embeddings-4-large-deployment]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[bedrock-cohere-embeddings-v4]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[bedrock-cohere-rerank-v4]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[bedrock-embeddings-titan-v2]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[cohere-embeddings-v5]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[cohere-rerank-v4-one]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[cohere-rerank-v4-three]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[cohere-rerank-v4-total-tokens-fallback]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[fireworks-embeddings-v1]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-embeddings-002]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[omni-moderations-next-list]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[omni-moderations-next-single]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-completions-openai-basic]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-completions-openai-n-best]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-completions-openai-stream-usage]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-embeddings-3-large-dimensions]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-embeddings-4-small-batch]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-embeddings-4-small-single]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[text-embeddings-4-small-token-array]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together-completions-v1]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[together-embeddings-v1]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[vertex-embeddings-text-006]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_reasoning]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_stream_cache_read]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_incomplete]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_previous_response_id]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_web_search_medium]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-responses_file_search]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_service_tier_flex]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_cache_write_5m]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_cache_write_1h]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_web_search]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_stream_cache_read]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_tiered_input_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-messages_input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-messages_input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-messages_cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-passthrough-generate_content_priced_via_gemini_key]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-3.1-pro-passthrough-stream_generate_content_priced_via_vertex_key]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-passthrough-messages]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-passthrough-messages_cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-passthrough-converse]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-passthrough-converse_stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[dashscope-qwen4-max-tiered_input]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[dashscope-qwen4-max-tiered_boundary_stays_lower_tier]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[dashscope-qwen4-max-tiered_second_tier]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[dashscope-qwen4-max-tiered_above_top_range]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-lite-input_below_128k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gemini-gemini-3.8-flash-lite-input_above_128k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-cache_creation_1h_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[openrouter-anthropic-claude-sonnet-5-provider_reported_cost]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[openrouter-anthropic-claude-sonnet-5-token_priced]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[perplexity-sonar-next-no_search]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[deepseek-deepseek-v4-chat-prompt_cache_hit]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[deepseek-deepseek-v4-chat-no_cache_fields_bills_zero_cache]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[xai-grok-5-reasoning_folded_into_completion]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[xai-grok-5-live_search]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[xai-grok-5-provider_reported_cost]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[bedrock-invoke-haiku-json]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[bedrock-invoke-haiku-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[bedrock-converse-profile-base-model]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[bedrock-converse-eu-regional-key]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[bedrock-converse-apac-bare-fallback]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[bedrock-converse-nova-2-pro]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[bedrock-converse-mistral-large-3-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-ai-gpt-5.4-mini-latest]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-ai-gpt-5.4-mini-latest-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-pinned-gpt-5.4-mini-stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[groq-qwen-3.8-json]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[groq-qwen-3.8-stream_x_groq_recount]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[cohere-command-a-v2-tokens]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[mistral-medium-2604-json]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[openai-deployment-pricing-override]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-upstream_400_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-upstream_401_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-upstream_500_stream_request_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_upstream_500_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_upstream_500_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-fallback_billed_to_answering_deployment]": [
+      "quota_management.spend_tracking.routing.fallback_billing"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-n_2_choices]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-finish_reason_length]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-stream_usage_in_empty_choices_chunk]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-stream_usage_in_last_delta_chunk]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-unknown_model_response_model_unknown]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-unknown_model_response_model_known]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-chat_request_to_embedding_entry]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-client_disconnect_mid_stream]": [
+      "quota_management.spend_tracking.scripted_wire.client_disconnect"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_health_intersects_route_restricted_key_grants_in_both_management_modes": [
+      "other.mcp.health.restricted_keys_intersect_grants_in_both_modes"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_warm_credential_removal_rejects_without_upstream_traffic": [
+      "other.mcp.credentials.warm_removal_fails_closed_without_upstream_traffic"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls": [
+      "other.mcp.guardrails.request_selection_blocks_resolved_tool_without_execution"
+    ],
+    "tests/integration/mcp/test_oauth_configuration.py::test_same_url_oauth_credentials_and_revocation_are_isolated_by_user_and_server[revoke]": [
+      "other.mcp.oauth.same_url_credentials_are_isolated_by_user_and_server"
+    ],
+    "tests/integration/mcp/test_oauth_configuration.py::test_same_url_oauth_credentials_and_revocation_are_isolated_by_user_and_server[expire]": [
+      "other.mcp.oauth.same_url_credentials_are_isolated_by_user_and_server"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[anonymous]": [
+      "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[bearer]": [
+      "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
     ]
   },
   "browser": {

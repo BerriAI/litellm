@@ -1,16 +1,18 @@
-use litellm_core::chat_completions::Error;
-use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
 use litellm_core::chat_completions::{
-    chat_completions as run_chat_completions, chat_completions_decline_reason,
+    Error, chat_completions as run_chat_completions, chat_completions_decline_reason,
+    types::ChatCompletionsRequest,
 };
 use litellm_host_python::{from_py_argument, run_async, run_sync};
+use litellm_types::utils::ChatCompletionsResponse;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
-use crate::errors::chat_completions_error_to_pyerr;
-use crate::marshal::{
-    RouteOptions, extra_headers_argument, messages_argument, optional_params_argument,
-    optional_timeout,
+use crate::{
+    errors::chat_completions_error_to_pyerr,
+    marshal::{
+        RouteOptions, extra_headers_argument, messages_argument, optional_params_argument,
+        optional_timeout,
+    },
 };
 
 async fn execute(
@@ -122,8 +124,7 @@ pub(crate) fn achat_completions<'py>(
 
 #[cfg(test)]
 mod tests {
-    use pyo3::prelude::*;
-    use pyo3::types::PyList;
+    use pyo3::{prelude::*, types::PyList};
 
     #[test]
     fn chat_completions_decline_keeps_existing_reasons() {
