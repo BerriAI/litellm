@@ -8553,6 +8553,21 @@ async def test_get_current_spend_fallback_to_in_memory():
         ps.spend_counter_cache = original
 
 
+def test_spend_counter_cache_keeps_key_counter_across_hundreds_of_other_scopes():
+    from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    probe_key = "spend:key:unit-40221-probe"
+    spend_counter_cache.in_memory_cache.set_cache(key=probe_key, value=0.25)
+    for index in range(DEFAULT_MAX_SIZE_IN_MEMORY + 100):
+        spend_counter_cache.in_memory_cache.set_cache(key=f"spend:end_user:unit-40221-{index}", value=0.01)
+
+    assert spend_counter_cache.in_memory_cache.get_cache(key=probe_key) == 0.25, (
+        f"key counter evicted after {DEFAULT_MAX_SIZE_IN_MEMORY + 100} other scopes; "
+        f"max_size_in_memory={spend_counter_cache.in_memory_cache.max_size_in_memory}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_increment_spend_counters_initializes_and_increments():
     """Counter should initialize from cached object spend, then increment.

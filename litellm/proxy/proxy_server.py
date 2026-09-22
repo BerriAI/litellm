@@ -256,7 +256,7 @@ import litellm
 import litellm._redis
 from litellm import Router
 from litellm._logging import _redact_string, verbose_proxy_logger, verbose_router_logger
-from litellm.caching.caching import DualCache, RedisCache
+from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
@@ -285,6 +285,7 @@ from litellm.constants import (
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
+    SPEND_COUNTER_CACHE_MAX_SIZE,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
@@ -2506,7 +2507,10 @@ shared_aiohttp_session: Optional["ClientSession"] = None  # Global shared sessio
 user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
-spend_counter_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
+spend_counter_cache: Final = DualCache(
+    in_memory_cache=InMemoryCache(max_size_in_memory=SPEND_COUNTER_CACHE_MAX_SIZE),
+    default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value,
+)
 cli_sso_session_cache: Final = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_TTL_SECONDS)
 model_max_budget_limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=spend_counter_cache)
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
