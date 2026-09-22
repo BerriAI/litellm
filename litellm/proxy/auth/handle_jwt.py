@@ -14,7 +14,7 @@ import hashlib
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
 
@@ -1602,6 +1602,7 @@ class JWTAuthManager:
         team_object: LiteLLM_TeamTable | None,
         route: str,
         request_method: str | None = None,
+        team_allowed_routes: Collection[str] = (),
     ) -> bool:
         normalized_request_method: Final = request_method.upper() if isinstance(request_method, str) else None
         if not RouteChecks.is_auth_enforced_pass_through_route(
@@ -1610,8 +1611,11 @@ class JWTAuthManager:
         ):
             return True
 
+        if RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=team_allowed_routes):
+            return True
+
         # JWT team selection is team-scoped; key metadata is not available here,
-        # so passthrough access is granted only by the selected team's metadata.
+        # so beyond the JWT config grant above, only the selected team's metadata grants access.
         return RouteChecks.check_passthrough_route_access(
             route=route,
             user_api_key_dict=UserAPIKeyAuth(team_metadata=(team_object.metadata or {}) if team_object else {}),
@@ -1689,6 +1693,7 @@ class JWTAuthManager:
                             team_object=team_object,
                             route=route,
                             request_method=request_method,
+                            team_allowed_routes=jwt_handler.litellm_jwtauth.team_allowed_routes,
                         ):
                             is_allowed = False
                             denied_auth_enforced_pass_through_route = True
@@ -2094,8 +2099,11 @@ class JWTAuthManager:
         spend / metadata can be attributed correctly.
 
         Returns (team_id, team_object, team_membership_object).
-        Any DB error is debug-logged and the tuple is (None, None, None) — no
-        exception ever propagates from this helper.
+        A team that cannot be loaded (HTTPException from get_team_object) is
+        debug-logged and the tuple is (None, None, None), the same as the DB
+        team fallback. A failed membership read propagates, so a database
+        outage surfaces as the 503 the rest of auth answers with instead of
+        serving the request with the member's limits dropped.
         """
         if user_object is None or not user_object.teams or len(user_object.teams) != 1:
             return None, None, None
@@ -2110,28 +2118,28 @@ class JWTAuthManager:
                 proxy_logging_obj=proxy_logging_obj,
                 team_id_upsert=team_id_upsert,
             )
-            if team_row is None:
-                return None, None, None
-
-            if not user_id:
-                return _tid, team_row, None
-
-            team_membership: Final = await get_team_membership(
-                user_id=user_id,
-                team_id=_tid,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            return _tid, team_row, team_membership
-        except Exception:
+        except HTTPException:
             verbose_proxy_logger.debug(
-                "JWT single-team fallback error, skipping. team_id=%s",
+                "JWT single-team fallback: team could not be loaded, skipping. team_id=%s",
                 _tid,
                 exc_info=True,
             )
             return None, None, None
+        if team_row is None:
+            return None, None, None
+
+        if not user_id:
+            return _tid, team_row, None
+
+        team_membership: Final = await get_team_membership(
+            user_id=user_id,
+            team_id=_tid,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        return _tid, team_row, team_membership
 
     @staticmethod
     async def _resolve_db_team_fallback(
@@ -2468,7 +2476,22 @@ class JWTAuthManager:
                     jwt_valid_token, handler, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj
                 )
                 return {**admin_result, "user_object": identity.user_object}
-            return admin_result
+            if prisma_client is None:
+                return admin_result
+            try:
+                admin_user: Final = await get_user_object(
+                    user_id=user_id,
+                    user_email=user_email,
+                    sso_user_id=user_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    user_id_upsert=False,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except UserNotFoundError:
+                return admin_result
+            return {**admin_result, "user_object": admin_user}
 
         # Get team with model access
         ## Check if team_id is specified via x-litellm-team-id header
@@ -2569,6 +2592,7 @@ class JWTAuthManager:
             team_object=team_object,
             route=route,
             request_method=request_method,
+            team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes,
         ):
             JWTAuthManager._raise_team_passthrough_route_denial(route=route)
 
@@ -2638,6 +2662,7 @@ class JWTAuthManager:
                 team_object=team_object,
                 route=route,
                 request_method=request_method,
+                team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes,
             ):
                 JWTAuthManager._raise_team_passthrough_route_denial(route=route)
         elif team_id is None:

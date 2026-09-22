@@ -1,3 +1,4 @@
+import datetime
 import time
 from typing import Final
 
@@ -29,6 +30,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+from litellm.types.videos.main import VideoObject
 
 
 @pytest.fixture
@@ -3038,21 +3040,23 @@ def test_completion_cost_logs_cache_and_reasoning_breakdown_for_custom_pricing()
     assert total == pytest.approx(100 * 1e-6 + 800 * 1e-7 + 100 * 1.25e-6 + 500 * 2e-6)
 
 
-def test_cost_per_token_per_second_pricing(monkeypatch):
+@pytest.mark.parametrize("custom_llm_provider", ["together_ai", "openai", "anthropic", "bedrock", "azure"])
+def test_cost_per_token_per_second_pricing(monkeypatch, custom_llm_provider: str):
     """
     Models priced by duration (input/output_cost_per_second) with no per-token rates
-    must be billed as cost_per_second * response_time_ms / 1000 in cost_per_token.
+    must be billed as cost_per_second * response_time_ms / 1000 in cost_per_token,
+    whether or not the provider has its own cost calculator.
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
-    model = "test-per-second-pricing-model"
+    model = f"test-per-second-pricing-{custom_llm_provider}"
     litellm.register_model(
         model_cost={
             model: {
                 "input_cost_per_second": 0.02,
                 "output_cost_per_second": 0.04,
-                "litellm_provider": "together_ai",
+                "litellm_provider": custom_llm_provider,
                 "mode": "chat",
             }
         }
@@ -3060,7 +3064,7 @@ def test_cost_per_token_per_second_pricing(monkeypatch):
 
     prompt_cost, completion_cost_value = cost_per_token(
         model=model,
-        custom_llm_provider="together_ai",
+        custom_llm_provider=custom_llm_provider,
         prompt_tokens=10,
         completion_tokens=20,
         response_time_ms=1500.0,
@@ -3068,6 +3072,143 @@ def test_cost_per_token_per_second_pricing(monkeypatch):
 
     assert prompt_cost == pytest.approx(0.02 * 1.5)
     assert completion_cost_value == pytest.approx(0.04 * 1.5)
+
+
+def test_cost_per_token_keeps_token_pricing_when_per_second_rates_are_also_set(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model = "test-token-and-per-second-pricing-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "input_cost_per_second": 0.02,
+                "output_cost_per_second": 0.04,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+
+    prompt_cost, completion_cost_value = cost_per_token(
+        model=model,
+        custom_llm_provider="openai",
+        prompt_tokens=10,
+        completion_tokens=20,
+        response_time_ms=1500.0,
+    )
+
+    assert prompt_cost == pytest.approx(10 * 1e-6)
+    assert completion_cost_value == pytest.approx(20 * 2e-6)
+
+
+def _logging_obj_with_call_window(duration_ms: float) -> Logging:
+    start_time: Final = datetime.datetime(2026, 9, 21, 12, 0, 0)
+    logging_obj: Final = Logging(
+        model="gpt-5.4-nano",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=start_time,
+        litellm_call_id="per-second-call-window",
+        function_id="f",
+    )
+    logging_obj.model_call_details["start_time"] = start_time
+    logging_obj.model_call_details["end_time"] = start_time + datetime.timedelta(milliseconds=duration_ms)
+    return logging_obj
+
+
+@pytest.mark.parametrize(
+    ("stamped_response_ms", "total_time", "logged_duration_ms", "expected_seconds"),
+    [(None, 0.0, 1500.0, 1.5), (3000.0, 0.0, 1500.0, 3.0), (None, 2500.0, 1500.0, 2.5), (3000.0, 2500.0, 1500.0, 3.0)],
+)
+def test_completion_cost_per_second_deployment_bills_the_call_duration(
+    monkeypatch,
+    stamped_response_ms: float | None,
+    total_time: float,
+    logged_duration_ms: float,
+    expected_seconds: float,
+):
+    """
+    A deployment priced only per second bills the stamped ``_response_ms`` when there is one,
+    then the caller's explicit ``total_time``, and the logging object's start/end window otherwise
+    (a streamed response is never stamped).
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    deployment_id = "per-second-openai-deployment"
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "input_cost_per_second": 0.02,
+                "output_cost_per_second": 0.04,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+    response = ModelResponse(
+        model="gpt-5.4-nano",
+        usage=Usage(prompt_tokens=11, completion_tokens=7, total_tokens=18),
+    )
+    response._response_ms = stamped_response_ms
+
+    cost = completion_cost(
+        completion_response=response,
+        model="openai/gpt-5.4-nano",
+        custom_llm_provider="openai",
+        custom_pricing=True,
+        router_model_id=deployment_id,
+        total_time=total_time,
+        litellm_logging_obj=_logging_obj_with_call_window(logged_duration_ms),
+    )
+
+    assert cost == pytest.approx((0.02 + 0.04) * expected_seconds)
+
+
+@pytest.mark.parametrize("mode", ["audio_transcription", "audio_speech", "video_generation", "realtime"])
+def test_cost_per_token_leaves_media_second_rates_to_their_dedicated_paths(monkeypatch, mode: str):
+    """
+    A media-mode entry's per-second rates price audio or video seconds, which the dedicated
+    transcription, speech, video, and realtime paths bill from the media itself, so a call that
+    reaches the generic path with only a wall-clock duration must not bill them.
+    """
+    model = f"test-media-per-second-{mode}"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_second": 0.02, "output_cost_per_second": 0.4, "litellm_provider": "openai", "mode": mode},
+    )
+
+    assert cost_per_token(model=model, custom_llm_provider="openai", response_time_ms=2000.0) == (0.0, 0.0)
+
+
+def test_completion_cost_video_status_poll_bills_nothing_on_a_per_second_video_model(monkeypatch):
+    """
+    Polling a video job returns a ``VideoObject`` with no stamped duration, so the cost path falls
+    back to the logging object's call window; on a video model priced per output second that
+    window must not be billed, or every status poll would charge for the seconds it took to answer.
+    """
+    model = "test-veo-per-second-poll"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"output_cost_per_second": 0.4, "litellm_provider": "vertex_ai", "mode": "video_generation"},
+    )
+    video = VideoObject(id="video_1", object="video", status="completed", model=model, progress=100)
+
+    cost = completion_cost(
+        completion_response=video,
+        model=model,
+        custom_llm_provider="vertex_ai",
+        call_type=CallTypes.video_retrieve.value,
+        litellm_logging_obj=_logging_obj_with_call_window(2000.0),
+    )
+
+    assert cost == 0.0
 
 
 def _batch_cache_usage() -> Usage:
@@ -3520,6 +3661,97 @@ def test_cost_per_token_region_name_applies_to_provider_prefixed_model(_local_mo
     assert prompt_cost + completion_cost == pytest.approx(
         38 * gov["input_cost_per_token"] + 20 * gov["output_cost_per_token"]
     )
+
+
+def test_completion_cost_mantle_native_messages_prices_claude_from_the_bedrock_row(_local_model_cost_map):
+    """Mantle's native Messages API answers with Anthropic's canonical model name and the proxy
+    resolves a Mantle region for every call, so the first cost candidate is
+    bedrock_mantle/<region>/claude-sonnet-5. That name has no row of its own and must fall through to
+    the deployment's bare Bedrock row instead of stopping on an unpriced capability rule at $0."""
+
+    response = litellm.ModelResponse(
+        id="msg_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="claude-sonnet-5",
+        usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
+    )
+    row = litellm.model_cost["anthropic.claude-sonnet-5"]
+    expected = 100 * row["input_cost_per_token"] + 10 * row["output_cost_per_token"]
+    assert expected > 0
+
+    for region_name in ("us-east-1", None):
+        assert litellm.completion_cost(
+            completion_response=response,
+            model="bedrock_mantle/anthropic.claude-sonnet-5",
+            custom_llm_provider="bedrock_mantle",
+            region_name=region_name,
+        ) == pytest.approx(expected)
+
+
+def test_completion_cost_mantle_native_messages_prices_haiku_from_the_mantle_row(_local_model_cost_map):
+    """Mantle serves Anthropic's un-versioned haiku id, which has no bare Bedrock row (Bedrock's carries
+    the -20251001-v1:0 suffix), and Claude Code sends every small-fast-model call to it. Both the plain
+    and the region-prefixed deployment names must price from bedrock_mantle/anthropic.claude-haiku-4-5
+    instead of billing $0."""
+
+    response = litellm.ModelResponse(
+        id="msg_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="claude-haiku-4-5",
+        usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
+    )
+    row = litellm.model_cost["bedrock_mantle/anthropic.claude-haiku-4-5"]
+    expected = 100 * row["input_cost_per_token"] + 10 * row["output_cost_per_token"]
+    assert expected > 0
+
+    for model in (
+        "bedrock_mantle/anthropic.claude-haiku-4-5",
+        "bedrock_mantle/us-east-2/anthropic.claude-haiku-4-5",
+    ):
+        assert litellm.completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="bedrock_mantle",
+        ) == pytest.approx(expected), model
+
+
+def test_completion_cost_legacy_mantle_route_prices_after_router_registration(local_model_cost_map):
+    """The proxy registers every deployment under its provider-prefixed key at boot. A
+    bedrock/mantle/<model> deployment must resolve to the bare Bedrock row there, otherwise the boot
+    entry is a cost-less capability rule that shadows the priced row and every call on the deployment,
+    /v1/chat/completions and /v1/messages alike, bills $0."""
+    from litellm import Router
+
+    Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-5",
+                "litellm_params": {
+                    "model": "bedrock/mantle/anthropic.claude-sonnet-5",
+                    "aws_region_name": "us-east-1",
+                },
+            }
+        ]
+    )
+    assert "bedrock/mantle/anthropic.claude-sonnet-5" not in litellm.model_cost
+
+    response = litellm.ModelResponse(
+        id="msg_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="claude-sonnet-5",
+        usage={"prompt_tokens": 16, "completion_tokens": 4, "total_tokens": 20},
+    )
+    row = litellm.model_cost["anthropic.claude-sonnet-5"]
+    expected = 16 * row["input_cost_per_token"] + 4 * row["output_cost_per_token"]
+    assert expected > 0
+
+    for call_type in ("completion", "anthropic_messages"):
+        assert litellm.completion_cost(
+            completion_response=response,
+            model="mantle/anthropic.claude-sonnet-5",
+            custom_llm_provider="bedrock",
+            call_type=call_type,
+        ) == pytest.approx(expected), call_type
 
 
 def test_select_model_name_keeps_base_model_free_of_region(_local_model_cost_map):
@@ -4230,3 +4462,30 @@ def test_completion_cost_prices_responses_websocket_turns_per_service_tier():
     assert ws_cost == pytest.approx(_http_cost(100, 40, "default") + _http_cost(60, 10, "priority"))
     assert ws_cost != pytest.approx(_http_cost(160, 50, "default"))
     assert ws_cost != pytest.approx(_http_cost(160, 50, "priority"))
+
+
+QWEN3_NEXT_REGIONS: Final = ("ap-northeast-1", "ap-south-1", "ap-southeast-2", "eu-west-1", "eu-west-2", "sa-east-1")
+
+
+@pytest.mark.parametrize("region", QWEN3_NEXT_REGIONS)
+def test_cost_per_token_bedrock_qwen3_next_uses_regional_entry_not_us_rate(
+    monkeypatch: pytest.MonkeyPatch, region: str
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    regional: Final = litellm.model_cost[f"bedrock/{region}/qwen.qwen3-next-80b-a3b"]
+    us: Final = litellm.model_cost["qwen.qwen3-next-80b-a3b"]
+    assert regional["input_cost_per_token"] != us["input_cost_per_token"]
+    assert regional["output_cost_per_token"] != us["output_cost_per_token"]
+
+    prompt_tokens, completion_tokens = 1000, 500
+    prompt_usd, completion_usd = cost_per_token(
+        model=f"bedrock/{region}/qwen.qwen3-next-80b-a3b",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        custom_llm_provider="bedrock",
+    )
+
+    assert prompt_usd == pytest.approx(prompt_tokens * regional["input_cost_per_token"])
+    assert completion_usd == pytest.approx(completion_tokens * regional["output_cost_per_token"])

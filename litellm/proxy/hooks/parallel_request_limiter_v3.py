@@ -4475,9 +4475,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # 'metadata' and 'litellm_metadata' fields from litellm_params
         standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
         request_metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
-        if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
-            # Internal sub-calls bill spend to the caller but are not the caller's
-            # traffic; charging them here would let background evals eat TPM headroom.
+        origin: Final = request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
+        if origin and origin != "autorouter_compaction":
+            # Background evaluations keep their exemption; foreground compaction
+            # is necessary caller traffic and consumes the caller's token limits.
             return []
         standard_logging_metadata: Final = standard_logging_object.get("metadata") or {}
 

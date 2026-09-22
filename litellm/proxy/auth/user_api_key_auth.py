@@ -39,6 +39,7 @@ from litellm.integrations.otel.runtime import phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
+from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     TeamNotFoundError,
@@ -649,6 +650,7 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
         "type": "http",
         "headers": scope_headers,
         "path": ws_scope.get("path", ""),
+        "state": ws_scope.setdefault("state", {}),  # mutable-ok: Starlette's socket state, shared with the request
     }
     for key in ("root_path", "app_root_path"):
         if key in ws_scope:
@@ -1713,6 +1715,16 @@ async def _user_api_key_auth_builder(
                     org_id: Final = result["org_id"]
                     jwt_claims = result.get("jwt_claims", None)
                     agent_id: Final[str | None] = result.get("agent_id")
+
+                    if (
+                        user_object is not None
+                        and isinstance(user_object.metadata, dict)
+                        and user_object.metadata.get("scim_active") is False
+                    ):
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail=f"User={user_id} has been deactivated via SCIM. Keys owned by this user cannot be used.",
+                        )
 
                     if is_proxy_admin:
                         # Proxy admins authenticate via auth_builder (full
@@ -3075,31 +3087,30 @@ async def _reserve_budget_after_common_checks(
     request: Request | None = None,
 ) -> None:
     user_api_key_auth_obj.budget_reservation = None
-    if skip_budget_checks:
-        return
-    if general_settings.get("disable_budget_reservation") is True:
-        return
+    if not skip_budget_checks and general_settings.get("disable_budget_reservation") is not True:
+        from litellm.proxy.spend_tracking.budget_reservation import (
+            reserve_budget_for_request,
+        )
 
-    from litellm.proxy.spend_tracking.budget_reservation import (
-        reserve_budget_for_request,
-    )
-
-    user_api_key_auth_obj.budget_reservation = await reserve_budget_for_request(
-        request_body=request_data,
-        route=route,
-        llm_router=llm_router,
-        valid_token=user_api_key_auth_obj,
-        team_object=team_object,
-        user_object=user_object,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-        end_user_id=end_user_id,
-        end_user_object=end_user_object,
-        apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
-        fail_closed_budget_enforcement=general_settings.get("fail_closed_budget_enforcement") is True,
-        raw_body=await read_raw_json_body(request=request),
-    )
+        user_api_key_auth_obj.budget_reservation = await reserve_budget_for_request(
+            request_body=request_data,
+            route=route,
+            llm_router=llm_router,
+            valid_token=user_api_key_auth_obj,
+            team_object=team_object,
+            user_object=user_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            end_user_id=end_user_id,
+            end_user_object=end_user_object,
+            apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
+            fail_closed_budget_enforcement=general_settings.get("fail_closed_budget_enforcement") is True,
+            raw_body=await read_raw_json_body(request=request),
+        )
+    if request is not None:
+        reservation: Final = user_api_key_auth_obj.budget_reservation
+        request.state.budget_reservation = reservation  # rebind-ok: read by the release middleware
 
 
 def _should_skip_budget_checks(
@@ -3320,6 +3331,9 @@ async def user_api_key_auth(
                 raise body_parse_exception
             raise
         user_api_key_auth_obj.budget_reservation = None
+        user_api_key_auth_obj.agent_caller = agent_caller_from_headers(
+            _safe_get_request_headers(request), user_api_key_auth_obj
+        )
         _seed_request_destinations(user_api_key_auth_obj, request)
 
         # A body that never parsed is authenticated (so the trace carries identity
