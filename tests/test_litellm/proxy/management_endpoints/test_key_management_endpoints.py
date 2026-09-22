@@ -20931,3 +20931,162 @@ async def test_key_update_evicts_object_permission_before_key_object(monkeypatch
     assert deleted.index(object_permission_cache_key(permission_id)) < deleted.index(
         _hash_token_if_needed("sk-lit5479")
     ), deleted
+
+
+class TestTeamAdminMemberKeyBudgetUpdate:
+    """LIT-5647: a team admin may update budget fields on another member's team key
+    only when the proxy enables the 'member_key_budgets' permission."""
+
+    def _member_key_row(self):
+        return LiteLLM_VerificationToken(
+            token="hashed_member_key",
+            user_id="member-1",
+            team_id="team-1",
+            key_alias="member",
+            models=["m"],
+            max_budget=10.0,
+            metadata={},
+        )
+
+    def _caller(self, user_id="team-admin-1"):
+        return UserAPIKeyAuth(
+            user_id=user_id,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+    def _team(self, members):
+        return LiteLLM_TeamTableCachedObj(team_id="team-1", members_with_roles=members)
+
+    def _setup(self, monkeypatch, team_obj, editable_fields):
+        mock_get_team = AsyncMock(return_value=team_obj)
+        monkeypatch.setattr(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+            mock_get_team,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.management_helpers.team_member_permission_checks.get_team_object",
+            mock_get_team,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"team_admin_editable_team_fields": editable_fields},
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_team_key_limits",
+            AsyncMock(return_value=None),
+        )
+
+    @pytest.mark.asyncio
+    async def test_team_admin_updates_member_key_budget_when_enabled(self, monkeypatch):
+        self._setup(
+            monkeypatch,
+            self._team([Member(user_id="team-admin-1", role="admin"), Member(user_id="member-1", role="user")]),
+            ["member_key_budgets"],
+        )
+        admin_check = AsyncMock(return_value=None)
+        monkeypatch.setattr(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+            admin_check,
+        )
+        await _validate_update_key_data(
+            data=UpdateKeyRequest(key="sk-member", max_budget=0, budget_duration="30d"),
+            existing_key_row=self._member_key_row(),
+            user_api_key_dict=self._caller(),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=AsyncMock(),
+            user_api_key_cache=MagicMock(),
+        )
+        admin_check.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_team_admin_denied_when_permission_disabled(self, monkeypatch):
+        self._setup(
+            monkeypatch,
+            self._team([Member(user_id="team-admin-1", role="admin"), Member(user_id="member-1", role="user")]),
+            ["tpm_limit"],
+        )
+        with pytest.raises(HTTPException) as exc:
+            await _validate_update_key_data(
+                data=UpdateKeyRequest(key="sk-member", max_budget=0),
+                existing_key_row=self._member_key_row(),
+                user_api_key_dict=self._caller(),
+                llm_router=None,
+                premium_user=True,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        assert exc.value.status_code == 403
+        assert "member_key_budgets" in str(exc.value.detail)
+        assert "only create keys for themselves" not in str(exc.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_enabled_but_non_budget_field_is_denied(self, monkeypatch):
+        self._setup(
+            monkeypatch,
+            self._team([Member(user_id="team-admin-1", role="admin"), Member(user_id="member-1", role="user")]),
+            ["member_key_budgets"],
+        )
+        with pytest.raises(HTTPException) as exc:
+            await _validate_update_key_data(
+                data=UpdateKeyRequest(key="sk-member", key_alias="renamed"),
+                existing_key_row=self._member_key_row(),
+                user_api_key_dict=self._caller(),
+                llm_router=None,
+                premium_user=True,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        assert exc.value.status_code == 403
+        assert "'key_alias'" in str(exc.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_ordinary_member_still_denied_on_another_members_key(self, monkeypatch):
+        self._setup(
+            monkeypatch,
+            self._team([Member(user_id="member-2", role="user"), Member(user_id="member-1", role="user")]),
+            ["member_key_budgets"],
+        )
+        with pytest.raises(HTTPException) as exc:
+            await _validate_update_key_data(
+                data=UpdateKeyRequest(key="sk-member", max_budget=0),
+                existing_key_row=self._member_key_row(),
+                user_api_key_dict=self._caller(user_id="member-2"),
+                llm_router=None,
+                premium_user=True,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        assert exc.value.status_code == 403
+        assert "member_key_budgets" not in str(exc.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_personal_key_owned_by_someone_else_still_denied(self, monkeypatch):
+        self._setup(
+            monkeypatch,
+            self._team([Member(user_id="team-admin-1", role="admin")]),
+            ["member_key_budgets"],
+        )
+        personal_row = LiteLLM_VerificationToken(
+            token="hashed_personal",
+            user_id="member-1",
+            team_id=None,
+            max_budget=10.0,
+            metadata={},
+        )
+        with pytest.raises(HTTPException) as exc:
+            await _validate_update_key_data(
+                data=UpdateKeyRequest(key="sk-personal", max_budget=0),
+                existing_key_row=personal_row,
+                user_api_key_dict=self._caller(),
+                llm_router=None,
+                premium_user=True,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        assert exc.value.status_code == 403
+        assert "member_key_budgets" not in str(exc.value.detail)

@@ -1,14 +1,22 @@
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy._types import LiteLLM_ModelTable, LiteLLM_TeamTable, UpdateTeamRequest
+from litellm.models.team import BudgetLimitEntry
+from litellm.models.verification_token import LiteLLM_VerificationToken
+from litellm.proxy._types import LiteLLM_ModelTable, LiteLLM_TeamTable, UpdateKeyRequest, UpdateTeamRequest
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     TeamAdminEditAllowed,
     TeamAdminEditingDisabled,
     TeamAdminFieldNotPermitted,
+    TeamAdminKeyEditAllowed,
+    TeamAdminMemberKeyEditingDisabled,
+    changed_key_fields,
     changed_team_fields,
     resolve_team_admin_editable_fields,
     team_admin_edit_verdict,
+    team_admin_key_edit_verdict,
+    team_admin_key_request_or_raise,
+    team_admin_may_edit_member_key_budgets,
     team_admin_may_manage_projects,
     team_admin_request_or_raise,
 )
@@ -156,3 +164,120 @@ class TestTeamAdminRequestOrRaise:
             team_admin_request_or_raise(TeamAdminFieldNotPermitted(field="blocked"))
         assert exc.value.status_code == 403
         assert "'blocked'" in exc.value.detail
+
+
+def _key(**overrides):
+    return LiteLLM_VerificationToken(token="hashed", **overrides)
+
+
+class TestTeamAdminMayEditMemberKeyBudgets:
+    def test_missing_setting_denies(self):
+        assert team_admin_may_edit_member_key_budgets({}) is False
+
+    def test_team_fields_alone_do_not_grant(self):
+        configured = {"team_admin_editable_team_fields": ["tpm_limit", "max_budget", "projects"]}
+        assert team_admin_may_edit_member_key_budgets(configured) is False
+
+    def test_member_key_budgets_entry_grants(self):
+        configured = {"team_admin_editable_team_fields": ["member_key_budgets"]}
+        assert team_admin_may_edit_member_key_budgets(configured) is True
+
+    @pytest.mark.parametrize("raw", ["member_key_budgets", 7, [1, 2]])
+    def test_malformed_setting_denies(self, raw):
+        assert team_admin_may_edit_member_key_budgets({"team_admin_editable_team_fields": raw}) is False
+
+
+class TestChangedKeyFields:
+    def test_key_alone_changes_nothing(self):
+        assert changed_key_fields(UpdateKeyRequest(key="sk-1"), _key()) == frozenset()
+
+    def test_columns_echoing_stored_values_are_not_a_change(self):
+        data = UpdateKeyRequest(key="sk-1", max_budget=10.0, models=["m"], tpm_limit=5)
+        existing = _key(max_budget=10.0, models=["m"], tpm_limit=5)
+        assert changed_key_fields(data, existing) == frozenset()
+
+    def test_column_with_different_value_is_a_change(self):
+        data = UpdateKeyRequest(key="sk-1", max_budget=0)
+        assert changed_key_fields(data, _key(max_budget=10.0)) == frozenset({"max_budget"})
+
+    def test_metadata_folded_field_echo_is_not_a_change(self):
+        data = UpdateKeyRequest(key="sk-1", tag_rpm_limit={"fast": 3})
+        existing = _key(metadata={"tag_rpm_limit": {"fast": 3}})
+        assert changed_key_fields(data, existing) == frozenset()
+
+    def test_metadata_folded_field_difference_is_named_not_metadata(self):
+        data = UpdateKeyRequest(key="sk-1", tag_rpm_limit={"fast": 4})
+        existing = _key(metadata={"tag_rpm_limit": {"fast": 3}})
+        assert changed_key_fields(data, existing) == frozenset({"tag_rpm_limit"})
+
+    def test_budget_limits_echo_ignores_order_and_reset_at(self):
+        windows = [
+            {"budget_duration": "1d", "max_budget": 5.0, "reset_at": "2030-01-01T00:00:00"},
+            {"budget_duration": "7d", "max_budget": 50.0, "reset_at": "2030-01-07T00:00:00"},
+        ]
+        data = UpdateKeyRequest(
+            key="sk-1",
+            budget_limits=[
+                BudgetLimitEntry(budget_duration="7d", max_budget=50.0),
+                BudgetLimitEntry(budget_duration="1d", max_budget=5.0),
+            ],
+        )
+        assert changed_key_fields(data, _key(budget_limits=windows)) == frozenset()
+
+    def test_budget_limits_difference_is_a_change(self):
+        data = UpdateKeyRequest(key="sk-1", budget_limits=[BudgetLimitEntry(budget_duration="1d", max_budget=9.0)])
+        existing = _key(budget_limits=[{"budget_duration": "1d", "max_budget": 5.0, "reset_at": "2030-01-01"}])
+        assert changed_key_fields(data, existing) == frozenset({"budget_limits"})
+
+    def test_explicit_null_clearing_a_stored_column_is_a_change(self):
+        data = UpdateKeyRequest(key="sk-1", budget_duration=None)
+        assert changed_key_fields(data, _key(budget_duration="30d")) == frozenset({"budget_duration"})
+
+    def test_field_without_a_stored_counterpart_counts_as_changed_when_sent(self):
+        data = UpdateKeyRequest(key="sk-1", duration="1h")
+        assert changed_key_fields(data, _key()) == frozenset({"duration"})
+
+
+class TestTeamAdminKeyEditVerdict:
+    def test_disabled_even_for_a_no_op(self):
+        verdict = team_admin_key_edit_verdict(UpdateKeyRequest(key="sk-1"), _key(), enabled=False)
+        assert verdict == TeamAdminMemberKeyEditingDisabled()
+
+    def test_budget_only_change_is_allowed(self):
+        data = UpdateKeyRequest(key="sk-1", max_budget=0, budget_duration="30d")
+        verdict = team_admin_key_edit_verdict(data, _key(max_budget=10.0), enabled=True)
+        assert verdict == TeamAdminKeyEditAllowed(changed=frozenset({"max_budget", "budget_duration"}))
+
+    def test_key_alias_change_is_blocked_and_named(self):
+        data = UpdateKeyRequest(key="sk-1", key_alias="renamed")
+        verdict = team_admin_key_edit_verdict(data, _key(key_alias="member"), enabled=True)
+        assert verdict == TeamAdminFieldNotPermitted(field="key_alias")
+
+    def test_spend_is_blocked(self):
+        data = UpdateKeyRequest(key="sk-1", spend=0)
+        verdict = team_admin_key_edit_verdict(data, _key(spend=3.5), enabled=True)
+        assert verdict == TeamAdminFieldNotPermitted(field="spend")
+
+    def test_budget_plus_non_budget_names_the_non_budget_field(self):
+        data = UpdateKeyRequest(key="sk-1", max_budget=0, key_alias="renamed")
+        verdict = team_admin_key_edit_verdict(data, _key(max_budget=10.0, key_alias="member"), enabled=True)
+        assert verdict == TeamAdminFieldNotPermitted(field="key_alias")
+
+
+class TestTeamAdminKeyRequestOrRaise:
+    def test_allowed_returns_none(self):
+        verdict = TeamAdminKeyEditAllowed(changed=frozenset({"max_budget"}))
+        assert team_admin_key_request_or_raise(verdict) is None
+
+    def test_disabled_is_a_403_pointing_at_member_key_budgets(self):
+        with pytest.raises(HTTPException) as exc:
+            team_admin_key_request_or_raise(TeamAdminMemberKeyEditingDisabled())
+        assert exc.value.status_code == 403
+        assert "member_key_budgets" in exc.value.detail
+        assert "Settings > UI > Team admin editable fields" in exc.value.detail
+
+    def test_field_not_permitted_is_a_403_naming_the_field(self):
+        with pytest.raises(HTTPException) as exc:
+            team_admin_key_request_or_raise(TeamAdminFieldNotPermitted(field="key_alias"))
+        assert exc.value.status_code == 403
+        assert "'key_alias'" in exc.value.detail

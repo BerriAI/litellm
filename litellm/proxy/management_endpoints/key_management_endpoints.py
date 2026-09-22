@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeV
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -99,6 +100,11 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
 from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
+from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    team_admin_key_edit_verdict,
+    team_admin_key_request_or_raise,
+    team_admin_may_edit_member_key_budgets,
+)
 from litellm.proxy.management_helpers.access_group_key_sync import (
     sync_key_access_group_membership,
     sync_key_regeneration_access_group_membership,
@@ -3008,6 +3014,55 @@ async def _validate_end_user_budget_id_change(
         raise HTTPException(status_code=400, detail=missing_detail)
 
 
+_GENERAL_SETTINGS: Final = TypeAdapter(dict[str, object])
+
+
+def _general_settings() -> Mapping[str, object]:
+    from litellm.proxy.proxy_server import (
+        general_settings,  # pyright: ignore[reportUnknownVariableType]  # untyped module-level dict in proxy_server
+    )
+
+    return _GENERAL_SETTINGS.validate_python(cast(object, general_settings))
+
+
+async def _acting_as_team_admin_for_key_update(
+    data: UpdateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+    user_api_key_dict: UserAPIKeyAuth,
+    checked_prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    is_proxy_admin: bool,
+) -> bool:
+    """Whether the caller acts as a team admin on another member's team key.
+
+    Raises 403 when the caller administers the key's team but the request edits fields
+    outside the member_key_budgets permission (or that permission is disabled).
+    """
+    if (
+        is_proxy_admin
+        or existing_key_row.team_id is None
+        or existing_key_row.user_id is None
+        or existing_key_row.user_id == user_api_key_dict.user_id
+    ):
+        return False
+    team_for_grant: Final = await get_team_object(
+        team_id=existing_key_row.team_id,
+        prisma_client=checked_prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        check_db_only=True,
+    )
+    if not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_for_grant):
+        return False
+    team_admin_key_request_or_raise(
+        team_admin_key_edit_verdict(
+            data=data,
+            existing=existing_key_row,
+            enabled=team_admin_may_edit_member_key_budgets(_general_settings()),
+        )
+    )
+    return True
+
+
 async def _validate_update_key_data(
     data: UpdateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
@@ -3058,10 +3113,19 @@ async def _validate_update_key_data(
         )
     is_project_change: Final = "project_id" in data.model_fields_set and data.project_id != existing_key_row.project_id
 
+    acting_as_team_admin: Final = await _acting_as_team_admin_for_key_update(
+        data=data,
+        existing_key_row=existing_key_row,
+        user_api_key_dict=user_api_key_dict,
+        checked_prisma_client=checked_prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        is_proxy_admin=_is_proxy_admin,
+    )
+
     common_key_access_checks(
         user_api_key_dict=user_api_key_dict,
         data=data,
-        user_id=existing_key_row.user_id,
+        user_id=user_api_key_dict.user_id if acting_as_team_admin else existing_key_row.user_id,
         llm_router=llm_router,
         premium_user=premium_user,
     )
