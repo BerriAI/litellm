@@ -209,8 +209,9 @@ class TargetCatalog:
             previous_config: Final = MappingProxyType(
                 {key: value.model_copy(deep=True) for key, value in self.manager.config_mcp_servers.items()}
             )
+            live_registry: Final = self.manager.registry
             previous_servers: Final = previous_config | MappingProxyType(
-                {key: value.model_copy(deep=True) for key, value in self.manager.registry.items()}
+                {key: value.model_copy(deep=True) for key, value in live_registry.items()}
             )
             config_identities: Final = MappingProxyType(
                 {key: _configuration_identity(value) for key, value in previous_config.items()}
@@ -223,17 +224,21 @@ class TargetCatalog:
             staged_routing: Final = dict(initial_routing)
             closed: Final = asyncio.Event()
             routing_token: Final = self._staged_routing.set((staged_routing, closed))
+            initial_tools: Final = MappingProxyType(dict(global_mcp_tool_registry.published_tools))
             try:
-                with global_mcp_tool_registry.catalog_scope(global_mcp_tool_registry.published_tools) as staged_tools:
+                with global_mcp_tool_registry.catalog_scope(initial_tools) as staged_tools:
                     await self._reload()
+                    live_routes: Final = self._unchanged_routing(previous_servers, self.manager.published_tool_routes)
                     concurrent_routes: Final = self._unchanged_routing(
-                        previous_servers,
+                        self.manager.config_mcp_servers | live_registry,
                         MappingProxyType(
                             {
                                 name: owner
                                 for name, owner in self.manager.published_tool_routes.items()
                                 if initial_routing.get(name) != owner
-                                and staged_routing.get(name) == initial_routing.get(name)
+                                and (
+                                    name not in staged_routing or staged_routing.get(name) == initial_routing.get(name)
+                                )
                             }
                         ),
                     )
@@ -248,6 +253,18 @@ class TargetCatalog:
                             }
                         ),
                     )
+                    concurrent_tools: Final = MappingProxyType(
+                        {
+                            name: tool
+                            for name, tool in global_mcp_tool_registry.published_tools.items()
+                            if (
+                                name in live_routes
+                                or name in concurrent_routes
+                                or (name not in initial_routing and name not in self.manager.published_tool_routes)
+                            )
+                            and initial_tools.get(name) is staged_tools.get(name)
+                        }
+                    )
                     self.manager.config_mcp_servers = {
                         key: value.model_copy(
                             update=staged_config[key].model_dump(
@@ -258,8 +275,18 @@ class TargetCatalog:
                         else value
                         for key, value in self.manager.config_mcp_servers.items()
                     }
-                    global_mcp_tool_registry.tools = staged_tools
-                    self.manager.published_tool_routes = retained_staged_routes | concurrent_routes
+                    global_mcp_tool_registry.tools = (
+                        MappingProxyType(
+                            {
+                                name: tool
+                                for name, tool in staged_tools.items()
+                                if name in global_mcp_tool_registry.published_tools
+                                or tool is not initial_tools.get(name)
+                            }
+                        )
+                        | concurrent_tools
+                    )
+                    self.manager.published_tool_routes = live_routes | retained_staged_routes | concurrent_routes
             finally:
                 closed.set()
                 self._staged_routing.reset(routing_token)
