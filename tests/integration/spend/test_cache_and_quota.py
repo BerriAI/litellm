@@ -1,4 +1,5 @@
 import json
+import re
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -323,6 +324,70 @@ def test_in_flight_count_tokens_does_not_reserve_key_budget_away_from_a_completi
         ]
         assert provider_calls[0].headers["x-goog-api-key"] == "synthetic-gemini-key"
         assert json.loads(provider_calls[0].body) == {"contents": contents}
+
+
+@pytest.mark.covers("quota_management.budget.key.fail_closed_rejects_estimate_over_remaining_headroom_before_provider")
+def test_fail_closed_key_rejects_known_estimate_over_remaining_budget_before_provider(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        costly: Final = scenario.model(input_cost_per_token=0.005, output_cost_per_token=0.04)
+        cheap: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.001)
+        key: Final = scenario.key(models=[costly, cheap], max_budget=1.0)
+        digest: Final = sha256(key.encode()).hexdigest()
+        first: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": costly, "messages": [{"role": "user", "content": f"fill {uuid.uuid4().hex}"}], "max_tokens": 20},
+            key=key,
+        )
+        assert first.status_code == 200, first.text
+        assert float(first.headers["x-litellm-response-cost"]) == pytest.approx(0.9)
+        spent: Final = eventually(
+            lambda: read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)),
+            lambda values: len(values) == 1 and float(values[0]["spend"]) >= 0.9,
+            seconds=70,
+        )
+        assert float(spent[0]["spend"]) == pytest.approx(0.9)
+        upstream.get("/__observations").raise_for_status()
+        denied: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": costly, "messages": [{"role": "user", "content": f"over {uuid.uuid4().hex}"}], "max_tokens": 20},
+            key=key,
+        )
+        assert denied.status_code == 422, denied.text
+        error: Final = denied.json()["error"]
+        assert (error["type"], error["code"]) == ("budget_exceeded", "422"), denied.text
+        reported: Final = re.fullmatch(
+            r"Budget has been exceeded! Key=\w+ Current cost: (\S+), Estimated request cost: (\S+), Max budget: 1\.0",
+            error["message"],
+        )
+        assert reported is not None, denied.text
+        assert float(reported.group(1)) == pytest.approx(0.9), denied.text
+        assert 20 * 0.04 < float(reported.group(2)) < 1.0, denied.text
+        assert upstream.get("/__observations").json()["requests"] == []
+        assert float(gateway.get("/key/info", {"key": key})["info"]["spend"]) == pytest.approx(0.9)
+        fitting_prompt: Final = f"fits {uuid.uuid4().hex}"
+        served: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": cheap, "messages": [{"role": "user", "content": fitting_prompt}], "max_tokens": 5},
+            key=key,
+        )
+        assert served.status_code == 200, served.text
+        assert served.json()["usage"]["total_tokens"] == 40
+        observed: Final = upstream.get("/__observations").json()["requests"]
+        assert [request["body"] for request in observed] == [
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": fitting_prompt}], "max_tokens": 5}
+        ], observed
+        eventually(
+            lambda: read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)),
+            lambda values: len(values) == 1 and float(values[0]["spend"]) >= 0.94,
+            seconds=70,
+        )
+        assert float(gateway.get("/key/info", {"key": key})["info"]["spend"]) == pytest.approx(0.94)
 
 
 @pytest.mark.covers("quota_management.response_cache.system_messages_partition_cache_identity")
