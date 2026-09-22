@@ -20,6 +20,9 @@ _SERVER_ERROR: Final = litellm.InternalServerError(message="provider down", mode
 _CONTENT_POLICY_ERROR: Final = litellm.ContentPolicyViolationError(
     message="flagged", model="gpt-5.4-mini", llm_provider="openai"
 )
+_CONTEXT_WINDOW_ERROR: Final = litellm.ContextWindowExceededError(
+    message="too long", model="gpt-5.4-mini", llm_provider="openai"
+)
 
 
 def _router_with_single_failing_deployment(
@@ -112,32 +115,43 @@ async def test_content_policy_error_keeps_backoff_when_its_dedicated_fallbacks_s
 
 
 @pytest.mark.parametrize(
-    ("error", "fallbacks", "content_policy_fallbacks", "expected"),
+    ("error", "fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "expected"),
     [
-        pytest.param(_SERVER_ERROR, [{"primary": ["backup"]}], None, True, id="own-chain"),
-        pytest.param(_SERVER_ERROR, [{"backup": ["primary"]}], None, False, id="chain-for-another-group"),
-        pytest.param(_SERVER_ERROR, [{"*": ["backup"]}], None, True, id="generic-chain"),
-        pytest.param(_SERVER_ERROR, [{"model": "backup"}], None, True, id="client-side-list"),
+        pytest.param(_SERVER_ERROR, [{"primary": ["backup"]}], None, None, True, id="own-chain"),
+        pytest.param(_SERVER_ERROR, [{"backup": ["primary"]}], None, None, False, id="chain-for-another-group"),
+        pytest.param(_SERVER_ERROR, [{"*": ["backup"]}], None, None, True, id="generic-chain"),
+        pytest.param(_SERVER_ERROR, [{"model": "backup"}], None, None, True, id="client-side-list"),
         pytest.param(
             _CONTENT_POLICY_ERROR,
             [{"primary": ["backup"]}],
+            None,
             [{"backup": ["primary"]}],
             False,
-            id="dedicated-list-skips-group",
+            id="content-policy-list-skips-group",
         ),
         pytest.param(
             _CONTENT_POLICY_ERROR,
             [{"backup": ["primary"]}],
+            None,
             [{"primary": ["backup"]}],
             True,
-            id="dedicated-list-covers-group",
+            id="content-policy-list-covers-group",
         ),
-        pytest.param(_CONTENT_POLICY_ERROR, [{"primary": ["backup"]}], None, True, id="no-dedicated-list"),
+        pytest.param(
+            _CONTEXT_WINDOW_ERROR,
+            [{"primary": ["backup"]}],
+            [{"backup": ["primary"]}],
+            None,
+            False,
+            id="context-window-list-skips-group",
+        ),
+        pytest.param(_CONTENT_POLICY_ERROR, [{"primary": ["backup"]}], None, None, True, id="no-dedicated-list"),
     ],
 )
 def test_fallback_available_for_error_follows_the_dispatch_order(
     error: Exception,
     fallbacks: list[dict[str, object]],
+    context_window_fallbacks: list[dict[str, list[str]]] | None,
     content_policy_fallbacks: list[dict[str, list[str]]] | None,
     expected: bool,
 ):
@@ -146,13 +160,35 @@ def test_fallback_available_for_error_follows_the_dispatch_order(
     available: Final = router._fallback_available_for_error(
         error=error,
         fallbacks=fallbacks,
-        context_window_fallbacks=None,
+        context_window_fallbacks=context_window_fallbacks,
         content_policy_fallbacks=content_policy_fallbacks,
         model_group="primary",
         kwargs={"model": "primary"},
     )
 
     assert available is expected
+
+
+def test_fallback_available_for_error_is_false_without_a_model_group_or_when_disabled():
+    router: Final = _router_with_single_failing_deployment(fallbacks=[])
+    disabled_kwargs: Final = {"model": "primary", "metadata": {}}
+    record_disable_fallbacks(disabled_kwargs, True)
+
+    def available(model_group: str | None, kwargs: dict[str, object]) -> bool:
+        return router._fallback_available_for_error(
+            error=_SERVER_ERROR,
+            fallbacks=[{"model": "backup"}],
+            context_window_fallbacks=None,
+            content_policy_fallbacks=None,
+            model_group=model_group,
+            kwargs=kwargs,
+        )
+
+    assert (available("primary", {"model": "primary"}), available(None, {}), available("primary", disabled_kwargs)) == (
+        True,
+        False,
+        False,
+    )
 
 
 def test_regular_fallback_available_is_false_once_the_chain_is_used_up_or_disabled():
