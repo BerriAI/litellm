@@ -821,6 +821,17 @@ def test_image_response_serialization_honors_dump_options():
             "provider_specific_fields": None,
         }
     ]
+    assert two_image_response.model_dump(exclude={"data": {-1}})["data"] == [
+        {
+            "b64_json": None,
+            "revised_prompt": None,
+            "url": "https://example.com/image.png",
+            "provider_specific_fields": None,
+        }
+    ]
+    assert two_image_response.model_dump(include={"data": {-1: {"url"}}})["data"] == [
+        {"url": "https://example.com/second-image.png"}
+    ]
 
 
 @pytest.mark.parametrize(

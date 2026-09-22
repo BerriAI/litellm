@@ -86,18 +86,20 @@ from .rerank import RerankResponse as RerankResponse
 def _nested_selector(
     selector: IncEx | None,
     index: int,
+    count: int,
     is_include: bool,
 ) -> tuple[bool, IncEx | None]:
     if selector is None:
         return True, None
     if isinstance(selector, Mapping):
-        value: Final = selector.get(index, selector.get("__all__"))
+        value: Final = selector.get(index, selector.get(index - count, selector.get("__all__")))
         keep: Final = value is not None if is_include else value is not True
         per_item_selector: Final = None if value is True or value is None else value
         return keep, per_item_selector
     if isinstance(selector, Collection) and not isinstance(selector, (str, bytes)):
         if all(isinstance(item, int) for item in selector):
-            return (index in selector if is_include else index not in selector), None
+            addressed: Final = index in selector or index - count in selector
+            return (addressed if is_include else not addressed), None
     return True, selector
 
 
@@ -2587,8 +2589,8 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         exclude: Final = info.exclude
 
         def _serialize_image(index: int, image: OpenAIImage) -> Mapping[str, object] | None:
-            include_keep, include_selector = _nested_selector(include, index, is_include=True)
-            exclude_keep, exclude_selector = _nested_selector(exclude, index, is_include=False)
+            include_keep, include_selector = _nested_selector(include, index, len(data), is_include=True)
+            exclude_keep, exclude_selector = _nested_selector(exclude, index, len(data), is_include=False)
             if not include_keep or not exclude_keep:
                 return None
             return image.model_dump(
