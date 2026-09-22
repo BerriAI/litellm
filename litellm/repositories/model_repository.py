@@ -4,14 +4,14 @@ Model repository for database operations on LiteLLM_ProxyModelTable.
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
 
@@ -40,7 +40,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
 
     def _encrypt_litellm_params(self, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
         """Encrypt sensitive values in litellm_params."""
-        encrypted: Final = {}
+        encrypted: Final[dict[str, object]] = {}
         for key, value in litellm_params.items():
             if isinstance(value, str):
                 encrypted[key] = encrypt_value_helper(value, new_encryption_key=self._encryption_key)
@@ -50,7 +50,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
 
     def _decrypt_litellm_params(self, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
         """Decrypt sensitive values in litellm_params."""
-        decrypted: Final = {}
+        decrypted: Final[dict[str, object]] = {}
         for key, value in litellm_params.items():
             if isinstance(value, str):
                 decrypted[key] = decrypt_value_helper(
@@ -60,22 +60,25 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
                 decrypted[key] = value
         return decrypted
 
-    def _to_model(self, record: Any) -> LiteLLM_ProxyModelTable | None:
+    def _to_model(self, record: DbRecord | None) -> LiteLLM_ProxyModelTable | None:
         """Convert a database record to a Model with decryption."""
         if record is None:
             return None
 
-        data: Final = record.dict() if hasattr(record, "dict") else dict(record)
+        data: Final = dict(record_to_dict(record))
 
-        if isinstance(data.get("litellm_params"), str):
-            data["litellm_params"] = json.loads(data["litellm_params"])
-        if isinstance(data.get("model_info"), str):
-            data["model_info"] = json.loads(data["model_info"])
+        raw_litellm_params: Final = data.get("litellm_params")
+        if isinstance(raw_litellm_params, str):
+            data["litellm_params"] = json.loads(raw_litellm_params)
+        raw_model_info: Final = data.get("model_info")
+        if isinstance(raw_model_info, str):
+            data["model_info"] = json.loads(raw_model_info)
 
-        if data.get("litellm_params"):
-            data["litellm_params"] = self._decrypt_litellm_params(data["litellm_params"])
+        litellm_params: Final = data.get("litellm_params")
+        if isinstance(litellm_params, Mapping) and litellm_params:
+            data["litellm_params"] = self._decrypt_litellm_params(litellm_params)
 
-        return LiteLLM_ProxyModelTable(**data)
+        return LiteLLM_ProxyModelTable.model_validate(data)
 
     async def find_by_id(self, model_id: str, id_field: str = "model_id") -> LiteLLM_ProxyModelTable | None:
         return await super().find_by_id(model_id, id_field)

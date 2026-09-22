@@ -556,7 +556,12 @@ async def asend_message(
 def send_message(
     a2a_client: "A2AClientType",
     request: "SendMessageRequest",
-    **kwargs: Any,
+    *,
+    api_base: str | None = None,
+    litellm_params: dict[str, object] | None = None,
+    agent_id: str | None = None,
+    agent_extra_headers: dict[str, str] | None = None,
+    **kwargs: object,
 ) -> LiteLLMSendMessageResponse | Coroutine[object, object, LiteLLMSendMessageResponse]:
     """
     Sync: Send a message to an A2A agent.
@@ -576,10 +581,18 @@ def send_message(
     except RuntimeError:
         loop = None
 
+    coro: Final = asend_message(
+        a2a_client=a2a_client,
+        request=request,
+        api_base=api_base,
+        litellm_params=litellm_params,
+        agent_id=agent_id,
+        agent_extra_headers=agent_extra_headers,
+        **kwargs,
+    )
     if loop is not None:
-        return asend_message(a2a_client=a2a_client, request=request, **kwargs)
-    else:
-        return asyncio.run(asend_message(a2a_client=a2a_client, request=request, **kwargs))
+        return coro
+    return asyncio.run(coro)
 
 
 def _build_streaming_logging_obj(

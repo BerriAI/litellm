@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any, Final
 
 import requests
@@ -18,7 +18,10 @@ class UsersManagementClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def list_users(self, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    def list_users(
+        self,
+        params: Mapping[str, str | bytes | int | float | Iterable[str | bytes | int | float] | None] | None = None,
+    ) -> list[dict[str, Any]]:
         """List users (GET /user/list)"""
         url: Final = f"{self.base_url}/user/list"
         response: Final = requests.get(url, headers=self._get_headers(), params=params, timeout=self.timeout)
