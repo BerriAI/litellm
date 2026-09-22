@@ -1421,14 +1421,13 @@ def test_llm_call_event_resolves_the_callers_conversation_id(litellm_params, exp
     [
         (
             {"metadata": {"user_api_key_hash": "hsh"}},
-            {"session_id": "conv-replayed", "trace_id": "0af7651916cd43dd8448eb211c80319c"},
-            "conv-replayed",
+            {"session_id": "minted-then-replayed", "trace_id": "minted-then-replayed"},
+            None,
         ),
-        ({"metadata": {"user_api_key_hash": "hsh"}}, {"session_id": ""}, None),
         (
             {"metadata": {"user_api_key_hash": "hsh"}},
-            {"session_id": "conv-replayed", "trace_id": "conv-replayed"},
-            "conv-replayed",
+            {"session_id": "conv-replayed", "trace_id": "0af7651916cd43dd8448eb211c80319c"},
+            None,
         ),
         ({"litellm_session_id": "conv-live"}, {"session_id": "conv-replayed"}, "conv-live"),
         (
@@ -1441,18 +1440,17 @@ def test_llm_call_event_resolves_the_callers_conversation_id(litellm_params, exp
         ),
     ],
     ids=[
-        "replayed-payload",
-        "replayed-payload-without-a-session",
-        "replayed-session-logged-without-a-parent-span-doubles-as-the-trace-id",
+        "replayed-minted-session-stays-hidden",
+        "replayed-payload-is-not-a-source",
         "live-params-win",
         "generated-stays-hidden",
     ],
 )
-def test_llm_call_event_falls_back_to_the_replayed_payloads_session_id(litellm_params, payload, expected):
-    """``/callback_logs`` replays a finished ``StandardLoggingPayload`` whose
-    ``litellm_params`` carry only key metadata, so the conversation survives on
-    ``payload.session_id``, including when the payload's ``trace_id`` fell back to
-    that same session because the request was served without a parent span."""
+def test_llm_call_event_never_reads_the_replayed_payloads_session_id(litellm_params, payload, expected):
+    """``/callback_logs`` rebuilds ``litellm_params`` with key metadata only, so a
+    ``StandardLoggingPayload`` minted under ``missing_session_id: generate`` arrives
+    without its generated marker and is indistinguishable from a caller's session;
+    the payload is therefore never a source for the conversation id."""
     kwargs: Final = {
         "litellm_params": litellm_params,
         "standard_logging_object": _sample_payload(**payload),

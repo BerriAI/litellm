@@ -220,17 +220,18 @@ def test_llm_call_span_keeps_the_header_session_when_the_proxy_generated_a_body_
     assert span.attributes[GenAI.CONVERSATION_ID] == "conv-header"
 
 
-def test_replayed_llm_call_span_carries_the_payloads_session_id():
+def test_replayed_llm_call_span_does_not_take_the_payloads_session_id():
     """``/callback_logs`` replays a finished payload whose ``litellm_params`` hold
-    only key metadata, so the conversation is read off ``payload.session_id``."""
+    only key metadata; a session minted under ``missing_session_id: generate``
+    lands there without its marker, so ``payload.session_id`` is never trusted."""
     logger, exporter = _logger()
     kwargs = {
-        **_kwargs(payload=_payload(session_id="conv-replayed")),
+        **_kwargs(payload=_payload(session_id="minted-then-replayed", trace_id="minted-then-replayed")),
         "litellm_params": {"metadata": {"user_api_key_hash": "hsh"}},
     }
     _emit_llm(logger, kwargs)
     (span,) = exporter.get_finished_spans()
-    assert span.attributes[GenAI.CONVERSATION_ID] == "conv-replayed"
+    assert GenAI.CONVERSATION_ID not in span.attributes
 
 
 def test_streaming_span_carries_time_to_first_chunk():

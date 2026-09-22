@@ -245,24 +245,20 @@ class LLMCallEvent:
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
             trace=trace,
-            session_id=caller_session_id(kwargs, trace, payload),
+            session_id=caller_session_id(kwargs, trace),
         )
 
 
-def caller_session_id(
-    kwargs: Mapping[str, object], trace: TraceControls, payload: StandardLoggingPayload | None
-) -> str | None:
+def caller_session_id(kwargs: Mapping[str, object], trace: TraceControls) -> str | None:
     """The conversation id the caller sent (``litellm_session_id``, else the
-    ``session_id`` trace control, else the ``session_id`` a replayed payload
-    carries); ``None`` when the request carried none.
+    ``session_id`` trace control); ``None`` when the request carried none.
 
     ``get_litellm_params`` back-fills ``litellm_session_id`` from ``metadata.trace_id``
     (which the proxy stamps with the OTel trace id) and ``missing_session_id: generate``
     mints one into the body; neither is a caller conversation, so both are ignored,
     while a ``langfuse_session_id`` header still counts under the generate policy.
-    A replayed ``StandardLoggingPayload`` keeps only ``session_id`` and ``trace_id``,
-    and ``get_standard_logging_payload_trace_id`` falls back to the session id, so
-    equality between the two is the normal shape of a caller conversation there."""
+    ``StandardLoggingPayload.session_id`` is never read: the payload drops the
+    generated marker, so a replayed minted id would pass for a caller's."""
     params: Final[Mapping[str, object]] = as_str_mapping(kwargs.get("litellm_params")) or MappingProxyType({})
     bodies: Final = tuple(
         metadata
@@ -278,9 +274,6 @@ def caller_session_id(
     if minted:
         return next((session for session in (trace.session_id, *from_body) if session and session not in minted), None)
     explicit: Final = as_str(params.get("litellm_session_id"))
-    if not explicit and not from_body:
-        replayed: Final = as_str(payload.get("session_id")) if payload is not None else None
-        return trace.session_id or replayed or None
     echoes_trace_id: Final = explicit is not None and any(as_str(body.get("trace_id")) == explicit for body in bodies)
     return (None if echoes_trace_id else explicit) or trace.session_id or None
 
