@@ -139,6 +139,15 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
             where["cache_hit"] = "hit"
         elif cond == "(cache_hit IS NULL OR LOWER(cache_hit) != 'true')":
             where["cache_hit"] = "miss"
+        elif "call_type" in cond:
+            if "call_type NOT IN" in cond:
+                where["span_type"] = "llm"
+            elif "call_mcp_tool" in cond:
+                where["span_type"] = "mcp"
+            elif "call_type = 'asend_message'" in cond:
+                where["span_type"] = "agent"
+            elif "acreate_batch" in cond:
+                where["span_type"] = "batch"
         elif sess:
             where["session_id"] = {"contains": str(params[int(sess.group(1)) - 1]).strip("%")}
         elif status:
@@ -3408,6 +3417,95 @@ async def test_ui_view_spend_logs_with_cache_hit_filter(client, monkeypatch):
             "/spend/logs/ui",
             params={
                 "cache_hit_filter": "invalid",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 400
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_span_type_filter(client, monkeypatch):
+    base = {
+        "api_key": "sk-test-key",
+        "user": "test_user_1",
+        "team_id": "team1",
+        "spend": 0.05,
+        "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+        "model": "gpt-4",
+        "status": "success",
+    }
+    mock_spend_logs = [
+        {**base, "id": "log1", "request_id": "req-llm", "call_type": "acompletion"},
+        {**base, "id": "log2", "request_id": "req-agent", "call_type": "asend_message"},
+        {**base, "id": "log3", "request_id": "req-mcp", "call_type": "call_mcp_tool"},
+        {**base, "id": "log4", "request_id": "req-batch", "call_type": "aretrieve_batch"},
+    ]
+
+    call_types_by_span = {
+        "llm": lambda ct: ct not in {"call_mcp_tool", "list_mcp_tools", "asend_message"}
+        and ct not in {"acreate_batch", "create_batch", "aretrieve_batch", "retrieve_batch"},
+        "agent": lambda ct: ct == "asend_message",
+        "mcp": lambda ct: ct in {"call_mcp_tool", "list_mcp_tools"},
+        "batch": lambda ct: ct
+        in {"acreate_batch", "create_batch", "aretrieve_batch", "retrieve_batch"},
+    }
+
+    def filter_by_span_type(where):
+        span_type = where.get("span_type")
+        if span_type is None:
+            return mock_spend_logs
+        return [log for log in mock_spend_logs if call_types_by_span[span_type](log["call_type"])]
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_span_type),
+    )
+
+    start_date, end_date = _default_date_range()
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        for span_type, expected_ids in [
+            ("batch", ["req-batch"]),
+            ("llm", ["req-llm"]),
+            ("mcp", ["req-mcp"]),
+            ("agent", ["req-agent"]),
+        ]:
+            response = client.get(
+                "/spend/logs/ui",
+                params={
+                    "span_type": span_type,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+                headers={"Authorization": "Bearer sk-test"},
+            )
+            assert response.status_code == 200, response.text
+            data = response.json()
+            assert data["total"] == len(expected_ids)
+            assert [row["request_id"] for row in data["data"]] == expected_ids
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert response.json()["total"] == 4
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "span_type": "invalid",
                 "start_date": start_date,
                 "end_date": end_date,
             },
