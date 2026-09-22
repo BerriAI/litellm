@@ -144,7 +144,7 @@ where
             .into_iter()
             .map(|key| self.namespaced_key(&key))
             .collect::<Vec<_>>();
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             connection.del(keys).map_err(|_| Error::Unavailable)
         })
         .await
@@ -172,7 +172,7 @@ where
             .iter()
             .map(|key| self.namespaced_key(key))
             .collect::<Vec<_>>();
-        let values = Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        let values = Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             redis::cmd("MGET")
                 .arg(keys)
                 .query::<Vec<redis::Value>>(connection)
@@ -188,7 +188,7 @@ where
     }
 
     pub async fn ping(&self) -> Result<bool, Error> {
-        Self::run_blocking(Arc::clone(&self.connections), |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), |connection| {
             connection.ping().map_err(|_| Error::Unavailable)
         })
         .await
@@ -196,7 +196,7 @@ where
 
     pub async fn async_get_ttl(&self, key: &str) -> Result<Option<i64>, Error> {
         let key = self.namespaced_key(key);
-        let ttl = Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        let ttl = Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             redis::cmd("TTL")
                 .arg(key)
                 .query::<i64>(connection)
@@ -208,7 +208,7 @@ where
 
     pub async fn async_scan_iter(&self, pattern: &str, count: usize) -> Result<Vec<String>, Error> {
         let pattern = format!("{}*", self.namespaced_key(pattern));
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             let mut matches = Vec::new();
             connection.scan(&pattern, count, |_, keys| {
                 matches.extend(keys);
@@ -231,7 +231,7 @@ where
         }
         let key = self.namespaced_key(key);
         let ttl = Self::ttl_seconds(ttl.unwrap_or(self.default_ttl));
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             let mut sadd = redis::cmd("SADD");
             sadd.arg(&key).arg(values);
             let mut expire = redis::cmd("EXPIRE");
@@ -253,7 +253,7 @@ where
             return Err(Error::InvalidEntry);
         }
         let key = self.namespaced_key(key);
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             redis::cmd("RPUSH")
                 .arg(key)
                 .arg(values)
@@ -279,7 +279,7 @@ where
         if operations.is_empty() {
             return Ok(Vec::new());
         }
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             let commands = operations
                 .into_iter()
                 .map(|(key, values)| {
@@ -304,7 +304,7 @@ where
     ) -> Result<RedisLpopResult, Error> {
         let key = self.namespaced_key(key);
         let multiple = count.is_some();
-        let value = Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        let value = Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             let mut command = redis::cmd("LPOP");
             command.arg(key);
             if let Some(count) = count {
@@ -333,7 +333,7 @@ where
             .iter()
             .map(|(_, count)| count.is_some())
             .collect::<Vec<_>>();
-        let values = Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        let values = Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             let commands = operations
                 .into_iter()
                 .map(|(key, count)| {
@@ -365,7 +365,7 @@ where
             .into_iter()
             .map(|key| self.namespaced_key(&key))
             .collect::<Vec<_>>();
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             redis::cmd("EVAL")
                 .arg(script)
                 .arg(keys.len())
@@ -426,7 +426,7 @@ where
         if operations.is_empty() {
             return Ok(Vec::new());
         }
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             let mut commands = Vec::with_capacity(operations.len() * 2);
             let mut increments = Vec::with_capacity(operations.len());
             for (key, amount, ttl) in operations {
@@ -460,7 +460,7 @@ where
     ) -> Result<i64, Error> {
         let key = self.namespaced_key(key);
         let ttl = Self::ttl_seconds(ttl);
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             increment_with_floor(connection, key, amount, ttl)
         })
         .await
@@ -474,7 +474,7 @@ where
     ) -> Result<f64, Error> {
         let key = self.namespaced_key(key);
         let ttl = Self::ttl_seconds(ttl.unwrap_or(self.default_ttl));
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             redis::cmd("EVAL")
                 .arg(SET_MAX_SCRIPT)
                 .arg(1)

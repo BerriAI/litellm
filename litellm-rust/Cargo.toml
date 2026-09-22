@@ -22,6 +22,7 @@ litellm-secrets = { path = "crates/secrets" }
 litellm-secrets-types = { path = "crates/secrets-types" }
 litellm-secrets-aws = { path = "crates/secrets-aws" }
 litellm-secrets-google = { path = "crates/secrets-google" }
+litellm-secrets-hashicorp = { path = "crates/secrets-hashicorp" }
 litellm-secrets-azure = { path = "crates/secrets-azure" }
 litellm-secrets-cyberark = { path = "crates/secrets-cyberark" }
 litellm-http = { path = "crates/http" }
@@ -32,8 +33,10 @@ litellm-cache = { path = "crates/cache" }
 litellm-cache-azure-blob = { path = "crates/cache-azure-blob" }
 litellm-cache-memory = { path = "crates/cache-memory" }
 litellm-cache-redis = { path = "crates/cache-redis" }
+litellm-cache-s3 = { path = "crates/cache-s3" }
 litellm-cache-gcs = { path = "crates/cache-gcs" }
 litellm-cache-disk = { path = "crates/cache-disk" }
+litellm-cache-redis-semantic = { path = "crates/cache-redis-semantic" }
 litellm-cache-response = { path = "crates/cache-response" }
 litellm-cache-qdrant-semantic = { path = "crates/cache-qdrant-semantic" }
 litellm-token-counter = { path = "crates/token-counter" }
@@ -58,6 +61,9 @@ uuid = { version = "1", features = ["v4"] }
 rstest = "0.26.1"
 rstest_reuse = "0.7.0"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustify = "=0.7.0"
+rustify_derive = "=0.5.5"
+vaultrs = { version = "=0.8.0", default-features = false, features = ["rustls"] }
 rustls-native-certs = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }

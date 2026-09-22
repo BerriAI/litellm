@@ -4,7 +4,7 @@ Per-session auto-router benchmarks rollup.
 At request time the spend writer builds one AutoRouterTurnTransaction per successful
 auto-routed request (a request whose metadata carries a routing_decision) and queues it
 on the prisma client. The spend-log flush job drains the queue into
-LiteLLM_AutoRouterSession with one conditional upsert per turn: the statement classifies
+key and user session rollups with one atomic statement per turn: each upsert classifies
 the turn (same model, first visit, return to a model the session already used, out of
 order) against the row's own columns, so nothing is read before the write and concurrent
 pods compose. The benchmarks endpoint aggregates these rows and never touches
@@ -35,10 +35,27 @@ if TYPE_CHECKING:
 CACHE_TTL_5M_SECONDS: Final = 300
 CACHE_TTL_1H_SECONDS: Final = 3600
 
-AUTOROUTER_BENCHMARKS_SQL: Final = """
+_SESSION_COLUMNS: Final = """
+    api_key, session_id, router_name, router_type, first_turn_at, last_turn_at,
+    last_model, models, turns, unordered_turns, covered_turns, cache_hits,
+    same_model_turns, same_model_hits, first_visit_turns, first_visit_hits,
+    return_turns, return_hits, return_expired_misses, return_within_ttl_misses,
+    ttl_5m_turns, ttl_1h_turns, total_tokens, spend, saved_spend, classifier_cost, classifier_cost_recorded_turns, tier_turns,
+    baseline_models, savings_estimated_turns, savings_estimated_actual_spend, savings_estimated_saved_spend,
+    savings_estimated_baseline_models
+"""
+
+AUTOROUTER_BENCHMARKS_SQL: Final = f"""
 WITH windowed AS (
-    SELECT * FROM "LiteLLM_AutoRouterSession"
-    WHERE last_turn_at >= $1::timestamp
+    SELECT {_SESSION_COLUMNS} FROM "LiteLLM_AutoRouterSession"
+    WHERE $4::text IS NULL
+      AND last_turn_at >= $1::timestamp
+      AND first_turn_at < $2::timestamp
+      AND ($3::text IS NULL OR api_key = $3::text)
+    UNION ALL
+    SELECT {_SESSION_COLUMNS} FROM "LiteLLM_AutoRouterUserSession"
+    WHERE (($4::text IS NOT NULL AND user_id = $4::text) OR ($4::text IS NULL AND api_key = ''))
+      AND last_turn_at >= $1::timestamp
       AND first_turn_at < $2::timestamp
       AND ($3::text IS NULL OR api_key = $3::text)
 ),
@@ -53,7 +70,7 @@ tier_maps AS (
 )
 SELECT
     agg.*,
-    COALESCE(tier_maps.tier_turns, '{}'::jsonb) AS tier_turns
+    COALESCE(tier_maps.tier_turns, '{{}}'::jsonb) AS tier_turns
 FROM (
 SELECT
     router_name,
@@ -111,6 +128,7 @@ class AutoRouterTurnTransaction:
     savings_estimated_turns: int = 0
     savings_estimated_actual_spend: float = 0.0
     savings_estimated_saved_spend: float = 0.0
+    user_id: str = ""
 
 
 class TurnCacheFacts(NamedTuple):
@@ -214,10 +232,11 @@ def build_autorouter_turn_transaction(
     if not isinstance(routing_decision, Mapping) or not routing_decision:
         return None
     router_name: Final = routing_decision.get("router_model_name") or payload.get("model_group")
-    api_key: Final = payload.get("api_key")
+    api_key: Final = payload.get("api_key") or ""
+    user_id: Final = payload.get("user") or ""
     session_id: Final = payload.get("session_id")
     model: Final = payload.get("model")
-    if not (isinstance(router_name, str) and router_name and api_key and session_id and model):
+    if not (isinstance(router_name, str) and router_name and (api_key or user_id) and session_id and model):
         return None
     turn_at: Final = _turn_time_utc(str(payload.get("startTime") or ""))
     if turn_at is None:
@@ -236,6 +255,7 @@ def build_autorouter_turn_transaction(
     estimated_savings: Final = recorded_estimated_autorouter_savings(metadata)
     return AutoRouterTurnTransaction(
         api_key=api_key,
+        user_id=user_id,
         session_id=bounded_session_id(session_id),
         router_name=router_name,
         router_type=str(routing_decision.get("router_type") or "unknown"),
@@ -293,18 +313,18 @@ _RETURN_MISS: Final = (
 _IDLE_SECONDS: Final = f"EXTRACT(EPOCH FROM {_TURN_AT}::timestamp) - (t.models -> {_MODEL} ->> 'at')::float8"
 _CACHE_TOUCHED: Final = f"{_TOUCHED}::int = 1"
 
-UPSERT_AUTOROUTER_SESSION_SQL: Final = f"""
-INSERT INTO "LiteLLM_AutoRouterSession" AS t (
-    api_key, session_id, router_name, router_type, first_turn_at, last_turn_at,
-    last_model, models, turns, unordered_turns, covered_turns, cache_hits,
-    same_model_turns, same_model_hits, first_visit_turns, first_visit_hits,
-    return_turns, return_hits, return_expired_misses, return_within_ttl_misses,
-    ttl_5m_turns, ttl_1h_turns, total_tokens, spend, saved_spend, classifier_cost, classifier_cost_recorded_turns, tier_turns,
-    baseline_models, savings_estimated_turns, savings_estimated_actual_spend, savings_estimated_saved_spend,
-    savings_estimated_baseline_models
+
+def _session_upsert_sql(*, user_scoped: bool) -> str:
+    table_name: Final = "LiteLLM_AutoRouterUserSession" if user_scoped else "LiteLLM_AutoRouterSession"
+    user_column: Final = "user_id, " if user_scoped else ""
+    user_value: Final = f"{_p('user_id')}::text, " if user_scoped else ""
+    required_identity: Final = _p("user_id" if user_scoped else "api_key")
+    return f"""
+INSERT INTO "{table_name}" AS t (
+    {user_column}{_SESSION_COLUMNS}
 )
-VALUES (
-    {_p("api_key")}, {_p("session_id")}, {_p("router_name")}, {_p("router_type")}, {_TURN_AT}::timestamp, {_TURN_AT}::timestamp,
+SELECT
+    {user_value}{_p("api_key")}, {_p("session_id")}, {_p("router_name")}, {_p("router_type")}, {_TURN_AT}::timestamp, {_TURN_AT}::timestamp,
     {_MODEL}, jsonb_build_object({_MODEL}, jsonb_build_object('at', EXTRACT(EPOCH FROM {_TURN_AT}::timestamp), 'ttl', {_CACHE_TTL}::int)),
     1, 0, {_COVERED}::int, {_CACHE_HIT}::int,
     0, 0, 1, {_CACHE_HIT}::int,
@@ -315,8 +335,8 @@ VALUES (
     {_p("classifier_cost")}::float8, 1, {_TIER_DELTA}, {_BASELINE_DELTA},
     {_p("savings_estimated_turns")}::int, {_p("savings_estimated_actual_spend")}::float8,
     {_p("savings_estimated_saved_spend")}::float8, {_ESTIMATED_BASELINE_DELTA}
-)
-ON CONFLICT (api_key, session_id, router_name) DO UPDATE SET
+WHERE {required_identity}::text <> ''
+ON CONFLICT ({user_column}api_key, session_id, router_name) DO UPDATE SET
     turns = t.turns + 1,
     total_tokens = t.total_tokens + EXCLUDED.total_tokens,
     spend = t.spend + EXCLUDED.spend,
@@ -365,6 +385,17 @@ ON CONFLICT (api_key, session_id, router_name) DO UPDATE SET
 """
 
 
+UPSERT_AUTOROUTER_SESSION_SQL: Final = f"""
+WITH key_rollup AS (
+    {_session_upsert_sql(user_scoped=False)}
+    RETURNING 1
+)
+{_session_upsert_sql(user_scoped=True)}
+"""
+
+UPSERT_AUTOROUTER_USER_SESSION_SQL: Final = _session_upsert_sql(user_scoped=True)
+
+
 def _as_sql_param(value: str | float | bool | datetime | None) -> str | float | None:
     if isinstance(value, bool):
         return int(value)
@@ -377,24 +408,81 @@ def _upsert_params(transaction: AutoRouterTurnTransaction) -> tuple[str | float 
     return tuple(_as_sql_param(getattr(transaction, name)) for name in _UPSERT_PARAM_FIELDS)
 
 
-async def write_autorouter_turn(db: SupportsExecuteRaw, transaction: AutoRouterTurnTransaction) -> None:
-    await db.execute_raw(UPSERT_AUTOROUTER_SESSION_SQL, *_upsert_params(transaction))
+async def write_autorouter_turn(
+    db: SupportsExecuteRaw,
+    transaction: AutoRouterTurnTransaction,
+    statement: str = UPSERT_AUTOROUTER_SESSION_SQL,
+) -> None:
+    await db.execute_raw(statement, *_upsert_params(transaction))
 
 
 async def _upsert_turn_with_retry(
     prisma_client: PrismaClient,
     transaction: AutoRouterTurnTransaction,
     n_retry_times: int,
+    statement: str,
 ) -> None:
     for attempt in range(n_retry_times + 1):
         try:
-            await write_autorouter_turn(prisma_client.db, transaction)
+            await write_autorouter_turn(prisma_client.db, transaction, statement)
         except DB_RETRY_SAFE_ERROR_TYPES:
             if attempt >= n_retry_times:
                 raise
             await asyncio.sleep(2**attempt + random.uniform(0, 1))
         else:
             return
+
+
+def _session_partition(transaction: AutoRouterTurnTransaction) -> tuple[str, str, str, str]:
+    identity: Final = ("key", transaction.api_key) if transaction.api_key else ("user", transaction.user_id)
+    return (*identity, transaction.session_id, transaction.router_name)
+
+
+async def _drain_session_partition(
+    prisma_client: PrismaClient,
+    transactions: tuple[AutoRouterTurnTransaction, ...],
+    n_retry_times: int,
+    statement: str,
+) -> tuple[AutoRouterTurnTransaction, ...]:
+    for position, transaction in enumerate(transactions):
+        try:
+            await _upsert_turn_with_retry(prisma_client, transaction, n_retry_times, statement)
+        except Exception as flush_err:  # noqa: BLE001  # stop dependent turns without retrying an ambiguous write
+            verbose_proxy_logger.error(
+                "Spend tracking - auto-router session rollup flush failed for router %s; "
+                "%s of %s turn writes stopped in this partition: %s",
+                transaction.router_name,
+                len(transactions) - position,
+                len(transactions),
+                flush_err,
+            )
+            return transactions[position:]
+    return ()
+
+
+async def _flush_session_partition(
+    prisma_client: PrismaClient,
+    transactions: tuple[AutoRouterTurnTransaction, ...],
+    n_retry_times: int,
+) -> None:
+    failed_suffix: Final = await _drain_session_partition(
+        prisma_client, transactions, n_retry_times, UPSERT_AUTOROUTER_SESSION_SQL
+    )
+    if not failed_suffix or not failed_suffix[0].api_key:
+        return
+    failed_user: Final = failed_suffix[0].user_id
+    other_users: Final = sorted(
+        (
+            transaction
+            for transaction in failed_suffix[1:]
+            if transaction.user_id and transaction.user_id != failed_user
+        ),
+        key=lambda transaction: transaction.user_id,
+    )
+    for _, user_turns in groupby(other_users, key=lambda transaction: transaction.user_id):
+        await _drain_session_partition(
+            prisma_client, tuple(user_turns), n_retry_times, UPSERT_AUTOROUTER_USER_SESSION_SQL
+        )
 
 
 async def flush_autorouter_turn_transactions(
@@ -407,38 +495,20 @@ async def flush_autorouter_turn_transactions(
     Statements run sequentially in per-session event order: a turn's classification
     depends on the turns before it, and Postgres rejects one multi-row INSERT touching
     the same key twice. Only ConnectError is retried, per statement, because it proves
-    that statement never reached the database. Any other failure drops the remaining
-    turns of THAT session only, with an error log, and the flush continues with the
-    next session: sessions are independent state machines, so one poisoned statement
-    must not discard unrelated sessions, and a repeated increment is worse than an
-    undercount. Callers must not add their own retry around this function.
+    that statement never reached the database. A failed write stops its key and user
+    histories for this batch. Other users sharing that key can still advance their
+    independent user histories, with the key projection disabled and the real key
+    identity preserved. The failed turn is never replayed. Callers must not add their
+    own retry around this function.
     """
     if not transactions:
         return
     ordered: Final = sorted(
         transactions,
-        key=lambda transaction: (
-            transaction.api_key,
-            transaction.session_id,
-            transaction.router_name,
-            transaction.turn_at,
-        ),
+        key=lambda transaction: (*_session_partition(transaction), transaction.turn_at),
     )
-    for session_key, session_group in groupby(
+    for _, session_group in groupby(
         ordered,
-        key=lambda transaction: (transaction.api_key, transaction.session_id, transaction.router_name),
+        key=_session_partition,
     ):
-        session_turns = tuple(session_group)
-        for position, transaction in enumerate(session_turns):
-            try:
-                await _upsert_turn_with_retry(prisma_client, transaction, n_retry_times)
-            except Exception as flush_err:  # noqa: BLE001  # a statement failure drops only its session's remainder by design
-                verbose_proxy_logger.error(
-                    "Spend tracking - auto-router session rollup flush failed for router %s; "
-                    "%s of %s turn transactions dropped for one session: %s",
-                    session_key[2],
-                    len(session_turns) - position,
-                    len(session_turns),
-                    flush_err,
-                )
-                break
+        await _flush_session_partition(prisma_client, tuple(session_group), n_retry_times)

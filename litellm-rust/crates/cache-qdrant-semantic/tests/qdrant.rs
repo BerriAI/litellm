@@ -3,9 +3,7 @@ mod support;
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use litellm_cache::{
-    BaseCache, CacheCodec, CacheContext, Error, SemanticCacheContext, SemanticCacheScope,
-};
+use litellm_cache::{BaseCache, CacheCodec, CacheContext, Error, SemanticCacheContext};
 use litellm_cache_qdrant_semantic::{
     Embedder, QdrantSemanticCache, QdrantSemanticConfig, Quantization,
 };
@@ -60,8 +58,7 @@ fn config(quantization: Quantization) -> QdrantSemanticConfig {
 
 fn context(prompt: &str) -> SemanticCacheContext {
     SemanticCacheContext {
-        messages: vec![json!({"role": "user", "content": prompt})],
-        scope: SemanticCacheScope::default(),
+        messages: Some(json!([{"role": "user", "content": prompt}])),
         ..Default::default()
     }
 }

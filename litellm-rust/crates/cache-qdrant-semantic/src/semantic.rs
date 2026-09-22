@@ -101,10 +101,13 @@ impl<E: Embedder, C: CacheCodec> QdrantSemanticCache<E, C> {
     }
 
     fn prompt(context: &SemanticCacheContext) -> Result<String, Error> {
-        if context.messages.is_empty() {
+        let Some(messages) = context.messages.as_ref().and_then(Value::as_array) else {
+            return Err(Error::MissingPrompt);
+        };
+        if messages.is_empty() {
             return Err(Error::MissingPrompt);
         }
-        Ok(prompt_from_messages(&context.messages))
+        Ok(prompt_from_messages(messages))
     }
 
     async fn set(
