@@ -45,6 +45,9 @@
     "tests/integration/providers/test_request_boundary.py::test_upstream_rejects_corruption_and_accepts_supported_metadata": [
       "other.provider_wire.validator_rejects_corruption"
     ],
+    "tests/integration/providers/test_responses_bridge_incomplete.py::test_chat_over_responses_deployment_returns_length_when_output_tokens_run_out": [
+      "other.provider_wire.responses_bridge.max_output_tokens_incomplete_maps_to_length"
+    ],
     "tests/integration/pricing/test_configured_prices.py::test_loaded_router_preserves_cached_defaults_during_real_requests": [
       "quota_management.spend_tracking.default_prices.loaded_router_preserves_cached_defaults"
     ],
