@@ -73,6 +73,17 @@ describe("provider_info_helpers", () => {
       expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.SCX_AI]);
     });
 
+    it("should map yolo-auto slug and YOLO_AUTO enum key to the Yolo-Auto display name and logo", () => {
+      const fromSlug = getProviderLogoAndName("yolo-auto");
+      expect(fromSlug.displayName).toBe(Providers.YOLO_AUTO);
+      expect(fromSlug.logo).toBe(providerLogoMap[Providers.YOLO_AUTO]);
+      expect(fromSlug.logo).toBeTruthy();
+
+      const fromEnumKey = getProviderLogoAndName("YOLO_AUTO");
+      expect(fromEnumKey.displayName).toBe(Providers.YOLO_AUTO);
+      expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.YOLO_AUTO]);
+    });
+
     it("should map bedrock_mantle slug to Bedrock Mantle display name and logo", () => {
       const result = getProviderLogoAndName("bedrock_mantle");
       expect(result.displayName).toBe(Providers.BedrockMantle);
@@ -221,6 +232,10 @@ describe("provider_info_helpers", () => {
 
     it("should return an scx-ai model placeholder for SCX_AI provider", () => {
       expect(getPlaceholder(Providers.SCX_AI)).toBe("scx-ai/GLM-5.2");
+    });
+
+    it("should return a yolo-auto model placeholder for YOLO_AUTO provider", () => {
+      expect(getPlaceholder(Providers.YOLO_AUTO)).toBe("yolo-auto/yolo");
     });
 
     it("should return an edenai model placeholder for EDENAI provider", () => {
