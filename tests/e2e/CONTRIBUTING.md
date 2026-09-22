@@ -119,17 +119,24 @@ To reproduce the CI topology on a dedicated machine, `bash .github/e2e-stack/up.
 
 ### Secret manager lanes
 
-`key_management_system` is global to the proxy, so each manager in `secret_manager/` runs against its own proxy and is deselected unless its opt-in is set. The HashiCorp Vault lane needs a Vault, a proxy booted from `gateway/secret_manager_vault_ci_config.yml` against it, and a license, because the Vault manager is an enterprise feature:
+`key_management_system` is global to the proxy, so the `secret_manager/` tests run once per backend, each against its own proxy. `E2E_SECRET_MANAGER` opts in and names the backend (a key of `secret_backends.BACKENDS`). The proxy boots from `gateway/secret_manager_<system>_ci_config.yml`, and the tests reach the same manager through that backend's `SecretStore`. The managers are enterprise features, so the proxy needs a license. For `hashicorp_vault`:
 
 ```bash
 docker run --rm -d --name e2e-vault -p 8200:8200 --cap-add IPC_LOCK -e VAULT_DEV_ROOT_TOKEN_ID=e2e-dev-root hashicorp/vault:1.20
 env -u OPENAI_API_KEY HCP_VAULT_ADDR=http://127.0.0.1:8200 HCP_VAULT_TOKEN=e2e-dev-root LITELLM_LICENSE=... \
-  LITELLM_MASTER_KEY=sk-1234 DATABASE_URL=... uv run litellm --config tests/e2e/gateway/secret_manager_vault_ci_config.yml --port 4000
-E2E_SECRET_MANAGER_VAULT=1 E2E_VAULT_ADDR=http://127.0.0.1:8200 E2E_VAULT_TOKEN=e2e-dev-root OPENAI_API_KEY=... \
+  LITELLM_MASTER_KEY=sk-1234 DATABASE_URL=... uv run litellm --config tests/e2e/gateway/secret_manager_hashicorp_vault_ci_config.yml --port 4000
+E2E_SECRET_MANAGER=hashicorp_vault E2E_VAULT_ADDR=http://127.0.0.1:8200 E2E_VAULT_TOKEN=e2e-dev-root OPENAI_API_KEY=... \
   uv run --group e2e-dev pytest tests/e2e/secret_manager/ -v
 ```
 
-Keep `OPENAI_API_KEY` out of the proxy's environment. The tests copy the runner's key into Vault under a fresh name per test, so a passing call proves the key came through the manager rather than the `os.environ` fallback `get_secret` takes when the manager errors
+Keep `OPENAI_API_KEY` out of the proxy's environment. The tests copy the runner's key into the manager under a fresh name per test, so a passing call proves the key came through the manager rather than the `os.environ` fallback `get_secret` takes when the manager errors
+
+To add a backend, leave the tests and markers alone and add:
+
+1. `secret_manager/secret_store_<system>.py`: a `SecretStore` (`write`, `read` returning None when absent, idempotent `destroy`) over the manager's own API through `e2e_http`'s external helpers, read from `E2E_<SYSTEM>_*` env vars, and a `SecretBackend` whose `system` is the litellm `KeyManagementSystem` value and whose `capabilities` lists what it supports (a backend without `deletes_stored_keys`, such as CyberArk, has the delete test deselected rather than failed)
+2. its entry in `secret_backends.BACKENDS`
+3. `gateway/secret_manager_<system>_ci_config.yml`, a copy of the Vault one with only `key_management_system` changed; `test_secret_backends.py` checks it
+4. a CI step that runs the manager as a sidecar, gives the proxy its credentials and license, and sets `E2E_SECRET_MANAGER=<system>` plus the store's env vars on the runner
 
 ### Record and replay
 

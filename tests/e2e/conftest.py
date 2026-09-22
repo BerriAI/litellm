@@ -35,7 +35,7 @@ from e2e_config import (
     PROVIDER_EDGE_HOST_OPT_IN_ENV,
     PROXY_BASE_URL,
     REDIS_CHAOS_OPT_IN_ENV,
-    SECRET_MANAGER_VAULT_OPT_IN_ENV,
+    SECRET_MANAGER_OPT_IN_ENV,
     WEEKLY_ANOMALY_OPT_IN_ENV,
     unique_marker,
 )
@@ -64,7 +64,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
         "provider_edge_host": PROVIDER_EDGE_HOST_OPT_IN_ENV,
         "otel_v2": OTEL_V2_OPT_IN_ENV,
-        "secret_manager_vault": SECRET_MANAGER_VAULT_OPT_IN_ENV,
+        "secret_manager": SECRET_MANAGER_OPT_IN_ENV,
     }
 )
 
@@ -160,8 +160,8 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
-        "secret_manager_vault: needs a proxy booted from gateway/secret_manager_vault_ci_config.yml against a live "
-        "HashiCorp Vault; deselected unless E2E_SECRET_MANAGER_VAULT is set",
+        "secret_manager: needs a proxy booted from gateway/secret_manager_<system>_ci_config.yml against that live "
+        "secret manager; deselected unless E2E_SECRET_MANAGER names the backend (see secret_manager/secret_backends.py)",
     )
 
 

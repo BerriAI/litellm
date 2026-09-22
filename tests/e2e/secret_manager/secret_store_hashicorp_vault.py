@@ -1,10 +1,8 @@
-"""Client for the HashiCorp Vault the secret manager suite's proxy reads from.
+"""The secret_manager suite's store for HashiCorp Vault (`hashicorp_vault`).
 
-The proxy under test runs with `key_management_system: hashicorp_vault` against a
-real Vault (dev mode in CI, see gateway/secret_manager_vault_ci_config.yml), and
-this client talks to that same Vault directly over its KV v2 HTTP API: it seeds the
-secrets a deployment points at, and reads back what the proxy wrote. It goes
-through e2e_http's external helpers, so no test ever calls requests itself.
+The lane's proxy runs against a real Vault (dev mode in CI), and this store talks
+to that same Vault directly over its KV v2 HTTP API. It goes through e2e_http's
+external helpers, so no test ever calls requests itself.
 
 litellm stores and reads every Vault secret under the data key `key`
 (HashicorpSecretManager._get_secret_value_from_json_response), so the bodies here
@@ -29,6 +27,8 @@ from e2e_http import (
 )
 from pydantic import BaseModel, Field
 
+from secret_store import SecretBackend
+
 VAULT_ADDR_ENV: Final = "E2E_VAULT_ADDR"
 VAULT_TOKEN_ENV: Final = "E2E_VAULT_TOKEN"
 VAULT_MOUNT_ENV: Final = "E2E_VAULT_MOUNT_NAME"
@@ -36,9 +36,11 @@ VAULT_MOUNT_ENV: Final = "E2E_VAULT_MOUNT_NAME"
 DEFAULT_VAULT_ADDR: Final = "http://127.0.0.1:8200"
 DEFAULT_MOUNT: Final = "secret"
 
+SYSTEM: Final = "hashicorp_vault"
+
 _START_HINT: Final = (
     "Start one with `docker run --rm -d -p 8200:8200 -e VAULT_DEV_ROOT_TOKEN_ID=<token> hashicorp/vault`, "
-    f"boot the proxy from gateway/secret_manager_vault_ci_config.yml with HCP_VAULT_ADDR / HCP_VAULT_TOKEN "
+    f"boot the proxy from gateway/secret_manager_{SYSTEM}_ci_config.yml with HCP_VAULT_ADDR / HCP_VAULT_TOKEN "
     f"pointing at it, and set {VAULT_ADDR_ENV} / {VAULT_TOKEN_ENV} for the tests"
 )
 
@@ -112,9 +114,16 @@ class Vault:
 def vault_from_env() -> Vault:
     token: Final = os.environ.get(VAULT_TOKEN_ENV, "").strip()
     if not token:
-        pytest.fail(f"The secret manager suite needs {VAULT_TOKEN_ENV} to reach its Vault. {_START_HINT}")
+        pytest.fail(f"The hashicorp_vault lane needs {VAULT_TOKEN_ENV} to reach its Vault. {_START_HINT}")
     return Vault(
         base_url=os.environ.get(VAULT_ADDR_ENV, DEFAULT_VAULT_ADDR).rstrip("/"),
         token=token,
         mount=os.environ.get(VAULT_MOUNT_ENV, "").strip() or DEFAULT_MOUNT,
     )
+
+
+HASHICORP_VAULT: Final = SecretBackend(
+    system=SYSTEM,
+    from_env=vault_from_env,
+    capabilities=frozenset({"deletes_stored_keys"}),
+)
