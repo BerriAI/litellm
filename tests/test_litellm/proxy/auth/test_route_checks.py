@@ -1117,6 +1117,49 @@ def test_virtual_key_llm_api_routes_denies_auth_pass_through_without_allowlist()
         assert "allowed_passthrough_routes" in exc_info.value.detail
 
 
+def _openai_routes_key_calls_auth_pass_through_registered_on_chat_completions(
+    passthrough_allowlist: list[str] | None,
+) -> bool:
+    request: Final = MagicMock(spec=Request)
+    request.method = "POST"
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            {
+                "test-uuid-1:exact:/chat/completions:POST": {
+                    "endpoint_id": "test-uuid-1",
+                    "path": "/chat/completions",
+                    "type": "exact",
+                    "methods": ["POST"],
+                    "auth": True,
+                },
+            },
+        ),
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+    ):
+        return RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/chat/completions",
+            valid_token=UserAPIKeyAuth(
+                user_id="test_user",
+                allowed_routes=["openai_routes"],
+                metadata={"allowed_passthrough_routes": passthrough_allowlist},
+            ),
+            request=request,
+        )
+
+
+def test_virtual_key_openai_routes_reaches_an_auth_pass_through_in_that_group_with_an_allowlist():
+    assert _openai_routes_key_calls_auth_pass_through_registered_on_chat_completions(["/chat/completions"]) is True
+
+
+def test_virtual_key_openai_routes_denies_an_auth_pass_through_in_that_group_without_an_allowlist():
+    with pytest.raises(HTTPException) as exc_info:
+        _openai_routes_key_calls_auth_pass_through_registered_on_chat_completions(None)
+
+    assert exc_info.value.status_code == 403
+    assert "allowed_passthrough_routes" in exc_info.value.detail
+
+
 def test_virtual_key_llm_api_routes_uses_method_specific_auth_setting():
     """Same-path pass-through routes must be checked against the request method."""
 
