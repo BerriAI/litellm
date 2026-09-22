@@ -611,3 +611,64 @@ def test_aggregate_mcp_route_returns_404_when_mcp_unavailable():
 
     assert response.status_code == 404
     assert handler_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["create", "rename", "delete"])
+@pytest.mark.parametrize("csv", [False, True])
+async def test_dynamic_route_observes_committed_peer_catalog_changes(monkeypatch, change, csv):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from starlette.responses import Response
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+
+    old_row = LiteLLM_MCPServerTable(
+        server_id="catalog-route", server_name="previous", alias="previous", transport="http",
+        url="https://previous.example/mcp", updated_at=datetime(2026, 1, 1),
+    )
+    new_row = old_row.model_copy(update={
+        "server_name": "current", "alias": "current", "url": "https://current.example/mcp",
+        "updated_at": datetime(2026, 1, 2),
+    })
+
+    async def find_rows(*, where):
+        if "mcp_access_groups" in where or change == "delete":
+            return []
+        return [new_row]
+
+    read_rows = AsyncMock(side_effect=find_rows)
+    prisma = SimpleNamespace(db=SimpleNamespace(
+        litellm_mcpservertable=SimpleNamespace(find_many=read_rows),
+        litellm_mcptoolsettable=SimpleNamespace(find_first=AsyncMock(return_value=None)),
+    ))
+    manager = mcp_server_manager.MCPServerManager()
+    if change != "create":
+        manager.registry = {old_row.server_id: await manager.build_mcp_server_from_table(old_row)}
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    name = "previous" if change == "delete" else "current"
+    segment = f"{name},missing" if csv else name
+    request = _make_request(f"/{segment}/mcp")
+
+    async def forwarded(path_segment, request):
+        if change != "delete":
+            assert manager.get_mcp_server_by_name(path_segment).url == new_row.url
+        return Response(content=b"forwarded", status_code=200)
+
+    with patch(_FORWARD, new=AsyncMock(side_effect=forwarded)) as forward:
+        if change == "delete":
+            with pytest.raises(HTTPException) as exc:
+                await proxy_server.dynamic_mcp_route(segment, request)
+            assert exc.value.status_code == 404
+            forward.assert_not_awaited()
+        else:
+            response = await proxy_server.dynamic_mcp_route(segment, request)
+            assert response.status_code == 200
+            forward.assert_awaited_once_with(name, request)
+    assert sum("OR" in call.kwargs["where"] for call in read_rows.await_args_list) == 1

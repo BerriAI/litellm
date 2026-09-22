@@ -321,6 +321,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._experimental.mcp_server.byok_credential_cache import byok_credential_cache
+from litellm.proxy._experimental.mcp_server.catalog import with_mcp_catalog
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -19755,6 +19756,7 @@ async def _is_mcp_access_group_cached(name: str) -> bool:
     "/{mcp_server_name}/mcp",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
 )
+@with_mcp_catalog
 async def dynamic_mcp_route(mcp_server_name: str, request: Request):
     """Handle /{name}/mcp for MCP server aliases, toolsets, MCP access group tags, and comma-separated lists.
 
