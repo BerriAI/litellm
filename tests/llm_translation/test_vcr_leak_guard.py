@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import httpx2
 import pytest
 
 from tests._vcr_conftest_common import (
@@ -15,6 +16,7 @@ from tests._vcr_conftest_common import (
 )
 
 _ORIGINAL_MOCK_HANDLE_ASYNC_REQUEST: Final = httpx.MockTransport.handle_async_request
+_ORIGINAL_HTTPX2_MOCK_HANDLE_ASYNC_REQUEST: Final = httpx2.MockTransport.handle_async_request
 
 
 @pytest.fixture
@@ -33,14 +35,27 @@ def test_leaked_cassette_is_detected_named_and_restorable(leaked_cassette_dir: P
     leak: Final = detect_vcr_patch_leak()
 
     assert leak is not None
-    assert "MockTransport.handle_async_request" in leak.patch_points
-    assert "ClientSession._request" in leak.patch_points
+    assert {"httpx.MockTransport.handle_async_request", "aiohttp.client.ClientSession._request"} <= set(
+        leak.patch_points
+    )
     assert leak.cassette_paths == (str(leaked_cassette_dir / "rewound_owner.yaml"),)
 
     restore_vcr_patch_points()
 
     assert detect_vcr_patch_leak() is None
     assert httpx.MockTransport.handle_async_request is _ORIGINAL_MOCK_HANDLE_ASYNC_REQUEST
+
+
+def test_leak_is_detected_on_every_transport_family_vcrpy_patches(leaked_cassette_dir: Path):
+    leak: Final = detect_vcr_patch_leak()
+
+    assert leak is not None
+    assert "httpx2.MockTransport.handle_async_request" in leak.patch_points
+    assert httpx2.MockTransport.handle_async_request is not _ORIGINAL_HTTPX2_MOCK_HANDLE_ASYNC_REQUEST
+
+    restore_vcr_patch_points()
+
+    assert httpx2.MockTransport.handle_async_request is _ORIGINAL_HTTPX2_MOCK_HANDLE_ASYNC_REQUEST
 
 
 def test_guard_fails_the_leaking_test_and_restores_the_originals(request, leaked_cassette_dir: Path):
