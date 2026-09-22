@@ -185,3 +185,26 @@ def test_success_handler_dispatches_openrouter_to_the_shared_handler():
 
     assert normalized["kwargs"]["custom_llm_provider"] == "openrouter"
     assert normalized["kwargs"]["model"] == "openrouter/typesafe/jev-1.13-20260917"
+
+
+def test_success_handler_skips_typesafe_pricing_for_non_decisions_openrouter_routes():
+    logging_obj = _logging_obj()
+    normalized = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+        httpx_response=_response(),
+        response_body={
+            "model": "typesafe/jev-1.13-20260917",
+            "usage": {"input_tokens": 282, "output_tokens": 20},
+        },
+        request_body={"model": "typesafe/jev-1.13"},
+        logging_obj=logging_obj,
+        url_route="https://openrouter.ai/api/v1/chat/completions",
+        result="{}",
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        cache_hit=False,
+        custom_llm_provider="openrouter",
+    )
+
+    assert normalized["standard_logging_response_object"] is None
+    assert "combined_usage_object" not in normalized["kwargs"]
+    assert normalized["kwargs"].get("model") != "openrouter/typesafe/jev-1.13-20260917"

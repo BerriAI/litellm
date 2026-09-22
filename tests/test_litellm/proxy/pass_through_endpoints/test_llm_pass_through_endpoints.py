@@ -7220,3 +7220,39 @@ class TestOpenRouterPassthroughRoute:
         )
 
         assert create_route.call_args.kwargs["target"] == "https://openrouter.ai/api/alpha/decisions"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["alpha/decisions", "v1/chat/completions"])
+    @pytest.mark.parametrize(
+        "base_env, expected_root",
+        [
+            (None, "https://openrouter.ai/api"),
+            ("https://openrouter.ai/api/v1", "https://openrouter.ai/api"),
+            ("https://openrouter.example/base", "https://openrouter.example/base"),
+            ("https://openrouter.example/base/v1/", "https://openrouter.example/base"),
+        ],
+    )
+    async def test_derives_api_root_from_configured_base(
+        self, monkeypatch: pytest.MonkeyPatch, base_env: str | None, expected_root: str, endpoint: str
+    ) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-test-key")
+        if base_env is None:
+            monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
+        else:
+            monkeypatch.setenv("OPENROUTER_API_BASE", base_env)
+
+        endpoint_func = AsyncMock(return_value={"ok": True})
+        create_route = Mock(return_value=endpoint_func)
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            create_route,
+        )
+
+        await openrouter_proxy_route(
+            endpoint=endpoint,
+            request=self._request({"state": "The sky is blue."}),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
+        )
+
+        assert create_route.call_args.kwargs["target"] == f"{expected_root}/{endpoint}"
