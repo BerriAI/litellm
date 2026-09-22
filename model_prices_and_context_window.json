@@ -47312,6 +47312,15 @@
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0
     },
+    "litellm/fusion-1": {
+        "litellm_provider": "litellm",
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses"
+        ]
+    },
     "linkup/search": {
         "input_cost_per_query": 0.00587,
         "litellm_provider": "linkup",

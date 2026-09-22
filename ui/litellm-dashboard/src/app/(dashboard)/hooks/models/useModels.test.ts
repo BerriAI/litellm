@@ -4,7 +4,10 @@ import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isAutoRouterDeployment,
+  isFusionRouterDeployment,
   selectAutoRouterModelGroups,
+  selectPlainModelGroups,
+  selectFusionRouterDeployments,
   selectPlainChatModelGroups,
   useAllProxyModels,
   useAutoRouterModelGroups,
@@ -123,6 +126,7 @@ describe("useModelsInfo", () => {
       undefined,
       undefined,
       false,
+      false,
     );
     expect(modelInfoCall).toHaveBeenCalledTimes(1);
   });
@@ -152,6 +156,7 @@ describe("useModelsInfo", () => {
       false,
       undefined,
       undefined,
+      false,
       false,
     );
   });
@@ -986,6 +991,20 @@ describe("selectAutoRouterModelGroups", () => {
   });
 });
 
+describe("selectPlainModelGroups", () => {
+  it("keeps only physical model groups", () => {
+    const deployments: AutoRouterCandidateDeployment[] = [
+      { model_name: "smart-router", litellm_params: { model: "auto_router/complexity_router" } },
+      { model_name: "claude-haiku", litellm_params: { model: "anthropic/claude-haiku-4-5" } },
+      { model_name: "claude-sonnet", litellm_params: { model: "anthropic/claude-sonnet-4-5" } },
+      { model_name: "cheap-router", litellm_params: { model: "auto_router/adaptive_router" } },
+      { model_name: "fusion/coding", litellm_params: { model: "fusion_router" } },
+    ];
+
+    expect(selectPlainModelGroups(deployments)).toEqual(new Set(["claude-haiku", "claude-sonnet"]));
+  });
+});
+
 describe("selectPlainChatModelGroups", () => {
   it("keeps chat-capable groups when mode metadata is absent or any sibling is compatible", () => {
     const deployments: AutoRouterDeployment[] = [
@@ -1025,6 +1044,22 @@ describe("selectPlainChatModelGroups", () => {
         "embedding-then-chat",
       ]),
     );
+  });
+});
+
+describe("Fusion deployment selection", () => {
+  it("recognizes the exact marker and reserved sub-prefix", () => {
+    expect(isFusionRouterDeployment({ litellm_params: { model: "fusion_router" } })).toBe(true);
+    expect(isFusionRouterDeployment({ litellm_params: { model: "fusion_router/v2" } })).toBe(true);
+    expect(isFusionRouterDeployment({ litellm_params: { model: "openai/fusion_router" } })).toBe(false);
+  });
+
+  it("selects only Fusion virtual deployments", () => {
+    const deployments = [
+      { model_name: "fusion/coding", litellm_params: { model: "fusion_router" } },
+      { model_name: "plain", litellm_params: { model: "openai/gpt-4o" } },
+    ];
+    expect(selectFusionRouterDeployments(deployments)).toEqual([deployments[0]]);
   });
 });
 

@@ -142,6 +142,7 @@ const AllModelsTab = ({
     modelNameForQuery,
     accessGroupForQuery,
     wildcardOnlyForQuery,
+    true,
   );
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 

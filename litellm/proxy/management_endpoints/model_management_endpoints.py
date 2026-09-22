@@ -28,6 +28,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.fusion_router import is_fusion_router_model, validate_fusion_router_write
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.ptu_pricing import (
@@ -296,6 +297,21 @@ def _strategy_router_write_violation(
     """
     if incoming_params is None:
         return None
+    incoming_model: Final = incoming_params.model
+    existing_model: Final = existing_params.model if existing_params is not None else None
+    incoming_fusion_config: Final = incoming_params.fusion_router_config
+    existing_fusion_config: Final = existing_params.fusion_router_config if existing_params is not None else None
+    if (
+        incoming_fusion_config is not None
+        or (isinstance(incoming_model, str) and is_fusion_router_model(incoming_model))
+        or (isinstance(existing_model, str) and is_fusion_router_model(existing_model))
+    ):
+        fusion_violation: Final = validate_fusion_router_write(
+            model=incoming_model or existing_model,
+            raw_config=(incoming_fusion_config if incoming_fusion_config is not None else existing_fusion_config),
+        )
+        if fusion_violation is not None:
+            return fusion_violation
     config_violation: Final = validate_complexity_router_config_write(
         complexity_router_config=(
             _effective_complexity_router_config(incoming_params, existing_params)
@@ -338,6 +354,34 @@ def _raise_on_strategy_router_write_violation(
         code=status.HTTP_400_BAD_REQUEST,
         param="litellm_params.model",
     )
+
+
+def _raise_if_non_admin_configures_fusion(
+    *,
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Keep the virtual model as the runtime ACL without allowing tenant privilege escalation."""
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    incoming_model: Final = incoming_params.model if incoming_params is not None else None
+    existing_model: Final = existing_params.model if existing_params is not None else None
+    config_supplied: Final = any(
+        params is not None and params.fusion_router_config is not None for params in (incoming_params, existing_params)
+    )
+    if config_supplied or any(
+        isinstance(model, str) and is_fusion_router_model(model) for model in (incoming_model, existing_model)
+    ):
+        raise ProxyException(
+            message=(
+                "Only proxy admins can create or edit Fusion models because their configured "
+                "models and Search Tool execute with the Fusion model's authorization."
+            ),
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="litellm_params.fusion_router_config",
+        )
 
 
 async def _raise_on_invalid_credential_name(
@@ -1173,6 +1217,12 @@ async def patch_model(
             )
             if member_marker is not None
             else patch_data
+        )
+
+        _raise_if_non_admin_configures_fusion(
+            incoming_params=patch_data.litellm_params,
+            existing_params=db_model.litellm_params,
+            user_api_key_dict=user_api_key_dict,
         )
 
         # Pause/resume (`blocked`) is a proxy-admin-only privilege. Team admins
@@ -2414,6 +2464,12 @@ async def add_new_model(
         )
         member_write: Final = write_authorization if isinstance(write_authorization, MemberAutoRouterWrite) else None
 
+        _raise_if_non_admin_configures_fusion(
+            incoming_params=model_params.litellm_params,
+            existing_params=None,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         ModelManagementAuthChecks.can_user_attach_credential(
             litellm_params=model_params.litellm_params,
             user_api_key_dict=user_api_key_dict,
@@ -2615,6 +2671,12 @@ async def update_model(
             incoming_model_params=model_params,
         )
         member_write: Final = write_authorization if isinstance(write_authorization, MemberAutoRouterWrite) else None
+
+        _raise_if_non_admin_configures_fusion(
+            incoming_params=model_params.litellm_params,
+            existing_params=deployment.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+        )
 
         ModelManagementAuthChecks.can_user_attach_credential(
             litellm_params=model_params.litellm_params,

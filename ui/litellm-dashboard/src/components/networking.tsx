@@ -1657,6 +1657,7 @@ export const modelInfoCall = async (
   modelName?: string,
   accessGroup?: string,
   wildcardOnly?: boolean,
+  excludeFusionRouters?: boolean,
 ) => {
   /**
    * Get all models on proxy
@@ -1687,6 +1688,9 @@ export const modelInfoCall = async (
     }
     if (excludeAutoRouters) {
       params.append("exclude_auto_routers", "true");
+    }
+    if (excludeFusionRouters) {
+      params.append("exclude_fusion_routers", "true");
     }
     if (accessGroup && accessGroup.trim()) {
       params.append("access_group", accessGroup.trim());

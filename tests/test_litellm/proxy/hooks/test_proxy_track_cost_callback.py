@@ -7,24 +7,39 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import (
+    FUSION_BUDGET_ACCUMULATED_COST_KEY,
+    FUSION_BUDGET_ACTIVE_KEY,
+    FUSION_BUDGET_PENDING_CALL_IDS_KEY,
+    FUSION_BUDGET_UNPRICED_CALL_IDS_KEY,
+)
+from litellm.litellm_core_utils.fusion_budget import (
+    complete_fusion_budget_call,
+    fusion_budget_reconciliation_cost,
+    register_fusion_budget_call,
+    wait_for_fusion_budget_calls,
+)
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
+    _failure_should_leave_fusion_reservation_open,
     _get_budget_reservation_from_metadata,
     _ProxyDBLogger,
+    _should_defer_fusion_budget_reconciliation,
     _should_track_cost_callback,
     _update_database_and_spend_counters,
     run_spend_event,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
-from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, Usage
 
 
@@ -588,7 +603,423 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         tags=["tag-a"],
         request_started_at=start_time,
         model_access_groups=("premium",),
+        model_access_group_response_cost=0.2,
         project_id=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_database_and_spend_counters_can_defer_fusion_reconciliation():
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
+    increment_spend_counters = AsyncMock()
+    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+
+    await _update_database_and_spend_counters(
+        proxy_logging_obj=proxy_logging_obj,
+        increment_spend_counters=increment_spend_counters,
+        user_api_key="test_api_key",
+        user_id="test_user_id",
+        end_user_id=None,
+        team_id="test_team_id",
+        org_id=None,
+        kwargs={},
+        completion_response=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        response_cost=0.2,
+        budget_reservation=budget_reservation,
+        defer_budget_counter_update=True,
+    )
+
+    proxy_logging_obj.db_spend_update_writer.update_database.assert_awaited_once()
+    increment_spend_counters.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fusion_hidden_costs_accumulate_then_continuation_reconciles_once():
+    logger = _ProxyDBLogger()
+    reservation = {
+        "reserved_cost": 1.0,
+        "entries": [],
+        "finalized": False,
+        FUSION_BUDGET_ACTIVE_KEY: True,
+    }
+    initial_response = litellm.ModelResponse(
+        choices=[
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "fusion-1",
+                            "type": "function",
+                            "function": {
+                                "name": "litellm_fusion",
+                                "arguments": '{"query":"investigate"}',
+                            },
+                        }
+                    ],
+                },
+            }
+        ]
+    )
+
+    def kwargs_for(origin: str, response_cost: float, call_id: str) -> dict:
+        return {
+            "call_type": "acompletion",
+            "model": "test-model",
+            "litellm_call_id": call_id,
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "hashed-key",
+                    "user_api_key_user_id": "user-1",
+                    "internal_call_origin": origin,
+                    "user_api_key_budget_reservation": reservation,
+                    MODEL_ACCESS_GROUP_METADATA_KEY: ["test-budget"],
+                }
+            },
+            "standard_logging_object": {
+                "response_cost": response_cost,
+                "request_tags": [],
+                "metadata": {},
+            },
+        }
+
+    with (
+        patch(  # test-quality-ok: isolates proxy persistence while reservation state remains observable
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as increment,
+        patch(  # test-quality-ok: observes hidden-call group idempotency without touching global counters
+            "litellm.proxy.proxy_server.increment_fusion_model_access_group_spend_counters", new_callable=AsyncMock
+        ) as increment_fusion_groups,
+        patch(  # test-quality-ok: isolates proxy persistence while reservation state remains observable
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),
+        patch(  # test-quality-ok: injects the callback persistence boundary
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as proxy_logging,
+    ):
+        proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+        initial_kwargs = kwargs_for("fusion_initial", 0.1, "initial-call")
+        await logger._PROXY_track_cost_callback(
+            kwargs=initial_kwargs,
+            completion_response=initial_response,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+        # Replaying the same callback cannot double-add a provider call.
+        await logger._PROXY_track_cost_callback(
+            kwargs=initial_kwargs,
+            completion_response=initial_response,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+        panel_kwargs = kwargs_for("fusion_panel", 0.2, "panel-call")
+        await logger._PROXY_track_cost_callback(
+            kwargs=panel_kwargs,
+            completion_response=litellm.ModelResponse(choices=[]),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        assert reservation[FUSION_BUDGET_ACCUMULATED_COST_KEY] == pytest.approx(0.3)
+        increment.assert_not_awaited()
+        assert increment_fusion_groups.await_count == 2
+        assert [call.kwargs["response_cost"] for call in increment_fusion_groups.await_args_list] == pytest.approx(
+            [0.1, 0.2]
+        )
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs_for("fusion_continuation", 0.4, "continuation-call"),
+            completion_response=litellm.ModelResponse(choices=[]),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        increment.assert_awaited_once()
+        assert increment.await_args.kwargs["response_cost"] == pytest.approx(0.7)
+        assert increment.await_args.kwargs["model_access_group_response_cost"] == pytest.approx(0.4)
+        assert increment.await_args.kwargs["budget_reservation"] is reservation
+
+
+@pytest.mark.asyncio
+async def test_fusion_continuation_waits_for_delayed_hidden_cost_callback():
+    logger = _ProxyDBLogger()
+    reservation = {
+        "reserved_cost": 1.0,
+        "entries": [],
+        "finalized": False,
+        FUSION_BUDGET_ACTIVE_KEY: True,
+    }
+    panel_metadata = {
+        "user_api_key": "hashed-key",
+        "user_api_key_user_id": "user-1",
+        "internal_call_origin": "fusion_panel",
+        "user_api_key_budget_reservation": reservation,
+    }
+    register_fusion_budget_call(panel_metadata)
+
+    def kwargs_for(origin: str, response_cost: float, call_id: str, metadata: dict) -> dict:
+        return {
+            "call_type": "acompletion",
+            "model": "test-model",
+            "litellm_call_id": call_id,
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "hashed-key",
+                    "user_api_key_user_id": "user-1",
+                    "internal_call_origin": origin,
+                    "user_api_key_budget_reservation": reservation,
+                    **metadata,
+                }
+            },
+            "standard_logging_object": {
+                "response_cost": response_cost,
+                "request_tags": [],
+                "metadata": {},
+            },
+        }
+
+    with (
+        patch(  # test-quality-ok: observes the aggregate passed to the real counter boundary
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as increment,
+        patch(  # test-quality-ok: isolates deployment-group accounting from the ordering assertion
+            "litellm.proxy.proxy_server.increment_fusion_model_access_group_spend_counters",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: avoids unrelated cache work in the callback race test
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),
+        patch(  # test-quality-ok: injects the callback persistence boundary
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as proxy_logging,
+    ):
+        proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+        continuation_task = asyncio.create_task(
+            logger._PROXY_track_cost_callback(
+                kwargs=kwargs_for("fusion_continuation", 0.4, "continuation-call", {}),
+                completion_response=litellm.ModelResponse(choices=[]),
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+            )
+        )
+        await asyncio.sleep(0)
+        assert not continuation_task.done()
+        increment.assert_not_awaited()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs_for("fusion_panel", 0.2, "panel-call", panel_metadata),
+            completion_response=litellm.ModelResponse(choices=[]),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+        await asyncio.wait_for(continuation_task, timeout=1)
+
+        increment.assert_awaited_once()
+        assert increment.await_args.kwargs["response_cost"] == pytest.approx(0.6)
+
+
+@pytest.mark.asyncio
+async def test_fusion_budget_callback_timeout_uses_reserved_maximum():
+    reservation = {
+        "reserved_cost": 1.0,
+        FUSION_BUDGET_ACTIVE_KEY: True,
+    }
+    metadata = {"user_api_key_budget_reservation": reservation}
+    register_fusion_budget_call(metadata)
+
+    await wait_for_fusion_budget_calls(metadata, timeout_seconds=0)
+
+    assert reservation[FUSION_BUDGET_PENDING_CALL_IDS_KEY] == []
+    assert len(reservation[FUSION_BUDGET_UNPRICED_CALL_IDS_KEY]) == 1
+    assert fusion_budget_reconciliation_cost(reservation, known_cost=0.4) == pytest.approx(1.0)
+    # A callback that arrives after the timeout cannot undo the conservative marker.
+    complete_fusion_budget_call(metadata, cost_known=True)
+    assert len(reservation[FUSION_BUDGET_UNPRICED_CALL_IDS_KEY]) == 1
+
+
+def test_mixed_fusion_and_client_tool_calls_reconcile_on_the_initial_response():
+    def response_with_tools(*tool_names: str) -> litellm.ModelResponse:
+        return litellm.ModelResponse(
+            choices=[
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": f"call-{index}",
+                                "type": "function",
+                                "function": {"name": name, "arguments": "{}"},
+                            }
+                            for index, name in enumerate(tool_names)
+                        ],
+                    },
+                }
+            ]
+        )
+
+    pure_fusion_response = response_with_tools("litellm_fusion")
+    mixed_response = response_with_tools("litellm_fusion", "send_email")
+    metadata = {"internal_call_origin": "fusion_initial"}
+
+    assert _should_defer_fusion_budget_reconciliation(metadata, pure_fusion_response, {})
+    assert not _should_defer_fusion_budget_reconciliation(metadata, mixed_response, {})
+    # Streaming callbacks may expose a partial chunk separately. The complete
+    # response is authoritative for whether Fusion will actually continue.
+    assert not _should_defer_fusion_budget_reconciliation(
+        metadata,
+        pure_fusion_response,
+        {"complete_streaming_response": mixed_response},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("guardrail_cost", [0.0, 0.03])
+async def test_cached_fusion_hidden_call_accumulates_only_guardrail_cost(guardrail_cost: float):
+    logger = _ProxyDBLogger()
+    reservation = {
+        "reserved_cost": 1.0,
+        "entries": [],
+        "finalized": False,
+        FUSION_BUDGET_ACTIVE_KEY: True,
+    }
+    kwargs = {
+        "call_type": "acompletion",
+        "model": "panel",
+        "cache_hit": True,
+        "response_cost": 0.2,
+        "litellm_call_id": "cached-panel-call",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "hashed-key",
+                "user_api_key_user_id": "user-1",
+                "internal_call_origin": "fusion_panel",
+                "user_api_key_budget_reservation": reservation,
+            }
+        },
+        "standard_logging_object": {
+            "response_cost": guardrail_cost,
+            "request_tags": [],
+            "metadata": {},
+        },
+    }
+
+    with (
+        patch(  # test-quality-ok: isolates proxy persistence while reservation state remains observable
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as increment,
+        patch(  # test-quality-ok: isolates proxy persistence while reservation state remains observable
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),
+        patch(  # test-quality-ok: injects the callback persistence boundary
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as proxy_logging,
+    ):
+        proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=litellm.ModelResponse(choices=[]),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        assert reservation[FUSION_BUDGET_ACCUMULATED_COST_KEY] == guardrail_cost
+        assert proxy_logging.db_spend_update_writer.update_database.await_args.kwargs["response_cost"] == guardrail_cost
+        increment.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unpriced_fusion_hidden_call_does_not_release_parent_reservation():
+    logger = _ProxyDBLogger()
+    reservation = {
+        "reserved_cost": 1.0,
+        "entries": [],
+        "finalized": False,
+        FUSION_BUDGET_ACTIVE_KEY: True,
+    }
+    kwargs = {
+        "call_type": "acompletion",
+        "model": "panel",
+        "litellm_call_id": "unpriced-panel-call",
+        "litellm_params": {
+            "metadata": {
+                "internal_call_origin": "fusion_panel",
+                "user_api_key_budget_reservation": reservation,
+            }
+        },
+        "standard_logging_object": {
+            "response_cost": None,
+            "response_cost_failure_debug_info": "missing custom price",
+            "request_tags": [],
+            "metadata": {},
+        },
+        "stream": False,
+    }
+
+    with (
+        patch(  # test-quality-ok: injects the callback alert boundary
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as proxy_logging,
+        patch(  # test-quality-ok: verifies unpriced hidden calls cannot release the parent reservation
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+            new_callable=AsyncMock,
+        ) as release_reservation,
+    ):
+        proxy_logging.failed_tracking_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=litellm.ModelResponse(choices=[]),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+        await asyncio.sleep(0)
+
+        release_reservation.assert_not_awaited()
+        assert reservation["finalized"] is False
+
+
+def test_only_hidden_fusion_failures_leave_parent_reservation_open():
+    reservation = {FUSION_BUDGET_ACTIVE_KEY: True}
+    assert _failure_should_leave_fusion_reservation_open(
+        {
+            "litellm_params": {
+                "metadata": {
+                    "internal_call_origin": "fusion_panel",
+                    "user_api_key_budget_reservation": reservation,
+                }
+            }
+        }
+    )
+    assert not _failure_should_leave_fusion_reservation_open(
+        {
+            "litellm_params": {
+                "metadata": {
+                    "internal_call_origin": "fusion_continuation",
+                    "user_api_key_budget_reservation": reservation,
+                }
+            }
+        }
+    )
+    assert not _failure_should_leave_fusion_reservation_open(
+        {
+            "litellm_params": {
+                "metadata": {
+                    "internal_call_origin": "fusion_panel",
+                    "user_api_key_budget_reservation": {},
+                }
+            }
+        }
     )
 
 
@@ -2035,9 +2466,15 @@ async def test_track_cost_callback_keeps_guardrail_cost_on_cache_hit():
     }
 
     with (
-        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as mock_increment,  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
-        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),  # test-quality-ok: same function-body import, no injection seam
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,  # test-quality-ok: same function-body import, no injection seam
+        patch(
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as mock_increment,  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
+        patch(
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),  # test-quality-ok: same function-body import, no injection seam
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,  # test-quality-ok: same function-body import, no injection seam
     ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
         mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
@@ -2403,6 +2840,61 @@ async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_ski
     assert not isinstance(event, SpendEventDecodeError)
     assert event.litellm_params["metadata"]["user_api_key_team_id"] == "team-1"
     assert event.response_cost == 0.0125
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_bucket", ["metadata", "litellm_metadata"])
+async def test_fusion_collector_callback_updates_the_shared_ledger_in_process(metadata_bucket: str):
+    producer: Final = SpendEventProducer(
+        address=UnixAddress(path="/nonexistent/spend.sock"),
+        on_unavailable="drop",
+        buffer_size=10,
+        connect_timeout=1.0,
+        fallback=_no_fallback,
+    )
+    logger: Final = _ProxyDBLogger(producer)
+    reservation: Final = {
+        "reserved_cost": 0.5,
+        "entries": [],
+        "finalized": False,
+        FUSION_BUDGET_ACTIVE_KEY: True,
+    }
+    metadata: Final = {
+        "user_api_key": "hash-1",
+        "user_api_key_user_id": "user-1",
+        "internal_call_origin": "fusion_panel",
+        "user_api_key_budget_reservation": reservation,
+    }
+    register_fusion_budget_call(metadata)
+    kwargs: Final = {
+        "call_type": "acompletion",
+        "model": "test-model",
+        "litellm_call_id": "fusion-panel-1",
+        "response_cost": 0.1,
+        "litellm_params": {metadata_bucket: metadata},
+    }
+    with (
+        patch(  # test-quality-ok: callback imports the global proxy logger with no injection seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as proxy_logging,
+        patch(  # test-quality-ok: callback imports global counter function with no injection seam
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as counters,
+        patch(  # test-quality-ok: callback imports global cache function with no injection seam
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),
+    ):
+        proxy_logging.db_spend_update_writer.update_database = AsyncMock(side_effect=[True, False])
+        proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+        await logger.async_log_success_event(kwargs, ModelResponse(choices=[]), datetime.now(), datetime.now())
+        await logger.async_log_success_event(kwargs, ModelResponse(choices=[]), datetime.now(), datetime.now())
+
+    assert producer.stats().queued == 0
+    assert reservation[FUSION_BUDGET_ACCUMULATED_COST_KEY] == pytest.approx(0.1)
+    assert reservation[FUSION_BUDGET_PENDING_CALL_IDS_KEY] == []
+    assert reservation["finalized"] is False
+    assert proxy_logging.db_spend_update_writer.update_database.await_count == 2
+    counters.assert_not_awaited()
 
 
 @pytest.mark.asyncio

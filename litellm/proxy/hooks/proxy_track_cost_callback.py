@@ -7,15 +7,27 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import batch_cost_is_final
-from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED
+from litellm.constants import (
+    BACKGROUND_INTERACTION_COST_POLLING_ENABLED,
+    FUSION_BUDGET_ACCUMULATED_CALL_IDS_KEY,
+    FUSION_BUDGET_ACCUMULATED_COST_KEY,
+    FUSION_BUDGET_ACTIVE_KEY,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     budget_reservation_from_metadata,
     get_litellm_metadata_from_kwargs,
 )
+from litellm.litellm_core_utils.fusion_budget import (
+    complete_fusion_budget_call,
+    fusion_budget_reconciliation_cost,
+    wait_for_fusion_budget_calls,
+)
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
+from litellm.litellm_core_utils.prompt_templates.factory import get_tool_calls_from_response
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
@@ -83,6 +95,104 @@ _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
     )
 )
 
+_FUSION_TOOL_NAME: Final = "litellm_fusion"
+_FUSION_ALWAYS_DEFERRED_ORIGINS: Final[frozenset[str]] = frozenset(
+    {"fusion_panel", "fusion_analyst", "fusion_research"}
+)
+
+
+def _response_requires_fusion_continuation(response: object) -> bool:
+    tool_calls: Final = get_tool_calls_from_response(response)
+    return bool(tool_calls) and all(tool_call["name"] == _FUSION_TOOL_NAME for tool_call in tool_calls)
+
+
+async def _fusion_budget_counter_cost(metadata: Mapping[str, object], response_cost: float) -> float:
+    reservation: Final = budget_reservation_from_metadata(metadata)
+    if (
+        reservation is None
+        or reservation.get(FUSION_BUDGET_ACTIVE_KEY) is not True
+        or metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != "fusion_continuation"
+    ):
+        return response_cost
+    await wait_for_fusion_budget_calls(metadata)
+    return fusion_budget_reconciliation_cost(
+        budget_reservation=reservation,
+        known_cost=response_cost + float(reservation.get(FUSION_BUDGET_ACCUMULATED_COST_KEY) or 0.0),
+    )
+
+
+def _should_defer_fusion_budget_reconciliation(
+    metadata: dict,  # mutable-ok: SDK boundary
+    completion_response: object,
+    kwargs: dict,  # mutable-ok: SDK boundary
+) -> bool:
+    origin: Final = metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
+    if origin in _FUSION_ALWAYS_DEFERRED_ORIGINS:
+        return True
+    if origin != "fusion_initial":
+        return False
+    complete_stream: Final = kwargs.get("complete_streaming_response")
+    return _response_requires_fusion_continuation(
+        complete_stream if complete_stream is not None else completion_response
+    )
+
+
+def _accumulate_fusion_cost(
+    budget_reservation: dict,  # mutable-ok: SDK boundary
+    response_cost: float,
+    kwargs: dict,  # mutable-ok: SDK boundary
+) -> bool:
+    """Add one hidden call exactly once and report whether this callback was new."""
+    call_id: Final = kwargs.get("litellm_call_id") or kwargs.get("id")
+    seen_call_ids: Final = budget_reservation.setdefault(
+        FUSION_BUDGET_ACCUMULATED_CALL_IDS_KEY,
+        [],  # mutable-ok: local provider payload
+    )  # mutable-ok: local provider payload
+    if isinstance(seen_call_ids, list) and call_id is not None:
+        normalized_call_id: Final = str(call_id)
+        if normalized_call_id in seen_call_ids:
+            return False
+        seen_call_ids.append(normalized_call_id)
+    budget_reservation[  # rebind-ok: shared reservation ledger
+        FUSION_BUDGET_ACCUMULATED_COST_KEY
+    ] = (  # rebind-ok: shared reservation ledger
+        float(  # rebind-ok: shared reservation ledger
+            budget_reservation.get(FUSION_BUDGET_ACCUMULATED_COST_KEY) or 0.0
+        )
+        + max(response_cost, 0.0)
+    )
+    return True
+
+
+def _failure_should_leave_fusion_reservation_open(
+    request_data: dict,  # mutable-ok: SDK boundary
+) -> bool:  # mutable-ok: SDK boundary
+    buckets: Final[tuple[object, ...]] = (
+        request_data.get("metadata"),
+        request_data.get("litellm_metadata"),
+        (
+            request_data.get("litellm_params") or {}  # mutable-ok: fallback metadata uses a native mapping
+        ).get(  # mutable-ok: local provider payload
+            "metadata"
+        )  # mutable-ok: local provider payload
+        if isinstance(request_data.get("litellm_params"), dict)
+        else None,
+        (
+            request_data.get("litellm_params") or {}  # mutable-ok: fallback metadata uses a native mapping
+        ).get(  # mutable-ok: local provider payload
+            "litellm_metadata"
+        )  # mutable-ok: local provider payload
+        if isinstance(request_data.get("litellm_params"), dict)
+        else None,
+    )
+    return any(
+        isinstance(bucket, dict)
+        and bucket.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) in _FUSION_ALWAYS_DEFERRED_ORIGINS
+        and isinstance(bucket.get("user_api_key_budget_reservation"), dict)
+        and bucket["user_api_key_budget_reservation"].get(FUSION_BUDGET_ACTIVE_KEY) is True
+        for bucket in buckets
+    )
+
 
 def _proxy_spend_writer() -> DBSpendUpdateWriter:
     from litellm.proxy.proxy_server import proxy_logging_obj
@@ -106,7 +216,10 @@ class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(
         self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        if self.spend_event_producer is None or not is_offloadable_success(response_obj):
+        metadata: Final = get_litellm_metadata_from_kwargs(dict(kwargs))
+        origin: Final = metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
+        is_fusion: Final = isinstance(origin, str) and origin.startswith("fusion_")
+        if self.spend_event_producer is None or not is_offloadable_success(response_obj) or is_fusion:
             await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
             return
         event: Final = build_spend_event(
@@ -139,7 +252,13 @@ class _ProxyDBLogger(CustomLogger):
         traceback_str: str | None = None,
     ):
         try:
-            await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
+            await _release_budget_reservation(
+                budget_reservation=(
+                    None
+                    if _failure_should_leave_fusion_reservation_open(request_data)
+                    else user_api_key_dict.budget_reservation
+                )
+            )
         except Exception:
             verbose_proxy_logger.exception("Failed to release budget reservation during failure handling")
             try:
@@ -286,6 +405,7 @@ class _ProxyDBLogger(CustomLogger):
         )
 
         verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
+        metadata: dict = {}  # mutable-ok: populated from the callback payload before final token cleanup
         try:
             verbose_proxy_logger.debug(
                 "kwargs stream: %s + complete streaming response: %s",
@@ -295,7 +415,9 @@ class _ProxyDBLogger(CustomLogger):
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs=kwargs)
             litellm_params: Final = kwargs.get("litellm_params", {}) or {}
             end_user_id: Final = get_end_user_id_for_cost_tracking(litellm_params)
-            metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
+            metadata = get_litellm_metadata_from_kwargs(  # rebind-ok: callback payload supplies request metadata
+                kwargs=kwargs
+            )
             # Only fetch key details when user_id wasn't already populated (e.g. direct MCP REST calls).
             # Avoids a cache/DB lookup on every normal LLM request.
             if metadata.get("user_api_key") and not metadata.get("user_api_key_user_id"):
@@ -340,8 +462,27 @@ class _ProxyDBLogger(CustomLogger):
                 served_model_id=sl_object.get("model_id") if sl_object is not None else None,
                 router=get_llm_router(),
             )
+            defer_fusion_reconciliation: Final = (
+                budget_reservation is not None
+                and budget_reservation.get(FUSION_BUDGET_ACTIVE_KEY) is True
+                and _should_defer_fusion_budget_reconciliation(metadata, completion_response, kwargs)
+            )
 
             if response_cost is not None:
+                fusion_call_should_charge_access_groups: Final = (
+                    _accumulate_fusion_cost(
+                        budget_reservation=budget_reservation,
+                        response_cost=float(response_cost),
+                        kwargs=kwargs,
+                    )
+                    if defer_fusion_reconciliation and budget_reservation is not None
+                    else True
+                )
+                # Completing the token immediately after accumulation is
+                # sufficient for the final-call barrier; persistence and alerts
+                # can continue without delaying the model orchestration.
+                complete_fusion_budget_call(metadata, cost_known=True)
+                budget_counter_response_cost: Final = await _fusion_budget_counter_cost(metadata, float(response_cost))
                 user_api_key: Final = metadata.get("user_api_key", None)
                 verbose_proxy_logger.debug(
                     "user_api_key %s, user_id %s, team_id %s, end_user_id %s",
@@ -373,8 +514,10 @@ class _ProxyDBLogger(CustomLogger):
                         end_time=end_time,
                         response_cost=response_cost,
                         budget_reservation=budget_reservation,
+                        budget_counter_response_cost=budget_counter_response_cost,
+                        defer_budget_counter_update=defer_fusion_reconciliation,
                         request_tags=tags,
-                        model_access_groups=model_access_groups,
+                        model_access_groups=(model_access_groups if fusion_call_should_charge_access_groups else ()),
                         project_id=project_id,
                     )
                     if not charged:
@@ -401,9 +544,10 @@ class _ProxyDBLogger(CustomLogger):
                         response_cost=response_cost,
                         max_budget=end_user_max_budget,
                     )
-                elif budget_reservation is not None:
+                elif budget_reservation is not None and not defer_fusion_reconciliation:
                     await _release_budget_reservation(budget_reservation=budget_reservation)
             else:
+                complete_fusion_budget_call(metadata, cost_known=False)
                 if _is_unbilled_interaction_response(completion_response):
                     if BACKGROUND_INTERACTION_COST_POLLING_ENABLED and _is_unbilled_in_progress_interaction(
                         completion_response
@@ -413,13 +557,15 @@ class _ProxyDBLogger(CustomLogger):
                             "the budget reservation stays open until the poll task logs the final usage"
                         )
                         return
-                    await _release_budget_reservation(budget_reservation=budget_reservation)
-                    verbose_proxy_logger.debug(
-                        "Released the budget reservation for an interaction create with no usage "
-                        "that no poll task will settle"
-                    )
+                    if not defer_fusion_reconciliation:
+                        await _release_budget_reservation(budget_reservation=budget_reservation)
+                        verbose_proxy_logger.debug(
+                            "Released the budget reservation for an interaction create with no usage "
+                            "that no poll task will settle"
+                        )
                     return
-                await _release_budget_reservation(budget_reservation=budget_reservation)
+                if not defer_fusion_reconciliation:
+                    await _release_budget_reservation(budget_reservation=budget_reservation)
                 # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
                 # Use .get() for "stream" to avoid KeyError on health checks.
                 # WS session wrappers (_aresponses_websocket, _arealtime) also reach here with
@@ -471,6 +617,11 @@ class _ProxyDBLogger(CustomLogger):
             )
 
             spend_log_error("Error in tracking cost callback - %s", str(e), exc=e)
+        finally:
+            # If metadata/cost processing itself failed, unblock the final call
+            # but force it to retain the reservation's conservative maximum.
+            # The helper is idempotent when the token already completed above.
+            complete_fusion_budget_call(metadata, cost_known=False)
 
     @staticmethod
     async def _enrich_failure_metadata_with_key_info(metadata: dict, resolve_missing_key_identity: bool = True) -> dict:
@@ -665,6 +816,8 @@ class _IncrementSpendCounters(Protocol):
         tags: list[str] | None = None,
         request_started_at: datetime | None = None,
         model_access_groups: Sequence[str] | None = None,
+        project_id: str | None = None,
+        model_access_group_response_cost: float | None = None,
     ) -> None: ...
 
 
@@ -682,13 +835,16 @@ async def _update_database_and_spend_counters(
     end_time: datetime | None,
     response_cost: float,
     budget_reservation: dict | None,
+    budget_counter_response_cost: float | None = None,
+    defer_budget_counter_update: bool = False,
     request_tags: list[str] | None = None,
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
 ) -> bool:
-    if budget_reservation is not None:
+    if budget_reservation is not None and not defer_budget_counter_update:
         await _reconcile_budget_reservation_before_db_update(
-            budget_reservation=budget_reservation, response_cost=response_cost
+            budget_reservation=budget_reservation,
+            response_cost=budget_counter_response_cost if budget_counter_response_cost is not None else response_cost,
         )
     try:
         charged: Final = await proxy_logging_obj.db_spend_update_writer.update_database(
@@ -705,7 +861,7 @@ async def _update_database_and_spend_counters(
             project_id=project_id,
         )
     except Exception:
-        if budget_reservation is not None:
+        if budget_reservation is not None and not defer_budget_counter_update:
             try:
                 await _release_budget_reservation(budget_reservation=budget_reservation)
             except Exception:
@@ -718,21 +874,34 @@ async def _update_database_and_spend_counters(
                     )
         raise
     if not charged:
-        await _release_budget_reservation(budget_reservation=budget_reservation)
+        if not defer_budget_counter_update:
+            await _release_budget_reservation(budget_reservation=budget_reservation)
         return False
 
     try:
+        if defer_budget_counter_update:
+            if model_access_groups:
+                from litellm.proxy.proxy_server import increment_fusion_model_access_group_spend_counters
+
+                await increment_fusion_model_access_group_spend_counters(
+                    model_access_groups=model_access_groups,
+                    response_cost=response_cost,
+                    budget_reservation=budget_reservation,
+                )
+            return True
+
         await increment_spend_counters(
             token=user_api_key,
             team_id=team_id,
             user_id=user_id,
-            response_cost=response_cost,
+            response_cost=(budget_counter_response_cost if budget_counter_response_cost is not None else response_cost),
             org_id=org_id,
             budget_reservation=budget_reservation,
             end_user_id=end_user_id,
             tags=request_tags,
             request_started_at=start_time,
             model_access_groups=model_access_groups,
+            model_access_group_response_cost=response_cost,
             project_id=project_id,
         )
     except Exception:

@@ -734,6 +734,7 @@ from litellm.proxy.shutdown.scheduled_jobs import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     get_budget_window_start,
+    get_reserved_counter_keys,
     release_unbound_budget_reservation,
 )
 from litellm.proxy.spend_tracking.daily_global_spend_rollup import (
@@ -2946,6 +2947,7 @@ async def increment_spend_counters(
     request_started_at: datetime | None = None,
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
+    model_access_group_response_cost: float | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -2982,6 +2984,7 @@ async def increment_spend_counters(
             request_started_at=request_started_at,
             model_access_groups=model_access_groups,
             project_id=project_id,
+            model_access_group_response_cost=model_access_group_response_cost,
         )
 
 
@@ -2997,6 +3000,7 @@ async def _increment_spend_counters_batched(
     request_started_at: datetime | None,
     model_access_groups: Sequence[str] | None,
     project_id: str | None = None,
+    model_access_group_response_cost: float | None = None,
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET."""
     reserved_counter_keys: Final = await _reconcile_budget_reservation_for_counter_update(
@@ -3010,6 +3014,9 @@ async def _increment_spend_counters_batched(
         return
 
     cost: Final[float] = response_cost
+    model_access_group_cost: Final = (
+        cost if model_access_group_response_cost is None else model_access_group_response_cost
+    )
 
     async def _key_scope(key_token: str) -> tuple[PendingSpendIncrement | BaseException, ...]:
         # key_token arrives pre-hashed from metadata["user_api_key"] (auth flow
@@ -3185,10 +3192,10 @@ async def _increment_spend_counters_batched(
             else None,
             _prepare_model_access_group_spend_increments(
                 model_access_groups=model_access_groups,
-                response_cost=cost,
+                response_cost=model_access_group_cost,
                 reserved_counter_keys=reserved_counter_keys,
             )
-            if model_access_groups
+            if model_access_groups and model_access_group_cost != 0
             else None,
             _prepare_org_spend_increment(
                 org_id=org_id,
@@ -3231,6 +3238,31 @@ async def _increment_spend_counters_batched(
 
     if budget_reservation is not None:
         budget_reservation["finalized"] = True
+
+
+async def increment_fusion_model_access_group_spend_counters(
+    model_access_groups: Sequence[str],
+    response_cost: float,
+    budget_reservation: dict | None,  # mutable-ok: shared reservation ledger is read here to avoid duplicate charges
+) -> None:
+    """Charge one deferred Fusion provider call to only its serving access groups.
+
+    Fusion defers the shared key/team/user reservation until its final outer call,
+    but model access groups are deployment-specific. Updating those counters per
+    provider call preserves attribution while skipping any group already reserved
+    for the virtual Fusion model itself.
+    """
+    results: Final = await _prepare_model_access_group_spend_increments(
+        model_access_groups=model_access_groups,
+        response_cost=response_cost,
+        reserved_counter_keys=get_reserved_counter_keys(budget_reservation=budget_reservation),
+    )
+    await _apply_spend_counter_increments(
+        pending=tuple(item for item in results if isinstance(item, PendingSpendIncrement))
+    )
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
 
 
 async def _reconcile_budget_reservation_for_counter_update(
@@ -14466,6 +14498,16 @@ def _is_auto_router_model(model: Mapping[str, object]) -> bool:
     return isinstance(litellm_model, str) and litellm_model.startswith("auto_router/")
 
 
+def _is_fusion_router_model(model: Mapping[str, object]) -> bool:
+    litellm_params: Final = model.get("litellm_params")
+    if not isinstance(litellm_params, Mapping):
+        return False
+    litellm_model: Final = litellm_params.get("model")
+    return isinstance(litellm_model, str) and (
+        litellm_model == "fusion_router" or litellm_model.startswith("fusion_router/")
+    )
+
+
 def _model_in_access_group(model: Mapping[str, object], access_group: str) -> bool:
     model_info: Final = model.get("model_info")
     if not isinstance(model_info, Mapping):
@@ -14479,8 +14521,11 @@ def _matches_model_info_filters(
     exclude_auto_routers: bool | None,
     access_group: str | None,
     wildcard_only: bool | None,
+    exclude_fusion_routers: bool | None = False,
 ) -> bool:
     if exclude_auto_routers is True and _is_auto_router_model(model):
+        return False
+    if exclude_fusion_routers is True and _is_fusion_router_model(model):
         return False
     if isinstance(access_group, str) and not _model_in_access_group(model, access_group):
         return False
@@ -14805,6 +14850,10 @@ async def model_info_v2(
         False,
         description="Only return wildcard deployments, i.e. those whose `model_name` contains `*`",
     ),
+    exclude_fusion_routers: bool | None = fastapi.Query(
+        False,
+        description="Omit Fusion virtual-model deployments. Defaults to false for compatibility.",
+    ),
 ):
     """
     Paginated model metadata for proxy deployments (pricing, provider, team access).
@@ -14978,7 +15027,9 @@ async def model_info_v2(
     # `is True` because direct-call tests bypass FastAPI, so the Query default arrives as a
     # truthy sentinel object rather than False.
     all_models = [
-        m for m in all_models if _matches_model_info_filters(m, exclude_auto_routers, access_group, wildcard_only)
+        m
+        for m in all_models
+        if _matches_model_info_filters(m, exclude_auto_routers, access_group, wildcard_only, exclude_fusion_routers)
     ]
 
     # Update total count to include agents

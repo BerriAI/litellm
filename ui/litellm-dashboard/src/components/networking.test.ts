@@ -146,6 +146,9 @@ describe("modelInfoCall", () => {
       undefined,
       true,
       "gpt-4",
+      undefined,
+      false,
+      true,
     );
 
     const parsed = new URL(mockFetch.mock.calls[0][0] as string, "http://example.com");
@@ -154,6 +157,7 @@ describe("modelInfoCall", () => {
     expect(parsed.searchParams.has("search")).toBe(false);
     expect(parsed.searchParams.get("page")).toBe("2");
     expect(parsed.searchParams.get("exclude_auto_routers")).toBe("true");
+    expect(parsed.searchParams.get("exclude_fusion_routers")).toBe("true");
   });
 });
 

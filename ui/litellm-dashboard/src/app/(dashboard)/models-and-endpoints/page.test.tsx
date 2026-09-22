@@ -8,6 +8,7 @@ import ModelsAndEndpointsPage from "./page";
 vi.mock("./panels/AllModelsPanel", () => ({ default: () => <div data-testid="panel-all-models" /> }));
 vi.mock("./panels/AddModelPanel", () => ({ default: () => <div data-testid="panel-add" /> }));
 vi.mock("./panels/AutoRoutersTabPanel", () => ({ default: () => <div data-testid="panel-auto-routers" /> }));
+vi.mock("./panels/FusionModelsTabPanel", () => ({ default: () => <div data-testid="panel-fusion-models" /> }));
 vi.mock("./panels/LlmCredentialsPanel", () => ({ default: () => <div data-testid="panel-credentials" /> }));
 vi.mock("./panels/PassThroughPanel", () => ({ default: () => <div data-testid="panel-pass-through" /> }));
 vi.mock("./panels/HealthStatusPanel", () => ({ default: () => <div data-testid="panel-health" /> }));
@@ -128,6 +129,7 @@ describe("ModelsAndEndpointsPage", () => {
       "All Models",
       "Add Model",
       "Auto-Routers Beta",
+      "Fusion Models",
       "LLM Credentials",
       "Pass-Through Endpoints",
       "Health Status",
@@ -194,6 +196,28 @@ describe("ModelsAndEndpointsPage", () => {
       renderPage();
 
       expect(screen.queryByRole("tab", { name: /Auto-Routers/ })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Fusion Models tab", () => {
+    it("sits next to Auto-Routers without a beta label", () => {
+      renderPage();
+      const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
+      expect(tabs[2]).toContain("Auto-Routers");
+      expect(tabs[3]).toBe("Fusion Models");
+    });
+
+    it("renders its panel when selected", async () => {
+      const user = userEvent.setup();
+      renderPage();
+      await user.click(screen.getByRole("tab", { name: /Fusion Models/ }));
+      expect(screen.getByTestId("panel-fusion-models")).toBeInTheDocument();
+    });
+
+    it("is hidden from users who cannot create models", () => {
+      mockUseAuthorized.mockReturnValue(NON_ADMIN);
+      renderPage();
+      expect(screen.queryByRole("tab", { name: /Fusion Models/ })).not.toBeInTheDocument();
     });
   });
 });

@@ -16,6 +16,7 @@ import { useModelDetailRouting } from "@/app/(dashboard)/models-and-endpoints/de
 import { useModelDashboardData } from "@/app/(dashboard)/models-and-endpoints/useModelDashboardData";
 import AllModelsPanel from "@/app/(dashboard)/models-and-endpoints/panels/AllModelsPanel";
 import AutoRoutersTabPanel from "@/app/(dashboard)/models-and-endpoints/panels/AutoRoutersTabPanel";
+import FusionModelsTabPanel from "@/app/(dashboard)/models-and-endpoints/panels/FusionModelsTabPanel";
 import AddModelPanel from "@/app/(dashboard)/models-and-endpoints/panels/AddModelPanel";
 import LlmCredentialsPanel from "@/app/(dashboard)/models-and-endpoints/panels/LlmCredentialsPanel";
 import PassThroughPanel from "@/app/(dashboard)/models-and-endpoints/panels/PassThroughPanel";
@@ -30,6 +31,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 type ModelTabSlug =
   | "add"
   | "auto-routers"
+  | "fusion-models"
   | "llm-credentials"
   | "pass-through"
   | "health"
@@ -43,6 +45,7 @@ const BASE_TAB_KEY = "all-models";
 const TAB_LABELS: Record<ModelTabSlug, string> = {
   add: "Add Model",
   "auto-routers": "Auto-Routers",
+  "fusion-models": "Fusion Models",
   "llm-credentials": "LLM Credentials",
   "pass-through": "Pass-Through Endpoints",
   health: "Health Status",
@@ -58,6 +61,8 @@ const renderPanel = (key: string) => {
       return <AllModelsPanel />;
     case "auto-routers":
       return <AutoRoutersTabPanel />;
+    case "fusion-models":
+      return <FusionModelsTabPanel />;
     case "add":
       return <AddModelPanel />;
     case "llm-credentials":
@@ -111,6 +116,7 @@ export default function ModelsAndEndpointsPage() {
       "",
       ...(canCreate ? (["add"] as const) : []),
       ...(isAdmin || canViewAutoRouters ? (["auto-routers"] as const) : []),
+      ...(isAdmin || canCreate ? (["fusion-models"] as const) : []),
       // effectiveSessionRole reports proxy_admin_viewer as "Admin", so isAdmin alone would show a
       // viewer these write-only panels; only the raw-role isViewOnly separates them. Health Status
       // stays: it is the bucket's one read view, and viewers keep read parity with admins.

@@ -42,6 +42,7 @@ export const useModelsInfo = (
   modelName?: string,
   accessGroup?: string,
   wildcardOnly: boolean = false,
+  excludeFusionRouters: boolean = false,
 ) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<PaginatedModelInfoResponse>({
@@ -60,6 +61,7 @@ export const useModelsInfo = (
         // Part of the key: callers that exclude auto-routers must not share a cache entry
         // with callers that keep them.
         ...(excludeAutoRouters && { excludeAutoRouters: "true" }),
+        ...(excludeFusionRouters && { excludeFusionRouters: "true" }),
         ...(accessGroup && { accessGroup }),
         ...(wildcardOnly && { wildcardOnly: "true" }),
       },
@@ -80,12 +82,14 @@ export const useModelsInfo = (
         modelName,
         accessGroup,
         wildcardOnly,
+        excludeFusionRouters,
       ),
     enabled: Boolean(accessToken && userId && userRole),
   });
 };
 
 const AUTO_ROUTER_MODEL_PREFIX = "auto_router/";
+const FUSION_ROUTER_MODEL = "fusion_router";
 const AUTO_ROUTER_LOOKUP_PAGE_SIZE = 1000;
 const NO_AUTO_ROUTERS: ReadonlySet<string> = new Set<string>();
 const NO_DEPLOYMENTS: AutoRouterDeployment[] = [];
@@ -108,6 +112,7 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
     adaptive_router_default_model?: string | null;
     quality_router_config?: unknown;
     quality_router_default_model?: string | null;
+    fusion_router_config?: unknown;
   } | null;
   model_info?: {
     id?: string | null;
@@ -125,6 +130,11 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
 export const isAutoRouterDeployment = (deployment: AutoRouterCandidateDeployment): boolean =>
   Boolean(deployment?.litellm_params?.model?.startsWith(AUTO_ROUTER_MODEL_PREFIX));
 
+export const isFusionRouterDeployment = (deployment: AutoRouterCandidateDeployment): boolean => {
+  const model = deployment?.litellm_params?.model;
+  return model === FUSION_ROUTER_MODEL || Boolean(model?.startsWith(`${FUSION_ROUTER_MODEL}/`));
+};
+
 export const selectAutoRouterModelGroups = (deployments: AutoRouterCandidateDeployment[]): ReadonlySet<string> =>
   new Set(
     deployments
@@ -136,13 +146,23 @@ export const selectAutoRouterModelGroups = (deployments: AutoRouterCandidateDepl
 export const selectAutoRouterDeployments = (deployments: AutoRouterDeployment[]): AutoRouterDeployment[] =>
   deployments.filter(isAutoRouterDeployment);
 
+export const selectFusionRouterDeployments = (deployments: AutoRouterDeployment[]): AutoRouterDeployment[] =>
+  deployments.filter(isFusionRouterDeployment);
+
 export const selectPlainModelGroups = (deployments: AutoRouterCandidateDeployment[]): ReadonlySet<string> => {
   const autoRouterGroups = selectAutoRouterModelGroups(deployments);
+  const fusionRouterGroups = new Set(
+    deployments
+      .filter(isFusionRouterDeployment)
+      .map((deployment) => deployment.model_name)
+      .filter((modelName): modelName is string => Boolean(modelName)),
+  );
   return new Set(
     deployments
       .map((deployment) => deployment.model_name)
       .filter((modelName): modelName is string => Boolean(modelName))
-      .filter((modelName) => !autoRouterGroups.has(modelName)),
+      .filter((modelName) => !autoRouterGroups.has(modelName))
+      .filter((modelName) => !fusionRouterGroups.has(modelName)),
   );
 };
 
@@ -226,6 +246,17 @@ export const usePlainChatModelDeployments = (): AutoRouterDeployment[] =>
 
 export const useAutoRouters = (): UseQueryResult<AutoRouterDeployment[], Error> =>
   useDeployments(selectAutoRouterDeployments);
+
+export const useFusionRouters = (): UseQueryResult<AutoRouterDeployment[], Error> =>
+  useDeployments(selectFusionRouterDeployments);
+
+export const useInvalidateFusionRouters = (): (() => Promise<void>) => {
+  const queryClient = useQueryClient();
+  return async () => {
+    const filters = { queryKey: modelKeys.lists() };
+    await queryClient.invalidateQueries(filters);
+  };
+};
 
 export const useInvalidateAutoRouters = (): (() => Promise<void>) => {
   const queryClient = useQueryClient();

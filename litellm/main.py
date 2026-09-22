@@ -606,6 +606,19 @@ async def acompletion(
         "shared_session": shared_session,
         "enable_json_schema_validation": enable_json_schema_validation,
     }
+    from litellm.llms.litellm import is_litellm_model
+
+    if is_litellm_model(model):
+        from litellm.llms.litellm.adapters import adispatch_completion
+
+        return await adispatch_completion(
+            model=model,
+            messages=cast(  # cast-ok: completion validates messages before LiteLLM model dispatch
+                list[AllMessageValues], messages
+            ),
+            stream=bool(stream),
+            request_kwargs={**kwargs, **completion_kwargs},  # mutable-ok: public SDK boundary
+        )
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
@@ -5191,6 +5204,27 @@ def completion(
 
     ######### unpacking kwargs #####################
     args: Final = _locals_snapshot(locals())
+
+    from litellm.llms.litellm import is_litellm_model
+
+    if is_litellm_model(model):
+        from litellm.llms.litellm.adapters import dispatch_completion
+        from litellm.types.llms.openai import AllMessageValues
+
+        request_kwargs: Final = {  # mutable-ok: public SDK boundary
+            **kwargs,
+            **{  # mutable-ok: locals snapshot is isolated for the model adapter
+                key: value for key, value in args.items() if key != "kwargs"
+            },
+        }
+        return dispatch_completion(
+            model=model,
+            messages=cast(  # cast-ok: completion validates messages before LiteLLM model dispatch
+                list[AllMessageValues], messages
+            ),
+            stream=bool(stream),
+            request_kwargs=request_kwargs,
+        )
 
     # Set by the responses->completion fallback so completion() does not bridge
     # back to the Responses API: that round-trip mutually recurses forever for a

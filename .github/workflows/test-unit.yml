@@ -101,6 +101,14 @@ jobs:
             timeout-minutes: 20
             job-timeout-minutes: 60
 
+          - shard: fusion
+            artifact-name: fusion
+            test-path: "tests/test_litellm/test_fusion_router.py"
+            workers: 2
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+
           - shard: misc
             artifact-name: misc
             test-path: >-
@@ -130,6 +138,7 @@ jobs:
               tests/test_litellm/vector_stores
               tests/test_litellm/videos
               tests/test_litellm/test_*.py
+              --deselect=tests/test_litellm/test_fusion_router.py
             workers: 2
             reruns: 2
             timeout-minutes: 20

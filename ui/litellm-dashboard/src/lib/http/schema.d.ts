@@ -31158,6 +31158,10 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
+            /** Fusion Router Config */
+            fusion_router_config?: {
+                [key: string]: unknown;
+            } | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -41993,6 +41997,10 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
+            /** Fusion Router Config */
+            fusion_router_config?: {
+                [key: string]: unknown;
+            } | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -70649,6 +70657,8 @@ export interface operations {
                 access_group?: string | null;
                 /** @description Only return wildcard deployments, i.e. those whose `model_name` contains `*` */
                 wildcard_only?: boolean | null;
+                /** @description Omit Fusion virtual-model deployments. Defaults to false for compatibility. */
+                exclude_fusion_routers?: boolean | null;
             };
             header?: never;
             path?: never;
