@@ -82,7 +82,7 @@ def _rejected_image_fetch(url: str, verdict: SSRFError) -> "litellm.ImageFetchEr
     verbose_logger.warning("Image fetch of %s rejected before any request went out: %s", url, verdict)
     return litellm.ImageFetchError(
         "Error: Unable to fetch image from URL. The proxy could not resolve this host or its URL policy rejected it; "
-        f"an admin can check the proxy log and `user_url_allowed_hosts` in general_settings. url={url}"
+        f"an admin can check the proxy log and `user_url_allowed_hosts` in litellm_settings. url={url}"
     )
 
 

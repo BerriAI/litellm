@@ -7,6 +7,7 @@ import pytest
 from fastapi import FastAPI, Request
 from pydantic import TypeAdapter
 
+import litellm
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
@@ -112,6 +113,7 @@ async def test_real_proxy_child_auth_privacy_and_body_policy(
         })))
         return asyncio.sleep(0, result=ModelResponse(id="private-summary", model="compactor"))
 
+    monkeypatch.setattr(litellm, "max_budget", 0)
     monkeypatch.setattr(proxy_server.app, "dependency_overrides", {})
     monkeypatch.setattr(proxy_server, "master_key", "sk-master-fixture")
     monkeypatch.setattr(proxy_server, "prisma_client", object())
