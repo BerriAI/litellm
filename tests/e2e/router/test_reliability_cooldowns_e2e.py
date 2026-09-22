@@ -222,7 +222,7 @@ class TestReliabilityCooldowns:
         len(PROXY_REPLICA_URLS) < 2,
         reason=(
             "this cell trips a deployment through one gateway and reads the bench from another, so "
-            f"LITELLM_PROXY_REPLICA_URLS has to name at least two, got {PROXY_REPLICA_URLS}"
+            f"LITELLM_PROXY_REPLICA_URLS has to name at least two distinct gateways, got {PROXY_REPLICA_URLS}"
         ),
     )
     def test_sibling_replica_serves_backup_within_redis_read_interval(
