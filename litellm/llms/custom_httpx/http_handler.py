@@ -845,6 +845,7 @@ class AsyncHTTPHandler:
                     params=params,
                     headers=headers,
                     stream=stream,
+                    content=content,
                 )
             finally:
                 await new_client.aclose()
@@ -985,6 +986,7 @@ class AsyncHTTPHandler:
                     params=params,
                     headers=headers,
                     stream=stream,
+                    content=content,
                 )
             finally:
                 await new_client.aclose()
@@ -1051,6 +1053,7 @@ class AsyncHTTPHandler:
                     params=params,
                     headers=headers,
                     stream=stream,
+                    content=content,
                 )
             finally:
                 await new_client.aclose()
