@@ -8553,18 +8553,28 @@ async def test_get_current_spend_fallback_to_in_memory():
         ps.spend_counter_cache = original
 
 
-def test_spend_counter_cache_keeps_key_counter_across_hundreds_of_other_scopes():
+@pytest.mark.asyncio
+async def test_over_budget_key_spend_survives_hundreds_of_other_scopes_incrementing():
     from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY
-    from litellm.proxy.proxy_server import spend_counter_cache
+    from litellm.proxy.proxy_server import get_current_spend, increment_spend_counters, spend_counter_cache
 
-    probe_key = "spend:key:unit-40221-probe"
-    spend_counter_cache.in_memory_cache.set_cache(key=probe_key, value=0.25)
-    for index in range(DEFAULT_MAX_SIZE_IN_MEMORY + 100):
-        spend_counter_cache.in_memory_cache.set_cache(key=f"spend:end_user:unit-40221-{index}", value=0.01)
+    token = "unit-40221-probe"
+    other_scopes = DEFAULT_MAX_SIZE_IN_MEMORY + 100
+    end_users = [f"unit-40221-{index}" for index in range(other_scopes)]
+    try:
+        await increment_spend_counters(token=token, team_id=None, user_id=None, response_cost=0.25)
+        for end_user in end_users:
+            await increment_spend_counters(
+                token=None, team_id=None, user_id=None, response_cost=0.01, end_user_id=end_user
+            )
+        spend = await get_current_spend(counter_key=f"spend:key:{token}", fallback_spend=0.0)
+    finally:
+        for counter_key in [f"spend:key:{token}", *(f"spend:end_user:{end_user}" for end_user in end_users)]:
+            spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
 
-    assert spend_counter_cache.in_memory_cache.get_cache(key=probe_key) == 0.25, (
-        f"key counter evicted after {DEFAULT_MAX_SIZE_IN_MEMORY + 100} other scopes; "
-        f"max_size_in_memory={spend_counter_cache.in_memory_cache.max_size_in_memory}"
+    assert spend == 0.25, (
+        f"key spend read back as {spend} after {other_scopes} other scopes were charged; "
+        "the counter was evicted and the budget check fell back to the stale value (#40221)"
     )
 
 
