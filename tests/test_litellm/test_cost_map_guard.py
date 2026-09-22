@@ -114,6 +114,40 @@ def test_unclassified_entry_key_is_reported() -> None:
     assert "Unclassified keys" in failure and "weird_thing" in failure
 
 
+STALE_HEAD: Final = _snapshot(BASE_MAP, backup=_serialize({**BASE_MAP, "openrouter/b": _entry(3e-06)}), schema="{}")
+CODE_ONLY: Final = (
+    "litellm/utils.py",
+    "tests/test_litellm/test_utils.py",
+    "docs/model_prices_and_context_window.json",
+)
+
+
+def test_human_pr_that_leaves_the_cost_map_alone_skips_the_file_checks() -> None:
+    unparseable: Final = guard.Snapshot(cost_map="{not json", backup="", schema="")
+    assert _failures(STALE_HEAD, changed_files=CODE_ONLY, bot=False) == ()
+    assert _failures(STALE_HEAD, changed_files=(), bot=False) == ()
+    assert _failures(unparseable, changed_files=CODE_ONLY, bot=False) == ()
+
+
+@pytest.mark.parametrize("guarded_path", guard.GUARDED_PATHS)
+def test_touching_any_cost_map_file_keeps_the_file_checks(guarded_path: str) -> None:
+    failures: Final = _failures(STALE_HEAD, changed_files=(*CODE_ONLY, guarded_path), bot=False)
+    assert [failure for failure in failures if failure.startswith(guard.BACKUP_PATH)]
+    assert [failure for failure in failures if failure.startswith(guard.SCHEMA_PATH)]
+
+
+def test_bot_pr_always_gets_the_file_checks() -> None:
+    failures: Final = _failures(STALE_HEAD, changed_files=CODE_ONLY, bot=True)
+    assert [failure for failure in failures if failure.startswith(guard.BACKUP_PATH)]
+    assert [failure for failure in failures if failure.startswith(guard.SCHEMA_PATH)]
+
+
+def test_contract_names_the_skip() -> None:
+    assert guard.contract_for(False, CODE_ONLY) == "human PR, cost map untouched"
+    assert guard.contract_for(False, (*CODE_ONLY, guard.SCHEMA_PATH)) == "human PR, file checks only"
+    assert guard.contract_for(True, CODE_ONLY) == "bot contract enforced"
+
+
 def test_bot_may_only_touch_the_cost_map_files() -> None:
     changed = (*guard.GUARDED_PATHS, "litellm/utils.py", ".github/workflows/cost-map-guard.yml")
     assert _failures(BASE, changed_files=changed, bot=False) == ()
@@ -147,6 +181,16 @@ def _commit(repo: Path, cost_map: dict[str, object], message: str) -> str:
     (repo / guard.BACKUP_PATH).parent.mkdir(exist_ok=True)
     (repo / guard.BACKUP_PATH).write_text(text)
     (repo / guard.SCHEMA_PATH).write_text(schema_module.render(schema_module.build_schema(cost_map)))
+    return _git_commit(repo, message)
+
+
+def _commit_code_only(repo: Path, message: str) -> str:
+    (repo / "litellm").mkdir(exist_ok=True)
+    (repo / "litellm" / "utils.py").write_text(f"print('{message}')\n")
+    return _git_commit(repo, message)
+
+
+def _git_commit(repo: Path, message: str) -> str:
     subprocess.run(("git", "add", "-A"), cwd=repo, check=True)
     subprocess.run(
         ("git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", message),
@@ -184,6 +228,40 @@ def test_main_reads_both_revisions_from_git(
     result = _run_guard(tmp_path, base, head, head_ref)
     assert result.returncode == expected_code, result.stdout + result.stderr
     assert expected_line in result.stdout.splitlines()
+
+
+def test_main_skips_the_file_checks_on_a_stale_base_the_pr_never_touched(tmp_path: Path) -> None:
+    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
+    _commit(tmp_path, BASE_MAP, "base")
+    (tmp_path / guard.BACKUP_PATH).write_text(_serialize({**BASE_MAP, "openrouter/b": _entry(3e-06)}))
+    (tmp_path / guard.SCHEMA_PATH).write_text("{}")
+    stale_base: Final = _commit_code_only(tmp_path, "stale base with drifted backup and schema")
+    head: Final = _commit_code_only(tmp_path, "code change on the stale base")
+    human: Final = _run_guard(tmp_path, stale_base, head, "litellm_fix_pricing")
+    assert human.returncode == 0, human.stdout + human.stderr
+    assert "cost map guard passed (human PR, cost map untouched)" in human.stdout.splitlines()
+    bot: Final = _run_guard(tmp_path, stale_base, head, BOT_REF)
+    assert bot.returncode == 1
+    backup_failure: Final = f"- {guard.BACKUP_PATH} differs from {guard.COST_MAP_PATH}; copy the root file over it"
+    assert backup_failure in bot.stdout.splitlines()
+
+
+def test_main_keeps_the_file_checks_when_a_cost_map_file_is_renamed(tmp_path: Path) -> None:
+    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
+    base: Final = _commit(tmp_path, BASE_MAP, "base")
+    subprocess.run(("git", "mv", guard.COST_MAP_PATH, "renamed.json"), cwd=tmp_path, check=True)
+    head: Final = _git_commit(tmp_path, "rename the cost map")
+    result: Final = _run_guard(tmp_path, base, head, "litellm_fix_pricing")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "cost map guard failed (human PR, file checks only):" in result.stdout.splitlines()
+
+
+def test_main_fails_when_the_changed_files_cannot_be_read(tmp_path: Path) -> None:
+    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
+    head: Final = _commit(tmp_path, BASE_MAP, "head")
+    result: Final = _run_guard(tmp_path, "0" * 40, head, "litellm_fix_pricing")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert result.stdout.startswith("cost map guard failed: git diff ")
 
 
 def test_main_rejects_a_bot_pr_that_edits_code(tmp_path: Path) -> None:
