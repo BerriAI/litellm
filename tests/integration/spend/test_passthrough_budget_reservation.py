@@ -1,10 +1,13 @@
 import uuid
 from hashlib import sha256
+from pathlib import Path
 from typing import Final
 
 import pytest
+import yaml
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
+from integration._support.process import owned_proxy
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse
 from pydantic import JsonValue
@@ -65,14 +68,19 @@ def _served_call(gateway: Gateway, model: str, key: str, scenario_id: str, call:
 
 
 @pytest.mark.covers("spend.budget_reservation.gemini_passthrough_success_releases_reservation_from_spend_counter")
-def test_repeated_gemini_passthrough_calls_stay_served_while_key_spend_is_below_max_budget(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario:
-        gateway.post(
-            "/config/update",
-            {"environment_variables": {"GEMINI_API_BASE": gateway.upstream_url, "GEMINI_API_KEY": "scripted"}},
-        )
+def test_repeated_gemini_passthrough_calls_stay_served_while_key_spend_is_below_max_budget(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["environment_variables"] = {
+        "GEMINI_API_BASE": gateway.upstream_url,
+        "GEMINI_API_KEY": "scripted",
+    }
+    path: Final = tmp_path / "gemini-passthrough.yaml"
+    path.write_text(yaml.safe_dump(config))
+    with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
         model: Final = f"gemini-passthrough-{uuid.uuid4().hex}"
-        created: Final = gateway.post(
+        created: Final = candidate.post(
             "/model/new",
             {
                 "model_name": model,
@@ -91,9 +99,9 @@ def test_repeated_gemini_passthrough_calls_stay_served_while_key_spend_is_below_
         scenario.cleanups.callback(delete_scenario, handle)
         key: Final = scenario.key(models=[model], max_budget=MAX_BUDGET)
         for call in range(1, CALLS_WITHIN_BUDGET + 1):
-            _served_call(gateway, model, key, handle.scenario_id, call)
+            _served_call(candidate, model, key, handle.scenario_id, call)
         assert _key_spend(sha256(key.encode()).hexdigest()) == pytest.approx(CALLS_WITHIN_BUDGET * COST_PER_CALL)
-        denied: Final = gateway.request(
+        denied: Final = candidate.request(
             "POST",
             f"/gemini/v1beta/models/{model}:generateContent",
             _generate_content_request(model),
