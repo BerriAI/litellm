@@ -5,7 +5,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias, cast
+from typing import Final, Literal, TypeAlias
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
@@ -227,9 +227,12 @@ def _budget_windows(value: object) -> frozenset[tuple[object, object]] | None:
     """
     if value is None:
         return frozenset()
-    if not isinstance(value, list) or not all(isinstance(window, dict) for window in cast(list[object], value)):
+    if not isinstance(value, list):
         return None
-    windows_input: Final = _WINDOW_LIST.validate_python(value)
+    try:
+        windows_input: Final = _WINDOW_LIST.validate_python(value)
+    except ValidationError:
+        return None
     windows: Final = frozenset((window.get("budget_duration"), window.get("max_budget")) for window in windows_input)
     if len(windows) != len(windows_input):
         return None

@@ -3022,7 +3022,7 @@ def _general_settings() -> Mapping[str, object]:
         general_settings,  # pyright: ignore[reportUnknownVariableType]  # untyped module-level dict in proxy_server
     )
 
-    return _GENERAL_SETTINGS.validate_python(cast(object, general_settings))
+    return _GENERAL_SETTINGS.validate_python(general_settings)
 
 
 async def _acting_as_team_admin_for_key_update(
