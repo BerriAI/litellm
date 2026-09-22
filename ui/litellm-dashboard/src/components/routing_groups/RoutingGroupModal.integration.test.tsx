@@ -1,4 +1,5 @@
 import userEvent from "@testing-library/user-event";
+import { fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders, screen } from "@/../tests/test-utils";
@@ -6,7 +7,7 @@ import { renderWithProviders, screen } from "@/../tests/test-utils";
 import RoutingGroupModal from "./RoutingGroupModal";
 import type { RoutingGroup } from "./types";
 
-const STRATEGIES = ["simple-shuffle", "latency-based-routing", "usage-based-routing"];
+const STRATEGIES = ["simple-shuffle", "latency-based-routing", "usage-based-routing", "priority"];
 const MODEL_OPTIONS = ["gpt-4o", "claude-sonnet", "gemini-pro"];
 const STRATEGY_DESCRIPTIONS = { "simple-shuffle": "Spreads requests evenly across the group." };
 
@@ -38,6 +39,14 @@ const STORED_GROUP_NULL_ARGS: RoutingGroup = {
   models: ["gpt-4o"],
   routing_strategy: "latency-based-routing",
   routing_strategy_args: null,
+};
+
+const STORED_PRIORITY_GROUP: RoutingGroup = {
+  group_name: "preferred-chat",
+  models: ["gpt-4o", "claude-sonnet"],
+  routing_strategy: "priority",
+  routing_strategy_args: null,
+  model_priorities: { "gpt-4o": 3, "claude-sonnet": 7 },
 };
 
 const EXPECTED_NULL_ARGS_PAYLOAD: RoutingGroup = {
@@ -98,6 +107,138 @@ const save = async (user: ReturnType<typeof userEvent.setup>, name: string) =>
   await user.click(screen.getByRole("button", { name }));
 
 describe("RoutingGroupModal", () => {
+  it("creates a priority group with editable defaults and members already used by another group", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderModal({ groupNameByModel: { "gpt-4o": "legacy-group" } });
+
+    fireEvent.change(screen.getByLabelText("Group Name"), { target: { value: "preferred-chat" } });
+    await pickModels(user, "gpt-4o", "claude-sonnet");
+    await pickStrategy(user, "Priority");
+
+    expect(screen.getByLabelText("Priority for gpt-4o")).toHaveValue("1");
+    expect(screen.getByLabelText("Priority for claude-sonnet")).toHaveValue("2");
+    fireEvent.change(screen.getByLabelText("Priority for claude-sonnet"), { target: { value: "1" } });
+    await save(user, "Create Group");
+
+    const expected: RoutingGroup = {
+      group_name: "preferred-chat",
+      models: ["gpt-4o", "claude-sonnet"],
+      routing_strategy: "priority",
+      routing_strategy_args: null,
+      model_priorities: { "gpt-4o": 1, "claude-sonnet": 1 },
+    };
+    expect(onSubmit).toHaveBeenCalledWith(expected);
+  });
+
+  it("preserves explicit priorities through edit for model names that are dictionary keys", async () => {
+    const user = userEvent.setup();
+    const stored: RoutingGroup = {
+      group_name: "preferred-chat",
+      models: ["provider/model.v1", "constructor", "__proto__"],
+      routing_strategy: "priority",
+      routing_strategy_args: null,
+      model_priorities: Object.fromEntries([
+        ["__proto__", 3],
+        ["constructor", 8],
+        ["provider/model.v1", 2],
+      ]),
+    };
+    const { onSubmit } = renderModal({ mode: "edit", initialValue: stored, modelOptions: stored.models });
+
+    expect(screen.getByLabelText("Priority for provider/model.v1")).toHaveValue("2");
+    expect(screen.getByLabelText("Priority for constructor")).toHaveValue("8");
+    await save(user, "Save Changes");
+
+    expect(onSubmit).toHaveBeenCalledWith(stored);
+  });
+
+  it.each([
+    { catalog: "omits Priority", strategies: ["simple-shuffle"] },
+    { catalog: "includes Priority", strategies: STRATEGIES },
+  ])("keeps unsaved priorities when switching away and back while the catalog $catalog", async ({ strategies }) => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderModal({
+      mode: "edit",
+      initialValue: STORED_PRIORITY_GROUP,
+      availableStrategies: strategies,
+    });
+
+    fireEvent.change(screen.getByLabelText("Priority for gpt-4o"), { target: { value: "9" } });
+    await pickStrategy(user, "simple-shuffle");
+    expect(screen.queryByLabelText("Priority for gpt-4o")).not.toBeInTheDocument();
+    await pickStrategy(user, "Priority");
+    expect(screen.getByLabelText("Priority for gpt-4o")).toHaveValue("9");
+    expect(screen.getByLabelText("Priority for claude-sonnet")).toHaveValue("7");
+    await save(user, "Save Changes");
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      ...STORED_PRIORITY_GROUP,
+      model_priorities: { "gpt-4o": 9, "claude-sonnet": 7 },
+    });
+  });
+
+  it("offers only the backend catalog when creating a group", async () => {
+    const user = userEvent.setup();
+    renderModal({ initialValue: STORED_PRIORITY_GROUP, availableStrategies: ["simple-shuffle"] });
+
+    await user.click(screen.getByLabelText("Routing Strategy"));
+
+    expect(await screen.findByRole("option", { name: "simple-shuffle" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Priority" })).not.toBeInTheDocument();
+  });
+
+  it("shows invalid stored priorities and lets the user repair them before saving", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderModal({
+      mode: "edit",
+      initialValue: {
+        group_name: "preferred-chat",
+        models: ["gpt-4o"],
+        routing_strategy: "priority",
+        model_priorities: { "gpt-4o": 0, unused: 9 },
+      },
+    });
+
+    expect(screen.getByLabelText("Priority for gpt-4o")).toHaveValue("0");
+    expect(screen.getByText("Model is not selected")).toBeInTheDocument();
+    await save(user, "Save Changes");
+    expect(onSubmit).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Remove priority for unused" }));
+    await save(user, "Save Changes");
+    expect(await screen.findByText("Priorities must be whole numbers from 1 to 9007199254740991")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Priority for gpt-4o"), { target: { value: "4" } });
+    await save(user, "Save Changes");
+
+    const expected: RoutingGroup = {
+      group_name: "preferred-chat",
+      models: ["gpt-4o"],
+      routing_strategy: "priority",
+      routing_strategy_args: null,
+      model_priorities: { "gpt-4o": 4 },
+    };
+    expect(onSubmit).toHaveBeenCalledWith(expected);
+  });
+
+  it("restores the legacy ownership restriction when switching away from priority", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderModal({
+      mode: "edit",
+      initialValue: {
+        group_name: "preferred-chat",
+        models: ["gpt-4o"],
+        routing_strategy: "priority",
+        model_priorities: { "gpt-4o": 1 },
+      },
+      groupNameByModel: { "gpt-4o": "legacy-group" },
+    });
+
+    await pickStrategy(user, "simple-shuffle");
+    await save(user, "Save Changes");
+
+    expect(await screen.findByText(/Already claimed: gpt-4o/)).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("submits an untouched edit of a group whose stored arguments are null", async () => {
     const user = userEvent.setup();
     const { onSubmit } = renderModal({ mode: "edit", initialValue: STORED_GROUP_NULL_ARGS });

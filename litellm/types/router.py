@@ -6,7 +6,7 @@ import datetime
 import enum
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
@@ -59,6 +59,25 @@ class RoutingGroup(BaseModel):
     models: list[str]
     routing_strategy: str
     routing_strategy_args: dict | None = None
+
+    model_priorities: dict[str, Annotated[int, Field(strict=True, ge=1, le=9007199254740991)]] | None = Field(
+        default=None,
+        description="For priority groups, every model's priority. Lower numbers are tried first; equal numbers share traffic.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_model_priorities(self) -> "RoutingGroup":
+        if self.routing_strategy != "priority":
+            if self.model_priorities:
+                raise ValueError("model_priorities requires routing_strategy='priority'")
+            return self
+        if not self.models or len(self.models) != len(frozenset(self.models)):
+            raise ValueError("Priority routing groups require nonempty, distinct models")
+        if self.model_priorities is None or frozenset(self.model_priorities) != frozenset(self.models):
+            raise ValueError("model_priorities must contain exactly the group's models")
+        if self.routing_strategy_args:
+            raise ValueError("Priority routing groups use model_priorities, not routing_strategy_args")
+        return self
 
     model_config = ConfigDict(protected_namespaces=())
 

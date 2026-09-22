@@ -4,6 +4,7 @@ Check if prompt caching is valid for a given deployment
 Route to previously cached model id, if valid
 """
 
+from collections.abc import Callable
 from typing import Final, cast
 
 from litellm import verbose_logger
@@ -48,8 +49,10 @@ def _get_min_token_count_for_deployments(healthy_deployments: list[dict]) -> int
 
 
 class PromptCachingDeploymentCheck(CustomLogger):
-    def __init__(self, cache: DualCache):
+    def __init__(self, cache: DualCache, is_priority_group: Callable[[str], bool] | None = None):
+        super().__init__()
         self.cache = cache
+        self.is_priority_group = is_priority_group
 
     async def async_filter_deployments(
         self,
@@ -59,6 +62,8 @@ class PromptCachingDeploymentCheck(CustomLogger):
         request_kwargs: dict | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
+        if self.is_priority_group is not None and self.is_priority_group(model):
+            return healthy_deployments
         if request_kwargs is not None and request_kwargs.get("_target_order") is not None:
             return healthy_deployments
 

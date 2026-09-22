@@ -33,6 +33,9 @@ class RouterSettingsResponse(BaseModel):
     fields: list[RouterSettingsField] = Field(description="List of all configurable router settings with metadata")
     current_values: dict[str, Any] = Field(description="Current values of router settings")
     routing_strategy_descriptions: dict[str, str] = Field(description="Descriptions for each routing strategy option")
+    routing_group_strategies: tuple[str, ...] = Field(
+        description="Strategies supported when constructing a routing group"
+    )
     source: dict[str, FieldSource] = Field(description="Source of each current router setting")
 
 
@@ -41,6 +44,9 @@ class RouterFieldsResponse(BaseModel):
         description="List of all configurable router settings with metadata (without field values)"
     )
     routing_strategy_descriptions: dict[str, str] = Field(description="Descriptions for each routing strategy option")
+    routing_group_strategies: tuple[str, ...] = Field(
+        description="Strategies supported when constructing a routing group"
+    )
 
 
 def _router_setting_source(
@@ -114,7 +120,10 @@ async def get_router_settings(
         if llm_router is not None:
             # Router exposes routing groups as private `_routing_groups`; the
             # generic `hasattr` loop below would miss them.
-            current_values["routing_groups"] = [group.model_dump() for group in llm_router._routing_groups.values()]
+            current_values["routing_groups"] = [
+                group.model_dump(exclude=frozenset(("model_priorities",)) if group.model_priorities is None else None)
+                for group in llm_router._routing_groups.values()
+            ]
             for field in router_fields:
                 if field.field_name == "routing_groups":
                     continue
@@ -147,6 +156,7 @@ async def get_router_settings(
             fields=router_fields,
             current_values=current_values,
             routing_strategy_descriptions=ROUTING_STRATEGY_DESCRIPTIONS,
+            routing_group_strategies=(*available_routing_strategies, "priority"),
             source=source,
         )
     except Exception as e:
@@ -196,6 +206,7 @@ async def get_router_fields(
         return RouterFieldsResponse(
             fields=router_fields,
             routing_strategy_descriptions=ROUTING_STRATEGY_DESCRIPTIONS,
+            routing_group_strategies=(*available_routing_strategies, "priority"),
         )
     except Exception as e:
         verbose_proxy_logger.error("Error fetching router fields: %s", e)
