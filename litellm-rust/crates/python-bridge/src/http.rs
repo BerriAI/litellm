@@ -12,7 +12,59 @@ use litellm_http::{
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 
-use crate::{coercion::Field, python_settings::PythonSettings};
+use crate::{
+    coercion::Field,
+    python_settings::{Adapter, PythonSettings, SettingSpec, Snapshot},
+};
+
+const fn http(name: &'static str, adapter: Adapter) -> SettingSpec {
+    SettingSpec::new(PythonSettings::Http, name, adapter)
+}
+
+pub(crate) const SSL_VERIFY: SettingSpec = http("ssl_verify", Adapter::SslVerifyInput)
+    .shapes(&["none", "bool", "str"])
+    .unsupported_live("configuration_error");
+pub(crate) const SSL_CERTIFICATE: SettingSpec =
+    http("ssl_certificate", Adapter::OptionalStrictString);
+pub(crate) const SSL_SECURITY_LEVEL: SettingSpec =
+    http("ssl_security_level", Adapter::TuningString);
+pub(crate) const SSL_ECDH_CURVE: SettingSpec = http("ssl_ecdh_curve", Adapter::TuningString);
+pub(crate) const FORCE_IPV4: SettingSpec = http("force_ipv4", Adapter::Truthy);
+pub(crate) const HTTP2: SettingSpec = http("http2", Adapter::ExactTrue);
+pub(crate) const AIOHTTP_TRUST_ENV: SettingSpec = http("aiohttp_trust_env", Adapter::Truthy);
+pub(crate) const DISABLE_AIOHTTP_TRUST_ENV: SettingSpec =
+    http("disable_aiohttp_trust_env", Adapter::Truthy);
+pub(crate) const DISABLE_AIOHTTP_TRANSPORT: SettingSpec =
+    http("disable_aiohttp_transport", Adapter::ExactTrue);
+pub(crate) const USER_AGENT: SettingSpec = http("user_agent", Adapter::StrictString).accessor();
+
+#[cfg(test)]
+pub(crate) const HTTP_SPECS: &[SettingSpec] = &[
+    SSL_VERIFY,
+    SSL_CERTIFICATE,
+    SSL_SECURITY_LEVEL,
+    SSL_ECDH_CURVE,
+    FORCE_IPV4,
+    HTTP2,
+    AIOHTTP_TRUST_ENV,
+    DISABLE_AIOHTTP_TRUST_ENV,
+    DISABLE_AIOHTTP_TRANSPORT,
+    USER_AGENT,
+];
+
+pub(crate) const USER_URL_VALIDATION: SettingSpec = SettingSpec::new(
+    PythonSettings::UrlPolicy,
+    "user_url_validation",
+    Adapter::Truthy,
+);
+pub(crate) const USER_URL_ALLOWED_HOSTS: SettingSpec = SettingSpec::new(
+    PythonSettings::UrlPolicy,
+    "user_url_allowed_hosts",
+    Adapter::HostCollection,
+);
+
+#[cfg(test)]
+pub(crate) const URL_POLICY_SPECS: &[SettingSpec] = &[USER_URL_VALIDATION, USER_URL_ALLOWED_HOSTS];
 
 static POOL: LazyLock<HttpClientPool> =
     LazyLock::new(|| HttpClientPool::new(Arc::new(PublicDnsResolver)));
@@ -80,12 +132,11 @@ pub(crate) fn url_policy(py: Python<'_>) -> PyResult<UrlPolicy> {
     project_url_policy(&PythonSettings::UrlPolicy.read(py)?)
 }
 
-fn project_url_policy(value: &Bound<'_, PyAny>) -> PyResult<UrlPolicy> {
+fn project_url_policy(snapshot: &Snapshot<'_>) -> PyResult<UrlPolicy> {
     Ok(UrlPolicy {
-        validate: Field::read(value, "url_policy.user_url_validation")?
-            .truthy()?
-            .0,
-        allowed_hosts: Field::read(value, "url_policy.user_url_allowed_hosts")?
+        validate: snapshot.field(&USER_URL_VALIDATION)?.truthy()?.0,
+        allowed_hosts: snapshot
+            .field(&USER_URL_ALLOWED_HOSTS)?
             .host_collection()?
             .0,
     })
@@ -93,7 +144,7 @@ fn project_url_policy(value: &Bound<'_, PyAny>) -> PyResult<UrlPolicy> {
 
 fn call_ssl_verify(kwargs: &Bound<'_, PyDict>) -> PyResult<Option<SslVerify>> {
     match kwargs.get_item("ssl_verify")? {
-        Some(value) => Ok(Field::new("request.ssl_verify", value).ssl_verify()?.0),
+        Some(value) => Ok(Field::new("request", "ssl_verify", value).ssl_verify()?.0),
         None => Ok(None),
     }
 }
@@ -106,39 +157,22 @@ fn for_call(call_ssl_verify: Option<SslVerify>, asynchronous: bool) -> HttpSetti
     }
 }
 
-fn configured(value: &Bound<'_, PyAny>) -> PyResult<HttpSettingsLayer> {
+fn configured(snapshot: &Snapshot<'_>) -> PyResult<HttpSettingsLayer> {
     Ok(HttpSettingsLayer {
-        ssl_verify: Field::read(value, "http_settings.ssl_verify")?
-            .ssl_verify()?
-            .0,
-        ssl_certificate: Field::read(value, "http_settings.ssl_certificate")?
+        ssl_verify: snapshot.field(&SSL_VERIFY)?.ssl_verify()?.0,
+        ssl_certificate: snapshot
+            .field(&SSL_CERTIFICATE)?
             .optional_strict_string()?
             .0
             .map(PathBuf::from),
-        ssl_security_level: Field::read(value, "http_settings.ssl_security_level")?
-            .tuning_string()?
-            .0,
-        ssl_ecdh_curve: Field::read(value, "http_settings.ssl_ecdh_curve")?
-            .tuning_string()?
-            .0,
-        force_ipv4: Some(Field::read(value, "http_settings.force_ipv4")?.truthy()?.0),
-        http2: Some(Field::read(value, "http_settings.http2")?.exact_true().0),
-        aiohttp_trust_env: Some(
-            Field::read(value, "http_settings.aiohttp_trust_env")?
-                .truthy()?
-                .0,
-        ),
-        disable_aiohttp_trust_env: Some(
-            Field::read(value, "http_settings.disable_aiohttp_trust_env")?
-                .truthy()?
-                .0,
-        ),
-        disable_aiohttp_transport: Some(
-            Field::read(value, "http_settings.disable_aiohttp_transport")?
-                .exact_true()
-                .0,
-        ),
-        user_agent: Some(Field::read(value, "http_settings.user_agent")?.schema_string()?),
+        ssl_security_level: snapshot.field(&SSL_SECURITY_LEVEL)?.tuning_string()?.0,
+        ssl_ecdh_curve: snapshot.field(&SSL_ECDH_CURVE)?.tuning_string()?.0,
+        force_ipv4: Some(snapshot.field(&FORCE_IPV4)?.truthy()?.0),
+        http2: Some(snapshot.field(&HTTP2)?.exact_true().0),
+        aiohttp_trust_env: Some(snapshot.field(&AIOHTTP_TRUST_ENV)?.truthy()?.0),
+        disable_aiohttp_trust_env: Some(snapshot.field(&DISABLE_AIOHTTP_TRUST_ENV)?.truthy()?.0),
+        disable_aiohttp_transport: Some(snapshot.field(&DISABLE_AIOHTTP_TRANSPORT)?.exact_true().0),
+        user_agent: Some(snapshot.field(&USER_AGENT)?.schema_string()?),
         ..HttpSettingsLayer::default()
     })
 }
@@ -152,7 +186,7 @@ mod tests {
     use super::*;
     use crate::python_settings::CONTRACT;
 
-    fn python_settings<'py>(py: Python<'py>, overrides: &str) -> Bound<'py, PyAny> {
+    fn python_settings<'py>(py: Python<'py>, overrides: &str) -> Snapshot<'py> {
         let source = format!(
             "
 import json
@@ -177,7 +211,7 @@ settings = types.SimpleNamespace(**{{name: defaults[name] for name in json.loads
         locals.set_item("contract", CONTRACT).unwrap();
         let source = std::ffi::CString::new(source).unwrap();
         py.run(&source, Some(&locals), Some(&locals)).unwrap();
-        locals.get_item("settings").unwrap().unwrap()
+        PythonSettings::Http.snapshot(locals.get_item("settings").unwrap().unwrap())
     }
 
     #[test]
@@ -395,7 +429,7 @@ user_agent='litellm/9.9.9',
         Python::attach(|py| {
             let value = py.eval(c"__import__('types').SimpleNamespace(user_url_validation=[], user_url_allowed_hosts=['B.test', 'a.test.', 'b.test'])", None, None).unwrap();
             assert_eq!(
-                project_url_policy(&value).unwrap(),
+                project_url_policy(&PythonSettings::UrlPolicy.snapshot(value)).unwrap(),
                 UrlPolicy {
                     validate: false,
                     allowed_hosts: vec!["a.test".into(), "b.test".into()],

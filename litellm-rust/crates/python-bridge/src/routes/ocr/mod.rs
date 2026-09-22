@@ -16,7 +16,29 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
-use crate::{coercion::Field, http, python_settings::PythonSettings, secrets};
+use crate::{
+    http,
+    python_settings::{Adapter, PythonSettings, SettingSpec, Snapshot},
+    secrets,
+};
+
+const fn provider_default(name: &'static str, adapter: Adapter) -> SettingSpec {
+    SettingSpec::new(PythonSettings::ProviderDefaults, name, adapter)
+}
+
+pub(crate) const VERTEX_PROJECT: SettingSpec =
+    provider_default("vertex_project", Adapter::FalsyOptionalString).sensitive();
+pub(crate) const VERTEX_LOCATION: SettingSpec =
+    provider_default("vertex_location", Adapter::FalsyOptionalString).sensitive();
+pub(crate) const ENABLE_AZURE_AD_TOKEN_REFRESH: SettingSpec =
+    provider_default("enable_azure_ad_token_refresh", Adapter::ExactTrue);
+
+#[cfg(test)]
+pub(crate) const PROVIDER_DEFAULT_SPECS: &[SettingSpec] = &[
+    VERTEX_PROJECT,
+    VERTEX_LOCATION,
+    ENABLE_AZURE_AD_TOKEN_REFRESH,
+];
 
 const SURFACE: LegacySurface = LegacySurface {
     call_type: "ocr",
@@ -63,20 +85,14 @@ fn ocr_settings(py: Python<'_>) -> PyResult<OcrSettings> {
     project_provider_defaults(&PythonSettings::ProviderDefaults.read(py)?)
 }
 
-fn project_provider_defaults(value: &Bound<'_, PyAny>) -> PyResult<OcrSettings> {
+fn project_provider_defaults(snapshot: &Snapshot<'_>) -> PyResult<OcrSettings> {
     Ok(OcrSettings {
-        vertex_project: Field::read(value, "provider_defaults.vertex_project")?
-            .falsy_optional_string()?
+        vertex_project: snapshot.field(&VERTEX_PROJECT)?.falsy_optional_string()?.0,
+        vertex_location: snapshot.field(&VERTEX_LOCATION)?.falsy_optional_string()?.0,
+        enable_azure_ad_token_refresh: snapshot
+            .field(&ENABLE_AZURE_AD_TOKEN_REFRESH)?
+            .exact_true()
             .0,
-        vertex_location: Field::read(value, "provider_defaults.vertex_location")?
-            .falsy_optional_string()?
-            .0,
-        enable_azure_ad_token_refresh: Field::read(
-            value,
-            "provider_defaults.enable_azure_ad_token_refresh",
-        )?
-        .exact_true()
-        .0,
         ..OcrSettings::from_environment(&ProcessEnvironment)
     })
 }
@@ -105,12 +121,15 @@ pub(crate) fn aocr(
 mod tests {
     use pyo3::prelude::*;
 
+    use crate::python_settings::PythonSettings;
+
     #[test]
     fn provider_defaults_distinguish_falsey_values_and_exact_true() {
         Python::initialize();
         Python::attach(|py| {
             let value = py.eval(c"__import__('types').SimpleNamespace(vertex_project=[], vertex_location=0, enable_azure_ad_token_refresh=1)", None, None).unwrap();
-            let projected = super::project_provider_defaults(&value).unwrap();
+            let snapshot = PythonSettings::ProviderDefaults.snapshot(value.clone());
+            let projected = super::project_provider_defaults(&snapshot).unwrap();
             assert_eq!(projected.vertex_project, None);
             assert_eq!(projected.vertex_location, None);
             assert!(!projected.enable_azure_ad_token_refresh);
@@ -119,12 +138,12 @@ mod tests {
             value
                 .setattr("enable_azure_ad_token_refresh", true)
                 .unwrap();
-            let next = super::project_provider_defaults(&value).unwrap();
+            let next = super::project_provider_defaults(&snapshot).unwrap();
             assert_eq!(next.vertex_project.as_deref(), Some("project"));
             assert_eq!(next.vertex_location.as_deref(), Some("region"));
             assert!(next.enable_azure_ad_token_refresh);
             value.setattr("vertex_project", 1).unwrap();
-            let error = super::project_provider_defaults(&value).err().unwrap();
+            let error = super::project_provider_defaults(&snapshot).err().unwrap();
             assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
             assert!(
                 error

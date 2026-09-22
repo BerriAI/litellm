@@ -1,8 +1,62 @@
 use litellm_secrets_types::{AccessMode, KeyManagementSettings, KeyManagementSystem, SecretValue};
-use pyo3::{prelude::*, types::PyAny};
 use serde_json::Value;
 
-use crate::coercion::{Field, ProjectionError};
+use crate::{
+    coercion::{Field, ProjectionError},
+    python_settings::{Adapter, PythonSettings, SettingSpec, Snapshot},
+};
+
+const fn secret_manager(name: &'static str, adapter: Adapter) -> SettingSpec {
+    SettingSpec::new(PythonSettings::SecretManager, name, adapter)
+}
+
+const fn aws(name: &'static str) -> SettingSpec {
+    secret_manager(name, Adapter::FalsyOptionalString)
+}
+
+pub(crate) const SYSTEM: SettingSpec = secret_manager("system", Adapter::FalsyOptionalString);
+pub(crate) const ACCESS_MODE: SettingSpec = secret_manager("access_mode", Adapter::StrictString);
+pub(crate) const HOSTED_KEYS: SettingSpec =
+    secret_manager("hosted_keys", Adapter::StringCollection).shapes(&["none", "list"]);
+pub(crate) const PRIMARY_SECRET_NAME: SettingSpec =
+    secret_manager("primary_secret_name", Adapter::FalsyOptionalString);
+pub(crate) const STORE_VIRTUAL_KEYS: SettingSpec =
+    secret_manager("store_virtual_keys", Adapter::Truthy);
+pub(crate) const PREFIX_FOR_STORED_VIRTUAL_KEYS: SettingSpec =
+    secret_manager("prefix_for_stored_virtual_keys", Adapter::StrictString);
+pub(crate) const KMS_KEY_ID: SettingSpec =
+    secret_manager("kms_key_id", Adapter::FalsyOptionalString);
+pub(crate) const CUSTOM_SECRET_MANAGER: SettingSpec =
+    secret_manager("custom_secret_manager", Adapter::FalsyOptionalString);
+pub(crate) const AWS_REGION_NAME: SettingSpec = aws("aws_region_name");
+pub(crate) const AWS_ROLE_NAME: SettingSpec = aws("aws_role_name");
+pub(crate) const AWS_SESSION_NAME: SettingSpec = aws("aws_session_name");
+pub(crate) const AWS_EXTERNAL_ID: SettingSpec = aws("aws_external_id").sensitive();
+pub(crate) const AWS_PROFILE_NAME: SettingSpec = aws("aws_profile_name");
+pub(crate) const AWS_WEB_IDENTITY_TOKEN: SettingSpec = aws("aws_web_identity_token").sensitive();
+pub(crate) const AWS_STS_ENDPOINT: SettingSpec = aws("aws_sts_endpoint");
+pub(crate) const REPLICA_REGIONS: SettingSpec =
+    secret_manager("replica_regions", Adapter::StringCollection).shapes(&["none", "list"]);
+
+#[cfg(test)]
+pub(crate) const SECRET_MANAGER_SPECS: &[SettingSpec] = &[
+    SYSTEM,
+    ACCESS_MODE,
+    HOSTED_KEYS,
+    PRIMARY_SECRET_NAME,
+    STORE_VIRTUAL_KEYS,
+    PREFIX_FOR_STORED_VIRTUAL_KEYS,
+    KMS_KEY_ID,
+    CUSTOM_SECRET_MANAGER,
+    AWS_REGION_NAME,
+    AWS_ROLE_NAME,
+    AWS_SESSION_NAME,
+    AWS_EXTERNAL_ID,
+    AWS_PROFILE_NAME,
+    AWS_WEB_IDENTITY_TOKEN,
+    AWS_STS_ENDPOINT,
+    REPLICA_REGIONS,
+];
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct SecretManagerSnapshot {
@@ -10,61 +64,36 @@ pub(crate) struct SecretManagerSnapshot {
     pub(crate) settings: KeyManagementSettings,
 }
 
-pub(crate) fn project(value: &Bound<'_, PyAny>) -> Result<SecretManagerSnapshot, ProjectionError> {
-    let system = parse_optional_system(&Field::read(value, "secret_manager.system")?)?;
-    let access_mode = parse_access_mode(&Field::read(value, "secret_manager.access_mode")?)?;
-    let hosted_keys = Field::read(value, "secret_manager.hosted_keys")?
-        .optional_string_collection()?
-        .map(|collection| collection.0);
-    let replica_regions = Field::read(value, "secret_manager.replica_regions")?
-        .optional_string_collection()?
-        .map(|collection| collection.0);
+pub(crate) fn project(snapshot: &Snapshot<'_>) -> Result<SecretManagerSnapshot, ProjectionError> {
+    let string = |spec: &SettingSpec| -> Result<Option<String>, ProjectionError> {
+        Ok(snapshot.field(spec)?.falsy_optional_string()?.0)
+    };
+    let collection = |spec: &SettingSpec| -> Result<Option<Vec<String>>, ProjectionError> {
+        Ok(snapshot
+            .field(spec)?
+            .optional_string_collection()?
+            .map(|collection| collection.0))
+    };
+    let system = parse_optional_system(&snapshot.field(&SYSTEM)?)?;
+    let access_mode = parse_access_mode(&snapshot.field(&ACCESS_MODE)?)?;
     let settings = KeyManagementSettings {
-        hosted_keys,
-        store_virtual_keys: Some(
-            Field::read(value, "secret_manager.store_virtual_keys")?
-                .truthy()?
-                .0,
-        ),
-        prefix_for_stored_virtual_keys: Field::read(
-            value,
-            "secret_manager.prefix_for_stored_virtual_keys",
-        )?
-        .strict_string()?,
+        hosted_keys: collection(&HOSTED_KEYS)?,
+        store_virtual_keys: Some(snapshot.field(&STORE_VIRTUAL_KEYS)?.truthy()?.0),
+        prefix_for_stored_virtual_keys: snapshot
+            .field(&PREFIX_FOR_STORED_VIRTUAL_KEYS)?
+            .strict_string()?,
         access_mode,
-        primary_secret_name: Field::read(value, "secret_manager.primary_secret_name")?
-            .falsy_optional_string()?
-            .0,
-        kms_key_id: Field::read(value, "secret_manager.kms_key_id")?
-            .falsy_optional_string()?
-            .0,
-        custom_secret_manager: Field::read(value, "secret_manager.custom_secret_manager")?
-            .falsy_optional_string()?
-            .0,
-        aws_region_name: Field::read(value, "secret_manager.aws_region_name")?
-            .falsy_optional_string()?
-            .0,
-        aws_role_name: Field::read(value, "secret_manager.aws_role_name")?
-            .falsy_optional_string()?
-            .0,
-        aws_session_name: Field::read(value, "secret_manager.aws_session_name")?
-            .falsy_optional_string()?
-            .0,
-        aws_external_id: Field::read(value, "secret_manager.aws_external_id")?
-            .falsy_optional_string()?
-            .0
-            .map(SecretValue::new),
-        aws_profile_name: Field::read(value, "secret_manager.aws_profile_name")?
-            .falsy_optional_string()?
-            .0,
-        aws_web_identity_token: Field::read(value, "secret_manager.aws_web_identity_token")?
-            .falsy_optional_string()?
-            .0
-            .map(SecretValue::new),
-        aws_sts_endpoint: Field::read(value, "secret_manager.aws_sts_endpoint")?
-            .falsy_optional_string()?
-            .0,
-        replica_regions,
+        primary_secret_name: string(&PRIMARY_SECRET_NAME)?,
+        kms_key_id: string(&KMS_KEY_ID)?,
+        custom_secret_manager: string(&CUSTOM_SECRET_MANAGER)?,
+        aws_region_name: string(&AWS_REGION_NAME)?,
+        aws_role_name: string(&AWS_ROLE_NAME)?,
+        aws_session_name: string(&AWS_SESSION_NAME)?,
+        aws_external_id: string(&AWS_EXTERNAL_ID)?.map(SecretValue::new),
+        aws_profile_name: string(&AWS_PROFILE_NAME)?,
+        aws_web_identity_token: string(&AWS_WEB_IDENTITY_TOKEN)?.map(SecretValue::new),
+        aws_sts_endpoint: string(&AWS_STS_ENDPOINT)?,
+        replica_regions: collection(&REPLICA_REGIONS)?,
         ..KeyManagementSettings::default()
     };
     Ok(SecretManagerSnapshot { system, settings })
@@ -98,6 +127,7 @@ mod tests {
     };
 
     use super::project;
+    use crate::python_settings::PythonSettings;
 
     fn snapshot<'py>(
         py: Python<'py>,
@@ -105,7 +135,7 @@ mod tests {
         access_mode: &str,
         store_virtual_keys: Bound<'py, PyAny>,
         hosted_keys: Bound<'py, PyAny>,
-    ) -> Bound<'py, PyAny> {
+    ) -> crate::python_settings::Snapshot<'py> {
         let locals = PyDict::new(py);
         locals.set_item("system", system).unwrap();
         locals.set_item("access_mode", access_mode).unwrap();
@@ -160,12 +190,14 @@ root = SimpleNamespace(secret_manager=SecretManager(
             Some(&locals),
         )
         .unwrap();
-        locals
-            .get_item("root")
-            .unwrap()
-            .unwrap()
-            .getattr("secret_manager")
-            .unwrap()
+        PythonSettings::SecretManager.snapshot(
+            locals
+                .get_item("root")
+                .unwrap()
+                .unwrap()
+                .getattr("secret_manager")
+                .unwrap(),
+        )
     }
 
     #[rstest::rstest]
