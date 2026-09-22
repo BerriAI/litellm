@@ -134,6 +134,9 @@ fn native_events_reach_python_with_levels_context_reentry_and_http_deduplication
     Python::attach(|py| {
         let locals = PyDict::new(py);
         locals
+            .set_item("repo_root", concat!(env!("CARGO_MANIFEST_DIR"), "/../../.."))
+            .unwrap();
+        locals
             .set_item(
                 "machine_warning",
                 wrap_pyfunction!(machine_warning, py).unwrap(),
@@ -166,10 +169,24 @@ fn native_events_reach_python_with_levels_context_reentry_and_http_deduplication
         locals
             .set_item("http_warning", wrap_pyfunction!(http_warning, py).unwrap())
             .unwrap();
+        let importable = py
+            .eval(
+                c"__import__('importlib.util', fromlist=['util']).find_spec('dotenv') is not None",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap()
+            .is_truthy()
+            .unwrap();
+        if !importable {
+            eprintln!("SKIP: litellm package dependencies are not importable in this interpreter");
+            return;
+        }
         py.run(c"
 import asyncio
 import logging
 import sys
+sys.path.insert(0, repo_root)
 import litellm
 from litellm._logging import verbose_logger, session_id_var, trace_id_var
 
