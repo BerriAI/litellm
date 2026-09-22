@@ -137,6 +137,10 @@
           "type": "number",
           "minimum": 0
         },
+        "cache_read_input_image_token_cost": {
+          "type": "number",
+          "minimum": 0
+        },
         "cache_read_input_token_cost": {
           "type": "number",
           "minimum": 0,
@@ -582,6 +586,18 @@
           "type": "number",
           "minimum": 0
         },
+        "output_cost_per_image_1024": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_image_1536": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_image_512": {
+          "type": "number",
+          "minimum": 0
+        },
         "output_cost_per_image_token": {
           "type": "number",
           "minimum": 0
@@ -603,6 +619,10 @@
           "type": "number",
           "minimum": 0
         },
+        "output_cost_per_second_2k": {
+          "type": "number",
+          "minimum": 0
+        },
         "output_cost_per_second_480p": {
           "type": "number",
           "minimum": 0
@@ -612,6 +632,10 @@
           "minimum": 0
         },
         "output_cost_per_second_720p": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_second_768p": {
           "type": "number",
           "minimum": 0
         },
@@ -813,6 +837,9 @@
           }
         },
         "supports_adaptive_thinking": {
+          "type": "boolean"
+        },
+        "supports_anthropic_compaction": {
           "type": "boolean"
         },
         "supports_anthropic_thinking_payload": {

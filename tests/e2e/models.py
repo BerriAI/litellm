@@ -60,6 +60,7 @@ class KeyMetadata(BaseModel):
     priority: str | None = None
     batch_enqueued_token_limit: int | None = None
     tag: str | None = None
+    guardrails: list[str] | None = None
 
 
 class ObjectPermission(BaseModel):
@@ -298,6 +299,7 @@ class ChatBody(BaseModel):
     max_completion_tokens: int | None = None
     temperature: float | None = None
     user: str | None = None
+    safety_identifier: str | None = None
     metadata: ChatMetadata | None = None
     reasoning_effort: str | None = None
     thinking: ThinkingParam | None = None
@@ -696,6 +698,40 @@ class EmbedResponse(BaseModel):
     model: str | None = None
 
 
+# ---------- videos ----------
+
+
+class VideoCreateBody(BaseModel):
+    model: str
+    prompt: str
+    seconds: str | None = None
+
+
+class VideoCreateResponse(BaseModel):
+    id: str
+    status: str | None = None
+
+
+# ---------- rerank ----------
+
+
+class RerankBody(BaseModel):
+    model: str
+    query: str
+    documents: list[str]
+    top_n: int
+    cache: dict[str, bool] | None = {"no-cache": True}
+
+
+class RerankItem(BaseModel):
+    index: int | None = None
+    relevance_score: float | None = None
+
+
+class RerankResponse(BaseModel):
+    results: list[RerankItem] = []
+
+
 # ---------- ocr ----------
 
 
@@ -722,6 +758,77 @@ class OcrResponse(BaseModel):
     object: str | None = None
     model: str | None = None
     pages: list[OcrPage] = []
+
+
+# ---------- completions ----------
+
+
+class CompletionBody(BaseModel):
+    model: str
+    prompt: str
+    max_tokens: int = 8
+    n: int = 1
+
+
+class CompletionChoice(BaseModel):
+    text: str = ""
+
+
+class CompletionResponse(BaseModel):
+    choices: list[CompletionChoice] = []
+
+
+# ---------- images ----------
+
+
+class ImageGenerationBody(BaseModel):
+    model: str
+    prompt: str
+    n: int = 1
+    size: str = "1024x1024"
+    quality: str = "low"
+
+
+class ImageDatum(BaseModel):
+    url: str | None = None
+    b64_json: str | None = None
+
+
+class ImageGenerationResponse(BaseModel):
+    data: list[ImageDatum] = []
+
+
+# ---------- audio ----------
+
+
+class SpeechBody(BaseModel):
+    model: str
+    input: str
+    voice: str = "alloy"
+
+
+class TranscriptionForm(BaseModel):
+    model: str
+
+
+class TranscriptionResponse(BaseModel):
+    text: str = ""
+
+
+# ---------- moderations ----------
+
+
+class ModerationBody(BaseModel):
+    model: str
+    input: str
+
+
+class ModerationResult(BaseModel):
+    flagged: bool
+
+
+class ModerationResponse(BaseModel):
+    results: list[ModerationResult] = []
 
 
 # ---------- spend logs ----------
@@ -767,6 +874,8 @@ class SpendLogRow(BaseModel):
     request_tags: list[str] | None = None
     metadata: SpendLogMetadata | None = None
     proxy_server_request: JsonValue = None
+    response: JsonValue = None
+    litellm_call_id: str | None = None
 
 
 class SpendLogs(RootModel[list[SpendLogRow]]):
@@ -915,6 +1024,23 @@ class RouterSettingsResponse(BaseModel):
     current_values: RouterCurrentValues
 
 
+class ConfigListParams(BaseModel):
+    config_type: Literal["general_settings"]
+
+
+class ConfigField(BaseModel):
+    """One row of GET /config/list: a general_settings field and the value the
+    proxy is running with, the two fields a test preconditions on."""
+
+    model_config = ConfigDict(extra="ignore")
+    field_name: str
+    field_value: JsonValue = None
+
+
+class ConfigFieldList(RootModel[tuple[ConfigField, ...]]):
+    """GET /config/list answers with a bare array of general_settings fields."""
+
+
 class CostMapEntry(BaseModel):
     model_config = ConfigDict(extra="ignore")
     litellm_provider: str | None = None
@@ -976,6 +1102,7 @@ class LiteLLMParamsBody(BaseModel):
     api_base: str | None = None
     api_version: str | None = None
     realtime_protocol: str | None = None
+    allowed_openai_params: list[str] | None = None
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_region_name: str | None = None
@@ -989,6 +1116,7 @@ class LiteLLMParamsBody(BaseModel):
     s3_region_name: str | None = None
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
+    s3_encryption_key_id: str | None = None
     aws_batch_role_arn: str | None = None
     aws_role_name: str | None = None
     aws_session_name: str | None = None
@@ -1028,6 +1156,7 @@ class ModelInfoBody(BaseModel):
     mode: ModelMode | None = None
     access_groups: list[str] | None = None
     team_id: str | None = None
+    allowed_fails: int | None = None
     allowed_fails_policy: dict[str, int] | None = None
 
 

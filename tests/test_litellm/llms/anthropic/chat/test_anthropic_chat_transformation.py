@@ -1,7 +1,11 @@
 
-import pytest
-
+import json
+from typing import Final
 from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
+import respx
 
 import litellm
 from litellm.constants import (
@@ -3769,6 +3773,70 @@ def test_multiple_compaction_blocks():
     assert len(compaction_blocks) == 2
     assert compaction_blocks[0]["content"] == "First summary..."
     assert compaction_blocks[1]["content"] == "Second summary..."
+
+
+@pytest.mark.parametrize("messages_api,gateway,native_endpoint", [
+    (False, False, False), (True, False, False), (False, True, False), (True, True, False), (True, True, True),
+])
+async def test_native_compaction_wire_roundtrip(
+    messages_api: bool, gateway: bool, native_endpoint: bool,
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    monkeypatch.setattr(litellm.anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", False)
+    block: Final = {"type": "compaction", "content": "Exact summary", "signature": "opaque-signature"}
+    operation: Final = {"type": "summarize", "instructions": "Keep identifiers"}
+    usage: Final = {"input_tokens": 0, "output_tokens": 0,
+                    "iterations": [{"type": "compaction", "input_tokens": 103, "output_tokens": 165}]}
+    chat_wire: Final = gateway and not native_endpoint
+    base: Final = "https://gateway.test/v1" if gateway else "https://api.anthropic.com/v1"
+    route: Final = respx_mock.post(f"{base}/{'chat/completions' if chat_wire else 'messages'}")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        payload: Final = json.loads(request.content)
+        assert len(request.headers.get_list("anthropic-beta")) == 1
+        assert {value.strip() for value in request.headers["anthropic-beta"].split(",")} == {
+            "compact-2026-09-04", "interleaved-thinking-2025-05-14",
+        }
+        if "compaction" in payload:
+            assert payload["compaction"] == operation
+        else:
+            assert payload["messages"][0] == {"role": "assistant", "content": [block]}
+        body: Final = (
+            {"id": "chatcmpl_compact", "object": "chat.completion", "created": 1, "model": "claude-sonnet-5",
+             "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "",
+                          "provider_specific_fields": {"compaction_blocks": [block]}}}],
+             "usage": {"prompt_tokens": 103, "completion_tokens": 165, "total_tokens": 268}}
+            if chat_wire else
+            {"id": "msg_compact", "type": "message", "role": "assistant", "model": "claude-sonnet-5",
+             "content": [block], "stop_reason": "compaction", "usage": usage}
+        )
+        return httpx.Response(200, json=body)
+
+    route.mock(side_effect=respond)
+    call: Final = litellm.anthropic.messages.acreate if messages_api else litellm.acompletion
+    params: Final = dict(
+        model=f"{'openai/' if gateway else ''}anthropic/claude-sonnet-5", api_key="test", max_tokens=512,
+        api_base=base if gateway else "https://api.anthropic.com",
+        extra_headers={"Anthropic-Beta": f"interleaved-thinking-2025-05-14{',compact-2026-09-04' if gateway else ''}"},
+        model_info={"supported_endpoints": ["/v1/messages"]} if native_endpoint else {},
+    )
+    response: Final = await call(
+        messages=[{"role": "user", "content": "Remember identifiers"}], compaction=operation, **params
+    )
+    message: Final = response if messages_api else response.choices[0].message.model_dump()
+    blocks: Final = message["content"] if messages_api else message["provider_specific_fields"]["compaction_blocks"]
+    assert blocks == [block]
+    if messages_api:
+        assert response["stop_reason"] == "compaction"
+        if not chat_wire:
+            assert response["usage"] == usage
+    if not gateway:
+        replay: Final = {"role": "assistant", "content": blocks} if messages_api else message
+        await call(messages=[replay, {"role": "user", "content": "Continue"}], **params)
+    assert route.call_count == (1 if gateway else 2)
 
 
 def test_compaction_block_request_transformation():
