@@ -1,8 +1,8 @@
 import datetime
 import time
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Final
+from types import MappingProxyType, SimpleNamespace
+from typing import Final, cast
 
 import pytest
 from pydantic import BaseModel
@@ -4553,6 +4553,273 @@ def test_completion_cost_prices_responses_websocket_turns_per_service_tier():
     assert ws_cost == pytest.approx(_http_cost(100, 40, "default") + _http_cost(60, 10, "priority"))
     assert ws_cost != pytest.approx(_http_cost(160, 50, "default"))
     assert ws_cost != pytest.approx(_http_cost(160, 50, "priority"))
+
+
+_TIERED_BATCH_MODEL: Final = "lit-tiered-batch-model"
+_FLAT_CACHE_BATCH_MODEL: Final = "lit-tiered-batch-model-without-cache-batch-rates"
+_TIERED_BATCH_ENTRY: Final = MappingProxyType(
+    {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 8e-6,
+        "cache_read_input_token_cost": 2e-7,
+        "cache_creation_input_token_cost": 2.5e-6,
+        "input_cost_per_token_above_272k_tokens": 4e-6,
+        "output_cost_per_token_above_272k_tokens": 1.2e-5,
+        "input_cost_per_token_batches": 1e-6,
+        "output_cost_per_token_batches": 4e-6,
+        "cache_read_input_token_cost_batches": 1e-7,
+        "cache_creation_input_token_cost_batches": 1.25e-6,
+        "input_cost_per_token_above_272k_tokens_batches": 3e-6,
+        "output_cost_per_token_above_272k_tokens_batches": 7e-6,
+        "cache_read_input_token_cost_above_272k_tokens_batches": 3e-7,
+        "cache_creation_input_token_cost_above_272k_tokens_batches": 3.75e-6,
+    }
+)
+_BATCH_RATE_PREFIXES: Final = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "cache_read_input_token_cost",
+    "cache_creation_input_token_cost",
+)
+
+
+@pytest.fixture
+def _tiered_batch_models(_local_model_cost_map: None) -> None:
+    litellm.register_model(
+        model_cost={
+            _TIERED_BATCH_MODEL: {**_TIERED_BATCH_ENTRY},
+            _FLAT_CACHE_BATCH_MODEL: {
+                key: rate
+                for key, rate in _TIERED_BATCH_ENTRY.items()
+                if not (key.startswith("cache_") and key.endswith("_batches"))
+            },
+        },
+        persist_across_reloads=False,
+    )
+
+
+def test_batch_cost_calculator_bills_the_long_context_batch_tier_above_272k(_tiered_batch_models: None) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    usage: Final = Usage(prompt_tokens=300_035, completion_tokens=64, total_tokens=300_099)
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=usage, model=_TIERED_BATCH_MODEL, custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(300_035 * 3e-6)
+    assert completion_cost_value == pytest.approx(64 * 7e-6)
+
+
+@pytest.mark.parametrize("prompt_tokens", [272_000, 1_000])
+def test_batch_cost_calculator_bills_the_flat_batch_rate_at_or_below_272k(
+    _tiered_batch_models: None, prompt_tokens: int
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    usage: Final = Usage(prompt_tokens=prompt_tokens, completion_tokens=64, total_tokens=prompt_tokens + 64)
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=usage, model=_TIERED_BATCH_MODEL, custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(prompt_tokens * 1e-6)
+    assert completion_cost_value == pytest.approx(64 * 4e-6)
+
+
+def test_get_model_info_exposes_every_registered_batch_rate(_tiered_batch_models: None) -> None:
+    info: Final = litellm.get_model_info(_TIERED_BATCH_MODEL, custom_llm_provider="openai")
+    batch_keys: Final = tuple(key for key in _TIERED_BATCH_ENTRY if key.endswith("_batches"))
+
+    assert len(batch_keys) == 8
+    assert {key: info[key] for key in batch_keys} == {key: _TIERED_BATCH_ENTRY[key] for key in batch_keys}
+
+
+def test_regular_path_never_bills_the_batch_tier_keys(_local_model_cost_map, monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "lit-batch-tier-guard",
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": 8e-6,
+            "input_cost_per_token_batches": 1e-6,
+            "output_cost_per_token_batches": 4e-6,
+            "input_cost_per_token_above_272k_tokens_batches": 5e-6,
+            "output_cost_per_token_above_272k_tokens_batches": 9e-6,
+        },
+    )
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model="lit-batch-tier-guard", custom_llm_provider="openai", prompt_tokens=300_035, completion_tokens=64
+    )
+
+    assert prompt_cost == pytest.approx(300_035 * 2e-6)
+    assert completion_cost == pytest.approx(64 * 8e-6)
+
+
+@pytest.mark.parametrize("prefix", _BATCH_RATE_PREFIXES)
+def test_every_openai_entry_with_a_long_context_rate_and_a_batch_rate_declares_the_batch_tier(
+    _local_model_cost_map: None, prefix: str
+) -> None:
+    undeclared: Final = [
+        name
+        for name, entry in litellm.model_cost.items()
+        if isinstance(entry, dict)
+        and entry.get("litellm_provider") == "openai"
+        and entry.get(f"{prefix}_above_272k_tokens") is not None
+        and entry.get(f"{prefix}_batches") is not None
+        and entry.get(f"{prefix}_above_272k_tokens_batches") is None
+    ]
+
+    assert undeclared == []
+
+
+def test_batch_cost_calculator_ignores_malformed_batch_tier_keys():
+    from litellm.cost_calculator import batch_cost_calculator
+
+    usage = Usage(prompt_tokens=300_035, completion_tokens=64, total_tokens=300_099)
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": 8e-6,
+            "input_cost_per_token_batches": 1e-6,
+            "output_cost_per_token_batches": 4e-6,
+            "input_cost_per_token_above_272k_tokens_batches": 2e-6,
+            "output_cost_per_token_above_272k_tokens_batches": 6e-6,
+            "input_cost_per_token_above_lots_tokens_batches": 1.0,
+        },
+    )
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=usage, model=_TIERED_BATCH_MODEL, custom_llm_provider="openai", model_info=model_info
+    )
+
+    assert prompt_cost == pytest.approx(300_035 * 2e-6)
+    assert completion_cost == pytest.approx(64 * 6e-6)
+
+
+def _cached_usage(prompt_tokens: int, cached_tokens: int, completion_tokens: int) -> Usage:
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+
+
+def test_batch_cost_calculator_bills_cached_tokens_at_the_long_context_batch_cached_rate(
+    _tiered_batch_models: None,
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=_cached_usage(300_048, 300_045, 11), model=_TIERED_BATCH_MODEL, custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(3 * 3e-6 + 300_045 * 3e-7)
+    assert completion_cost_value == pytest.approx(11 * 7e-6)
+
+
+def test_batch_cost_calculator_bills_cached_tokens_at_the_flat_batch_cached_rate_at_or_below_272k(
+    _tiered_batch_models: None,
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_cached_usage(1_000, 900, 4), model=_TIERED_BATCH_MODEL, custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(100 * 1e-6 + 900 * 1e-7)
+
+
+def test_batch_cost_calculator_bills_cached_tokens_at_the_batch_input_rate_without_a_cached_batch_rate(
+    _tiered_batch_models: None,
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_cached_usage(300_048, 300_045, 11), model=_FLAT_CACHE_BATCH_MODEL, custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(300_048 * 3e-6)
+
+
+def _cache_write_usage(prompt_tokens: int, cache_write_tokens: int, completion_tokens: int) -> Usage:
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0, cache_write_tokens=cache_write_tokens),
+    )
+
+
+def test_batch_cost_calculator_bills_cache_write_tokens_at_the_long_context_batch_cache_write_rate(
+    _tiered_batch_models: None,
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=_cache_write_usage(300_048, 300_045, 4), model=_TIERED_BATCH_MODEL, custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(3 * 3e-6 + 300_045 * 3.75e-6)
+    assert completion_cost_value == pytest.approx(4 * 7e-6)
+
+
+def test_batch_cost_calculator_bills_cache_write_tokens_at_the_flat_batch_cache_write_rate_at_or_below_272k(
+    _tiered_batch_models: None,
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_cache_write_usage(1_000, 900, 4), model=_TIERED_BATCH_MODEL, custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(100 * 1e-6 + 900 * 1.25e-6)
+
+
+def test_batch_cost_calculator_bills_cache_write_tokens_at_the_batch_input_rate_without_a_cache_write_batch_rate(
+    _tiered_batch_models: None,
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_cache_write_usage(300_048, 300_045, 4), model=_FLAT_CACHE_BATCH_MODEL, custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(300_048 * 3e-6)
+
+
+def test_batch_cost_calculator_prices_modalities_and_cached_tokens_together_in_the_crossed_tier() -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model_info: Final = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token_batches": 1e-6,
+            "input_cost_per_token_above_272k_tokens_batches": 3e-6,
+            "input_cost_per_audio_token_batches": 5e-6,
+            "cache_read_input_token_cost_batches": 1e-7,
+            "cache_read_input_token_cost_above_272k_tokens_batches": 3e-7,
+        },
+    )
+    usage: Final = Usage(
+        prompt_tokens=300_000,
+        completion_tokens=0,
+        total_tokens=300_000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(audio_tokens=64, image_tokens=10, cached_tokens=1_000),
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage, model=_TIERED_BATCH_MODEL, custom_llm_provider="openai", model_info=model_info
+    )
+
+    assert prompt_cost == pytest.approx(298_926 * 3e-6 + 64 * 5e-6 + 10 * 3e-6 + 1_000 * 3e-7)
 
 
 QWEN3_NEXT_REGIONS: Final = ("ap-northeast-1", "ap-south-1", "ap-southeast-2", "eu-west-1", "eu-west-2", "sa-east-1")
