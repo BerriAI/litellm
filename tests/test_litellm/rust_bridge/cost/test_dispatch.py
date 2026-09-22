@@ -7,7 +7,7 @@ import pytest
 from typing_extensions import Never
 
 from litellm import cost_calculator
-from litellm.litellm_core_utils.llm_cost_calc import utils
+from litellm.litellm_core_utils.llm_cost_calc import guardrail_cost, utils
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import CostRule, Rules
@@ -63,9 +63,8 @@ def test_rust_required_routes_each_public_cost_function(api: CostApi, monkeypatc
     def native(name: str) -> Never:
         raise NativeCalled(name)
 
-    target: Final[object] = getattr(cost_calculator, api.value, None) or getattr(  # pyright: ignore[reportAny]  # module lookup is dynamic
-        utils, api.value
-    )
+    owner: Final = next(module for module in (cost_calculator, utils, guardrail_cost) if hasattr(module, api.value))
+    target: Final[object] = getattr(owner, api.value)  # pyright: ignore[reportAny]  # module lookup is dynamic
     assert callable(target)
     monkeypatch.setattr(catalog, "RULES", (CostRule(Rollout.RUST_REQUIRED),))
     NATIVE_COST_API.override(native)

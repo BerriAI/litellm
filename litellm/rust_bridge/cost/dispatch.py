@@ -40,6 +40,9 @@ class CostApi(str, Enum):
     COST_COMPONENT = "calculate_cost_component"
     IMAGE_RESPONSE_COST_FROM_USAGE = "calculate_image_response_cost_from_usage"
     IMAGE_RESPONSE_WEB_SEARCH_COST = "calculate_image_response_web_search_cost"
+    BEDROCK_GUARDRAIL_COST_BY_UNIT = "bedrock_guardrail_cost_by_unit"
+    AZURE_PROMPT_SHIELD_GUARDRAIL_COST = "azure_prompt_shield_guardrail_cost"
+    GUARDRAIL_INFORMATION_COST = "guardrail_information_cost"
 
 
 def _native_cost_api(value: object) -> Callable[[str], Never] | None:
