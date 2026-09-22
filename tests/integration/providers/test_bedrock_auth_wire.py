@@ -14,6 +14,8 @@ from integration._support.wire import Reply, Request, wire_server
 
 MODEL: Final = "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0"
 TOKEN: Final = "synthetic-bedrock-bearer"
+ACCESS_KEY: Final = "AKIAINTEGRATION000002"
+CLIENT_OAUTH_TOKEN: Final = "Bearer sk-ant-oat01-synthetic-client-subscription-token"
 RESPONSE: Final = json.dumps({
     "output": {"message": {"role": "assistant", "content": [{"text": "bedrock wire control"}]}},
     "stopReason": "end_turn", "usage": {"inputTokens": 11, "outputTokens": 4, "totalTokens": 15},
@@ -97,3 +99,36 @@ def test_bearer_environment_reference_loads_from_db_and_yaml_and_survives_reload
                     target: Final = next(entry for entry in entries if entry["model_name"] == database_model)
                     response: Final = candidate.request("PATCH", f"/model/{target['model_info']['id']}/update", {"model_info": {"description": "bearer reload"}})
                     assert response.status_code == 200, response.text
+
+
+INVOKE_MODEL: Final = "bedrock/invoke/anthropic.claude-3-haiku-20240307-v1:0"
+INVOKE_RESPONSE: Final = json.dumps({
+    "id": "msg_synthetic", "type": "message", "role": "assistant", "model": "anthropic.claude-3-haiku-20240307-v1:0",
+    "content": [{"type": "text", "text": "bedrock invoke wire control"}], "stop_reason": "end_turn", "stop_sequence": None,
+    "usage": {"input_tokens": 11, "output_tokens": 4},
+}).encode()
+
+
+def sigv4_invoke_peer(request: Request) -> Reply:
+    assert request.method == "POST" and request.target == "/model/anthropic.claude-3-haiku-20240307-v1:0/invoke"
+    assert request.headers["authorization"].startswith(f"AWS4-HMAC-SHA256 Credential={ACCESS_KEY}/"), dict(request.headers)
+    assert CLIENT_OAUTH_TOKEN not in request.headers.values(), dict(request.headers)
+    assert json.loads(request.body)["messages"] == [{"role": "user", "content": "synthetic oauth isolation request"}]
+    return Reply(body=INVOKE_RESPONSE)
+
+
+@pytest.mark.covers("providers.bedrock_auth.client_anthropic_oauth_token_never_replaces_sigv4_authorization")
+def test_client_anthropic_oauth_authorization_header_does_not_replace_bedrock_sigv4_signature(gateway: Gateway) -> None:
+    with wire_server(sigv4_invoke_peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=INVOKE_MODEL, api_key=None, aws_access_key_id=ACCESS_KEY, aws_secret_access_key="synthetic-secret-key-for-testing",
+            aws_region_name="us-east-1", aws_bedrock_runtime_endpoint=wire.url, api_base=wire.url,
+        )
+        response: Final = gateway.request(
+            "POST", "/v1/messages",
+            {"model": model, "messages": [{"role": "user", "content": "synthetic oauth isolation request"}], "max_tokens": 16},
+            headers={"Authorization": CLIENT_OAUTH_TOKEN, "x-litellm-api-key": f"Bearer {gateway.key}"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["content"] == [{"type": "text", "text": "bedrock invoke wire control"}], response.text
+        assert len(wire.drain()) == 1, response.text
