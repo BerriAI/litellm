@@ -30,7 +30,9 @@ started the read interval on it, trips the deployment through the first, waits
 the interval plus a margin, and then sends the second replica exactly one call,
 which has to come back from the backup. One call, because a poll that reached
 the failing deployment through the second replica would bench it there too and
-hide whether the first replica's bench ever travelled.
+hide whether the first replica's bench ever travelled. A stack addressed only
+through its load balancer cannot pin which replica takes a call, so the cell is
+skipped at collection unless LITELLM_PROXY_REPLICA_URLS names at least two.
 
 The failures are the same real ones the retry tests use: a 1ms deadline and a
 bogus key on the real backend, and this proxy standing in as the upstream for
@@ -47,7 +49,7 @@ from dataclasses import dataclass
 
 import pytest
 from complexity_router_client import ComplexityRouterClient
-from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
+from e2e_config import CHEAP_OPENAI_MODEL, PROXY_REPLICA_URLS, unique_marker
 from e2e_http import StreamingResponse
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, RouterSettingsOverride
@@ -95,12 +97,8 @@ class _Replica:
 
 
 def _two_replicas(client: ComplexityRouterClient) -> tuple[_Replica, _Replica]:
-    replicas = tuple(_Replica(url, transport) for url, transport in client.proxy.replicas.items())
-    assert len(replicas) >= 2, (
-        "this cell trips a deployment through one gateway and reads the bench from another, so "
-        f"LITELLM_PROXY_REPLICA_URLS has to name at least two, got {tuple(replica.url for replica in replicas)}"
-    )
-    return replicas[0], replicas[1]
+    first, second, *_ = (_Replica(url, transport) for url, transport in client.proxy.replicas.items())
+    return first, second
 
 
 def _warm_cooldown_reads(replica: _Replica, key: str) -> None:
@@ -220,6 +218,13 @@ class TestReliabilityCooldowns:
         _assert_trips_then_recovers(client, scoped_key, group, failing, backup, failure_status=500)
 
     @pytest.mark.covers("reliability.cooldown.sibling_replica.serves_backup_within_read_interval")
+    @pytest.mark.skipif(
+        len(PROXY_REPLICA_URLS) < 2,
+        reason=(
+            "this cell trips a deployment through one gateway and reads the bench from another, so "
+            f"LITELLM_PROXY_REPLICA_URLS has to name at least two, got {PROXY_REPLICA_URLS}"
+        ),
+    )
     def test_sibling_replica_serves_backup_within_redis_read_interval(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
