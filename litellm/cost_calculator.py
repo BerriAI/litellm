@@ -115,6 +115,7 @@ from litellm.types.utils import (
     LlmProviders,
     LlmProvidersSet,
     ModelInfo,
+    ModelInfoBase,
     PromptTokensDetailsWrapper,
     ServiceTier,
     StandardBuiltInToolsParams,
@@ -322,6 +323,40 @@ class OCRPricing(TypedDict, total=False):
     annotation_cost_per_page: ReadOnly[float | None]
 
 
+def _has_token_or_tiered_pricing(model_info: ModelInfoBase) -> bool:
+    return (
+        (model_info.get("input_cost_per_token") or 0.0) > 0
+        or (model_info.get("output_cost_per_token") or 0.0) > 0
+        or model_info.get("tiered_pricing") is not None
+    )
+
+
+def _per_second_pricing_cost(
+    model: str,
+    custom_llm_provider: str | None,
+    response_time_ms: float | None,
+) -> tuple[float, float] | None:
+    try:
+        model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
+        return None
+    if _has_token_or_tiered_pricing(model_info):
+        return None
+    input_cost_per_second: Final = model_info.get("input_cost_per_second")
+    output_cost_per_second: Final = model_info.get("output_cost_per_second")
+    if input_cost_per_second is None and output_cost_per_second is None:
+        return None
+    seconds: Final = (response_time_ms or 0.0) / 1000
+    verbose_logger.debug(
+        "For model=%s - input_cost_per_second: %s; output_cost_per_second: %s; response time: %s",
+        model,
+        input_cost_per_second,
+        output_cost_per_second,
+        response_time_ms,
+    )
+    return (input_cost_per_second or 0.0) * seconds, (output_cost_per_second or 0.0) * seconds
+
+
 def cost_per_token(
     model: str = "",
     prompt_tokens: int = 0,
@@ -448,9 +483,6 @@ def cost_per_token(
     if response_cost is not None:
         return response_cost[0], response_cost[1]
 
-    # given
-    prompt_tokens_cost_usd_dollar: float = 0
-    completion_tokens_cost_usd_dollar: float = 0
     model_cost_ref: Final = litellm.model_cost
     # Only callers that explicitly pass `custom_llm_provider` get the
     # dedup/prefix-join treatment. When provider is omitted, preserve legacy
@@ -611,6 +643,14 @@ def cost_per_token(
             number_of_queries=number_of_queries or 1,
             optional_params=(getattr(response, "_hidden_params", None) if response else None),
         )
+    elif (
+        per_second_cost := _per_second_pricing_cost(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            response_time_ms=response_time_ms,
+        )
+    ) is not None:
+        return per_second_cost
     elif custom_llm_provider == "vertex_ai":
         cost_router: Final = google_cost_router(
             model=model_without_prefix,
@@ -685,12 +725,7 @@ def cost_per_token(
         )
     else:
         model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
-
-        if (
-            (model_info.get("input_cost_per_token") or 0.0) > 0
-            or (model_info.get("output_cost_per_token") or 0.0) > 0
-            or model_info.get("tiered_pricing") is not None
-        ):
+        if _has_token_or_tiered_pricing(model_info):
             return generic_cost_per_token(
                 model=model,
                 usage=usage_block,
@@ -698,36 +733,8 @@ def cost_per_token(
                 service_tier=service_tier,
                 data_residency=data_residency,
             )
-
-        input_cost_per_second: Final = model_info.get("input_cost_per_second")
-        if input_cost_per_second is not None and response_time_ms is not None:
-            verbose_logger.debug(
-                "For model=%s - input_cost_per_second: %s; response time: %s",
-                model,
-                input_cost_per_second,
-                response_time_ms,
-            )
-            ## COST PER SECOND ##
-            prompt_tokens_cost_usd_dollar = input_cost_per_second * response_time_ms / 1000
-
-        output_cost_per_second: Final = model_info.get("output_cost_per_second")
-        if output_cost_per_second is not None and response_time_ms is not None:
-            verbose_logger.debug(
-                "For model=%s - output_cost_per_second: %s; response time: %s",
-                model,
-                output_cost_per_second,
-                response_time_ms,
-            )
-            ## COST PER SECOND ##
-            completion_tokens_cost_usd_dollar = output_cost_per_second * response_time_ms / 1000
-
-        verbose_logger.debug(
-            "Returned custom cost for model=%s - prompt_tokens_cost_usd_dollar: %s, completion_tokens_cost_usd_dollar: %s",
-            model,
-            prompt_tokens_cost_usd_dollar,
-            completion_tokens_cost_usd_dollar,
-        )
-        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+        verbose_logger.debug("No per-token, tiered, or per-second pricing for model=%s; cost is 0", model)
+        return 0.0, 0.0
 
 
 def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
@@ -1222,6 +1229,19 @@ def _split_responses_ws_logging_object_by_service_tier(
     )
 
 
+def _response_time_ms_for_cost(
+    completion_response: object,
+    litellm_logging_obj: LitellmLoggingObject | None,
+    total_time: float | None,
+) -> float | None:
+    stamped: Final = getattr(completion_response, "_response_ms", None)
+    if isinstance(stamped, (int, float)):
+        return float(stamped)
+    if litellm_logging_obj is not None:
+        return litellm_logging_obj.get_response_ms()
+    return total_time
+
+
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
@@ -1442,8 +1462,6 @@ def completion_cost(
                     ):
                         prompt_tokens_details = _usage.get("prompt_tokens_details") or {}
                         cache_read_input_tokens = prompt_tokens_details.get("cached_tokens", 0)
-
-                    total_time = getattr(completion_response, "_response_ms", 0)
 
                     hidden_params = getattr(completion_response, "_hidden_params", None)
                     if hidden_params is not None:
@@ -1676,6 +1694,11 @@ def completion_cost(
                     )
 
                     return MCPCostCalculator.calculate_mcp_tool_call_cost(litellm_logging_obj=litellm_logging_obj)
+                response_time_ms = _response_time_ms_for_cost(
+                    completion_response=completion_response,
+                    litellm_logging_obj=litellm_logging_obj,
+                    total_time=total_time,
+                )
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai"
@@ -1686,7 +1709,7 @@ def completion_cost(
                 # see https://replicate.com/pricing
                 elif (model in litellm.replicate_models or "replicate" in model) and model not in litellm.model_cost:
                     # for unmapped replicate model, default to replicate's time tracking logic
-                    return get_replicate_completion_pricing(completion_response, total_time)
+                    return get_replicate_completion_pricing(completion_response, response_time_ms)
 
                 if model is None:
                     raise ValueError(
@@ -1718,7 +1741,7 @@ def completion_cost(
                     prompt_tokens=prompt_tokens or 0,
                     completion_tokens=completion_tokens or 0,
                     custom_llm_provider=custom_llm_provider,
-                    response_time_ms=total_time,
+                    response_time_ms=response_time_ms,
                     region_name=None if explicit_pricing else region_name,
                     custom_cost_per_second=custom_cost_per_second,
                     custom_cost_per_token=custom_cost_per_token,

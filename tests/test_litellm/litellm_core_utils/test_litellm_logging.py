@@ -3109,6 +3109,20 @@ def _make_logging_obj(stream: bool) -> LitellmLogging:
     )
 
 
+def test_get_response_ms_measures_a_float_start_time_against_a_datetime_end_time():
+    """The files paths construct the logging object with ``time.time()`` while the success
+    handler stamps a datetime end, and the per-second cost path reads this window."""
+    logging_obj = _make_logging_obj(stream=False)
+    logging_obj.update_environment_variables(
+        model="openai/codex-mini-latest", user="", optional_params={}, litellm_params={}
+    )
+    start_seconds = logging_obj.model_call_details["start_time"]
+    assert isinstance(start_seconds, float)
+    logging_obj.model_call_details["end_time"] = datetime.datetime.fromtimestamp(start_seconds + 1.5)
+
+    assert logging_obj.get_response_ms() == pytest.approx(1500)
+
+
 def test_get_assembled_streaming_response_returns_none_for_non_streaming():
     """Non-streaming requests should return None so the streaming block is skipped."""
     import datetime
