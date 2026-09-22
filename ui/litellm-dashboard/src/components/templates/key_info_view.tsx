@@ -1,6 +1,7 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -45,7 +46,7 @@ import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
-import { InheritedBudgetHint, inheritedBudgetGates } from "../shared/InheritedBudgetHint";
+import { InheritedBudgetHint, inheritedBudgetGates, keyOwnerBudgetSource } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
 
 interface KeyInfoViewProps {
@@ -95,6 +96,7 @@ export default function KeyInfoView({
   const { data: organizations } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
+  const applyUserBudgetToTeamKeys = useApplyUserBudgetToTeamKeys();
   const { data: allMcpServers } = useMCPServers();
   const { data: allMcpToolsets } = useMCPToolsets();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
@@ -507,7 +509,8 @@ export default function KeyInfoView({
 
   const hasOwnBudget = currentKeyData.max_budget !== null;
   const budgetDisplay = hasOwnBudget ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}` : "Unlimited";
-  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg);
+  const ownerUser = keyOwnerBudgetSource(currentKeyData, applyUserBudgetToTeamKeys);
+  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg, ownerUser);
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">
