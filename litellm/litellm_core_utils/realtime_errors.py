@@ -9,6 +9,7 @@ frame itself fail, which is how a loud failure turns back into a silent one.
 """
 
 import json
+from types import MappingProxyType
 from typing import Final, Protocol
 
 from litellm.types.realtime import RealtimeErrorDetail, RealtimeErrorEvent
@@ -48,13 +49,14 @@ def client_close_code(upstream_code: int) -> int:
 def upstream_handshake_close_code(status_code: int) -> int:
     from websockets.frames import CloseCode
 
-    match status_code:
-        case 401 | 403:
-            return int(CloseCode.POLICY_VIOLATION)
-        case 429:
-            return int(CloseCode.TRY_AGAIN_LATER)
-        case _:
-            return int(CloseCode.INTERNAL_ERROR)
+    refusal_codes: Final = MappingProxyType(
+        {
+            401: int(CloseCode.POLICY_VIOLATION),
+            403: int(CloseCode.POLICY_VIOLATION),
+            429: int(CloseCode.TRY_AGAIN_LATER),
+        }
+    )
+    return refusal_codes.get(status_code, int(CloseCode.INTERNAL_ERROR))
 
 
 async def close_after_upstream_handshake_refusal(websocket: _ClientWebSocket, status_code: int) -> None:
