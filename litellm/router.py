@@ -7162,6 +7162,7 @@ class Router:
         # behind the router name, and fallbacks are configured per tier, not per router.
         lookup_groups: Final[tuple[str, ...]] = fallback_lookup_groups(kwargs, model_group)
         fallback_failure_exception_str = ""
+        no_fallback_group_explained = False
         hop_depth: Final = kwargs.get("fallback_depth")
         nested_fallback_hop: Final = isinstance(hop_depth, int) and hop_depth > 0
 
@@ -7361,6 +7362,7 @@ class Router:
                         and not nested_fallback_hop
                     ):
                         original_exception.message += format_no_fallback_group_message(lookup_groups, fallbacks)
+                        no_fallback_group_explained = True
                     raise original_exception
 
                 input_kwargs.update(
@@ -7391,15 +7393,15 @@ class Router:
                 cooldown_info,
             )
 
-        lookup_already_explained: Final = fallback_model_group is None and len(fallback_failure_exception_str) > 0
+        attempted_fallback_group: Final = input_kwargs.get("fallback_model_group")
         if (
             hasattr(original_exception, "message")
             and litellm.expose_router_debug_in_errors
-            and not lookup_already_explained
+            and not no_fallback_group_explained
             and not nested_fallback_hop
         ):
             original_exception.message += format_fallback_outcome_message(
-                model_group, fallback_model_group, fallback_failure_exception_str
+                model_group, attempted_fallback_group, fallback_failure_exception_str
             )
 
         raise original_exception

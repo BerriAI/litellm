@@ -354,6 +354,30 @@ async def test_flag_on_shows_content_policy_fallback_hint(monkeypatch: pytest.Mo
     assert _INTERNAL_MODEL_GROUP_NAME in msg, msg
 
 
+@pytest.mark.asyncio
+async def test_flag_on_explains_failed_content_policy_fallback(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
+    router = Router(
+        model_list=[
+            {"model_name": _INTERNAL_MODEL_GROUP_NAME, "litellm_params": {"model": "gpt-4o", "api_key": "key"}},
+            {"model_name": "policy-safe-group", "litellm_params": {"model": "gpt-4o", "api_key": "key"}},
+        ],
+        content_policy_fallbacks=[{_INTERNAL_MODEL_GROUP_NAME: ["policy-safe-group"]}],
+        num_retries=0,
+    )
+    with pytest.raises(litellm.ContentPolicyViolationError) as excinfo:
+        await router.acompletion(
+            model=_INTERNAL_MODEL_GROUP_NAME,
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=_content_policy_error(),
+        )
+    msg = excinfo.value.message
+    assert f"model group '{_INTERNAL_MODEL_GROUP_NAME}' failed with the error above" in msg, msg
+    assert "Fallback to policy-safe-group also failed: " in msg, msg
+    assert _AVAILABLE_FALLBACKS_PHRASE not in msg, msg
+    assert msg.count("failed with the error above") == 1, msg
+
+
 # --- Credential masking: raw provider keys never leak, either flag state ----
 
 
