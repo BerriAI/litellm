@@ -58,8 +58,15 @@ def test_responses_success_callback_cost_is_priced_and_matches_spend_row(gateway
         return Reply()
 
     with wire_server(upstream) as provider, wire_server(sink) as endpoint:
-        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-        config["litellm_settings"].update({"callbacks": ["generic_api"], "DEFAULT_FLUSH_INTERVAL_SECONDS": 1})
+        base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config: Final = {
+            **base,
+            "litellm_settings": {
+                **base["litellm_settings"],
+                "callbacks": ["generic_api"],
+                "DEFAULT_FLUSH_INTERVAL_SECONDS": 1,
+            },
+        }
         path: Final = tmp_path / "callbacks.yaml"
         path.write_text(yaml.safe_dump(config))
         with (
@@ -87,13 +94,11 @@ def test_responses_success_callback_cost_is_priced_and_matches_spend_row(gateway
             assert response.status_code == 200, response.text
             assert len(provider.drain()) == 1
             response_id: Final = response.json()["id"]
-            batches = []
 
             def delivered() -> tuple[dict, ...]:
-                batches.extend(endpoint.drain())
                 return tuple(
                     event
-                    for batch in batches
+                    for batch in endpoint.drain()
                     for event in json.loads(batch.body)
                     if marker in event.get("request_tags", [])
                 )
