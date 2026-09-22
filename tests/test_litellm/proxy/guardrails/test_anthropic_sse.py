@@ -3,6 +3,7 @@ from typing import Final
 
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_frames,
+    rewrite_text_blocks,
     text_block_texts,
 )
 
@@ -90,3 +91,26 @@ def test_text_block_texts_joins_only_text_deltas() -> None:
     thinking_only: Final = anthropic_sse_frames(chunks[:5] + chunks[-1:])
     assert thinking_only is not None
     assert dict(text_block_texts(thinking_only)) == {}
+
+
+def test_rewrite_text_blocks_keeps_crlf_line_endings_on_the_rewritten_frame() -> None:
+    start: Final = _frame(
+        "message_start",
+        {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+    )
+    delta_frame: Final = (
+        b"event: content_block_delta\r\n"
+        b'data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}\r\n'
+        b"\r\n"
+    )
+    stop: Final = _frame("message_stop", {"type": "message_stop"})
+    frames: Final = anthropic_sse_frames((start, delta_frame, stop))
+    assert frames is not None
+    emitted: Final = rewrite_text_blocks(frames, {0: "masked"})
+    assert emitted == (
+        start,
+        b"event: content_block_delta\r\n"
+        b'data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "masked"}}\r\n'
+        b"\r\n",
+        stop,
+    )

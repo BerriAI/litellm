@@ -196,10 +196,12 @@ def _frame_event(body: str) -> Mapping[str, object] | None:
     if data is None:
         return None
     try:
-        parsed: Final = cast(object, json.loads(data))
+        parsed: Final = cast(object, json.loads(data))  # cast-ok: json.loads returns Any
     except json.JSONDecodeError:
         return None
-    return cast(Mapping[str, object], parsed) if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict):
+        return None
+    return cast(Mapping[str, object], parsed)  # cast-ok: JSON objects decode to dicts
 
 
 def anthropic_sse_frames(all_chunks: Sequence[object]) -> tuple[SseFrame, ...] | None:
@@ -224,7 +226,7 @@ def _text_delta(frame: SseFrame) -> tuple[int, str] | None:
     delta: Final = frame.event.get("delta")
     if not isinstance(index, int) or not isinstance(delta, dict):
         return None
-    delta_map: Final = cast(Mapping[str, object], delta)
+    delta_map: Final = cast(Mapping[str, object], delta)  # cast-ok: isinstance above proved the dict shape
     text: Final = delta_map.get("text")
     if delta_map.get("type") != "text_delta" or not isinstance(text, str):
         return None
@@ -242,11 +244,15 @@ def text_block_texts(frames: Sequence[SseFrame]) -> Mapping[int, str]:
 
 
 def rewrite_text_blocks(frames: Sequence[SseFrame], masked: Mapping[int, str]) -> tuple[bytes, ...]:
-    first_positions: Final = {
-        delta[0]: position
-        for position, delta in reversed(tuple((position, _text_delta(frame)) for position, frame in enumerate(frames)))
-        if delta is not None and delta[0] in masked
-    }
+    first_positions: Final = MappingProxyType(
+        {
+            delta[0]: position
+            for position, delta in reversed(
+                tuple((position, _text_delta(frame)) for position, frame in enumerate(frames))
+            )
+            if delta is not None and delta[0] in masked
+        }
+    )
     return tuple(
         _emitted_frame(position, frame, first_positions, masked)
         for position, frame in enumerate(frames)
@@ -262,11 +268,14 @@ def _emitted_frame(
         return frame.raw.encode()
     lines: Final = frame.raw.split("\n")
     data_position: Final = next(line_number for line_number, line in enumerate(lines) if line.startswith("data:"))
-    event: Final = cast(Mapping[str, object], frame.event)
-    payload: Final = {
-        **event,
-        "delta": {**cast(Mapping[str, object], event["delta"]), "text": masked[delta[0]]},
-    }
+    event: Final = cast(Mapping[str, object], frame.event)  # cast-ok: a non-None _text_delta implies a parsed event
+    delta_map: Final = cast(Mapping[str, object], event["delta"])  # cast-ok: _text_delta verified it is a dict
+    payload: Final = {**event, "delta": {**delta_map, "text": masked[delta[0]]}}  # mutable-ok: json.dumps needs a dict
+    ending: Final = "\r" if lines[data_position].endswith("\r") else ""
     return "\n".join(
-        (*lines[:data_position], f"data: {json.dumps(payload, ensure_ascii=False)}", *lines[data_position + 1 :])
+        (
+            *lines[:data_position],
+            f"data: {json.dumps(payload, ensure_ascii=False)}{ending}",
+            *lines[data_position + 1 :],
+        )
     ).encode()

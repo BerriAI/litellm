@@ -1423,7 +1423,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )
             return chunks
         presidio_config: Final = self.get_presidio_settings_from_request_data(  # pyright: ignore[reportUnknownMemberType]  # signature takes dict unparameterized
-            request_data or {}
+            request_data or {}  # mutable-ok: empty literal fills the dict-typed parameter
         )
         originals: Final = text_block_texts(frames)
         masked: Final = MappingProxyType(
