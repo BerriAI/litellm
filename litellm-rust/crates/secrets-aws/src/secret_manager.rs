@@ -16,8 +16,9 @@ use litellm_auth_aws::constants::{
 };
 use litellm_core_utils::settings::Lookup;
 use litellm_secrets_types::{
-    AwsOperationContext, BaseSecretManager, KeyManagementSettings, Secret, SecretDeleter,
-    SecretOperationContext, SecretValue, SecretWriteContext, SecretWriter, async_rotate_secret,
+    AwsOperationContext, BaseSecretManager, KeyManagementSettings, RotationError, Secret,
+    SecretDeleter, SecretRotator, SecretValue, SecretWriteContext, SecretWriter,
+    async_rotate_secret,
 };
 use serde_json::Value;
 
@@ -286,6 +287,17 @@ impl AwsSecretsManagerV2 {
             .await
     }
 
+    pub async fn async_delete_secret_with_context(
+        &self,
+        name: &str,
+        recovery_window_in_days: Option<u32>,
+        context: &AwsOperationContext,
+    ) -> Result<DeleteSecretOutput, Error> {
+        let client = self.client_for_context(context)?;
+        self.async_delete_secret_with_client(&client, name, recovery_window_in_days)
+            .await
+    }
+
     async fn async_delete_secret_with_client(
         &self,
         client: &Client,
@@ -306,12 +318,12 @@ impl AwsSecretsManagerV2 {
         current_name: &str,
         new_name: &str,
         value: &SecretValue,
-    ) -> Result<RotationResponse, Error> {
+    ) -> Result<RotationResponse, RotationError<RotationResponse, Error>> {
         self.async_rotate_secret_with_context(
             current_name,
             new_name,
             value,
-            &SecretOperationContext::default(),
+            &AwsOperationContext::default(),
         )
         .await
     }
@@ -321,33 +333,19 @@ impl AwsSecretsManagerV2 {
         current_name: &str,
         new_name: &str,
         value: &SecretValue,
-        context: &SecretOperationContext,
-    ) -> Result<RotationResponse, Error> {
-        if current_name == new_name {
-            let client = self.client_for_context(context)?;
-            return self
-                .async_put_secret_value_with_client(&client, current_name, value)
-                .await
-                .map(RotationResponse::Updated);
-        }
-        async_rotate_secret(self, current_name, new_name, value, context)
-            .await
-            .map(RotationResponse::Created)
+        context: &AwsOperationContext,
+    ) -> Result<RotationResponse, RotationError<RotationResponse, Error>> {
+        async_rotate_secret(self, current_name, new_name, value, context).await
     }
 
-    fn client_for_context(&self, context: &SecretOperationContext) -> Result<Client, Error> {
-        match context {
-            SecretOperationContext::Default => Ok(self.client.clone()),
-            SecretOperationContext::Aws(context) if context == &AwsOperationContext::default() => {
-                Ok(self.client.clone())
-            }
-            SecretOperationContext::Aws(context) => self
-                .context_client_factory
-                .as_ref()
-                .ok_or(Error::OperationContextUnavailable)?
-                .client(context),
-            _ => Err(Error::InvalidOperationContext),
+    fn client_for_context(&self, context: &AwsOperationContext) -> Result<Client, Error> {
+        if context == &AwsOperationContext::default() {
+            return Ok(self.client.clone());
         }
+        self.context_client_factory
+            .as_ref()
+            .ok_or(Error::OperationContextUnavailable)?
+            .client(context)
     }
 }
 
@@ -409,11 +407,12 @@ impl ContextClientFactory {
 
 impl BaseSecretManager for AwsSecretsManagerV2 {
     type Error = Error;
+    type Context = AwsOperationContext;
 
     async fn async_read_secret(
         &self,
         name: &str,
-        context: &SecretOperationContext,
+        context: &Self::Context,
     ) -> Result<Option<SecretValue>, Error> {
         let client = self.client_for_context(context)?;
         Self::async_read_secret_with_client(&client, name).await
@@ -427,7 +426,7 @@ impl SecretWriter for AwsSecretsManagerV2 {
         &self,
         name: &str,
         value: &SecretValue,
-        context: &SecretWriteContext,
+        context: &SecretWriteContext<Self::Context>,
     ) -> Result<CreateSecretOutput, Error> {
         let client = self.client_for_context(&context.operation)?;
         self.async_write_secret_with_client_and_tags(
@@ -447,11 +446,9 @@ impl SecretDeleter for AwsSecretsManagerV2 {
     async fn async_delete_secret(
         &self,
         name: &str,
-        recovery_window_in_days: Option<u32>,
-        context: &SecretOperationContext,
+        context: &Self::Context,
     ) -> Result<DeleteSecretOutput, Error> {
-        let client = self.client_for_context(context)?;
-        self.async_delete_secret_with_client(&client, name, recovery_window_in_days)
+        self.async_delete_secret_with_context(name, Some(7), context)
             .await
     }
 }
@@ -465,4 +462,40 @@ fn bootstrap_key(name: &str) -> bool {
             | AWS_REGION
             | AWS_BEDROCK_RUNTIME_ENDPOINT
     )
+}
+
+impl SecretRotator for AwsSecretsManagerV2 {
+    type RotationResponse = RotationResponse;
+
+    async fn async_read_secret_fresh(
+        &self,
+        name: &str,
+        context: &Self::Context,
+    ) -> Result<Option<SecretValue>, Error> {
+        BaseSecretManager::async_read_secret(self, name, context).await
+    }
+
+    async fn async_write_replacement(
+        &self,
+        current_name: &str,
+        new_name: &str,
+        value: &SecretValue,
+        context: &Self::Context,
+    ) -> Result<RotationResponse, Error> {
+        if current_name == new_name {
+            let client = self.client_for_context(context)?;
+            return self
+                .async_put_secret_value_with_client(&client, new_name, value)
+                .await
+                .map(RotationResponse::Updated);
+        }
+        SecretWriter::async_write_secret(
+            self,
+            new_name,
+            value,
+            &SecretWriteContext::rotated_from(current_name, context.clone()),
+        )
+        .await
+        .map(RotationResponse::Created)
+    }
 }

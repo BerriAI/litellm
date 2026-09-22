@@ -6,8 +6,6 @@ pub enum Error {
     Auth(#[from] #[redact] litellm_auth_aws::Error),
     #[error("AWS region is not configured")]
     MissingRegion,
-    #[error("AWS Secrets Manager received a non-AWS operation context")]
-    InvalidOperationContext,
     #[error("AWS Secrets Manager was constructed without context-aware configuration")]
     OperationContextUnavailable,
     #[error("KMS response has no plaintext")]

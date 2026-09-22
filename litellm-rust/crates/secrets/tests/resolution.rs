@@ -9,11 +9,83 @@ use litellm_secrets::{
 
 fn resolver(value: Option<&str>) -> SecretResolver {
     let value = value.map(str::to_owned);
-    SecretResolver::new(
+    SecretResolver::new_python_compatible(
         Arc::new(SecretManagerState::default()),
         Arc::new(move |_: &str| value.clone()),
         OidcResolver::default(),
     )
+}
+
+#[rstest::rstest]
+#[case::environment(false)]
+#[case::manager(true)]
+#[tokio::test]
+async fn native_reads_preserve_strings_and_report_conversion_errors(#[case] managed: bool) {
+    for raw in ["True", " FALSE ", "", "(True)", "{\"key\":1}"] {
+        let state = if managed {
+            SecretManagerState::new(
+                SecretManager::External(Arc::new(FixedManager(Ok(Some(Secret::String(
+                    SecretValue::new(raw),
+                )))))),
+                KeyManagementSettings::default(),
+            )
+        } else {
+            SecretManagerState::default()
+        };
+        let resolver = SecretResolver::new(
+            Arc::new(state),
+            Arc::new(move |_: &str| Some(raw.to_owned())),
+            OidcResolver::default(),
+        );
+        assert_eq!(
+            resolver
+                .get_secret_str("key", None)
+                .await
+                .unwrap()
+                .unwrap()
+                .expose(),
+            raw
+        );
+        assert_eq!(
+            resolver.get_secret("key", None).await.unwrap(),
+            Some(Secret::String(SecretValue::new(raw)))
+        );
+        if raw == "True" || raw == " FALSE " {
+            assert_eq!(
+                resolver.get_secret_bool("key", None).await.unwrap(),
+                Some(raw == "True")
+            );
+        } else {
+            assert!(matches!(
+                resolver.get_secret_bool("key", None).await,
+                Err(Error::TypeMismatch {
+                    expected: "boolean"
+                })
+            ));
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_defaults_apply_to_absence_but_never_hide_provider_failures() {
+    for reply in [Ok(None), Err(())] {
+        let resolver = SecretResolver::new(
+            Arc::new(SecretManagerState::new(
+                SecretManager::External(Arc::new(FixedManager(reply.clone()))),
+                KeyManagementSettings::default(),
+            )),
+            Arc::new(|_: &str| None),
+            OidcResolver::default(),
+        );
+        let result = resolver
+            .get_secret_str("key", Some(SecretValue::new("default")))
+            .await;
+        match reply {
+            Ok(None) => assert_eq!(result.unwrap().unwrap().expose(), "default"),
+            Err(()) => assert!(matches!(result, Err(Error::MissingCiphertext))),
+            Ok(Some(_)) => unreachable!(),
+        }
+    }
 }
 
 #[rstest::rstest]
@@ -99,7 +171,7 @@ impl ExternalSecretManager for FixedManager {
 }
 
 fn managed(reply: Result<Option<Secret>, ()>, environment: Option<&'static str>) -> SecretResolver {
-    SecretResolver::new(
+    SecretResolver::new_python_compatible(
         Arc::new(SecretManagerState::new(
             SecretManager::External(Arc::new(FixedManager(reply))),
             KeyManagementSettings::default(),
@@ -194,7 +266,7 @@ async fn prefix_is_removed_once_and_resolved_from_environment() {
         &state,
         "os.environ/os.environ/KEY"
     ));
-    let resolver = SecretResolver::new(
+    let resolver = SecretResolver::new_python_compatible(
         Arc::new(state),
         Arc::new(|name: &str| (name == "os.environ/KEY").then(|| "value".into())),
         OidcResolver::default(),

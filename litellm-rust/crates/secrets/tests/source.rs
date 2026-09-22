@@ -9,13 +9,13 @@ mod tests {
     #[case::padded_false("LITELLM_ENVIRONMENT_SECRETS_FALSE", " FALSE ", None)]
     #[case::text("LITELLM_ENVIRONMENT_SECRETS_TEXT", "secret", Some("secret"))]
     #[tokio::test]
-    async fn boolean_environment_values_are_absent_like_get_secret_str(
+    async fn python_environment_values_are_absent_like_get_secret_str(
         #[case] name: &'static str,
         #[case] value: &str,
         #[case] expected: Option<&str>,
     ) {
         unsafe { std::env::set_var(name, value) };
-        let secret = EnvironmentSecrets::default()
+        let secret = EnvironmentSecrets::python_compatible()
             .resolve(&[name])
             .await
             .unwrap()

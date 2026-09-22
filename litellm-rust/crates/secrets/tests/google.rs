@@ -37,7 +37,11 @@ async fn google_resolver_distinguishes_absence_from_failure(#[case] status: u16)
         SecretManager::GoogleSecretManager(manager),
         KeyManagementSettings::default(),
     );
-    let resolver = SecretResolver::new(Arc::new(state), environment, OidcResolver::default());
+    let resolver = SecretResolver::new_python_compatible(
+        Arc::new(state),
+        environment,
+        OidcResolver::default(),
+    );
     let result = resolver.get_secret_str("KEY", None).await;
     if status == 404 {
         assert_eq!(result.unwrap(), None);

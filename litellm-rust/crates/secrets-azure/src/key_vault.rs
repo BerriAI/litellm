@@ -3,9 +3,7 @@ use std::sync::Arc;
 use litellm_auth_azure::{AzureAuthInputs, AzureAuthService, ConfigValue};
 use litellm_auth_types::{InputSource, Sourced};
 use litellm_core_utils::settings::Lookup;
-use litellm_secrets_types::{
-    BaseSecretManager, KeyManagementSystem, Secret, SecretOperationContext, SecretValue,
-};
+use litellm_secrets_types::{AzureOperationContext, BaseSecretManager, Secret, SecretValue};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC};
 use serde::Deserialize;
 
@@ -79,7 +77,7 @@ impl AzureKeyVault {
     }
 
     pub async fn get_secret(&self, name: &str) -> Result<Option<Secret>, Error> {
-        BaseSecretManager::async_read_secret(self, name, &SecretOperationContext::Default)
+        BaseSecretManager::async_read_secret(self, name, &AzureOperationContext::default())
             .await
             .map(|value| value.map(Secret::String))
     }
@@ -125,14 +123,14 @@ fn scope_for(vault: &reqwest::Url) -> String {
 
 impl BaseSecretManager for AzureKeyVault {
     type Error = Error;
+    type Context = AzureOperationContext;
 
     async fn async_read_secret(
         &self,
         name: &str,
-        context: &SecretOperationContext,
+        context: &Self::Context,
     ) -> Result<Option<SecretValue>, Error> {
-        context.validate_for(KeyManagementSystem::AzureKeyVault)?;
-        match context.timeout() {
+        match context.timeout {
             Some(timeout) => tokio::time::timeout(timeout, self.read(name))
                 .await
                 .map_err(|_| Error::Timeout)?,

@@ -1,4 +1,4 @@
-use crate::{Error, SecretOperationContext, SecretValue, SecretWriteContext};
+use crate::{Error, SecretValue, SecretWriteContext};
 
 pub fn validate_secret_name(name: &str) -> Result<(), Error> {
     if name.split('/').any(|segment| segment == "..")
@@ -13,11 +13,12 @@ pub fn validate_secret_name(name: &str) -> Result<(), Error> {
 
 pub trait BaseSecretManager {
     type Error: From<Error>;
+    type Context: Clone + Default + Send + Sync;
 
     fn async_read_secret(
         &self,
         name: &str,
-        context: &SecretOperationContext,
+        context: &Self::Context,
     ) -> impl std::future::Future<Output = Result<Option<SecretValue>, Self::Error>> + Send;
 }
 
@@ -28,7 +29,7 @@ pub trait SecretWriter: BaseSecretManager {
         &self,
         name: &str,
         value: &SecretValue,
-        context: &SecretWriteContext,
+        context: &SecretWriteContext<Self::Context>,
     ) -> impl std::future::Future<Output = Result<Self::WriteResponse, Self::Error>> + Send;
 }
 
@@ -38,41 +39,86 @@ pub trait SecretDeleter: BaseSecretManager {
     fn async_delete_secret(
         &self,
         name: &str,
-        recovery_window_in_days: Option<u32>,
-        context: &SecretOperationContext,
+        context: &Self::Context,
     ) -> impl std::future::Future<Output = Result<Self::DeleteResponse, Self::Error>> + Send;
 }
 
-pub async fn async_rotate_secret<M: SecretWriter + SecretDeleter>(
+pub trait SecretRotator: SecretDeleter {
+    type RotationResponse;
+
+    fn async_write_replacement(
+        &self,
+        current_name: &str,
+        new_name: &str,
+        value: &SecretValue,
+        context: &Self::Context,
+    ) -> impl std::future::Future<Output = Result<Self::RotationResponse, Self::Error>> + Send;
+
+    fn async_read_secret_fresh(
+        &self,
+        name: &str,
+        context: &Self::Context,
+    ) -> impl std::future::Future<Output = Result<Option<SecretValue>, Self::Error>> + Send;
+}
+
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum RotationError<R, E> {
+    #[error("could not read the current secret")]
+    Read(#[source] E),
+    #[error("replacement write failed; provider state may be unknown")]
+    Write(#[source] E),
+    #[error("replacement was written but could not be verified")]
+    Verification {
+        response: Box<R>,
+        #[source]
+        source: E,
+    },
+    #[error("replacement was verified but retiring the old secret failed")]
+    Retirement {
+        response: Box<R>,
+        #[source]
+        source: E,
+    },
+}
+
+pub async fn async_rotate_secret<M: SecretRotator>(
     manager: &M,
     current_name: &str,
     new_name: &str,
     value: &SecretValue,
-    context: &SecretOperationContext,
-) -> Result<M::WriteResponse, M::Error> {
+    context: &M::Context,
+) -> Result<M::RotationResponse, RotationError<M::RotationResponse, M::Error>> {
     if manager
-        .async_read_secret(current_name, context)
-        .await?
+        .async_read_secret_fresh(current_name, context)
+        .await
+        .map_err(RotationError::Read)?
         .is_none()
     {
-        return Err(Error::CurrentSecretMissing.into());
+        return Err(RotationError::Read(Error::CurrentSecretMissing.into()));
     }
     let response = manager
-        .async_write_secret(
-            new_name,
-            value,
-            &SecretWriteContext::rotated_from(current_name, context.clone()),
-        )
-        .await?;
-    match manager.async_read_secret(new_name, context).await? {
-        None => return Err(Error::NewSecretMissing.into()),
-        Some(actual) if actual != *value => return Err(Error::NewSecretMismatch.into()),
-        Some(_) => {}
+        .async_write_replacement(current_name, new_name, value, context)
+        .await
+        .map_err(RotationError::Write)?;
+    let verification = match manager.async_read_secret_fresh(new_name, context).await {
+        Ok(None) => Err(Error::NewSecretMissing.into()),
+        Ok(Some(actual)) if actual != *value => Err(Error::NewSecretMismatch.into()),
+        Ok(Some(_)) => Ok(()),
+        Err(error) => Err(error),
+    };
+    if let Err(source) = verification {
+        return Err(RotationError::Verification {
+            response: Box::new(response),
+            source,
+        });
     }
-    if current_name != new_name {
-        manager
-            .async_delete_secret(current_name, Some(7), context)
-            .await?;
+    if current_name != new_name
+        && let Err(source) = manager.async_delete_secret(current_name, context).await
+    {
+        return Err(RotationError::Retirement {
+            response: Box::new(response),
+            source,
+        });
     }
     Ok(response)
 }

@@ -3,8 +3,8 @@ use std::{fs, sync::Arc, time::Duration};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_core_utils::settings::Lookup;
 use litellm_secrets_types::{
-    BaseSecretManager, KeyManagementSystem, SecretOperationContext, SecretValue,
-    SecretWriteContext, SecretWriter, validate_secret_name,
+    BaseSecretManager, CyberarkOperationContext, SecretCache, SecretValue, SecretWriteContext,
+    SecretWriter, validate_secret_name,
 };
 use moka::future::Cache;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
@@ -38,7 +38,7 @@ pub struct CyberArkSecretManager {
     username: String,
     api_key: SecretValue,
     token: Cache<(), SecretValue>,
-    secrets: Cache<String, SecretValue>,
+    secrets: SecretCache<String, SecretValue>,
     authentication_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -63,7 +63,7 @@ impl CyberArkSecretManager {
         let token = Cache::builder()
             .time_to_live(ttl.min(MAX_TOKEN_LIFETIME))
             .build();
-        let secrets = Cache::builder().time_to_live(ttl).build();
+        let secrets = SecretCache::new(200, ttl);
         Self {
             client,
             endpoint,
@@ -146,7 +146,7 @@ impl CyberArkSecretManager {
             .map_err(|_| Error::Endpoint)
     }
 
-    async fn authenticate(&self, context: &SecretOperationContext) -> Result<SecretValue, Error> {
+    async fn authenticate(&self, context: &CyberarkOperationContext) -> Result<SecretValue, Error> {
         if let Some(token) = self.token.get(&()).await {
             return Ok(token);
         }
@@ -178,7 +178,7 @@ impl CyberArkSecretManager {
 
     async fn authorization_header(
         &self,
-        context: &SecretOperationContext,
+        context: &CyberarkOperationContext,
     ) -> Result<String, Error> {
         Ok(format!(
             "Token token=\"{}\"",
@@ -187,19 +187,31 @@ impl CyberArkSecretManager {
     }
 
     pub async fn async_read_secret(&self, name: &str) -> Result<Option<SecretValue>, Error> {
-        self.async_read_secret_with_context(name, &SecretOperationContext::default())
+        self.async_read_secret_with_context(name, &CyberarkOperationContext::default())
             .await
     }
 
     pub async fn async_read_secret_with_context(
         &self,
         name: &str,
-        context: &SecretOperationContext,
+        context: &CyberarkOperationContext,
     ) -> Result<Option<SecretValue>, Error> {
-        context.validate_for(KeyManagementSystem::Cyberark)?;
-        if let Some(value) = self.secrets.get(name).await {
-            return Ok(Some(value));
+        let read = self
+            .secrets
+            .read(name.to_owned(), self.read_uncached(name, context));
+        match context.timeout {
+            Some(timeout) => tokio::time::timeout(timeout, read)
+                .await
+                .map_err(|_| Error::Timeout)?,
+            None => read.await,
         }
+    }
+
+    async fn read_uncached(
+        &self,
+        name: &str,
+        context: &CyberarkOperationContext,
+    ) -> Result<Option<SecretValue>, Error> {
         let had_cached_token = self.token.get(&()).await.is_some();
         let response = with_timeout(
             self.client
@@ -230,7 +242,6 @@ impl CyberArkSecretManager {
             return Err(Error::Status(response.status().as_u16()));
         }
         let value = SecretValue::new(response.text().await?);
-        self.secrets.insert(name.to_owned(), value.clone()).await;
         Ok(Some(value))
     }
 
@@ -244,7 +255,7 @@ impl CyberArkSecretManager {
             name,
             value,
             description,
-            &SecretOperationContext::default(),
+            &CyberarkOperationContext::default(),
         )
         .await
     }
@@ -254,9 +265,8 @@ impl CyberArkSecretManager {
         name: &str,
         value: &SecretValue,
         _description: Option<&str>,
-        context: &SecretOperationContext,
+        context: &CyberarkOperationContext,
     ) -> Result<(), Error> {
-        context.validate_for(KeyManagementSystem::Cyberark)?;
         validate_secret_name(name)?;
         self.ensure_variable_exists(name, context).await;
         let response = with_timeout(
@@ -289,7 +299,7 @@ impl CyberArkSecretManager {
         Ok(())
     }
 
-    async fn ensure_variable_exists(&self, name: &str, context: &SecretOperationContext) {
+    async fn ensure_variable_exists(&self, name: &str, context: &CyberarkOperationContext) {
         let policy_url = self
             .endpoint
             .join(&format!("policies/{}/policy/root", self.account));
@@ -348,7 +358,7 @@ impl CyberArkSecretManager {
         self.async_delete_secret_with_context(
             name,
             recovery_window_in_days,
-            &SecretOperationContext::default(),
+            &CyberarkOperationContext::default(),
         )
         .await
     }
@@ -357,24 +367,24 @@ impl CyberArkSecretManager {
         &self,
         name: &str,
         _recovery_window_in_days: Option<u32>,
-        context: &SecretOperationContext,
+        _context: &CyberarkOperationContext,
     ) -> Result<DeleteOutcome, Error> {
-        context.validate_for(KeyManagementSystem::Cyberark)?;
         tracing::warn!(
             "CyberArk Conjur does not support direct secret deletion. Secrets must be removed through policy updates."
         );
-        self.secrets.invalidate(name).await;
+        self.secrets.invalidate(&name.to_owned()).await;
         Ok(DeleteOutcome::NotSupported)
     }
 }
 
 impl BaseSecretManager for CyberArkSecretManager {
     type Error = Error;
+    type Context = CyberarkOperationContext;
 
     async fn async_read_secret(
         &self,
         name: &str,
-        context: &SecretOperationContext,
+        context: &Self::Context,
     ) -> Result<Option<SecretValue>, Error> {
         self.async_read_secret_with_context(name, context).await
     }
@@ -387,7 +397,7 @@ impl SecretWriter for CyberArkSecretManager {
         &self,
         name: &str,
         value: &SecretValue,
-        context: &SecretWriteContext,
+        context: &SecretWriteContext<Self::Context>,
     ) -> Result<(), Error> {
         self.async_write_secret_with_context(
             name,
@@ -401,9 +411,9 @@ impl SecretWriter for CyberArkSecretManager {
 
 fn with_timeout(
     request: reqwest::RequestBuilder,
-    context: &SecretOperationContext,
+    context: &CyberarkOperationContext,
 ) -> reqwest::RequestBuilder {
-    match context.timeout() {
+    match context.timeout {
         Some(timeout) => request.timeout(timeout),
         None => request,
     }

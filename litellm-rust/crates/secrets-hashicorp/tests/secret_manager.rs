@@ -3,8 +3,8 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use litellm_core_utils::settings::Lookup;
 use litellm_secrets_hashicorp::{Error, HashicorpVault, HashicorpVaultConfig};
 use litellm_secrets_types::{
-    AwsOperationContext, BaseSecretManager, CyberarkOperationContext, HashicorpOperationContext,
-    SecretDeleter, SecretOperationContext, SecretValue, SecretWriteContext, SecretWriter,
+    BaseSecretManager, HashicorpOperationContext, RotationError, SecretDeleter, SecretValue,
+    SecretWriteContext, SecretWriter,
 };
 use rstest::{fixture, rstest};
 use serde::Deserialize;
@@ -441,55 +441,116 @@ async fn read_responses_distinguish_absence_and_malformed_payloads(
 #[rstest]
 #[tokio::test]
 async fn write_and_delete_invalidate_the_read_cache(token_values: Vec<(&str, &str)>) {
-    let server: MockServer = MockServer::start().await;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let server = MockServer::start().await;
+    let revision = Arc::new(AtomicUsize::new(0));
+    let current = revision.clone();
     Mock::given(method("GET"))
         .and(path("/v1/secret/data/name"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(read_response(json!({"key": "value"}))),
+            move |_: &wiremock::Request| match current.load(Ordering::SeqCst) {
+                0 => ResponseTemplate::new(200).set_body_json(read_response(
+                    json!({"key": "old", "alternate": "old-alternate"}),
+                )),
+                1 => ResponseTemplate::new(200).set_body_json(read_response(
+                    json!({"key": "updated", "alternate": "updated-alternate"}),
+                )),
+                _ => ResponseTemplate::new(404).set_body_json(json!({"errors": ["missing"]})),
+            },
         )
-        .expect(2)
+        .expect(5)
         .mount(&server)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/secret/data/unrelated"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(read_response(json!({"key": "unrelated"}))),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let written = revision.clone();
     Mock::given(method("POST"))
         .and(path("/v1/secret/data/name"))
-        .and(body_json(
-            json!({"data": {"key": "updated", "description": "description"}}),
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": {
-                "created_time": "",
-                "deletion_time": "",
-                "custom_metadata": null,
-                "destroyed": false,
-                "version": 2
-            },
-            "lease_id": "",
-            "lease_duration": 0,
-            "renewable": false,
-            "request_id": "",
-            "warnings": null,
-            "wrap_info": null
-        })))
+        .respond_with(move |_: &wiremock::Request| {
+            written.store(1, Ordering::SeqCst);
+            ResponseTemplate::new(200).set_body_json(write_response(2))
+        })
         .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("DELETE"))
         .and(path("/v1/secret/data/name"))
-        .respond_with(ResponseTemplate::new(204))
+        .respond_with(move |_: &wiremock::Request| {
+            revision.store(2, Ordering::SeqCst);
+            ResponseTemplate::new(204)
+        })
         .expect(1)
         .mount(&server)
         .await;
-    let manager: HashicorpVault = manager(&server, &token_values);
-
-    assert!(manager.async_read_secret("name").await.unwrap().is_some());
-    assert!(
+    let manager = manager(&server, &token_values);
+    let alternate = HashicorpOperationContext {
+        data_key: Some("alternate".into()),
+        ..Default::default()
+    };
+    assert_eq!(
         manager
-            .async_write_secret("name", SecretValue::new("updated"), Some("description"))
+            .async_read_secret("name")
             .await
-            .is_ok()
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "old"
     );
-    assert!(manager.async_read_secret("name").await.unwrap().is_some());
+    assert_eq!(
+        BaseSecretManager::async_read_secret(&manager, "name", &alternate)
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "old-alternate"
+    );
+    assert_eq!(
+        manager
+            .async_read_secret("unrelated")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "unrelated"
+    );
+    manager
+        .async_write_secret("name", SecretValue::new("updated"), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        manager
+            .async_read_secret("name")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "updated"
+    );
+    assert_eq!(
+        BaseSecretManager::async_read_secret(&manager, "name", &alternate)
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "updated-alternate"
+    );
     manager.async_delete_secret("name").await.unwrap();
+    assert!(manager.async_read_secret("name").await.unwrap().is_none());
+    assert_eq!(
+        manager
+            .async_read_secret("unrelated")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "unrelated"
+    );
 }
 
 #[rstest]
@@ -536,12 +597,12 @@ async fn base_manager_context_overrides_vault_location_and_data_key(
         .mount(&server)
         .await;
     let manager: HashicorpVault = manager(&server, &token_values);
-    let operation = SecretOperationContext::Hashicorp(HashicorpOperationContext {
+    let operation = HashicorpOperationContext {
         mount: Some(" /alternate/ ".to_owned()),
         path_prefix: Some(" /managed/ ".to_owned()),
         data_key: Some("api_token".to_owned()),
         ..HashicorpOperationContext::default()
-    });
+    };
     let write_context = SecretWriteContext {
         description: Some("Managed key".to_owned()),
         operation: operation.clone(),
@@ -570,7 +631,7 @@ async fn base_manager_context_overrides_vault_location_and_data_key(
             .unwrap()
             .is_some()
     );
-    SecretDeleter::async_delete_secret(&manager, "name", None, &operation)
+    SecretDeleter::async_delete_secret(&manager, "name", &operation)
         .await
         .unwrap();
 }
@@ -582,10 +643,10 @@ async fn rejects_description_that_would_replace_the_secret_value(token_values: V
     let manager: HashicorpVault = manager(&server, &token_values);
     let context = SecretWriteContext {
         description: Some("metadata".to_owned()),
-        operation: SecretOperationContext::Hashicorp(HashicorpOperationContext {
+        operation: HashicorpOperationContext {
             data_key: Some("description".to_owned()),
             ..HashicorpOperationContext::default()
-        }),
+        },
         ..SecretWriteContext::default()
     };
 
@@ -683,10 +744,10 @@ async fn reads_cache_each_data_key_for_the_same_vault_path(token_values: Vec<(&s
         .mount(&server)
         .await;
     let manager: HashicorpVault = manager(&server, &token_values);
-    let alternate = SecretOperationContext::Hashicorp(HashicorpOperationContext {
+    let alternate = HashicorpOperationContext {
         data_key: Some("alternate".to_owned()),
         ..HashicorpOperationContext::default()
-    });
+    };
 
     assert_eq!(
         manager
@@ -731,75 +792,15 @@ async fn base_manager_context_timeout_limits_vault_io(token_values: Vec<(&str, &
         .mount(&server)
         .await;
     let manager: HashicorpVault = manager(&server, &token_values);
-    let context = SecretOperationContext::Hashicorp(HashicorpOperationContext {
+    let context = HashicorpOperationContext {
         timeout: Some(Duration::from_millis(10)),
         ..HashicorpOperationContext::default()
-    });
+    };
 
     assert!(matches!(
         BaseSecretManager::async_read_secret(&manager, "name", &context).await,
         Err(Error::Timeout)
     ));
-}
-
-#[rstest]
-#[case::aws(SecretOperationContext::Aws(AwsOperationContext::default()))]
-#[case::cyberark(SecretOperationContext::Cyberark(CyberarkOperationContext::default()))]
-#[tokio::test]
-async fn foreign_contexts_cannot_access_vault_secrets(
-    token_values: Vec<(&str, &str)>,
-    #[case] context: SecretOperationContext,
-    #[values(false, true)] cached: bool,
-) {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/v1/secret/data/name"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(read_response(json!({"key": "value"}))),
-        )
-        .expect(u64::from(cached))
-        .mount(&server)
-        .await;
-    let manager = manager(&server, &token_values);
-    if cached {
-        assert!(manager.async_read_secret("name").await.unwrap().is_some());
-    }
-    assert!(matches!(
-        BaseSecretManager::async_read_secret(&manager, "name", &context).await,
-        Err(Error::InvalidOperationContext)
-    ));
-    assert!(matches!(
-        SecretWriter::async_write_secret(
-            &manager,
-            "name",
-            &SecretValue::new("replacement"),
-            &SecretWriteContext {
-                operation: context.clone(),
-                ..SecretWriteContext::default()
-            },
-        )
-        .await,
-        Err(Error::InvalidOperationContext)
-    ));
-    assert!(matches!(
-        SecretDeleter::async_delete_secret(&manager, "name", None, &context).await,
-        Err(Error::InvalidOperationContext)
-    ));
-    assert!(matches!(
-        manager
-            .async_rotate_secret_with_context(
-                "name",
-                "new",
-                &SecretValue::new("replacement"),
-                &context
-            )
-            .await,
-        Err(Error::InvalidOperationContext)
-    ));
-    assert_eq!(
-        server.received_requests().await.unwrap().len(),
-        usize::from(cached)
-    );
 }
 
 #[rstest]
@@ -858,12 +859,12 @@ async fn rotation_applies_timeout_to_each_request(token_values: Vec<(&str, &str)
         .mount(&server)
         .await;
     let manager = manager(&server, &token_values);
-    let context = SecretOperationContext::Hashicorp(HashicorpOperationContext {
+    let context = HashicorpOperationContext {
         timeout: Some(timeout),
         mount: Some("alternate".to_owned()),
         path_prefix: Some("managed".to_owned()),
         data_key: Some("api_token".to_owned()),
-    });
+    };
 
     manager
         .async_rotate_secret_with_context(
@@ -1112,4 +1113,120 @@ async fn same_name_rotation_keeps_the_replacement(token_values: Vec<(&str, &str)
             .expose(),
         "replacement"
     );
+}
+
+#[rstest]
+#[tokio::test]
+async fn concurrent_reads_share_a_load_but_verification_fetches_fresh(
+    token_values: Vec<(&str, &str)>,
+) {
+    use litellm_secrets_types::SecretRotator;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let server = MockServer::start().await;
+    let reads = AtomicUsize::new(0);
+    Mock::given(method("GET"))
+        .and(path("/v1/secret/data/name"))
+        .respond_with(move |_: &wiremock::Request| {
+            let value = if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                "old"
+            } else {
+                "new"
+            };
+            ResponseTemplate::new(200)
+                .set_body_json(read_response(json!({"key": value})))
+                .set_delay(Duration::from_millis(20))
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let manager = manager(&server, &token_values);
+    let (first, second) = tokio::join!(
+        manager.async_read_secret("name"),
+        manager.async_read_secret("name")
+    );
+    assert_eq!(first.unwrap().unwrap().expose(), "old");
+    assert_eq!(second.unwrap().unwrap().expose(), "old");
+    assert_eq!(
+        manager
+            .async_read_secret("name")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "old"
+    );
+    assert_eq!(
+        manager
+            .async_read_secret_fresh("name", &HashicorpOperationContext::default())
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "new"
+    );
+    assert_eq!(
+        manager
+            .async_read_secret("name")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "new"
+    );
+}
+
+#[rstest]
+#[case::verification(false)]
+#[case::retirement(true)]
+#[tokio::test]
+async fn rotation_reports_partial_completion_without_losing_the_write_response(
+    token_values: Vec<(&str, &str)>,
+    #[case] verified: bool,
+) {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/secret/data/old"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(read_response(json!({"key": "old"}))),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/secret/data/new"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(write_response(2)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/secret/data/new"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(read_response(
+            json!({"key": if verified { "replacement" } else { "stale" }}),
+        )))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/v1/secret/data/old"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({"errors": ["denied"]})))
+        .expect(u64::from(verified))
+        .mount(&server)
+        .await;
+    let result = manager(&server, &token_values)
+        .async_rotate_secret("old", "new", &SecretValue::new("replacement"))
+        .await;
+    match result {
+        Err(RotationError::Verification { response, source }) if !verified => {
+            assert_eq!(response["version"], 2);
+            assert!(matches!(
+                source,
+                Error::Operation(litellm_secrets_types::Error::NewSecretMismatch)
+            ));
+        }
+        Err(RotationError::Retirement { response, source }) if verified => {
+            assert_eq!(response["version"], 2);
+            assert!(matches!(source, Error::Status { status: 403 }));
+        }
+        other => panic!("unexpected rotation outcome: {other:?}"),
+    }
 }

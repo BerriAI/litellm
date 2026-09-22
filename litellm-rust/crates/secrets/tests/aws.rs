@@ -42,7 +42,7 @@ async fn read_results_follow_the_selected_failure_policy(
         .expect(1)
         .mount(&server)
         .await;
-    let resolver = SecretResolver::new(
+    let resolver = SecretResolver::new_python_compatible(
         Arc::new(state(&server, KeyManagementSettings::default())),
         Arc::new(move |_: &str| environment.map(str::to_owned)),
         OidcResolver::default(),
@@ -86,7 +86,7 @@ async fn primary_secret_values_other_than_strings_resolve_to_none(
         primary_secret_name: Some("primary".into()),
         ..Default::default()
     };
-    let resolver = SecretResolver::new(
+    let resolver = SecretResolver::new_python_compatible(
         Arc::new(state(&server, settings)),
         Arc::new(|_: &str| Some("fallback".into())),
         OidcResolver::default(),
@@ -146,7 +146,7 @@ async fn gating_prediction_matches_actual_lookup(
     assert!(state.backend().is_some());
     assert_eq!(state.settings().unwrap().access_mode, access_mode);
     assert_eq!(secret_manager_would_be_consulted(&state, name), expected);
-    let resolver = SecretResolver::new(
+    let resolver = SecretResolver::new_python_compatible(
         Arc::new(state),
         Arc::new(|_: &str| Some("environment".into())),
         OidcResolver::default(),

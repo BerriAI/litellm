@@ -3,9 +3,9 @@ pub enum Error {
     #[error("HashiCorp Vault requires an enterprise license")]
     EnterpriseRequired,
     #[error("invalid secret name")]
-    InvalidSecretName(#[from] litellm_secrets_types::Error),
-    #[error("HashiCorp Vault received an incompatible operation context")]
-    InvalidOperationContext,
+    InvalidSecretName(litellm_secrets_types::Error),
+    #[error(transparent)]
+    Operation(#[from] litellm_secrets_types::Error),
     #[error("HashiCorp Vault client failed")]
     Client(
         #[from]

@@ -3223,7 +3223,6 @@ dependencies = [
  "litellm-auth-types",
  "litellm-core-utils",
  "litellm-secrets-types",
- "moka",
  "percent-encoding",
  "reqwest 0.12.28",
  "rstest",
@@ -3241,7 +3240,6 @@ version = "0.1.0"
 dependencies = [
  "litellm-core-utils",
  "litellm-secrets-types",
- "moka",
  "rstest",
  "rustify",
  "rustify_derive",
@@ -3260,6 +3258,7 @@ name = "litellm-secrets-types"
 version = "0.1.0"
 dependencies = [
  "litellm-auth-types",
+ "moka",
  "rstest",
  "serde",
  "serde_json",

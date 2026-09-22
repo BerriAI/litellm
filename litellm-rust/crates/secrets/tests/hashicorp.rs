@@ -47,7 +47,7 @@ async fn hashicorp_handler_resolves_found_missing_and_failed_values() {
     });
     let found_config = HashicorpVaultConfig::from_environment(found_environment.as_ref()).unwrap();
     let found_manager = HashicorpVault::from_config(found_config, true).unwrap();
-    let found_resolver = SecretResolver::new(
+    let found_resolver = SecretResolver::new_python_compatible(
         Arc::new(SecretManagerState::new(
             SecretManager::HashicorpVault(found_manager),
             KeyManagementSettings {
@@ -128,7 +128,7 @@ async fn hashicorp_handler_resolves_found_missing_and_failed_values() {
             ..Default::default()
         },
     );
-    let failed_resolver = SecretResolver::new(
+    let failed_resolver = SecretResolver::new_python_compatible(
         Arc::new(failed_state),
         Arc::new(|_: &str| None),
         litellm_secrets::OidcResolver::default(),

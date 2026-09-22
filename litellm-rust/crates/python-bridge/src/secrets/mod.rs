@@ -33,7 +33,7 @@ fn select(
     resolved: impl FnOnce() -> PyResult<Arc<dyn SecretSource>>,
 ) -> PyResult<Arc<dyn SecretSource>> {
     if !manager.read(&READABLE)? {
-        return Ok(Arc::new(EnvironmentSecrets::default()));
+        return Ok(Arc::new(EnvironmentSecrets::python_compatible()));
     }
     if !manager.read(&NATIVE)? {
         return Err(RustBridgeDeclined::new_err(
@@ -85,7 +85,7 @@ mod tests {
             let mut resolved_called = false;
             let selected = select(&PythonSettings::SecretManager.snapshot(manager), || {
                 resolved_called = true;
-                Ok(Arc::new(EnvironmentSecrets::default()) as Arc<dyn SecretSource>)
+                Ok(Arc::new(EnvironmentSecrets::python_compatible()) as Arc<dyn SecretSource>)
             });
             match expected {
                 Selected::Environment => assert!(selected.is_ok() && !resolved_called),

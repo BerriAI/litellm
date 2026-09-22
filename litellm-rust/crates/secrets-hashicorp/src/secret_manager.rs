@@ -8,10 +8,10 @@ use std::{
 
 use litellm_core_utils::settings::Lookup;
 use litellm_secrets_types::{
-    BaseSecretManager, HashicorpOperationContext, SecretDeleter, SecretOperationContext,
-    SecretValue, SecretWriteContext, SecretWriter, async_rotate_secret, validate_secret_name,
+    BaseSecretManager, HashicorpOperationContext, RotationError, SecretCache, SecretDeleter,
+    SecretRotator, SecretValue, SecretWriteContext, SecretWriter, async_rotate_secret,
+    validate_secret_name,
 };
-use moka::future::Cache;
 use rustify::errors::ClientError as RustifyClientError;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -50,7 +50,7 @@ struct CacheKey {
 #[derive(Clone)]
 pub struct HashicorpVault {
     config: HashicorpVaultConfig,
-    cache: Cache<CacheKey, SecretValue>,
+    cache: SecretCache<CacheKey, SecretValue>,
     auth_client: Arc<Mutex<Option<CachedClient>>>,
 }
 
@@ -80,10 +80,7 @@ impl HashicorpVault {
         if !enterprise_enabled {
             return Err(Error::EnterpriseRequired);
         }
-        let cache: Cache<CacheKey, SecretValue> = Cache::builder()
-            .max_capacity(CACHE_CAPACITY)
-            .time_to_live(config.refresh_interval)
-            .build();
+        let cache = SecretCache::new(CACHE_CAPACITY, config.refresh_interval);
         Ok(Self {
             config,
             cache,
@@ -92,19 +89,19 @@ impl HashicorpVault {
     }
 
     pub fn secret_location(&self, secret_name: &str) -> Result<SecretLocation, Error> {
-        self.secret_location_with_context(secret_name, &SecretOperationContext::default())
+        self.secret_location_with_context(secret_name, &HashicorpOperationContext::default())
     }
 
     pub fn secret_location_with_context(
         &self,
         secret_name: &str,
-        context: &SecretOperationContext,
+        context: &HashicorpOperationContext,
     ) -> Result<SecretLocation, Error> {
         validate_secret_name(secret_name).map_err(Error::InvalidSecretName)?;
-        let operation: Option<&HashicorpOperationContext> = hashicorp_context(context)?;
         let path: String = [
-            operation
-                .and_then(|operation| operation.path_prefix.as_deref())
+            context
+                .path_prefix
+                .as_deref()
                 .and_then(path_component)
                 .or_else(|| self.config.path_prefix.clone()),
             Some(secret_name.to_owned()),
@@ -115,8 +112,9 @@ impl HashicorpVault {
         .join("/");
         Ok(SecretLocation {
             namespace: self.config.secret_namespace().map(str::to_owned),
-            mount: operation
-                .and_then(|operation| operation.mount.as_deref())
+            mount: context
+                .mount
+                .as_deref()
                 .and_then(path_component)
                 .unwrap_or_else(|| self.config.mount.clone()),
             path,
@@ -128,42 +126,49 @@ impl HashicorpVault {
     }
 
     pub async fn async_read_secret(&self, secret_name: &str) -> Result<Option<SecretValue>, Error> {
-        self.async_read_secret_with_context(secret_name, &SecretOperationContext::default())
+        self.async_read_secret_with_context(secret_name, &HashicorpOperationContext::default())
             .await
     }
 
     pub async fn async_read_secret_with_context(
         &self,
         secret_name: &str,
-        context: &SecretOperationContext,
+        context: &HashicorpOperationContext,
     ) -> Result<Option<SecretValue>, Error> {
         let location: SecretLocation = self.secret_location_with_context(secret_name, context)?;
-        let data_key: String = data_key(context)?;
+        let data_key: String = data_key(context);
         let cache_key = CacheKey {
             location: location.clone(),
             data_key: data_key.clone(),
         };
-        if let Some(value) = self.cache.get(&cache_key).await {
-            return Ok(Some(value));
-        }
-        let data: Option<HashMap<String, Value>> = with_timeout(context, async {
-            let client: Arc<VaultClient> = self.vault_client().await?;
+        with_timeout(
+            context,
+            self.cache
+                .read(cache_key, self.read_uncached(&location, &data_key)),
+        )
+        .await
+    }
+
+    async fn read_uncached(
+        &self,
+        location: &SecretLocation,
+        data_key: &str,
+    ) -> Result<Option<SecretValue>, Error> {
+        let client = self.vault_client().await?;
+        let data: Option<HashMap<String, Value>> =
             match kv2::read(client.as_ref(), &location.mount, &location.path).await {
-                Ok(data) => Ok(Some(data)),
-                Err(error) if api_status(&error) == Some(404) => Ok(None),
-                Err(error) => Err(map_api_error(error, ErrorContext::Read)),
-            }
-        })
-        .await?;
+                Ok(data) => Some(data),
+                Err(error) if api_status(&error) == Some(404) => None,
+                Err(error) => return Err(map_api_error(error, ErrorContext::Read)),
+            };
         let Some(data) = data else {
             return Ok(None);
         };
-        let Some(value) = data.get(&data_key) else {
+        let Some(value) = data.get(data_key) else {
             return Ok(None);
         };
         let value: &str = value.as_str().ok_or(Error::NonStringValue)?;
         let value: SecretValue = SecretValue::new(value);
-        self.cache.insert(cache_key, value.clone()).await;
         Ok(Some(value))
     }
 
@@ -188,11 +193,11 @@ impl HashicorpVault {
         &self,
         secret_name: &str,
         value: &SecretValue,
-        context: &SecretWriteContext,
+        context: &SecretWriteContext<HashicorpOperationContext>,
     ) -> Result<Value, Error> {
         let location: SecretLocation =
             self.secret_location_with_context(secret_name, &context.operation)?;
-        let data_key: String = data_key(&context.operation)?;
+        let data_key: String = data_key(&context.operation);
         if context.description.is_some() && data_key == "description" {
             return Err(Error::DataKeyConflictsWithDescription);
         }
@@ -238,20 +243,21 @@ impl HashicorpVault {
             }
         })
         .await?;
-        self.cache.invalidate_all();
+        self.cache
+            .invalidate_where(move |key| key.location == location);
         serde_json::to_value(metadata)
             .map_err(|source| Error::Client(ClientError::JsonParseError { source }))
     }
 
     pub async fn async_delete_secret(&self, secret_name: &str) -> Result<(), Error> {
-        self.async_delete_secret_with_context(secret_name, &SecretOperationContext::default())
+        self.async_delete_secret_with_context(secret_name, &HashicorpOperationContext::default())
             .await
     }
 
     pub async fn async_delete_secret_with_context(
         &self,
         secret_name: &str,
-        context: &SecretOperationContext,
+        context: &HashicorpOperationContext,
     ) -> Result<(), Error> {
         let location: SecretLocation = self.secret_location_with_context(secret_name, context)?;
         with_timeout(context, async {
@@ -261,7 +267,8 @@ impl HashicorpVault {
                 .map_err(|error| map_api_error(error, ErrorContext::Secret))
         })
         .await?;
-        self.cache.invalidate_all();
+        self.cache
+            .invalidate_where(move |key| key.location == location);
         Ok(())
     }
 
@@ -270,12 +277,12 @@ impl HashicorpVault {
         current_name: &str,
         new_name: &str,
         value: &SecretValue,
-    ) -> Result<Value, Error> {
+    ) -> Result<Value, RotationError<Value, Error>> {
         self.async_rotate_secret_with_context(
             current_name,
             new_name,
             value,
-            &SecretOperationContext::default(),
+            &HashicorpOperationContext::default(),
         )
         .await
     }
@@ -285,8 +292,8 @@ impl HashicorpVault {
         current_name: &str,
         new_name: &str,
         value: &SecretValue,
-        context: &SecretOperationContext,
-    ) -> Result<Value, Error> {
+        context: &HashicorpOperationContext,
+    ) -> Result<Value, RotationError<Value, Error>> {
         async_rotate_secret(self, current_name, new_name, value, context).await
     }
 
@@ -365,11 +372,12 @@ impl HashicorpVault {
 
 impl BaseSecretManager for HashicorpVault {
     type Error = Error;
+    type Context = HashicorpOperationContext;
 
     async fn async_read_secret(
         &self,
         name: &str,
-        context: &SecretOperationContext,
+        context: &Self::Context,
     ) -> Result<Option<SecretValue>, Error> {
         HashicorpVault::async_read_secret_with_context(self, name, context).await
     }
@@ -382,7 +390,7 @@ impl SecretWriter for HashicorpVault {
         &self,
         name: &str,
         value: &SecretValue,
-        context: &SecretWriteContext,
+        context: &SecretWriteContext<Self::Context>,
     ) -> Result<Value, Error> {
         HashicorpVault::async_write_secret_with_context(self, name, value, context).await
     }
@@ -391,12 +399,7 @@ impl SecretWriter for HashicorpVault {
 impl SecretDeleter for HashicorpVault {
     type DeleteResponse = ();
 
-    async fn async_delete_secret(
-        &self,
-        name: &str,
-        _recovery_window_in_days: Option<u32>,
-        context: &SecretOperationContext,
-    ) -> Result<(), Error> {
+    async fn async_delete_secret(&self, name: &str, context: &Self::Context) -> Result<(), Error> {
         HashicorpVault::async_delete_secret_with_context(self, name, context).await
     }
 }
@@ -408,35 +411,26 @@ enum ErrorContext {
     Secret,
 }
 
-fn hashicorp_context(
-    context: &SecretOperationContext,
-) -> Result<Option<&HashicorpOperationContext>, Error> {
-    match context {
-        SecretOperationContext::Hashicorp(context) => Ok(Some(context)),
-        SecretOperationContext::Default => Ok(None),
-        _ => Err(Error::InvalidOperationContext),
-    }
-}
-
 fn path_component(value: &str) -> Option<String> {
     let value: &str = value.trim().trim_matches('/');
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-fn data_key(context: &SecretOperationContext) -> Result<String, Error> {
-    Ok(hashicorp_context(context)?
-        .and_then(|context| context.data_key.as_deref())
+fn data_key(context: &HashicorpOperationContext) -> String {
+    context
+        .data_key
+        .as_deref()
         .map(str::trim)
         .filter(|data_key| !data_key.is_empty())
         .map(str::to_owned)
-        .unwrap_or_else(|| "key".to_owned()))
+        .unwrap_or_else(|| "key".to_owned())
 }
 
 async fn with_timeout<T>(
-    context: &SecretOperationContext,
+    context: &HashicorpOperationContext,
     operation: impl Future<Output = Result<T, Error>>,
 ) -> Result<T, Error> {
-    match context.timeout() {
+    match context.timeout {
         Some(timeout) => tokio::time::timeout(timeout, operation)
             .await
             .map_err(|_| Error::Timeout)?,
@@ -510,4 +504,43 @@ fn malformed_response(context: ErrorContext) -> Error {
 
 fn token_expiry(lease_duration: u64) -> Option<Instant> {
     (lease_duration > 0).then(|| Instant::now() + Duration::from_secs(lease_duration))
+}
+
+impl SecretRotator for HashicorpVault {
+    type RotationResponse = Value;
+
+    async fn async_read_secret_fresh(
+        &self,
+        name: &str,
+        context: &Self::Context,
+    ) -> Result<Option<SecretValue>, Error> {
+        let location = self.secret_location_with_context(name, context)?;
+        let data_key = data_key(context);
+        let key = CacheKey {
+            location: location.clone(),
+            data_key: data_key.clone(),
+        };
+        with_timeout(
+            context,
+            self.cache
+                .refresh(key, self.read_uncached(&location, &data_key)),
+        )
+        .await
+    }
+
+    async fn async_write_replacement(
+        &self,
+        current_name: &str,
+        new_name: &str,
+        value: &SecretValue,
+        context: &Self::Context,
+    ) -> Result<Value, Error> {
+        SecretWriter::async_write_secret(
+            self,
+            new_name,
+            value,
+            &SecretWriteContext::rotated_from(current_name, context.clone()),
+        )
+        .await
+    }
 }

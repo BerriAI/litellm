@@ -13,7 +13,7 @@ use crate::SecretValue;
     feature = "azure",
     feature = "cyberark"
 ))]
-use litellm_secrets_types::{BaseSecretManager, SecretOperationContext};
+use litellm_secrets_types::BaseSecretManager;
 
 pub trait ExternalSecretManager: Send + Sync {
     fn system(&self) -> KeyManagementSystem;
@@ -170,7 +170,7 @@ where
     Error: From<M::Error>,
 {
     manager
-        .async_read_secret(name, &SecretOperationContext::Default)
+        .async_read_secret(name, &M::Context::default())
         .await
         .map(|value| value.map(Secret::String))
         .map_err(Error::from)

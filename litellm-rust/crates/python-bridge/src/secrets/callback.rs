@@ -168,7 +168,7 @@ handler.get_secret_from_manager = get_secret_from_manager
             );
             (reader, locals.unbind())
         });
-        let resolver = SecretResolver::new(
+        let resolver = SecretResolver::new_python_compatible(
             Arc::new(SecretManagerState::new(
                 SecretManager::External(Arc::new(reader)),
                 KeyManagementSettings::default(),

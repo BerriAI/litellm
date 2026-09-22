@@ -68,14 +68,14 @@ pub struct CyberarkOperationContext {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct SecretWriteContext {
+pub struct SecretWriteContext<C = SecretOperationContext> {
     pub description: Option<String>,
     pub tags: BTreeMap<String, String>,
-    pub operation: SecretOperationContext,
+    pub operation: C,
 }
 
-impl SecretWriteContext {
-    pub fn rotated_from(current_name: &str, operation: SecretOperationContext) -> Self {
+impl<C> SecretWriteContext<C> {
+    pub fn rotated_from(current_name: &str, operation: C) -> Self {
         Self {
             description: Some(format!("Rotated from {current_name}")),
             tags: BTreeMap::new(),

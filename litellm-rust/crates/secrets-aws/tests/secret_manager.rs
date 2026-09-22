@@ -12,8 +12,8 @@ use aws_sdk_secretsmanager::{
 };
 use litellm_secrets_aws::{AwsSecretsManagerV2, Error, RotationResponse};
 use litellm_secrets_types::{
-    AwsOperationContext, BaseSecretManager, KeyManagementSettings, SecretDeleter,
-    SecretOperationContext, SecretValue, SecretWriteContext, SecretWriter,
+    AwsOperationContext, BaseSecretManager, KeyManagementSettings, SecretDeleter, SecretValue,
+    SecretWriteContext, SecretWriter,
 };
 use rstest::{fixture, rstest};
 use serde_json::json;
@@ -175,6 +175,19 @@ async fn same_name_rotation_uses_put_and_returns_its_response(
         .expect(1)
         .mount(&server)
         .await;
+    let reads = AtomicUsize::new(0);
+    Mock::given(header("x-amz-target", "secretsmanager.GetSecretValue"))
+        .respond_with(move |_: &wiremock::Request| {
+            let value = if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                "old"
+            } else {
+                "replacement"
+            };
+            ResponseTemplate::new(200).set_body_json(json!({"SecretString": value}))
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
     let response = manager(&server, default_settings)
         .async_rotate_secret("key", "key", &SecretValue::new("replacement"))
         .await
@@ -183,7 +196,7 @@ async fn same_name_rotation_uses_put_and_returns_its_response(
         RotationResponse::Updated(output) => assert_eq!(output.version_id(), Some("version")),
         _ => panic!("rotation created a second secret"),
     }
-    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert_eq!(server.received_requests().await.unwrap().len(), 3);
 }
 
 #[rstest]
@@ -321,9 +334,7 @@ async fn trait_write_uses_typed_write_context(default_settings: KeyManagementSet
 
 #[rstest]
 #[tokio::test]
-async fn trait_delete_accepts_an_unspecified_recovery_window(
-    default_settings: KeyManagementSettings,
-) {
+async fn trait_delete_uses_the_provider_recovery_policy(default_settings: KeyManagementSettings) {
     let server = MockServer::start().await;
     Mock::given(header("x-amz-target", "secretsmanager.DeleteSecret"))
         .and(body_partial_json(json!({"SecretId": "key"})))
@@ -334,8 +345,7 @@ async fn trait_delete_accepts_an_unspecified_recovery_window(
     let response = SecretDeleter::async_delete_secret(
         &manager(&server, default_settings),
         "key",
-        None,
-        &SecretOperationContext::default(),
+        &AwsOperationContext::default(),
     )
     .await
     .unwrap();
@@ -360,10 +370,10 @@ async fn trait_read_uses_the_aws_region_from_its_operation_context() {
         .expect(1)
         .mount(&server)
         .await;
-    let context = SecretOperationContext::Aws(AwsOperationContext {
+    let context = AwsOperationContext {
         region_name: Some("us-west-2".into()),
         ..Default::default()
-    });
+    };
     let value = BaseSecretManager::async_read_secret(&loaded_manager(&server), "key", &context)
         .await
         .unwrap();
@@ -383,10 +393,10 @@ async fn trait_read_applies_the_aws_operation_timeout() {
         .expect(1)
         .mount(&server)
         .await;
-    let context = SecretOperationContext::Aws(AwsOperationContext {
+    let context = AwsOperationContext {
         timeout: Some(Duration::from_millis(30)),
         ..Default::default()
-    });
+    };
     assert!(matches!(
         BaseSecretManager::async_read_secret(&loaded_manager(&server), "key", &context).await,
         Err(Error::Timeout)

@@ -21,6 +21,7 @@ pub struct SecretResolver {
     environment: Arc<dyn Lookup + Send + Sync>,
     oidc: OidcResolver,
     failure_policy: FailurePolicy,
+    python_compatible: bool,
 }
 
 impl Default for SecretResolver {
@@ -44,6 +45,18 @@ impl SecretResolver {
             environment,
             oidc,
             failure_policy: FailurePolicy::default(),
+            python_compatible: false,
+        }
+    }
+
+    pub fn new_python_compatible(
+        state: Arc<SecretManagerState>,
+        environment: Arc<dyn Lookup + Send + Sync>,
+        oidc: OidcResolver,
+    ) -> Self {
+        Self {
+            python_compatible: true,
+            ..Self::new(state, environment, oidc)
         }
     }
 
@@ -59,6 +72,19 @@ impl SecretResolver {
         name: &str,
         default_value: Option<Secret>,
     ) -> Result<Option<Secret>, Error> {
+        let value = self.read(name, default_value.clone()).await?;
+        Ok(if self.python_compatible {
+            value
+        } else {
+            value.or(default_value)
+        })
+    }
+
+    async fn read(
+        &self,
+        name: &str,
+        default_value: Option<Secret>,
+    ) -> Result<Option<Secret>, Error> {
         let name = normalize_secret_name(name);
         if name.starts_with("oidc/") {
             return self
@@ -69,21 +95,28 @@ impl SecretResolver {
         }
         let LookupTarget::Manager { backend, settings } = self.state.lookup_target(name) else {
             return Ok(self.environment.get(name).map(|value| {
-                parse_str_bool(&value)
-                    .map_or_else(|| Secret::String(SecretValue::new(value)), Secret::Bool)
+                if self.python_compatible {
+                    parse_str_bool(&value)
+                        .map_or_else(|| Secret::String(SecretValue::new(value)), Secret::Bool)
+                } else {
+                    Secret::String(SecretValue::new(value))
+                }
             }));
         };
         match crate::get_secret_from_manager(backend, name, settings, self.environment.as_ref())
             .await
         {
-            Ok(value) => Ok(value.and_then(manager_value)),
+            Ok(value) => Ok(value.and_then(|value| self.manager_value(value))),
             Err(error @ Error::ExternalManager(_)) => Err(error),
             Err(error) => match self.failure_policy {
-                FailurePolicy::Propagate => default_value.map(Some).ok_or(error),
+                FailurePolicy::Propagate if self.python_compatible => {
+                    default_value.map(Some).ok_or(error)
+                }
+                FailurePolicy::Propagate => Err(error),
                 FailurePolicy::EnvironmentFallback => Ok(self
                     .environment
                     .get(name)
-                    .and_then(|value| manager_value(Secret::String(SecretValue::new(value))))),
+                    .and_then(|value| self.manager_value(Secret::String(SecretValue::new(value))))),
             },
         }
     }
@@ -99,7 +132,10 @@ impl SecretResolver {
         {
             Some(Secret::String(value)) => Ok(Some(value)),
             None => Ok(None),
-            Some(Secret::Bool(_) | Secret::Json(_)) => Ok(None),
+            Some(Secret::Bool(_) | Secret::Json(_)) if self.python_compatible => Ok(None),
+            Some(Secret::Bool(_) | Secret::Json(_)) => {
+                Err(Error::TypeMismatch { expected: "string" })
+            }
         }
     }
 
@@ -113,19 +149,32 @@ impl SecretResolver {
             .await?
         {
             Some(Secret::Bool(value)) => Ok(Some(value)),
-            Some(Secret::String(value)) => Ok(parse_str_bool(value.expose())),
-            Some(Secret::Json(_)) => Ok(None),
+            Some(Secret::String(value)) => match parse_str_bool(value.expose()) {
+                Some(value) => Ok(Some(value)),
+                None if self.python_compatible => Ok(None),
+                None => Err(Error::TypeMismatch {
+                    expected: "boolean",
+                }),
+            },
+            Some(Secret::Json(_)) if self.python_compatible => Ok(None),
+            Some(Secret::Json(_)) => Err(Error::TypeMismatch {
+                expected: "boolean",
+            }),
             None => Ok(None),
         }
     }
-}
 
-fn manager_value(secret: Secret) -> Option<Secret> {
-    let Secret::String(value) = secret else {
-        return None;
-    };
-    match literal_eval(value.expose()) {
-        Ok(Value::Bool(boolean)) => Some(Secret::Bool(boolean)),
-        _ => Some(Secret::String(value)),
+    fn manager_value(&self, secret: Secret) -> Option<Secret> {
+        if !self.python_compatible {
+            return Some(secret);
+        }
+
+        let Secret::String(value) = secret else {
+            return None;
+        };
+        match literal_eval(value.expose()) {
+            Ok(Value::Bool(boolean)) => Some(Secret::Bool(boolean)),
+            _ => Some(Secret::String(value)),
+        }
     }
 }

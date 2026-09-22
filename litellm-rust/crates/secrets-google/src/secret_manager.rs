@@ -3,9 +3,8 @@ use std::{sync::Arc, time::Duration};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_core_utils::settings::Lookup;
 use litellm_secrets_types::{
-    BaseSecretManager, KeyManagementSystem, Secret, SecretOperationContext, SecretValue,
+    BaseSecretManager, GoogleOperationContext, Secret, SecretCache, SecretValue,
 };
-use moka::future::Cache;
 use serde::Deserialize;
 
 use litellm_auth_gcp::GoogleCredentials;
@@ -28,7 +27,7 @@ pub struct GoogleSecretManager {
     credentials: Arc<GoogleCredentials>,
     endpoint: reqwest::Url,
     project: String,
-    cache: Cache<String, SecretValue>,
+    cache: SecretCache<String, SecretValue>,
     always_read: bool,
 }
 
@@ -63,10 +62,7 @@ impl GoogleSecretManager {
         let ttl = refresh_interval
             .filter(|ttl| !ttl.is_zero())
             .unwrap_or(DEFAULT_CACHE_TTL);
-        let cache = Cache::builder()
-            .max_capacity(CACHE_CAPACITY)
-            .time_to_live(ttl)
-            .build();
+        let cache = SecretCache::new(CACHE_CAPACITY, ttl);
         Ok(Self {
             client,
             credentials: Arc::new(credentials),
@@ -120,17 +116,21 @@ impl GoogleSecretManager {
         &self,
         name: &str,
     ) -> Result<Option<Secret>, Error> {
-        BaseSecretManager::async_read_secret(self, name, &SecretOperationContext::Default)
+        BaseSecretManager::async_read_secret(self, name, &GoogleOperationContext::default())
             .await
             .map(|value| value.map(Secret::String))
     }
 
     async fn read(&self, name: &str) -> Result<Option<SecretValue>, Error> {
-        if !self.always_read
-            && let Some(cached) = self.cache.get(name).await
-        {
-            return Ok(Some(cached));
+        if self.always_read {
+            return self.read_uncached(name).await;
         }
+        self.cache
+            .read(name.to_owned(), self.read_uncached(name))
+            .await
+    }
+
+    async fn read_uncached(&self, name: &str) -> Result<Option<SecretValue>, Error> {
         let url = self
             .endpoint
             .join(&format!(
@@ -170,21 +170,20 @@ impl GoogleSecretManager {
         }
         let plaintext = String::from_utf8(bytes).map_err(|_| Error::Utf8)?;
         let value = SecretValue::new(plaintext);
-        self.cache.insert(name.to_owned(), value.clone()).await;
         Ok(Some(value))
     }
 }
 
 impl BaseSecretManager for GoogleSecretManager {
     type Error = Error;
+    type Context = GoogleOperationContext;
 
     async fn async_read_secret(
         &self,
         name: &str,
-        context: &SecretOperationContext,
+        context: &Self::Context,
     ) -> Result<Option<SecretValue>, Error> {
-        context.validate_for(KeyManagementSystem::GoogleSecretManager)?;
-        match context.timeout() {
+        match context.timeout {
             Some(timeout) => tokio::time::timeout(timeout, self.read(name))
                 .await
                 .map_err(|_| Error::Timeout)?,

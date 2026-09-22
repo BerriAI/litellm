@@ -8,9 +8,7 @@ use std::{
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_secrets_cyberark::{CyberArkSecretManager, DeleteOutcome, Error};
-use litellm_secrets_types::{
-    BaseSecretManager, CyberarkOperationContext, SecretOperationContext, SecretValue,
-};
+use litellm_secrets_types::{BaseSecretManager, CyberarkOperationContext, SecretValue};
 use rstest::{fixture, rstest};
 use serde::Deserialize;
 use wiremock::{
@@ -102,7 +100,7 @@ async fn successful_reads_cache_auth_secret_and_redact_values() {
 
 #[rstest]
 #[tokio::test]
-async fn concurrent_reads_share_authentication_request() {
+async fn concurrent_reads_share_authentication_and_secret_requests() {
     let server = MockServer::start().await;
     Mock::given(path("/authn/acct/admin/authenticate"))
         .and(body_string("k3y"))
@@ -120,7 +118,7 @@ async fn concurrent_reads_share_authentication_request() {
             format!("Token token=\"{}\"", STANDARD.encode(TOKEN_JSON)),
         ))
         .respond_with(ResponseTemplate::new(200).set_body_string("value"))
-        .expect(2)
+        .expect(1)
         .mount(&server)
         .await;
     let manager = manager(&server, Duration::from_secs(60));
@@ -351,13 +349,17 @@ async fn trait_read_applies_cyberark_operation_timeout_to_authentication() {
         .mount(&server)
         .await;
     let manager = manager(&server, Duration::from_secs(60));
-    let context = SecretOperationContext::Cyberark(CyberarkOperationContext {
+    let context = CyberarkOperationContext {
         timeout: Some(Duration::from_millis(10)),
-    });
+    };
 
     let result = BaseSecretManager::async_read_secret(&manager, "key", &context).await;
 
-    assert!(matches!(result, Err(Error::Http(error)) if error.is_timeout()));
+    match result {
+        Err(Error::Timeout) => {}
+        Err(Error::Http(error)) => assert!(error.is_timeout()),
+        other => panic!("expected timeout, got {other:?}"),
+    }
 }
 
 #[rstest]
@@ -701,36 +703,4 @@ fn parity_fixture_matches_authentication_contract(parity_fixture: ParityFixture)
         parity_fixture.secrets[1].policy_body,
         "- !variable \"team/app/key\"\n"
     );
-}
-
-#[rstest]
-#[case::aws(SecretOperationContext::Aws(Default::default()))]
-#[case::vault(SecretOperationContext::Hashicorp(Default::default()))]
-#[tokio::test]
-async fn foreign_context_is_rejected_before_io(#[case] context: SecretOperationContext) {
-    let server = MockServer::start().await;
-    let manager = manager(&server, Duration::from_secs(60));
-    assert!(matches!(
-        BaseSecretManager::async_read_secret(&manager, "key", &context).await,
-        Err(Error::Operation(
-            litellm_secrets_types::Error::InvalidOperationContext
-        ))
-    ));
-    assert!(matches!(
-        manager
-            .async_write_secret_with_context("key", &SecretValue::new("value"), None, &context)
-            .await,
-        Err(Error::Operation(
-            litellm_secrets_types::Error::InvalidOperationContext
-        ))
-    ));
-    assert!(matches!(
-        manager
-            .async_delete_secret_with_context("key", None, &context)
-            .await,
-        Err(Error::Operation(
-            litellm_secrets_types::Error::InvalidOperationContext
-        ))
-    ));
-    assert!(server.received_requests().await.unwrap().is_empty());
 }

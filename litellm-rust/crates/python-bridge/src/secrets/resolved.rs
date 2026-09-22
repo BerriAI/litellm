@@ -20,7 +20,7 @@ impl ResolvedSecrets {
 
     fn from_state(state: Arc<SecretManagerState>) -> Self {
         Self {
-            resolver: SecretResolver::new(
+            resolver: SecretResolver::new_python_compatible(
                 state,
                 Arc::new(ProcessEnvironment),
                 OidcResolver::default(),

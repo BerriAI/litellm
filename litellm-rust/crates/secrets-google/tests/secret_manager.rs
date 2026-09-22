@@ -275,9 +275,7 @@ async fn cache_preserves_raw_values(default_ttl: Duration, #[case] raw: &str) {
 
 #[tokio::test]
 async fn trait_read_limits_the_operation_duration() {
-    use litellm_secrets_types::{
-        BaseSecretManager, GoogleOperationContext, SecretOperationContext,
-    };
+    use litellm_secrets_types::{BaseSecretManager, GoogleOperationContext};
     use std::time::Duration;
     let server = MockServer::start().await;
     Mock::given(wiremock::matchers::method("GET"))
@@ -285,30 +283,32 @@ async fn trait_read_limits_the_operation_duration() {
         .mount(&server)
         .await;
     let manager = manager(&server, false, Duration::from_secs(60));
-    let context = SecretOperationContext::Google(GoogleOperationContext {
+    let context = GoogleOperationContext {
         timeout: Some(Duration::from_millis(30)),
-    });
+    };
     assert!(matches!(
         BaseSecretManager::async_read_secret(&manager, "key", &context).await,
         Err(Error::Timeout)
     ));
 }
 
-#[rstest]
-#[case::aws(litellm_secrets_types::SecretOperationContext::Aws(Default::default()))]
-#[case::vault(litellm_secrets_types::SecretOperationContext::Hashicorp(Default::default()))]
 #[tokio::test]
-async fn foreign_context_is_rejected_before_io(
-    #[case] context: litellm_secrets_types::SecretOperationContext,
-) {
-    use litellm_secrets_types::BaseSecretManager;
+async fn concurrent_reads_share_one_secret_request() {
     let server = MockServer::start().await;
+    Mock::given(wiremock::matchers::method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"payload": {"data": STANDARD.encode("value")}}))
+                .set_delay(Duration::from_millis(20)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
     let manager = manager(&server, false, Duration::from_secs(60));
-    assert!(matches!(
-        BaseSecretManager::async_read_secret(&manager, "key", &context).await,
-        Err(Error::Operation(
-            litellm_secrets_types::Error::InvalidOperationContext
-        ))
-    ));
-    assert!(server.received_requests().await.unwrap().is_empty());
+    let (first, second) = tokio::join!(
+        manager.get_secret_from_google_secret_manager("key"),
+        manager.get_secret_from_google_secret_manager("key")
+    );
+    assert_eq!(first.unwrap().unwrap().as_str(), Some("value"));
+    assert_eq!(second.unwrap().unwrap().as_str(), Some("value"));
 }

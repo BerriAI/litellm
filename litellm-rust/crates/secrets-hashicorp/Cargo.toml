@@ -8,7 +8,6 @@ repository.workspace = true
 [dependencies]
 litellm-core-utils.workspace = true
 litellm-secrets-types.workspace = true
-moka.workspace = true
 rustify.workspace = true
 rustify_derive.workspace = true
 serde.workspace = true
