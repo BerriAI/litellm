@@ -441,12 +441,7 @@ def _in_scope(span: ReadableSpan, scope: "OtelSpanScope") -> bool:
 
 
 def _is_internal_span(span: ReadableSpan) -> bool:
-    """Whether ``span`` is the proxy's own work rather than the request or the tenant's call.
-
-    The request root is the SERVER span; the model call, the MCP call and the guardrail
-    each carry one of the tenant-owned keys. Everything else the proxy emits inside a
-    request is a SERVICE or DB_CALL span: auth, Redis, Postgres, spend writes.
-    """
+    """A SERVICE or DB_CALL span: neither the request root nor a tenant-owned model, MCP or guardrail span."""
     return span.kind is not SpanKind.SERVER and not _is_tenant_owned_span(span.attributes or _NO_ATTRIBUTES)
 
 

@@ -1677,8 +1677,6 @@ LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: Final = "litellm_no_upstream_llm_call"
 # the key's values after the team metadata merge so a key outranks its team).
 OTEL_SERVICE_NAME_METADATA_KEYS: Final = ("otel_service_name_override", "otel_service_name")
 
-# ``litellm_settings: otel_tenant_internal_spans`` value (and its env equivalent) that
-# keeps the proxy's own SERVICE and DB_CALL spans out of tenant OTel destinations.
 OTEL_EXCLUDE_INTERNAL_SPANS: Final = "exclude"
 OTEL_TENANT_INTERNAL_SPANS_ENV: Final = "LITELLM_OTEL_TENANT_INTERNAL_SPANS"
 

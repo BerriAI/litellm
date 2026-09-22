@@ -403,11 +403,7 @@ def tenant_destinations_are_additive() -> bool:
 
 
 def tenant_internal_spans_default() -> OtelInternalSpans:
-    """The ``internal_spans`` a tenant destination gets when its own callback vars name none.
-
-    Include is the default, so a destination keeps the whole request tree unless the
-    operator or the team asks for the proxy's own SERVICE and DB_CALL spans to stay home.
-    """
+    """The ``internal_spans`` a tenant destination gets when its own callback vars name none."""
     import litellm
 
     configured: Final = litellm.otel_tenant_internal_spans or os.environ.get(OTEL_TENANT_INTERNAL_SPANS_ENV)
