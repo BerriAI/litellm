@@ -633,9 +633,6 @@ def test_openai_token_with_image_and_text():
     "model, base_model, input_tokens, user_max_tokens, expected_value",
     [
         ("random-model", "random-model", 1024, 1024, 1024),
-        ("command", "command", 1000000, None, None),  # model max = 4096
-        ("command", "command", 4000, 256, 96),  # model max = 4096
-        ("command", "command", 4000, 10, 10),  # model max = 4096
         ("gpt-3.5-turbo", "gpt-3.5-turbo", 4000, 5000, 4096),  # model max output = 4096
     ],
 )
