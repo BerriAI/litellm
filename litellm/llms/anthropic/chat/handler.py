@@ -717,11 +717,21 @@ class ModelResponseIterator:
                 if reasoning_content is None:
                     reasoning_content = ""
         elif "content" in content_block["delta"] and content_block["delta"].get("type") == "compaction_delta":
-            # Handle compaction delta
+            delta_content: Final = content_block["delta"]["content"]
             provider_specific_fields["compaction_delta"] = {
                 "type": "compaction_delta",
-                "content": content_block["delta"]["content"],
+                "content": delta_content,
             }
+            # Fold the summary into the open block: replaying an empty-content block
+            # fails Anthropic's compaction_content_mismatch check.
+            if self.compaction_blocks:
+                open_block: Final = self.compaction_blocks[-1]
+                merged_content: Final = f"{open_block.get('content') or ''}{delta_content}"
+                self.compaction_blocks = [
+                    *self.compaction_blocks[:-1],
+                    {**open_block, "content": merged_content},
+                ]
+                provider_specific_fields["compaction_blocks"] = self.compaction_blocks
 
         return (
             text,

@@ -1131,3 +1131,69 @@ async def test_plain_text_stream_announces_exactly_one_message_item(sync_mode: b
             ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
         ):
             assert event.item_id == message_item_adds[0].item.id
+
+
+def _compaction_chunk(blocks, extra_key, extra_val) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-4-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content=None,
+                    provider_specific_fields={"compaction_blocks": blocks, extra_key: extra_val},
+                ),
+                finish_reason=None,
+            )
+        ],
+    )
+
+
+def test_streaming_emits_compaction_item_before_message():
+    """#41456: threshold compaction must stream a compaction output item (added + done)
+    at index 0, ahead of the message item, and list it first in response.completed."""
+    block_full = {"type": "compaction", "content": "Summary of prior turns.", "encrypted_content": "OPAQUE-s"}
+    chunks = [
+        _compaction_chunk(
+            [{"type": "compaction", "content": None, "encrypted_content": "OPAQUE-s"}],
+            "compaction_start",
+            {"type": "compaction", "content": None},
+        ),
+        _compaction_chunk([block_full], "compaction_delta", {"type": "compaction_delta", "content": block_full["content"]}),
+        _chunk("Answer."),
+        _chunk("", finish_reason="stop"),
+    ]
+
+    events = list(_build_iterator(chunks))
+
+    def _item_type(event):
+        item = getattr(event, "item", None)
+        return getattr(item, "type", None) if item is not None else None
+
+    added_types = [
+        _item_type(e) for e in events if getattr(e, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    ]
+    assert added_types[0] == "compaction", added_types
+    assert "message" in added_types
+    assert added_types.index("compaction") < added_types.index("message")
+
+    compaction_added = next(
+        e
+        for e in events
+        if getattr(e, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and _item_type(e) == "compaction"
+    )
+    assert compaction_added.output_index == 0
+
+    compaction_done = next(
+        e
+        for e in events
+        if getattr(e, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _item_type(e) == "compaction"
+    )
+    assert json.loads(compaction_done.item.encrypted_content) == block_full
+
+    completed = next(e for e in events if getattr(e, "type", None) == "response.completed")
+    assert completed.response.output[0].type == "compaction"

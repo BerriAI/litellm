@@ -718,3 +718,62 @@ async def test_message_history_normalizes_redacted_tool_call_arguments():
     tool_call = assistant_message.tool_calls[0]
     assert tool_call.function.arguments == "{}"
     assert json.loads(tool_call.function.arguments) == {}
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_carries_compaction_block_forward():
+    """#41456: a stored Anthropic response's compaction block must survive
+    previous_response_id reconstruction so the next turn can replay it."""
+    block = {"type": "compaction", "content": "Summary.", "encrypted_content": "OPAQUE-h"}
+    mock_spend_logs = [
+        {
+            "request_id": "chatcmpl-c1",
+            "call_type": "aresponses",
+            "session_id": "sess-1",
+            "model": "claude-sonnet-5",
+            "proxy_server_request": {"input": "big history", "model": "anthropic/claude-sonnet-5"},
+            "response": {
+                "id": "chatcmpl-c1",
+                "model": "claude-sonnet-5",
+                "object": "chat.completion",
+                "created": 1,
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": "the answer",
+                            "provider_specific_fields": {"compaction_blocks": [block]},
+                        },
+                    }
+                ],
+                "usage": {"total_tokens": 1, "prompt_tokens": 1, "completion_tokens": 0},
+            },
+            "status": "success",
+        }
+    ]
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = mock_spend_logs
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "chatcmpl-c1"
+        )
+
+    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+
+    reconstructed = [m if isinstance(m, dict) else m.model_dump() for m in result["messages"]]
+    anthropic_request = anthropic_messages_pt(
+        model="claude-sonnet-5", messages=reconstructed, llm_provider="anthropic"
+    )
+    replayed_blocks = [
+        c
+        for message in anthropic_request
+        for c in (message.get("content") if isinstance(message.get("content"), list) else [])
+        if isinstance(c, dict) and c.get("type") == "compaction"
+    ]
+    assert replayed_blocks == [block]

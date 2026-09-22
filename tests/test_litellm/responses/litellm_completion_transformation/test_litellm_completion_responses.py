@@ -395,6 +395,232 @@ class TestLiteLLMCompletionResponsesConfig:
         assert message_items[0].content[0].text == "Just a regular answer."
         assert responses_api_response.object == "response"
 
+    def _compaction_response(self, block):
+        return ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="Continuing the answer.",
+                        role="assistant",
+                        provider_specific_fields={"compaction_blocks": [block]},
+                    ),
+                )
+            ],
+        )
+
+    def test_transform_response_emits_compaction_output_item_first(self):
+        """#41456: an Anthropic threshold compaction block must surface as a Responses
+        compaction output item at index 0 whose encrypted_content round-trips the whole
+        block (content AND the opaque encrypted_content token), not just as a
+        non-standard provider_specific_fields attr."""
+        block = {
+            "type": "compaction",
+            "content": "Summary of prior turns.",
+            "encrypted_content": "OPAQUE-TOKEN-abc123",
+        }
+
+        response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="hi",
+            responses_api_request={},
+            chat_completion_response=self._compaction_response(block),
+        )
+
+        compaction_items = [item for item in response.output if item.type == "compaction"]
+        assert len(compaction_items) == 1
+        assert response.output[0].type == "compaction"
+        assert compaction_items[0].id.startswith("cmp_")
+        # The opaque token must survive verbatim, else Anthropic rejects the replay.
+        assert json.loads(compaction_items[0].encrypted_content) == block
+
+    def test_multiple_compactions_in_one_response_extract_all_then_replay_latest(self):
+        """Server-tool loops can compact several times in one request, so one response's
+        content carries multiple progressive compaction blocks (the last is the final
+        state). Stage 1 (extraction) surfaces all of them in order, matching the native
+        extract_response_content; stage 2 (replay) then keeps only the latest, so exactly
+        one block reaches the next Anthropic request."""
+        comp1 = {"type": "compaction", "content": "first pass", "encrypted_content": "tok-1"}
+        comp2 = {"type": "compaction", "content": "final summary", "encrypted_content": "tok-2"}
+        chat_completion_response = ModelResponse(
+            id="r",
+            created=1,
+            model="claude-sonnet-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="Reply.",
+                        role="assistant",
+                        provider_specific_fields={"compaction_blocks": [comp1, comp2]},
+                    ),
+                )
+            ],
+        )
+
+        response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="hi",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+        compaction_items = [item for item in response.output if item.type == "compaction"]
+        assert [json.loads(item.encrypted_content) for item in compaction_items] == [comp1, comp2]
+        assert response.output[0].type == "compaction" and response.output[-1].type == "message"
+
+        replay_input = [json.loads(item.model_dump_json(exclude_none=True)) for item in response.output]
+        replay_input.append({"role": "user", "content": "go"})
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=replay_input, responses_api_request={}, replay_reasoning=True
+        )
+        anthropic_request = anthropic_messages_pt(
+            model="claude-sonnet-5", messages=messages, llm_provider="anthropic"
+        )
+        request_blocks = [
+            c
+            for message in anthropic_request
+            for c in (message.get("content") if isinstance(message.get("content"), list) else [])
+            if isinstance(c, dict) and c.get("type") == "compaction"
+        ]
+        assert request_blocks == [comp2]
+
+    def test_compaction_block_preserves_every_field(self):
+        """A block carrying content + encrypted_content + signature must round-trip all
+        three byte-for-byte, so the bridge is robust to whatever fields Anthropic returns."""
+        block = {
+            "type": "compaction",
+            "content": "S",
+            "encrypted_content": "E-token",
+            "signature": "SIG",
+        }
+        response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="hi",
+            responses_api_request={},
+            chat_completion_response=self._compaction_response(block),
+        )
+        item = next(i for i in response.output if i.type == "compaction")
+        assert json.loads(item.encrypted_content) == block
+
+    def test_compaction_block_with_null_content_still_emitted(self):
+        """Anthropic returns content: null for a failed/no-op compaction and it may be
+        replayed as a no-op, so the bridge must not drop it."""
+        block = {"type": "compaction", "content": None, "encrypted_content": "TOKEN"}
+        response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="hi",
+            responses_api_request={},
+            chat_completion_response=self._compaction_response(block),
+        )
+        items = [i for i in response.output if i.type == "compaction"]
+        assert len(items) == 1
+        assert json.loads(items[0].encrypted_content) == block
+
+    def test_non_compaction_block_not_emitted(self):
+        """A non-compaction entry in compaction_blocks must not become an item."""
+        response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="hi",
+            responses_api_request={},
+            chat_completion_response=self._compaction_response({"type": "text", "text": "not a block"}),
+        )
+        assert [i for i in response.output if i.type == "compaction"] == []
+
+    def test_compaction_input_item_round_trips_to_anthropic_block(self):
+        """#41456: a replayed compaction input item must be rebuilt onto an assistant
+        message carrying compaction_blocks, so the prompt factory fronts the exact block
+        (including encrypted_content) on the Anthropic request."""
+        block = {"type": "compaction", "content": "Summary.", "encrypted_content": "OPAQUE-2"}
+        input_items = [
+            {"type": "compaction", "id": "cmp_x", "encrypted_content": json.dumps(block)},
+            {"role": "user", "content": "next question"},
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items,
+            responses_api_request={},
+            replay_reasoning=True,
+        )
+
+        assistant = [m for m in messages if m.get("role") == "assistant"]
+        assert len(assistant) == 1
+        assert assistant[0].get("content") == ""
+        assert assistant[0]["provider_specific_fields"]["compaction_blocks"] == [block]
+
+        anthropic_messages = anthropic_messages_pt(
+            model="claude-sonnet-5",
+            messages=messages,
+            llm_provider="anthropic",
+        )
+        assistant_anthropic = [m for m in anthropic_messages if m["role"] == "assistant"]
+        assert assistant_anthropic[0]["content"][0] == block
+
+    def test_compaction_input_item_round_trips_signature_shape(self):
+        """Parity with the native on-demand path (test_native_compaction_wire_roundtrip),
+        whose block is {content, signature}: the bridge preserves it verbatim too."""
+        block = {"type": "compaction", "content": "Exact summary", "signature": "opaque-signature"}
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[{"type": "compaction", "id": "cmp_s", "encrypted_content": json.dumps(block)}],
+            responses_api_request={},
+            replay_reasoning=True,
+        )
+        anthropic_messages = anthropic_messages_pt(
+            model="claude-sonnet-5", messages=messages, llm_provider="anthropic"
+        )
+        assert anthropic_messages[0]["content"][0] == block
+
+    def test_opaque_encrypted_content_is_not_reconstructed(self):
+        """A genuinely opaque native-provider blob must be dropped, not forwarded."""
+        input_items = [{"type": "compaction", "id": "cmp_y", "encrypted_content": "not-json-blob"}]
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items,
+            responses_api_request={},
+            replay_reasoning=True,
+        )
+        assert [m for m in messages if m.get("role") == "assistant"] == []
+
+    def test_replay_keeps_only_latest_compaction_block(self):
+        """Threshold compaction can fire several times, but the newest block reflects the
+        final state and the API ignores everything before it, so a replayed transcript
+        must carry only the latest block (parity with the native path's latest-block
+        selection in _slice_around_compaction_block). The earlier block is dropped."""
+        older = {"type": "compaction", "content": "old summary", "encrypted_content": "tok-old"}
+        newer = {"type": "compaction", "content": "new summary", "encrypted_content": "tok-new"}
+        input_items = [
+            {"type": "compaction", "id": "cmp_1", "encrypted_content": json.dumps(older)},
+            {"role": "user", "content": "a turn"},
+            {"type": "compaction", "id": "cmp_2", "encrypted_content": json.dumps(newer)},
+            {"role": "user", "content": "next"},
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items,
+            responses_api_request={},
+            replay_reasoning=True,
+        )
+
+        carriers = [
+            m["provider_specific_fields"]["compaction_blocks"]
+            for m in messages
+            if isinstance(m, dict) and isinstance(m.get("provider_specific_fields"), dict)
+            and m["provider_specific_fields"].get("compaction_blocks")
+        ]
+        assert carriers == [[newer]]
+
+        anthropic_request = anthropic_messages_pt(
+            model="claude-sonnet-5", messages=messages, llm_provider="anthropic"
+        )
+        request_blocks = [
+            c
+            for message in anthropic_request
+            for c in (message.get("content") if isinstance(message.get("content"), list) else [])
+            if isinstance(c, dict) and c.get("type") == "compaction"
+        ]
+        assert request_blocks == [newer]
+        assert any(m.get("role") == "user" for m in anthropic_request)
+
     def test_transform_chat_completion_response_multiple_choices_with_reasoning(self):
         """Test that only reasoning from first choice is included when multiple choices exist"""
         # Setup
@@ -3908,6 +4134,9 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._cached_item_id = None
         iterator._cached_reasoning_item_id = None
         iterator._reasoning_active = False
+        iterator._compaction_present = False
+        iterator._cached_compaction_item_id = None
+        iterator._accumulated_provider_specific_fields = {}
         iterator._pending_response_events = []
         iterator._pending_tool_events = []
         iterator._tool_output_index_by_call_id = {}

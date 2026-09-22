@@ -2452,3 +2452,31 @@ def test_served_model_reaches_assembled_stream_through_custom_stream_wrapper():
         assert chunk._hidden_params["provider_response_model"] == served_model
     assembled: Final = litellm.stream_chunk_builder(chunks=list(chunks), messages=[{"role": "user", "content": "hi"}])
     assert assembled._hidden_params["provider_response_model"] == served_model
+
+
+def test_streaming_compaction_delta_folds_summary_into_block():
+    """Regression for #41456: threshold compaction streams the opaque encrypted_content
+    token in content_block_start and the summary text in a later compaction_delta. The
+    assembled block must carry both (content from the delta, encrypted_content from the
+    start), or replaying it fails Anthropic's compaction_content_mismatch check."""
+    iterator: Final = ModelResponseIterator(None, sync_stream=True)
+    chunks: Final = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "compaction", "content": None, "encrypted_content": "OPAQUE-xyz"},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "compaction_delta", "content": "Summary of prior turns."},
+        },
+    ]
+
+    parsed = [iterator.chunk_parser(chunk=chunk) for chunk in chunks]
+    delta_fields = parsed[-1].choices[0].delta.provider_specific_fields
+    blocks = delta_fields["compaction_blocks"]
+
+    assert blocks[-1]["type"] == "compaction"
+    assert blocks[-1]["content"] == "Summary of prior turns."
+    assert blocks[-1]["encrypted_content"] == "OPAQUE-xyz"
