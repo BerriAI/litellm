@@ -220,8 +220,10 @@ def _assert_cache_miss(response: StreamingResponse, call_type: str) -> None:
     assert "x-litellm-cache-key" not in response.headers, f"{call_type}: first call must be a cache miss"
 
 
-def _assert_cache_hit(response: StreamingResponse, call_type: str) -> None:
+def _assert_cache_hit(response: StreamingResponse, call_type: str, *, expect_cache_key: bool = True) -> None:
     require_successful_call(response)
+    if expect_cache_key:
+        assert response.headers.get("x-litellm-cache-key"), f"{call_type}: identical request must hit the response cache"
 
 
 def _assert_one_provider_call(observation: ProviderRequestObservation, call_type: str) -> None:
@@ -297,7 +299,7 @@ def _assert_cached_stream(
 ) -> None:
     _assert_cache_miss(first, call_type)
     first_text: Final = stream_text(first)
-    _assert_cache_hit(second, call_type)
+    _assert_cache_hit(second, call_type, expect_cache_key=False)
     assert stream_text(second) == first_text, f"{call_type}: cached stream changed assembled content"
     _assert_one_provider_call(observation, call_type)
 
@@ -350,7 +352,6 @@ class TestReliabilityCache:
                 "/chat/completions", headers=client.proxy.transport.bearer(scoped_key), json=body
             )
             _assert_cache_hit(second, "chat")
-            assert second.headers.get("x-litellm-cache-key"), "identical request must hit the response cache"
             assert _CachedAnswer.model_validate_json(second.body) == _CachedAnswer.model_validate_json(first.body), (
                 "cache hit changed the answer, finish reason or usage"
             )
@@ -428,7 +429,7 @@ class TestReliabilityCache:
             second: Final = client.proxy.transport.send(
                 "/embeddings", headers=client.proxy.transport.bearer(scoped_key), json=body
             )
-            _assert_cache_hit(second, "embeddings")
+            _assert_cache_hit(second, "embeddings", expect_cache_key=False)
             assert _CachedEmbeddingsResponse.model_validate_json(second.body) == first_answer, (
                 "embeddings: cache hit changed the returned vectors"
             )
