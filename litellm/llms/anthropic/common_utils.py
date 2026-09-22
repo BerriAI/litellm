@@ -268,7 +268,9 @@ def optionally_handle_anthropic_oauth(
 
     if not is_anthropic:
         if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
-            headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}  # rebind-ok: strip authorization without mutating the caller's default dict
+            headers = {
+                k: v for k, v in headers.items() if k.lower() != "authorization"
+            }  # rebind-ok: strip authorization without mutating the caller's default dict
         if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
             api_key = None
         return headers, api_key
