@@ -1,6 +1,5 @@
 import os
 import socket
-from typing import Optional
 from unittest.mock import patch
 
 import pytest
@@ -22,10 +21,10 @@ from litellm.proxy.client.cli.commands.autoroute.process import (
 
 
 class FakeProcess:
-    def __init__(self, returncode: Optional[int] = None):
+    def __init__(self, returncode: int | None = None):
         self.returncode = returncode
 
-    def poll(self) -> Optional[int]:
+    def poll(self) -> int | None:
         return self.returncode
 
 
@@ -112,12 +111,72 @@ class TestIsRunning:
         assert is_running(2**30) is False
 
     def test_permission_error_from_kill_is_treated_as_running(self, monkeypatch):
+        # The os.kill probe only runs on non-Windows platforms; on Windows liveness is
+        # checked via OpenProcess/GetExitCodeProcess instead.
+        monkeypatch.setattr(process_module.sys, "platform", "linux")
+
         def fake_kill(pid: int, sig: int) -> None:
             raise PermissionError("not permitted to signal this pid")
 
         monkeypatch.setattr(process_module.os, "kill", fake_kill)
 
         assert is_running(999) is True
+
+    def test_windows_uses_handle_probe_instead_of_kill(self, monkeypatch):
+        """os.kill(pid, 0) is not a usable liveness probe on Windows (it would kill the
+        process before Python 3.14, and raises a bare OSError for dead pids on 3.14+),
+        so is_running must not call os.kill at all on that platform."""
+        calls = []
+
+        def fake_kill(pid: int, sig: int) -> None:
+            calls.append((pid, sig))
+
+        monkeypatch.setattr(process_module.sys, "platform", "win32")
+        monkeypatch.setattr(process_module.os, "kill", fake_kill)
+        monkeypatch.setattr(process_module, "_is_running_win32", lambda pid: True)
+
+        assert is_running(1234) is True
+        assert calls == []
+
+    def test_windows_probe_reports_dead_pid(self, monkeypatch):
+        monkeypatch.setattr(process_module.sys, "platform", "win32")
+        monkeypatch.setattr(process_module, "_is_running_win32", lambda pid: False)
+
+        assert is_running(1234) is False
+
+
+class TestTerminate:
+    def test_skips_sigkill_escalation_when_signal_is_unavailable(self, monkeypatch):
+        """Windows has no signal.SIGKILL; escalating there must not crash with AttributeError
+        (os.kill with SIGTERM already force-terminates via TerminateProcess)."""
+        sent = []
+
+        def fake_kill(pid: int, sig: int) -> None:
+            sent.append(sig)
+
+        monkeypatch.setattr(process_module.os, "kill", fake_kill)
+        monkeypatch.setattr(process_module, "is_running", lambda pid: True)
+        monkeypatch.setattr(process_module.time, "sleep", lambda seconds: None)
+        monkeypatch.setattr(process_module.signal, "SIGKILL", None, raising=False)
+
+        process_module.terminate(1234, grace_period=0.0)
+
+        assert sent == [process_module.signal.SIGTERM]
+
+    def test_escalates_to_sigkill_when_available(self, monkeypatch):
+        sent = []
+
+        def fake_kill(pid: int, sig: int) -> None:
+            sent.append(sig)
+
+        monkeypatch.setattr(process_module.os, "kill", fake_kill)
+        monkeypatch.setattr(process_module, "is_running", lambda pid: True)
+        monkeypatch.setattr(process_module.time, "sleep", lambda seconds: None)
+        monkeypatch.setattr(process_module.signal, "SIGKILL", 9, raising=False)
+
+        process_module.terminate(1234, grace_period=0.0)
+
+        assert sent == [process_module.signal.SIGTERM, 9]
 
 
 class TestPollLiveliness:

@@ -138,7 +138,40 @@ def clear_pid_record(path: Path | None = None) -> None:
     resolved_path.unlink(missing_ok=True)
 
 
+def _is_running_win32(pid: int) -> bool:
+    """Liveness probe for Windows.
+
+    ``os.kill(pid, 0)`` is not a usable liveness probe on Windows: before
+    Python 3.14 any signal other than CTRL_C_EVENT / CTRL_BREAK_EVENT is
+    handed to TerminateProcess, so the "probe" would kill the very process
+    it checks; on 3.14+ it raises a bare ``OSError`` (e.g. WinError 87)
+    instead of ``ProcessLookupError`` for pids that do not exist.
+    OpenProcess + GetExitCodeProcess is the safe equivalent.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    ERROR_ACCESS_DENIED = 5
+    STILL_ACTIVE = 259
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        # The pid exists but we lack permission to query it -> treat as running.
+        return ctypes.GetLastError() == ERROR_ACCESS_DENIED
+    try:
+        exit_code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return False
+        return exit_code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def is_running(pid: int) -> bool:
+    if sys.platform == "win32":
+        return _is_running_win32(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -158,8 +191,13 @@ def terminate(pid: int, grace_period: float = 5.0) -> None:
     while time.monotonic() < deadline and is_running(pid):
         time.sleep(0.2)
     if is_running(pid):
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
+        # signal.SIGKILL does not exist on Windows, where os.kill with SIGTERM
+        # already force-terminates via TerminateProcess, so there is nothing to
+        # escalate to.
+        sigkill = getattr(signal, "SIGKILL", None)
+        if sigkill is not None:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, sigkill)
 
 
 def stream_log(log_path: Path, stop_event: threading.Event) -> None:
