@@ -1075,7 +1075,7 @@ class _DbBackedProxyConfig:
     def __init__(self, stored_litellm_settings: dict[str, object] | None = None) -> None:
         self.stored_litellm_settings_json: str = json.dumps(stored_litellm_settings or {})
 
-    async def get_config(self):
+    async def get_config(self) -> ProxyRuntimeConfig:
         from litellm.proxy.proxy_server import ProxyConfig
 
         db_param_value: Final[dict[str, object]] = json.loads(self.stored_litellm_settings_json)
