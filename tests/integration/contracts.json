@@ -48,6 +48,9 @@
     "tests/integration/providers/test_request_boundary.py::test_internal_key_forced_into_body_is_observed_at_emission": [
       "other.provider_wire.internal_key_emission_observed"
     ],
+    "tests/integration/providers/test_request_boundary.py::test_internal_key_forced_into_converse_body_is_observed_at_emission": [
+      "other.provider_wire.internal_key_emission_observed_bedrock_converse"
+    ],
     "tests/integration/pricing/test_configured_prices.py::test_loaded_router_preserves_cached_defaults_during_real_requests": [
       "quota_management.spend_tracking.default_prices.loaded_router_preserves_cached_defaults"
     ],

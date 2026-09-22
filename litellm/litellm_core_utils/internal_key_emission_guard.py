@@ -1,3 +1,4 @@
+import threading
 from collections.abc import Mapping, Sequence
 from typing import Final, cast
 
@@ -6,19 +7,24 @@ from litellm.types.utils import all_litellm_params
 
 OWNED_KEY_PREFIX: Final = "_litellm_"
 OWNED_KEYS: Final = frozenset(key for key in ("litellm_params", *all_litellm_params) if key != "metadata")
-OWNED_KEY_SCOPES: Final = frozenset(("", "metadata"))
+OWNED_KEY_SCOPES: Final = frozenset(
+    ("", "metadata", "additionalModelRequestFields", "additionalModelRequestFields.extra_body")
+)
 
 
 class LeakCounter:
     def __init__(self) -> None:
+        self._lock: Final = threading.Lock()
         self._value = 0
 
     @property
     def value(self) -> int:
-        return self._value
+        with self._lock:
+            return self._value
 
     def increment(self) -> None:
-        self._value += 1
+        with self._lock:
+            self._value += 1
 
 
 internal_key_leak_counter: Final = LeakCounter()
