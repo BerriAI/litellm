@@ -95,11 +95,19 @@ jobs:
 
           - shard: All Other Providers
             artifact-name: llm-other-providers
-            test-path: "tests/test_litellm/llms tests/unit/llms/webiq --ignore=tests/test_litellm/llms/vertex_ai"
+            test-path: "tests/test_litellm/llms --ignore=tests/test_litellm/llms/vertex_ai"
             workers: 2
             reruns: 2
             timeout-minutes: 20
             job-timeout-minutes: 60
+
+          - shard: Web IQ
+            artifact-name: llm-webiq
+            test-path: "tests/unit/llms/webiq"
+            workers: 0
+            reruns: 0
+            timeout-minutes: 5
+            job-timeout-minutes: 30
 
           - shard: misc
             artifact-name: misc
