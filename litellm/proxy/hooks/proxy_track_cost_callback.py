@@ -106,6 +106,21 @@ def _response_requires_fusion_continuation(response: object) -> bool:
     return bool(tool_calls) and all(tool_call["name"] == _FUSION_TOOL_NAME for tool_call in tool_calls)
 
 
+async def _fusion_budget_counter_cost(metadata: Mapping[str, object], response_cost: float) -> float:
+    reservation: Final = budget_reservation_from_metadata(metadata)
+    if (
+        reservation is None
+        or reservation.get(FUSION_BUDGET_ACTIVE_KEY) is not True
+        or metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != "fusion_continuation"
+    ):
+        return response_cost
+    await wait_for_fusion_budget_calls(metadata)
+    return fusion_budget_reconciliation_cost(
+        budget_reservation=reservation,
+        known_cost=response_cost + float(reservation.get(FUSION_BUDGET_ACCUMULATED_COST_KEY) or 0.0),
+    )
+
+
 def _should_defer_fusion_budget_reconciliation(
     metadata: dict,  # mutable-ok: SDK boundary
     completion_response: object,
@@ -237,8 +252,13 @@ class _ProxyDBLogger(CustomLogger):
         traceback_str: str | None = None,
     ):
         try:
-            if not _failure_should_leave_fusion_reservation_open(request_data):
-                await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
+            await _release_budget_reservation(
+                budget_reservation=(
+                    None
+                    if _failure_should_leave_fusion_reservation_open(request_data)
+                    else user_api_key_dict.budget_reservation
+                )
+            )
         except Exception:
             verbose_proxy_logger.exception("Failed to release budget reservation during failure handling")
             try:
@@ -408,12 +428,6 @@ class _ProxyDBLogger(CustomLogger):
                 _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
             budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)
             if (
-                budget_reservation is not None
-                and budget_reservation.get(FUSION_BUDGET_ACTIVE_KEY) is True
-                and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == "fusion_continuation"
-            ):
-                await wait_for_fusion_budget_calls(metadata)
-            if (
                 isinstance(completion_response, LiteLLMBatch)
                 and kwargs.get("call_type") == CallTypes.aretrieve_batch.value
                 and not batch_cost_is_final(completion_response)
@@ -468,21 +482,7 @@ class _ProxyDBLogger(CustomLogger):
                 # sufficient for the final-call barrier; persistence and alerts
                 # can continue without delaying the model orchestration.
                 complete_fusion_budget_call(metadata, cost_known=True)
-                known_fusion_cost: Final = float(response_cost) + (
-                    float(budget_reservation.get(FUSION_BUDGET_ACCUMULATED_COST_KEY) or 0.0)
-                    if budget_reservation is not None
-                    else 0.0
-                )
-                budget_counter_response_cost: Final = (
-                    fusion_budget_reconciliation_cost(
-                        budget_reservation=budget_reservation,
-                        known_cost=known_fusion_cost,
-                    )
-                    if budget_reservation is not None
-                    and budget_reservation.get(FUSION_BUDGET_ACTIVE_KEY) is True
-                    and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == "fusion_continuation"
-                    else float(response_cost)
-                )
+                budget_counter_response_cost: Final = await _fusion_budget_counter_cost(metadata, float(response_cost))
                 user_api_key: Final = metadata.get("user_api_key", None)
                 verbose_proxy_logger.debug(
                     "user_api_key %s, user_id %s, team_id %s, end_user_id %s",

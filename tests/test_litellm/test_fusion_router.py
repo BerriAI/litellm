@@ -657,8 +657,8 @@ async def test_analyst_timeout_degrades_to_raw_panel_responses() -> None:
     assert completion.analyst_started.is_set()
     assert completion.analyst_cancelled.is_set()
     assert response._hidden_params["fusion"]["analysis_available"] is False
-    assert reservation.get(FUSION_BUDGET_UNPRICED_CALL_IDS_KEY) in (None, [])
-    assert fusion_budget_reconciliation_cost(reservation, known_cost=0.4) == pytest.approx(0.4)
+    assert len(reservation[FUSION_BUDGET_UNPRICED_CALL_IDS_KEY]) == 1
+    assert fusion_budget_reconciliation_cost(reservation, known_cost=0.4) == pytest.approx(reservation["reserved_cost"])
     payload = json.loads(completion.calls[-1]["messages"][-1]["content"])
     assert [item["content"] for item in payload["responses"]] == ["Panel A", "Panel B"]
 

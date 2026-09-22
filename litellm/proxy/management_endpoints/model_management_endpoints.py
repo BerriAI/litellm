@@ -299,7 +299,6 @@ def _strategy_router_write_violation(
         return None
     incoming_model: Final = incoming_params.model
     existing_model: Final = existing_params.model if existing_params is not None else None
-    effective_model: Final = incoming_model or existing_model
     incoming_fusion_config: Final = incoming_params.fusion_router_config
     existing_fusion_config: Final = existing_params.fusion_router_config if existing_params is not None else None
     if (
@@ -308,7 +307,7 @@ def _strategy_router_write_violation(
         or (isinstance(existing_model, str) and is_fusion_router_model(existing_model))
     ):
         fusion_violation: Final = validate_fusion_router_write(
-            model=effective_model,
+            model=incoming_model or existing_model,
             raw_config=(incoming_fusion_config if incoming_fusion_config is not None else existing_fusion_config),
         )
         if fusion_violation is not None:
