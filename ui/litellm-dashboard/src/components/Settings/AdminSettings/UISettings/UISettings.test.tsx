@@ -20,7 +20,7 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUpdateUISettings", () => ({
   useUpdateUISettings: mockUseUpdateUISettings,
 }));
 
-const buildSettingsResponse = (overrides?: Partial<Record<string, unknown>>) => ({
+const buildSettingsResponse = (overrides?: Partial<Record<string, unknown>>, source: Record<string, string> = {}) => ({
   data: {
     field_schema: {
       description: "UI settings description",
@@ -41,6 +41,7 @@ const buildSettingsResponse = (overrides?: Partial<Record<string, unknown>>) => 
       disable_team_admin_delete_team_user: false,
       require_auth_for_public_ai_hub: false,
     },
+    source,
   },
   isLoading: false,
   isError: false,
@@ -154,5 +155,66 @@ describe("UISettings", () => {
       }),
     );
     expect(toast.success).toHaveBeenCalledWith("UI settings updated successfully");
+  });
+
+  describe("config.yaml owned settings", () => {
+    it("freezes a switch whose source is config and does not call update", () => {
+      const mutateMock = vi.fn();
+      mockUseUpdateUISettings.mockReturnValue({ mutate: mutateMock, isPending: false, error: null });
+      mockUseUISettings.mockReturnValue(
+        buildSettingsResponse(undefined, {
+          disable_model_add_for_internal_users: "config",
+          disable_team_admin_delete_team_user: "db",
+        }),
+      );
+
+      render(<UISettings />);
+
+      const frozen = screen.getByRole("switch", { name: "Disable model add for internal users" });
+      expect(frozen).toHaveAttribute("data-disabled");
+      expect(frozen).toHaveAttribute("aria-disabled", "true");
+
+      act(() => {
+        fireEvent.click(frozen);
+      });
+
+      expect(mutateMock).not.toHaveBeenCalled();
+    });
+
+    it.each(["env", "default", "db", "unset"])("keeps a switch editable when its source is %s", (source) => {
+      const mutateMock = vi.fn();
+      mockUseUpdateUISettings.mockReturnValue({ mutate: mutateMock, isPending: false, error: null });
+      mockUseUISettings.mockReturnValue(
+        buildSettingsResponse(undefined, { disable_model_add_for_internal_users: source }),
+      );
+
+      render(<UISettings />);
+
+      const toggle = screen.getByRole("switch", { name: "Disable model add for internal users" });
+      expect(toggle).not.toHaveAttribute("data-disabled");
+      expect(toggle).not.toHaveAttribute("aria-disabled", "true");
+
+      act(() => {
+        fireEvent.click(toggle);
+      });
+
+      expect(mutateMock).toHaveBeenCalledWith({ disable_model_add_for_internal_users: true }, expect.anything());
+    });
+
+    it("freezes only the config owned switch and leaves siblings editable", () => {
+      mockUseUISettings.mockReturnValue(buildSettingsResponse(undefined, { require_auth_for_public_ai_hub: "config" }));
+
+      render(<UISettings />);
+
+      expect(screen.getByRole("switch", { name: "Require authentication for public AI Hub" })).toHaveAttribute(
+        "data-disabled",
+      );
+      expect(screen.getByRole("switch", { name: "Disable model add for internal users" })).not.toHaveAttribute(
+        "data-disabled",
+      );
+      expect(screen.getByRole("switch", { name: "Disable team admin delete team user" })).not.toHaveAttribute(
+        "data-disabled",
+      );
+    });
   });
 });

@@ -1,13 +1,20 @@
 import React, { useId } from "react";
+import { ConfigOwnedField } from "@/components/shared/ConfigOwnedField";
 import { Switch } from "@/components/ui/switch";
 
 interface TagFilteringToggleProps {
   enabled: boolean;
   routerFieldsMetadata: { [key: string]: any };
+  disabled?: boolean;
   onToggle: (enabled: boolean) => void;
 }
 
-const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({ enabled, routerFieldsMetadata, onToggle }) => {
+const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({
+  enabled,
+  routerFieldsMetadata,
+  disabled = false,
+  onToggle,
+}) => {
   const toggleId = useId();
 
   return (
@@ -34,7 +41,9 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({ enabled, router
             )}
           </p>
         </div>
-        <Switch id={toggleId} checked={enabled} onCheckedChange={onToggle} className="ml-4" />
+        <ConfigOwnedField frozen={disabled} className="ml-4 inline-flex">
+          <Switch id={toggleId} checked={enabled} disabled={disabled} onCheckedChange={onToggle} />
+        </ConfigOwnedField>
       </div>
     </div>
   );

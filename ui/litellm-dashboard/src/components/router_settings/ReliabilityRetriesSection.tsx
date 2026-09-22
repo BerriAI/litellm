@@ -1,14 +1,17 @@
 import React from "react";
+import { ConfigOwnedField, type FieldSourceMap, isConfigOwned } from "@/components/shared/ConfigOwnedField";
 import { Input } from "@/components/ui/input";
 
 interface ReliabilityRetriesSectionProps {
   routerSettings: { [key: string]: any };
   routerFieldsMetadata: { [key: string]: any };
+  routerSources?: FieldSourceMap;
 }
 
 const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
   routerSettings,
   routerFieldsMetadata,
+  routerSources = {},
 }) => {
   return (
     <div className="space-y-6">
@@ -39,18 +42,21 @@ const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
                 <p className="text-xs text-muted-foreground mt-0.5 mb-2">
                   {routerFieldsMetadata[param]?.field_description || ""}
                 </p>
-                <Input
-                  name={param}
-                  defaultValue={
-                    value === null || value === undefined || value === "null"
-                      ? ""
-                      : typeof value === "object"
-                        ? JSON.stringify(value, null, 2)
-                        : value?.toString() || ""
-                  }
-                  placeholder="—"
-                  className="font-mono text-sm w-full"
-                />
+                <ConfigOwnedField frozen={isConfigOwned(routerSources, param)}>
+                  <Input
+                    name={param}
+                    disabled={isConfigOwned(routerSources, param)}
+                    defaultValue={
+                      value === null || value === undefined || value === "null"
+                        ? ""
+                        : typeof value === "object"
+                          ? JSON.stringify(value, null, 2)
+                          : value?.toString() || ""
+                    }
+                    placeholder="—"
+                    className="font-mono text-sm w-full"
+                  />
+                </ConfigOwnedField>
               </label>
             </div>
           ))}

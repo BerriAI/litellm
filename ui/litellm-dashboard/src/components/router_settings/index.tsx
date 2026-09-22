@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import type { FieldSourceMap } from "@/components/shared/ConfigOwnedField";
 import { toast } from "@/lib/toast";
 import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "./RouterSettingsForm";
@@ -24,6 +25,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
   const [availableRoutingStrategies, setAvailableRoutingStrategies] = useState<string[]>([]);
   const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
   const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
+  const [routerSources, setRouterSources] = useState<FieldSourceMap>({});
 
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
@@ -43,6 +45,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
       }));
     });
     getRouterSettingsCall(accessToken).then((data) => {
+      setRouterSources(data.source ?? {});
       if (data.fields) {
         // Build metadata map for easy lookup
         const fieldsMap: { [key: string]: any } = {};
@@ -184,6 +187,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
         value={formValue}
         onChange={setFormValue}
         routerFieldsMetadata={routerFieldsMetadata}
+        routerSources={routerSources}
         availableRoutingStrategies={availableRoutingStrategies}
         routingStrategyDescriptions={routingStrategyDescriptions}
       />

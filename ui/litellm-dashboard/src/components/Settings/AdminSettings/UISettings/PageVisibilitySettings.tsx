@@ -4,6 +4,7 @@ import { ChevronDown } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { getAvailablePages } from "@/components/page_utils";
+import { ConfigOwnedField } from "@/components/shared/ConfigOwnedField";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -13,6 +14,7 @@ interface PageVisibilitySettingsProps {
   enabledPagesInternalUsers: string[] | null | undefined;
   enabledPagesPropertyDescription?: string;
   isUpdating: boolean;
+  configOwned?: boolean;
   onUpdate: (settings: { enabled_ui_pages_internal_users: string[] | null }) => void;
 }
 
@@ -20,6 +22,7 @@ export default function PageVisibilitySettings({
   enabledPagesInternalUsers,
   enabledPagesPropertyDescription,
   isUpdating,
+  configOwned = false,
   onUpdate,
 }: PageVisibilitySettingsProps) {
   const isPageVisibilitySet = enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined;
@@ -93,11 +96,14 @@ export default function PageVisibilitySettings({
                     const checkboxId = `page-visibility-${page.page}`;
                     return (
                       <label key={page.page} htmlFor={checkboxId} className="flex cursor-pointer items-start gap-2">
-                        <Checkbox
-                          id={checkboxId}
-                          checked={selectedPages.includes(page.page)}
-                          onCheckedChange={(checked) => togglePage(page.page, checked === true)}
-                        />
+                        <ConfigOwnedField frozen={configOwned} className="inline-flex">
+                          <Checkbox
+                            id={checkboxId}
+                            checked={selectedPages.includes(page.page)}
+                            disabled={configOwned}
+                            onCheckedChange={(checked) => togglePage(page.page, checked === true)}
+                          />
+                        </ConfigOwnedField>
                         <span className="space-y-0.5">
                           <span className="block text-sm text-foreground">{page.label}</span>
                           <span className="block text-xs text-muted-foreground">{page.description}</span>
@@ -110,13 +116,22 @@ export default function PageVisibilitySettings({
             ))}
 
             <div className="flex flex-wrap gap-2">
-              <Button type="button" onClick={handleSavePageVisibility} disabled={isUpdating}>
-                Save Page Visibility Settings
-              </Button>
-              {isPageVisibilitySet && (
-                <Button type="button" variant="outline" onClick={handleResetToDefault} disabled={isUpdating}>
-                  Reset to Default (All Pages)
+              <ConfigOwnedField frozen={configOwned} className="inline-flex">
+                <Button type="button" onClick={handleSavePageVisibility} disabled={isUpdating || configOwned}>
+                  Save Page Visibility Settings
                 </Button>
+              </ConfigOwnedField>
+              {isPageVisibilitySet && (
+                <ConfigOwnedField frozen={configOwned} className="inline-flex">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleResetToDefault}
+                    disabled={isUpdating || configOwned}
+                  >
+                    Reset to Default (All Pages)
+                  </Button>
+                </ConfigOwnedField>
               )}
             </div>
           </div>

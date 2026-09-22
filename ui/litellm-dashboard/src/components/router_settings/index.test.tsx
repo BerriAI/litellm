@@ -183,4 +183,50 @@ describe("RouterSettings", () => {
     });
     expect(toast.success).not.toHaveBeenCalled();
   });
+
+  describe("config.yaml owned fields", () => {
+    it("freezes routing strategy, tag filtering and reliability inputs whose source is config", async () => {
+      const user = userEvent.setup();
+      vi.mocked(getRouterSettingsCall).mockResolvedValue({
+        ...mockRouterSettingsResponse,
+        source: { routing_strategy: "config", enable_tag_filtering: "config", num_retries: "config", timeout: "db" },
+      });
+      renderWithProviders(<RouterSettings {...defaultProps} />);
+
+      const strategySelect = await findStrategySelect();
+      expect(strategySelect).toHaveAttribute("data-disabled");
+      expect(screen.getByRole("switch")).toHaveAttribute("data-disabled");
+      expect(await screen.findByRole("textbox", { name: /num_retries/i })).toBeDisabled();
+      expect(screen.getByRole("textbox", { name: /timeout/i })).toBeEnabled();
+
+      await user.hover(strategySelect);
+      expect(await screen.findByText("Set in config.yaml and cannot be changed here")).toBeInTheDocument();
+    });
+
+    it.each(["env", "default", "db"])("keeps fields editable when source is %s", async (source) => {
+      const user = userEvent.setup();
+      vi.mocked(getRouterSettingsCall).mockResolvedValue({
+        ...mockRouterSettingsResponse,
+        source: { routing_strategy: source, enable_tag_filtering: source, num_retries: source },
+      });
+      renderWithProviders(<RouterSettings {...defaultProps} />);
+
+      const strategySelect = await findStrategySelect();
+      expect(strategySelect).not.toHaveAttribute("data-disabled");
+      expect(screen.getByRole("switch")).not.toHaveAttribute("data-disabled");
+      const numRetries = await screen.findByRole("textbox", { name: /num_retries/i });
+      expect(numRetries).toBeEnabled();
+      expect(screen.queryByText("Set in config.yaml and cannot be changed here")).not.toBeInTheDocument();
+
+      fireEvent.change(numRetries, { target: { value: "7" } });
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() =>
+        expect(setCallbacksCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.objectContaining({ router_settings: expect.objectContaining({ num_retries: 7 }) }),
+        ),
+      );
+    });
+  });
 });
