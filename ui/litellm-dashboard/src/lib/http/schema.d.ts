@@ -37245,6 +37245,13 @@ export interface components {
             routing_strategy_descriptions: {
                 [key: string]: string;
             };
+            /**
+             * Source
+             * @description Source of each current router setting
+             */
+            source: {
+                [key: string]: "config" | "db" | "env" | "default" | "unset";
+            };
         };
         /**
          * RoutingGroup
@@ -39707,6 +39714,10 @@ export interface components {
             /** Field Schema */
             field_schema: {
                 [key: string]: unknown;
+            };
+            /** Source */
+            source: {
+                [key: string]: "config" | "db" | "env" | "default" | "unset";
             };
             /** Values */
             values: {
