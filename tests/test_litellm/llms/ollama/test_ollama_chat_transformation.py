@@ -989,3 +989,64 @@ class TestOllamaStreamingUsage:
         )
 
         assert result.usage is None
+
+
+class TestOllamaChatReasoningEffort:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/37452."""
+
+    @pytest.mark.parametrize(
+        "reasoning_effort, expected_think",
+        [
+            ("low", True),
+            ("high", True),
+            ("none", False),
+            ({"effort": "medium"}, True),
+            ({"effort": "medium", "summary": "auto"}, True),
+            ({"effort": "none", "summary": "detailed"}, False),
+        ],
+    )
+    def test_reasoning_effort_string_or_dict_maps_to_think(self, reasoning_effort, expected_think):
+        optional_params = get_optional_params(
+            model="ollama_chat/qwen3:8b",
+            custom_llm_provider="ollama_chat",
+            reasoning_effort=reasoning_effort,
+        )
+        assert optional_params["think"] is expected_think
+
+    def test_reasoning_dict_without_effort_does_not_crash_and_sets_nothing(self):
+        # Codex CLI sends `reasoning: {"summary": "auto"}` on every Responses API call.
+        # This used to raise `TypeError: unhashable type: 'dict'`.
+        optional_params = get_optional_params(
+            model="ollama_chat/qwen3:8b",
+            custom_llm_provider="ollama_chat",
+            reasoning_effort={"summary": "auto"},
+        )
+        assert "think" not in optional_params
+
+    def test_reasoning_dict_gpt_oss_forwards_effort_string(self):
+        optional_params = OllamaChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": {"effort": "high", "summary": "auto"}},
+            optional_params={},
+            model="gpt-oss:20b",
+            drop_params=False,
+        )
+        assert optional_params["think"] == "high"
+
+    def test_responses_api_reasoning_summary_end_to_end_to_ollama_chat(self):
+        # The exact path from the issue: /v1/responses -> chat bridge -> ollama_chat params.
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            LiteLLMCompletionResponsesConfig,
+        )
+
+        chat_request = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="ollama_chat/qwen3:8b",
+            input="say OK",
+            responses_api_request={"reasoning": {"summary": "auto"}},
+            custom_llm_provider="ollama_chat",
+        )
+        optional_params = get_optional_params(
+            model="ollama_chat/qwen3:8b",
+            custom_llm_provider="ollama_chat",
+            reasoning_effort=chat_request.get("reasoning_effort"),
+        )
+        assert "think" not in optional_params

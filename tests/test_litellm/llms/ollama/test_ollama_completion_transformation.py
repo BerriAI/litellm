@@ -544,3 +544,33 @@ async def test_ollama_async_completion_inlines_remote_images_off_the_event_loop(
     assert response.choices[0].message.content == "Green"
     assert async_only_image_fetch.fetched == [image_url]
     assert captured["body"]["images"] == [async_only_image_fetch.base64_png]
+
+
+class TestOllamaConfigReasoningEffort:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/37452 (text completion path)."""
+
+    @pytest.mark.parametrize(
+        "reasoning_effort, expected_think",
+        [
+            ("medium", True),
+            ({"effort": "medium", "summary": "auto"}, True),
+            ({"effort": "none"}, False),
+        ],
+    )
+    def test_reasoning_effort_string_or_dict_maps_to_think(self, reasoning_effort, expected_think):
+        optional_params = OllamaConfig().map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort},
+            optional_params={},
+            model="qwen3:8b",
+            drop_params=False,
+        )
+        assert optional_params["think"] is expected_think
+
+    def test_reasoning_dict_without_effort_does_not_crash(self):
+        optional_params = OllamaConfig().map_openai_params(
+            non_default_params={"reasoning_effort": {"summary": "auto"}},
+            optional_params={},
+            model="qwen3:8b",
+            drop_params=False,
+        )
+        assert "think" not in optional_params
