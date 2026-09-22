@@ -1,7 +1,6 @@
 import os
 import re
 import sys
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -11,12 +10,6 @@ secrets_adapter: Final[TypeAdapter[dict[str, str]]] = TypeAdapter(dict[str, str]
 ENV_NAME: Final = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 MIN_MASKED_LENGTH: Final = 8
 ACTIONS_RUNNER_FLAG: Final = "GITHUB_ACTIONS"
-
-
-def mask_commands(secrets: Mapping[str, str]) -> tuple[str, ...]:
-    return tuple(
-        f"::add-mask::{value.replace('%', '%25')}\n" for value in secrets.values() if len(value) >= MIN_MASKED_LENGTH
-    )
 
 
 def main() -> int:
@@ -39,7 +32,13 @@ def main() -> int:
         )
         return 1
     if os.environ.get(ACTIONS_RUNNER_FLAG) == "true":
-        _ = sys.stdout.write("".join(mask_commands(secrets)))
+        _ = sys.stdout.write(
+            "".join(
+                f"::add-mask::{value.replace('%', '%25')}\n"
+                for value in secrets.values()
+                if len(value) >= MIN_MASKED_LENGTH
+            )
+        )
         sys.stdout.flush()
     lines: Final = tuple(f"{key}='{value}'" for key, value in secrets.items() if value)
     try:
