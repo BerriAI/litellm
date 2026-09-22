@@ -22,6 +22,8 @@ class Route(str, Enum):
     RESPONSES = "responses"
     TRANSCRIPTION = "transcription"
     OCR = "ocr"
+    TOKEN_COUNTER = "token_counter"
+    TOKENIZER = "tokenizer"
 
 
 class Delivery(Enum):
@@ -92,6 +94,8 @@ RULES: Final[Rules] = (
     RouteRule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),
     RouteRule(Route.OCR, Rollout.RUST_OPT_OUT),
     RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN),
+    RouteRule(Route.TOKEN_COUNTER, Rollout.RUST_OPT_IN),
+    RouteRule(Route.TOKENIZER, Rollout.RUST_OPT_IN),
     RouteRule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
     CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.LOCAL})),
     CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.REDIS})),

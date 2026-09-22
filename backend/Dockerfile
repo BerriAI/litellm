@@ -61,6 +61,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --extra saml \
         --python python3.13
 
+RUN cp "$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"/litellm/rust_bridge/_native*.so litellm/rust_bridge/
+
 RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     npm_config_cache=/root/.npm \
     prisma generate --schema=./schema.prisma

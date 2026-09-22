@@ -39,8 +39,6 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     model_access_group_spend_counter_key,
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
-    TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS,
-    _approximate_input_size,
     _get_model_access_group_budget_counters,
     estimate_request_max_cost,
     get_budget_window_start,
@@ -48,6 +46,10 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     release_budget_reservation,
     release_budget_reservation_on_cancel,
     reserve_budget_for_request,
+)
+from litellm.proxy.spend_tracking.input_tokens import (
+    TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS,
+    _approximate_input_size,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router

@@ -20,5 +20,5 @@ pub mod tiktoken;
 
 pub use counter::{InputTokenCount, TokenCounter};
 pub use error::Error;
-pub use tokenizer::Tokenizer;
+pub use tokenizer::{TextCodec, Tokenizer};
 pub use types::CountableRequest;

@@ -4,6 +4,12 @@ pub trait Tokenizer: Send + Sync {
     fn count_tokens(&self, text: &str) -> Result<usize, Error>;
 }
 
+pub trait TextCodec: Tokenizer {
+    fn encode(&self, text: &str) -> Result<Vec<u32>, Error>;
+    fn decode(&self, ids: &[u32], skip_special_tokens: bool) -> Result<String, Error>;
+    fn name(&self) -> &str;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

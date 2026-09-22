@@ -12,7 +12,7 @@ mod routes;
     reason = "secret-manager foundations await rollout activation"
 )]
 mod secrets;
-mod token_counter;
+mod tokenizer;
 
 #[pymodule(gil_used = true)]
 mod _native {
@@ -37,7 +37,12 @@ mod _native {
     #[pymodule_export]
     use crate::routes::responses::ResponsesWebSocketConnection;
     #[pymodule_export]
-    use crate::token_counter::TokenCounter;
+    use crate::routes::token_counter::TokenCounter;
+    #[cfg(feature = "huggingface")]
+    #[pymodule_export]
+    use crate::tokenizer::HuggingFaceEncoding;
+    #[pymodule_export]
+    use crate::tokenizer::Tokenizer;
     #[pymodule_export]
     use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
     use pyo3::{prelude::*, types::PyModule};
@@ -83,10 +88,13 @@ mod tests {
                 "achat_completions",
                 "ResponsesWebSocketConnection",
                 "TokenCounter",
+                "Tokenizer",
                 "gil_stats",
                 "process_state_started",
                 "reserve_process_for_forking",
             ];
+            #[cfg(feature = "huggingface")]
+            expected.push("HuggingFaceEncoding");
             expected.sort_unstable();
 
             let mut public_names: Vec<String> = native_module(py)

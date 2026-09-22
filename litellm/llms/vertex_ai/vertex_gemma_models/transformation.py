@@ -24,9 +24,8 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 
 
@@ -276,7 +275,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         litellm_params: dict,
         client: HTTPHandler | httpx.Client | None = None,
         timeout: float | httpx.Timeout | None = None,
-        encoding: "tiktoken.Encoding | None" = None,
+        encoding: "Tokenizer | None" = None,
     ):
         """Synchronous completion request"""
         from litellm.utils import convert_to_model_response_object
@@ -366,7 +365,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         litellm_params: dict,
         client: AsyncHTTPHandler | httpx.AsyncClient | None = None,
         timeout: float | httpx.Timeout | None = None,
-        encoding: "tiktoken.Encoding | None" = None,
+        encoding: "Tokenizer | None" = None,
     ):
         """Asynchronous completion request"""
         from litellm.utils import convert_to_model_response_object

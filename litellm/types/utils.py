@@ -104,6 +104,8 @@ def _nested_selector(
 
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Tokenizer
+
     from .vector_stores import VectorStoreSearchResponse
 else:
     VectorStoreSearchResponse = Any
@@ -4406,7 +4408,7 @@ class ProviderSpecificHeader(TypedDict):
 
 class SelectTokenizerResponse(TypedDict):
     type: Literal["openai_tokenizer", "huggingface_tokenizer"]
-    tokenizer: Any
+    tokenizer: ReadOnly["Tokenizer"]
 
 
 class LiteLLMFineTuningJob(FineTuningJob):

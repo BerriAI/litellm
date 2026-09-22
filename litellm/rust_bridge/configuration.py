@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from enum import Enum, auto
+from functools import lru_cache
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
@@ -32,7 +33,9 @@ class _RustConfiguration:
 _CONFIGURATION: Final = _RustConfiguration()
 
 
+@lru_cache(maxsize=16)
 def _parse_env_bool(value: str | None) -> bool | None:
+    """`LITELLM_RUST` as a bool; cached by raw value because `decision` runs per tokenizer call."""
     if value is None:
         return None
     try:
