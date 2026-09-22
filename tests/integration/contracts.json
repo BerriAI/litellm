@@ -205,6 +205,12 @@
     "tests/integration/providers/test_fal_ai_chat_wire.py::test_fal_moondream3_chat_sends_prompt_image_and_reasoning": [
       "other.provider_wire.fal_ai.moondream3_chat_query_wire_and_token_pricing"
     ],
+    "tests/integration/providers/test_fal_ai_chat_wire.py::test_fal_moondream3_chat_rejects_non_string_reasoning_effort_before_the_wire": [
+      "other.provider_wire.fal_ai.chat_non_string_reasoning_effort_rejected_before_wire"
+    ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_flux_dev_generation_without_deployment_api_base_uses_global_api_base": [
+      "other.provider_wire.fal_ai.global_api_base_routes_image_generation"
+    ],
     "tests/integration/providers/test_xiaomi_mimo_wire.py::test_xiaomi_mimo_nonstream_surfaces_reasoning_and_charges_registry_price[mimo-v2.6-pro]": [
       "other.provider_wire.xiaomi_mimo.reasoning_content_and_registry_pricing"
     ],
