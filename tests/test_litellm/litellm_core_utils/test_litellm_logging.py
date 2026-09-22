@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     set_callbacks,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
@@ -7941,3 +7942,19 @@ def test_response_cost_calculator_prices_terminal_responses_event_from_its_respo
     assert event_cost is not None and event_cost > 0
     assert event_cost == inner_cost
     assert logging_obj.cost_breakdown["input_cost"] is not None and logging_obj.cost_breakdown["input_cost"] > 0
+
+
+class TestBudgetReservationBinding:
+    """The proxy builds a logging object for every route before calling anything, so a
+    logging object seeing the reservation is no promise that a cost callback will settle
+    it: the claim belongs to the call wrapper, and this object must leave it unbound."""
+
+    def test_update_environment_variables_leaves_the_reservation_unbound(self, logging_obj):
+        reservation: Final = {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+
+        logging_obj.update_environment_variables(
+            litellm_params={"metadata": {"user_api_key_budget_reservation": reservation}}, optional_params={}
+        )
+
+        assert logging_obj.litellm_params["metadata"]["user_api_key_budget_reservation"] is reservation
+        assert reservation["callback_bound"] is False

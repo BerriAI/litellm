@@ -11,6 +11,7 @@ from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
+    budget_reservation_from_metadata,
     get_litellm_metadata_from_kwargs,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -630,17 +631,7 @@ def _metadata_keys(metadata: object) -> tuple[str, ...]:
 
 
 def _get_budget_reservation_from_metadata(metadata: dict) -> dict | None:
-    metadata_budget_reservation: Final = metadata.get("user_api_key_budget_reservation")
-    if isinstance(metadata_budget_reservation, dict):
-        return metadata_budget_reservation
-
-    user_api_key_auth_obj: Final = metadata.get("user_api_key_auth")
-    if user_api_key_auth_obj is None:
-        return None
-    if isinstance(user_api_key_auth_obj, dict):
-        budget_reservation: Final = user_api_key_auth_obj.get("budget_reservation")
-        return budget_reservation if isinstance(budget_reservation, dict) else None
-    return getattr(user_api_key_auth_obj, "budget_reservation", None)
+    return budget_reservation_from_metadata(metadata)
 
 
 def _get_request_tags_for_cost_tracking(

@@ -5493,7 +5493,7 @@ def request_model_access_groups_from_litellm_params(litellm_params: Mapping[str,
     """Access groups the auth layer stamped onto this request, from whichever metadata field carries them.
 
     Detached internal sub-calls only inherit the identity keys, so the auth object is the
-    fallback there, exactly as _get_budget_reservation_from_metadata does for reservations.
+    fallback there, exactly as budget_reservation_from_metadata does for reservations.
     """
     for metadata_variable_name in ("metadata", "litellm_metadata"):
         metadata = litellm_params.get(metadata_variable_name)
