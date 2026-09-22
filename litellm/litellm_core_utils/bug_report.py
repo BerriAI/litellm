@@ -64,8 +64,8 @@ def _get_litellm_frames(exc: BaseException) -> tuple[str, ...]:
     )[-MAX_FRAMES:]
 
 
-def allowlisted(value: str | None, allowed: frozenset[str]) -> str | None:
-    return value if value is not None and value in allowed else None
+def allowlisted(value: object, allowed: frozenset[str]) -> str | None:
+    return value if isinstance(value, str) and value in allowed else None
 
 
 def build_bug_report(
@@ -73,7 +73,7 @@ def build_bug_report(
     *,
     surface: Surface,
     call_type: str | None = None,
-    custom_llm_provider: str | None = None,
+    custom_llm_provider: object = None,
 ) -> BugReport:
     return BugReport(
         surface=surface,

@@ -75,6 +75,18 @@ def test_allowlisted_only_passes_exact_members():
     assert allowlisted("/v1/chat/completions", allowed) == "/v1/chat/completions"
     assert allowlisted("/v1/chat/completions/../../admin", allowed) is None
     assert allowlisted(None, allowed) is None
+    assert allowlisted(["/v1/chat/completions"], allowed) is None
+    assert allowlisted({"provider": "openai"}, allowed) is None
+
+
+def test_build_bug_report_survives_unhashable_provider_from_request_data():
+    report = build_bug_report(
+        KeyError("missing"),
+        surface="proxy",
+        custom_llm_provider={"name": "openai"},
+    )
+
+    assert report.custom_llm_provider is None
 
 
 def test_frames_are_capped_and_url_is_bounded():

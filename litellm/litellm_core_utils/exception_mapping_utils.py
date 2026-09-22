@@ -2686,7 +2686,7 @@ def exception_type(
                                 build_bug_report(
                                     original_exception,
                                     surface="sdk",
-                                    custom_llm_provider=cast(str | None, custom_llm_provider),
+                                    custom_llm_provider=custom_llm_provider,
                                 )
                             )
                             if should_report_bug(original_exception)
