@@ -132,6 +132,7 @@ from litellm.proxy.common_utils.callback_utils import (
     strip_callback_config,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
+from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
     get_hidden_params_dict,
@@ -4852,6 +4853,22 @@ def validate_deployment_complexity_router_placement(model: Mapping[str, object])
         raise ValueError(f"model {model.get('model_name', '')!r}: {violation}")
 
 
+def validate_deployment_access_windows(model: Mapping[str, object]) -> None:
+    """
+    Reject a malformed `model_info.access_windows` instead of silently dropping the deployment.
+
+    Checked here rather than on `ModelInfo` because the proxy builds its router with
+    `ignore_invalid_deployments=True`, so a rejection further down turns a bad
+    deployment into a silently missing model instead of a refusal to start.
+    """
+    model_info: Final = model.get("model_info")
+    if not isinstance(model_info, Mapping):
+        return
+    error: Final = access_windows_config_error(model_info, model_name=str(model.get("model_name", "")))
+    if error is not None:
+        raise ValueError(error)
+
+
 def validate_auto_router_capability_limits(model_list: Sequence[Mapping[str, object]], *, limit: int | None) -> None:
     """
     Refuse to start when config.yaml defines more auto-routers claiming a licensed capability than allowed.
@@ -6552,6 +6569,7 @@ class ProxyConfig:
                         model["litellm_params"][k] = get_secret(v)
                 validate_deployment_max_agentic_loops(model)
                 validate_deployment_complexity_router_placement(model)
+                validate_deployment_access_windows(model)
                 pin_complexity_router_model_id(model)
                 complexity_router_config = model["litellm_params"].get("complexity_router_config")
                 if isinstance(complexity_router_config, dict):

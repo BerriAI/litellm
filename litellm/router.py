@@ -31,6 +31,7 @@ from collections.abc import (
     MutableMapping,
     Sequence,
 )
+from datetime import datetime, timezone
 from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
@@ -138,6 +139,7 @@ from litellm.router_strategy.tag_based_routing import (
     get_deployments_for_tag,
     is_valid_deployment_tag,
 )
+from litellm.router_utils.access_windows import access_windows_config_error, filter_reserved_deployments
 from litellm.router_utils.add_retry_fallback_headers import (
     _HiddenParamsHost,
     add_fallback_headers_to_response,
@@ -8774,6 +8776,9 @@ class Router:
             )
             if ptu_error is not None and is_ptu_cost_attribution_enabled():
                 raise ValueError(ptu_error)
+            access_windows_error: Final = access_windows_config_error(_model_info, model_name=_model_name)
+            if access_windows_error is not None:
+                raise ValueError(access_windows_error)
             zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
             litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(
                 **(  # pyright: ignore[reportArgumentType]  # untyped merged dict; already true for every field here
@@ -12535,12 +12540,30 @@ class Router:
         request_team_id: Final = get_request_team_id(request_kwargs)
         # check if aliases set on litellm model alias map
         if specific_deployment is True:
-            return model, self._get_deployment_by_litellm_model(model=model)
+            return model, self._drop_strategy_markers(
+                model,
+                self._filter_reserved_deployments(
+                    model=model,
+                    healthy_deployments=self._get_deployment_by_litellm_model(model=model),
+                    request_team_id=request_team_id,
+                ),
+            )
         elif model not in self.model_names and self.has_model_id(model):
             deployment: Final = self.get_deployment(model_id=model)
             if deployment is not None:
                 deployment_model: Final = deployment.litellm_params.model
-                return deployment_model, deployment.model_dump(exclude_none=True)
+                return deployment_model, cast(  # cast-ok: contract requires a plain dict for a single deployment
+                    dict,
+                    self._filter_reserved_deployments(
+                        model=deployment_model,
+                        healthy_deployments=(
+                            cast(  # cast-ok: model_dump of a router deployment
+                                DeploymentTypedDict, deployment.model_dump(exclude_none=True)
+                            ),
+                        ),
+                        request_team_id=request_team_id,
+                    )[0],
+                )
             raise ValueError(
                 f"LiteLLM Router: Trying to call specific deployment, but Model ID :{model} does not exist in Model ID map"
             )
@@ -12558,8 +12581,26 @@ class Router:
             )
             if early is not None:
                 if not isinstance(early[1], list):
-                    return early
-                return early[0], self._drop_strategy_markers(early[0], early[1])
+                    return early[0], cast(  # cast-ok: contract requires a plain dict for a single deployment
+                        dict,
+                        self._filter_reserved_deployments(
+                            model=early[0],
+                            healthy_deployments=(
+                                cast(  # cast-ok: early resolve returns a router deployment
+                                    DeploymentTypedDict, early[1]
+                                ),
+                            ),
+                            request_team_id=request_team_id,
+                        )[0],
+                    )
+                return early[0], self._drop_strategy_markers(
+                    early[0],
+                    self._filter_reserved_deployments(
+                        model=early[0],
+                        healthy_deployments=early[1],
+                        request_team_id=request_team_id,
+                    ),
+                )
 
         ## get healthy deployments
         ### get all deployments
@@ -12569,10 +12610,14 @@ class Router:
             else self._get_all_deployments(model_name=model, team_id=request_team_id)
         )
         _pre_model_access_group_filter_len: Final = len(healthy_deployments)
-        healthy_deployments = self._filter_deployments_by_model_access_groups(
+        healthy_deployments = self._filter_reserved_deployments(
             model=model,
-            healthy_deployments=healthy_deployments,
-            request_kwargs=request_kwargs,
+            healthy_deployments=self._filter_deployments_by_model_access_groups(
+                model=model,
+                healthy_deployments=healthy_deployments,
+                request_kwargs=request_kwargs,
+                request_team_id=request_team_id,
+            ),
             request_team_id=request_team_id,
         )
         _access_group_filter_emptied_candidates = (
@@ -12585,10 +12630,14 @@ class Router:
             # _get_deployment_by_litellm_model does not re-apply that filter.
             if _pre_model_access_group_filter_len == 0:
                 _litellm_model_deployments: Final = self._get_deployment_by_litellm_model(model=model)
-                healthy_deployments = self._filter_deployments_by_model_access_groups(
+                healthy_deployments = self._filter_reserved_deployments(
                     model=model,
-                    healthy_deployments=_litellm_model_deployments,
-                    request_kwargs=request_kwargs,
+                    healthy_deployments=self._filter_deployments_by_model_access_groups(
+                        model=model,
+                        healthy_deployments=_litellm_model_deployments,
+                        request_kwargs=request_kwargs,
+                        request_team_id=request_team_id,
+                    ),
                     request_team_id=request_team_id,
                 )
                 # If the litellm-model lookup produced candidates that access-group
@@ -12616,10 +12665,14 @@ class Router:
                     # Re-assign model to the fallback and try to get deployments again
                     model = fallback_model
                     healthy_deployments = self._get_all_deployments(model_name=model, team_id=request_team_id)
-                    healthy_deployments = self._filter_deployments_by_model_access_groups(
+                    healthy_deployments = self._filter_reserved_deployments(
                         model=model,
-                        healthy_deployments=healthy_deployments,
-                        request_kwargs=request_kwargs,
+                        healthy_deployments=self._filter_deployments_by_model_access_groups(
+                            model=model,
+                            healthy_deployments=healthy_deployments,
+                            request_kwargs=request_kwargs,
+                            request_team_id=request_team_id,
+                        ),
                         request_team_id=request_team_id,
                     )
 
@@ -12652,6 +12705,24 @@ class Router:
                 llm_provider="",
             )
         return selectable
+
+    def _filter_reserved_deployments(
+        self,
+        model: str,
+        healthy_deployments: Sequence[DeploymentTypedDict],
+        request_team_id: str | None,
+    ) -> tuple[DeploymentTypedDict, ...]:
+        result: Final = filter_reserved_deployments(
+            self._drop_strategy_markers(model, healthy_deployments), request_team_id, now=datetime.now(timezone.utc)
+        )
+        if result.blocking_window is not None and len(result.deployments) == 0:
+            raise litellm.BadRequestError(
+                message=f"Deployment {model} is reserved for another team until "
+                f"{result.blocking_window.end:%H:%M} {result.blocking_window.timezone}",
+                model=model,
+                llm_provider="",
+            )
+        return result.deployments
 
     def _filter_deployments_by_model_access_groups(
         self,

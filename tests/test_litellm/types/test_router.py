@@ -146,3 +146,48 @@ def test_aws_session_tags_round_trip_as_sts_shaped_pairs():
 def test_aws_session_tags_reject_shapes_sts_would_refuse(aws_session_tags):
     with pytest.raises(ValidationError, match="aws_session_tags"):
         LiteLLM_Params(model="bedrock/anthropic.claude-opus-5", aws_session_tags=aws_session_tags)
+
+
+def test_model_info_parses_access_windows_time_strings():
+    import datetime
+
+    info = ModelInfo(
+        id="x",
+        access_windows=[
+            {
+                "start": "22:00",
+                "end": "06:00",
+                "timezone": "America/New_York",
+                "team_ids": ["team-nightly"],
+            }
+        ],
+    )
+    window = info.access_windows[0]
+    assert window.start == datetime.time(22, 0)
+    assert window.end == datetime.time(6, 0)
+    assert window.timezone == "America/New_York"
+    assert window.team_ids == ("team-nightly",)
+
+
+@pytest.mark.parametrize(
+    "access_windows",
+    [
+        [{"start": "25:00", "end": "06:00", "timezone": "UTC", "team_ids": ["t"]}],
+        [{"start": "22:00", "end": "06:00", "timezone": "Mars/Olympus", "team_ids": ["t"]}],
+        [{"start": "22:00", "end": "06:00", "timezone": "UTC", "team_ids": []}],
+    ],
+    ids=["invalid-time", "unknown-timezone", "empty-team-ids"],
+)
+def test_model_info_rejects_invalid_access_windows(access_windows):
+    with pytest.raises(ValidationError):
+        ModelInfo(id="x", access_windows=access_windows)
+
+
+def test_model_info_rejects_offset_aware_access_window_times():
+    with pytest.raises(ValidationError):
+        ModelInfo(
+            id="x",
+            access_windows=[
+                {"start": "22:00+05:00", "end": "06:00", "timezone": "UTC", "team_ids": ["t"]}
+            ],
+        )

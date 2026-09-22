@@ -32,6 +32,7 @@ from litellm.proxy.proxy_server import (
     _scrub_guardrail_inner,
     resolve_complexity_router_plugins,
     resolve_routing_plugins,
+    validate_deployment_access_windows,
     validate_deployment_complexity_router_placement,
     validate_deployment_max_agentic_loops,
     validate_auto_router_capability_limits,
@@ -4714,3 +4715,59 @@ def test_websearch_interception_settings_can_be_named_in_supported_db_objects(mo
 
     monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["models"]})
     assert proxy_server.should_load_db_object(object_type="websearch_interception_settings") is False
+
+
+def test_validate_deployment_access_windows_rejects_malformed_time():
+    model = {
+        "model_name": "gpt-4o-shared",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {
+            "access_windows": [
+                {"start": "25:00", "end": "06:00", "timezone": "America/New_York", "team_ids": ["t"]}
+            ]
+        },
+    }
+
+    with pytest.raises(ValueError, match="access_windows") as exc_info:
+        validate_deployment_access_windows(model)
+
+    assert "gpt-4o-shared" in str(exc_info.value)
+
+
+def test_validate_deployment_access_windows_rejects_unknown_timezone():
+    model = {
+        "model_name": "gpt-4o-shared",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {
+            "access_windows": [
+                {"start": "22:00", "end": "06:00", "timezone": "Mars/Olympus", "team_ids": ["t"]}
+            ]
+        },
+    }
+
+    with pytest.raises(ValueError, match="Mars/Olympus"):
+        validate_deployment_access_windows(model)
+
+
+def test_validate_deployment_access_windows_accepts_valid_and_absent():
+    assert (
+        validate_deployment_access_windows(
+            {
+                "model_name": "gpt-4o-shared",
+                "litellm_params": {"model": "gpt-4o"},
+                "model_info": {
+                    "access_windows": [
+                        {"start": "22:00", "end": "06:00", "timezone": "America/New_York", "team_ids": ["t"]}
+                    ]
+                },
+            }
+        )
+        is None
+    )
+    assert validate_deployment_access_windows({"model_name": "m", "litellm_params": {"model": "m"}}) is None
+    assert (
+        validate_deployment_access_windows(
+            {"model_name": "m", "litellm_params": {"model": "m"}, "model_info": {"id": "x"}}
+        )
+        is None
+    )
