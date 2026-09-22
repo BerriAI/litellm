@@ -92,7 +92,9 @@ class AnthropicMessageBatchList(TypedDict, total=False):
 _ANTHROPIC_MESSAGE_BATCH_ADAPTER: Final = TypeAdapter(AnthropicMessageBatch)
 _ANTHROPIC_MESSAGE_BATCH_LIST_ADAPTER: Final = TypeAdapter(AnthropicMessageBatchList)
 _OBJECT_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
-_EMPTY_PARAMS: Final[dict] = {}  # mutable-ok: shared empty mapping for signatures that declare dict; callees only read it
+_EMPTY_PARAMS: Final[
+    dict
+] = {}  # mutable-ok: shared empty mapping for signatures that declare dict; callees only read it
 _EMPTY_METADATA: Final[dict] = {}  # mutable-ok: shared empty LiteLLMBatch metadata; callers never mutate it
 
 

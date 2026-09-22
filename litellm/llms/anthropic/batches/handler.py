@@ -18,7 +18,9 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-_EMPTY_PARAMS: Final[dict] = {}  # mutable-ok: shared empty mapping for signatures that declare dict; every callee here only reads it
+_EMPTY_PARAMS: Final[
+    dict
+] = {}  # mutable-ok: shared empty mapping for signatures that declare dict; every callee here only reads it
 _EMPTY_MESSAGES: Final[list] = []  # mutable-ok: shared empty list for the messages signature; callees only read it
 
 from ..common_utils import AnthropicModelInfo
@@ -207,7 +209,9 @@ class AnthropicBatchesHandler:
         if not resolved_api_key:
             raise ValueError("Missing Anthropic API Key")
 
-        resolved_logging_obj: Final = logging_obj or self._default_logging_obj(call_type="batch_list", call_id="batch_list")
+        resolved_logging_obj: Final = logging_obj or self._default_logging_obj(
+            call_type="batch_list", call_id="batch_list"
+        )
 
         list_url: Final = self.provider_config.get_list_batches_url(
             api_base=resolved_api_base,
