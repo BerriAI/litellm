@@ -5,7 +5,7 @@ pub(crate) use execution::{run_async, run_async_value, run_sync, run_sync_value}
 pub(crate) use machine::LoggedMachine;
 
 use litellm_host_python::Pythonized;
-use litellm_logger::{DiagnosticInput, Level, Logger, Metadata, Policy, Processor, Record, Sink};
+use litellm_tracing::{DiagnosticInput, Level, Logger, Metadata, Policy, Processor, Record, Sink};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 

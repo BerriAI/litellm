@@ -24,17 +24,17 @@ impl Machine for DiagnosticMachine {
     type Complete = ();
 
     fn resume(&mut self, _: Option<HostResult<Self>>) -> Step<'_, Self> {
-        litellm_logger::warn!("machine started");
+        litellm_tracing::warn!("machine started");
         Box::pin(async {
             tokio::task::yield_now().await;
-            litellm_logger::warn!("machine warning");
+            litellm_tracing::warn!("machine warning");
             Ok(MachineStep::Complete(()))
         })
     }
 
     fn interrupt(&mut self, _: HostFailure<String>) -> Interrupted<'_, Self> {
         Box::pin(async {
-            litellm_logger::warn!("machine interrupted");
+            litellm_tracing::warn!("machine interrupted");
             Ok(())
         })
     }
@@ -63,19 +63,19 @@ fn machine_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
 #[pyfunction]
 fn warning(py: Python<'_>) {
     super::capture(py).scope(|| {
-        litellm_logger::warn!(attempt = 3, retry = true, "native warning");
+        litellm_tracing::warn!(attempt = 3, retry = true, "native warning");
     });
 }
 
 #[pyfunction]
 fn levels(py: Python<'_>) {
     super::capture(py).scope(|| {
-        litellm_logger::trace!("trace");
-        litellm_logger::debug!("debug");
-        litellm_logger::info!("info");
-        litellm_logger::warn!("warn");
-        litellm_logger::error!("error");
-        litellm_logger::warn!(target: "unrelated_transport", "private wire data");
+        litellm_tracing::trace!("trace");
+        litellm_tracing::debug!("debug");
+        litellm_tracing::info!("info");
+        litellm_tracing::warn!("warn");
+        litellm_tracing::error!("error");
+        litellm_tracing::warn!(target: "unrelated_transport", "private wire data");
     });
 }
 
@@ -83,7 +83,7 @@ fn levels(py: Python<'_>) {
 fn asynchronous_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     super::run_async_value(py, async {
         tokio::task::yield_now().await;
-        litellm_logger::warn!("async warning");
+        litellm_tracing::warn!("async warning");
         Ok(())
     })
 }
@@ -92,7 +92,7 @@ fn asynchronous_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
 fn synchronous_warning(py: Python<'_>) -> PyResult<()> {
     super::run_sync_value(py, async {
         tokio::task::yield_now().await;
-        litellm_logger::warn!("sync warning");
+        litellm_tracing::warn!("sync warning");
         Ok(())
     })
 }
@@ -100,7 +100,7 @@ fn synchronous_warning(py: Python<'_>) -> PyResult<()> {
 #[pyfunction]
 fn synchronous_failure(py: Python<'_>) -> PyResult<()> {
     super::run_sync_value(py, async {
-        litellm_logger::warn!("failure diagnostic");
+        litellm_tracing::warn!("failure diagnostic");
         Err(pyo3::exceptions::PyValueError::new_err("request failed"))
     })
 }

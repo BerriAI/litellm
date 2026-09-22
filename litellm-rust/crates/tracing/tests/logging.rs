@@ -4,7 +4,7 @@ use std::sync::{
     mpsc,
 };
 
-use litellm_logger::{Level, Logger, Metadata, Record, Sink, info, warn};
+use litellm_tracing::{Level, Logger, Metadata, Record, Sink, info, warn};
 use serde_json::{Value, json};
 
 struct Output {

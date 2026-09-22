@@ -20,7 +20,7 @@ tiktoken = ["litellm-token-counter/tiktoken"]
 
 [dependencies]
 fancy-regex.workspace = true
-litellm-logger.workspace = true
+litellm-tracing.workspace = true
 litellm-host.workspace = true
 bytes.workspace = true
 futures-util.workspace = true

@@ -9,7 +9,7 @@ license = "MIT"
 repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
-litellm-logger = { path = "crates/logger" }
+litellm-tracing = { path = "crates/tracing" }
 tracing = "0.1"
 litellm-core = { path = "crates/core" }
 litellm-host = { path = "crates/host" }

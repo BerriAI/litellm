@@ -5,7 +5,7 @@ use litellm_host::{
     machine::{HostFailure, Interrupted, Machine, Step},
     route::Route,
 };
-use litellm_logger::Logger;
+use litellm_tracing::Logger;
 use pyo3::Python;
 
 pub(crate) struct LoggedMachine<M> {
