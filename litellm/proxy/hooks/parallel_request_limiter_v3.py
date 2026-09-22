@@ -13,7 +13,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapp
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -92,6 +92,11 @@ else:
 _REQUEST_RATE_LIMIT_DATA: Final = TypeAdapter(Mapping[str, object])
 
 
+def _sibling_counter_keys(window_key: str) -> tuple[str, str]:
+    prefix: Final = window_key.removesuffix(":window")
+    return f"{prefix}:requests", f"{prefix}:tokens"
+
+
 BATCH_RATE_LIMITER_SCRIPT: Final = """
 local results = {}
 local now = tonumber(ARGV[1])
@@ -107,6 +112,8 @@ for i = 1, #KEYS, 2 do
     local window_start = redis.call('GET', window_key)
     if not window_start or (now - tonumber(window_start)) >= window_size then
         -- Reset window and counter
+        local prefix = string.sub(window_key, 1, -(#':window') - 1)
+        redis.call('DEL', prefix .. ':requests', prefix .. ':tokens')
         redis.call('SET', window_key, tostring(now))
         redis.call('SET', counter_key, increment_value)
         redis.call('EXPIRE', window_key, window_size)
@@ -152,6 +159,7 @@ CHECK_AND_INCREMENT_BY_N_SCRIPT: Final = """
 local time_reply = redis.call('TIME')
 local now = tonumber(time_reply[1])
 local descriptor_count = #KEYS / 2
+local reset_windows = {}
 
 -- Pass 1: read state, validate. Abort without writing if any over limit.
 local descriptor_state = {}
@@ -202,6 +210,11 @@ for i = 1, descriptor_count do
 
     if window_expired then
         active_window_start = now
+        if not reset_windows[window_key] then
+            local prefix = string.sub(window_key, 1, -(#':window') - 1)
+            redis.call('DEL', prefix .. ':requests', prefix .. ':tokens')
+            reset_windows[window_key] = true
+        end
         redis.call('SET', window_key, tostring(now))
         redis.call('SET', counter_key, increment)
         redis.call('EXPIRE', window_key, window_size)
@@ -1058,6 +1071,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Implement sliding window rate limiting logic using in-memory cache operations.
         This follows the same logic as the Redis Lua script but uses async cache operations.
         """
+        async with self._check_and_increment_lock:
+            return await self._in_memory_cache_sliding_window(keys=keys, now_int=now_int, window_size=window_size)
+
+    async def _in_memory_cache_sliding_window(
+        self,
+        keys: list[str],
+        now_int: int,
+        window_size: int,
+    ) -> CacheCounterValues:
         results: Final[list[CacheCounterValue | None]] = []
 
         # Process each window/counter pair
@@ -1076,6 +1098,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # Check if window exists and is valid
             if window_start is None or (now_int - int(window_start)) >= window_size:
                 # Reset window and counter
+                for sibling_counter_key in _sibling_counter_keys(window_key):
+                    await self.internal_usage_cache.async_set_cache(
+                        key=sibling_counter_key,
+                        value=0,
+                        ttl=window_size,
+                        litellm_parent_otel_span=None,
+                        local_only=True,
+                    )
                 await self.internal_usage_cache.async_set_cache(
                     key=window_key,
                     value=str(now_int),
@@ -2285,6 +2315,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         # Pass 2: apply increments.
+        expired_windows: Final[Mapping[str, int]] = {
+            meta["window_key"]: meta["window_size"]
+            for meta, state in zip(per_counter_meta, descriptor_state)
+            if state["window_expired"]
+        }
+        for window_key, window_size in expired_windows.items():
+            for sibling_counter_key in _sibling_counter_keys(window_key):
+                await self.internal_usage_cache.async_set_cache(
+                    key=sibling_counter_key,
+                    value=0,
+                    ttl=window_size,
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
         statuses: Final[list[RateLimitStatus]] = []
         for meta, state in zip(per_counter_meta, descriptor_state):
             new_counter = meta["increment"] if state["window_expired"] else state["current"] + meta["increment"]
@@ -3317,7 +3361,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
                 now = self._get_current_time().timestamp()
                 reset_time = now + self.window_size
-                reset_time_formatted = datetime.fromtimestamp(reset_time).strftime("%Y-%m-%d %H:%M:%S UTC")
+                reset_time_formatted = datetime.fromtimestamp(reset_time, tz=timezone.utc).strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"
+                )
 
                 remaining_display = max(0, status["limit_remaining"])
                 rate_limit_type = status["rate_limit_type"]
@@ -4674,9 +4720,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # 'metadata' and 'litellm_metadata' fields from litellm_params
         standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
         request_metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
-        if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
-            # Internal sub-calls bill spend to the caller but are not the caller's
-            # traffic; charging them here would let background evals eat TPM headroom.
+        origin: Final = request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
+        if origin and origin != "autorouter_compaction":
+            # Background evaluations keep their exemption; foreground compaction
+            # is necessary caller traffic and consumes the caller's token limits.
             return []
         standard_logging_metadata: Final = standard_logging_object.get("metadata") or {}
 

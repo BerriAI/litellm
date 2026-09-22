@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
 
-    Span = _Span | Any
+    Span = _Span
     InternalUsageCache = _InternalUsageCache
 else:
     Span = Any
@@ -146,7 +146,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         current: dict | None,
         request_count_api_key: str,
         rate_limit_type: Literal["key", "model_per_key", "user", "customer", "team"],
-        values_to_update_in_cache: list[tuple[Any, Any]],
+        values_to_update_in_cache: list[tuple[str, object]],
     ) -> dict:
         verbose_proxy_logger.info("Current Usage of %s in this minute: %s", rate_limit_type, current)
         if current is None:
@@ -340,7 +340,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             rpm_limit = sys.maxsize
 
         values_to_update_in_cache: list[
-            tuple[Any, Any]
+            tuple[str, object]
         ] = []  # values that need to get updated in cache, will run a batch_set_cache after this function
 
         # ------------

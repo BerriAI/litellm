@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from litellm.proxy.config_resolvers.settings_rules import JsonValue
-from litellm.proxy.config_resolvers.settings_store import SettingsStore
+from litellm.proxy.config_resolvers.settings_store import ConfigOwnedKeyError, SettingsStore
 
 
 def test_settings_store_matches_plain_dict_mapping_operations() -> None:
@@ -86,11 +86,21 @@ def test_settings_store_keeps_unaffected_runtime_values_on_a_db_row_refresh() ->
 def test_settings_store_keeps_a_config_owned_key_when_a_db_row_disagrees() -> None:
     store: Final = SettingsStore("general_settings")
     store.load_yaml({"changed": "config"})
-    store.apply_runtime_values({"changed": "resolved-config"})
 
     store.apply_db_row("general_settings", {"changed": "database"})
 
     assert store["changed"] == "config"
+    assert store.source("changed") == "config"
+
+
+def test_settings_store_keeps_the_resolved_value_of_a_config_owned_key_across_a_db_row() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"changed": "os.environ/SETTING"})
+    store.apply_runtime_values({"changed": "resolved-config"})
+
+    store.apply_db_row("general_settings", {"changed": "database"})
+
+    assert store["changed"] == "resolved-config"
     assert store.source("changed") == "config"
 
 
@@ -162,11 +172,25 @@ def test_settings_store_refuses_a_runtime_write_to_a_config_owned_key() -> None:
     store: Final = SettingsStore("general_settings")
     store.load_yaml({"max_parallel_requests": 3})
 
-    store["max_parallel_requests"] = 11
-    del store["max_parallel_requests"]
+    with pytest.raises(ConfigOwnedKeyError) as write:
+        store["max_parallel_requests"] = 11
+    with pytest.raises(ConfigOwnedKeyError):
+        del store["max_parallel_requests"]
 
+    assert "max_parallel_requests" in str(write.value)
     assert store["max_parallel_requests"] == 3
     assert store.source("max_parallel_requests") == "config"
+
+
+def test_settings_store_accepts_a_write_that_does_not_change_a_config_owned_value() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"master_key": "os.environ/MASTER_KEY"})
+    store.apply_runtime_values({"master_key": "sk-resolved"})
+
+    store["master_key"] = "sk-resolved"
+
+    assert store["master_key"] == "sk-resolved"
+    assert store.source("master_key") == "config"
 
 
 @pytest.mark.timeout(10)
@@ -282,3 +306,146 @@ def test_settings_store_starts_with_an_unset_source() -> None:
     store: Final = SettingsStore("general_settings")
 
     assert store.source("unknown") == "unset"
+
+
+def test_settings_store_still_accepts_a_write_to_a_key_the_config_does_not_own() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"allowed_ips": ["1.2.3.4"]})
+
+    store["max_parallel_requests"] = 7
+
+    assert store["max_parallel_requests"] == 7
+
+
+def test_settings_store_reports_a_config_owned_key_whose_stored_value_differs() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"allowed_ips": ["1.2.3.4"]})
+    store.apply_db_row("general_settings", {"allowed_ips": ["1.2.3.4", "5.6.7.8"], "max_parallel_requests": 7})
+
+    assert store.shadowed_db_keys() == ("allowed_ips",)
+    assert store.shadows_db_value("allowed_ips") is True
+    assert store.shadows_db_value("max_parallel_requests") is False
+    assert store["max_parallel_requests"] == 7
+
+
+def test_settings_store_reports_no_shadowing_when_the_stored_value_agrees() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"allowed_ips": ["1.2.3.4"]})
+    store.apply_db_row("general_settings", {"allowed_ips": ["1.2.3.4"]})
+
+    assert store.shadowed_db_keys() == ()
+    assert store.shadows_db_value("allowed_ips") is False
+
+
+def test_settings_store_says_the_stored_value_is_ignored_when_it_refuses_a_write() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"allowed_ips": ["1.2.3.4"]})
+    store.apply_db_row("general_settings", {"allowed_ips": ["1.2.3.4", "5.6.7.8"]})
+
+    with pytest.raises(ConfigOwnedKeyError) as refused:
+        store["allowed_ips"] = ["9.9.9.9"]
+
+    assert refused.value.shadows_db_value is True
+    assert "stored in the database" in str(refused.value)
+
+
+def test_settings_store_refusal_stays_quiet_about_the_database_when_nothing_is_stored() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"allowed_ips": ["1.2.3.4"]})
+
+    with pytest.raises(ConfigOwnedKeyError) as refused:
+        store["allowed_ips"] = ["9.9.9.9"]
+
+    assert refused.value.shadows_db_value is False
+    assert "stored in the database" not in str(refused.value)
+    assert "config file" in str(refused.value)
+
+
+def test_settings_store_keeps_a_resolved_runtime_value_when_a_db_row_repeats_it() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.apply_db_row("general_settings", {"litellm_key_header_name": "os.environ/HDR"})
+    store.apply_runtime_values({"litellm_key_header_name": "X-Resolved-Header"})
+
+    store.apply_db_row("general_settings", {"litellm_key_header_name": "os.environ/HDR"})
+
+    assert store["litellm_key_header_name"] == "X-Resolved-Header"
+
+
+def test_settings_store_drops_a_resolved_runtime_value_when_a_db_row_changes_it() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.apply_db_row("general_settings", {"litellm_key_header_name": "os.environ/HDR"})
+    store.apply_runtime_values({"litellm_key_header_name": "X-Resolved-Header"})
+
+    store.apply_db_row("general_settings", {"litellm_key_header_name": "os.environ/OTHER"})
+
+    assert store["litellm_key_header_name"] == "os.environ/OTHER"
+
+
+def test_settings_store_accepts_the_writes_it_does_not_report_as_rejected() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"litellm_key_header_name": "os.environ/HDR"})
+    store.apply_runtime_values({"litellm_key_header_name": "X-Resolved-Header"})
+    incoming: Final[dict[str, JsonValue]] = {"litellm_key_header_name": "X-Resolved-Header"}
+
+    assert store.rejected_writes(incoming) == ()
+    store["litellm_key_header_name"] = "X-Resolved-Header"
+    assert store["litellm_key_header_name"] == "X-Resolved-Header"
+
+
+def test_settings_store_reports_a_rejected_write_the_store_itself_refuses() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"litellm_key_header_name": "os.environ/HDR"})
+    store.apply_runtime_values({"litellm_key_header_name": "X-Resolved-Header"})
+
+    assert store.rejected_writes({"litellm_key_header_name": "X-Other-Header"}) == ("litellm_key_header_name",)
+    with pytest.raises(ConfigOwnedKeyError):
+        store["litellm_key_header_name"] = "X-Other-Header"
+
+
+def test_settings_store_reports_no_shadowing_when_the_database_repeats_the_config_template() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"litellm_key_header_name": "os.environ/HDR"})
+    store.apply_db_row("general_settings", {"litellm_key_header_name": "os.environ/HDR"})
+    store.apply_runtime_values({"litellm_key_header_name": "X-Resolved-Header"})
+
+    assert store.shadowed_db_keys() == ()
+    assert store.shadows_db_value("litellm_key_header_name") is False
+
+
+def test_settings_store_still_reports_shadowing_when_the_database_holds_another_template() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"litellm_key_header_name": "os.environ/HDR"})
+    store.apply_db_row("general_settings", {"litellm_key_header_name": "os.environ/OTHER"})
+    store.apply_runtime_values({"litellm_key_header_name": "X-Resolved-Header"})
+
+    assert store.shadowed_db_keys() == ("litellm_key_header_name",)
+
+
+def test_settings_store_truthiness_stops_at_the_first_key() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({f"key_{index}": index for index in range(25)})
+    resolutions: Final[list[str]] = []
+    original: Final = SettingsStore._resolution_for
+
+    def counted(self: SettingsStore, key: str):
+        resolutions.append(key)
+        return original(self, key)
+
+    with patch.object(SettingsStore, "_resolution_for", counted):  # test-quality-ok: counting resolutions is the only way to observe that truthiness short-circuits
+        assert bool(store) is True
+        truthiness_resolutions: Final = len(resolutions)
+        resolutions.clear()
+        assert len(store) == 25
+
+    assert len(resolutions) == 25
+    assert truthiness_resolutions <= 1
+
+
+def test_settings_store_truthiness_matches_emptiness() -> None:
+    store: Final = SettingsStore("general_settings")
+
+    assert bool(store) is False
+    store["max_parallel_requests"] = 3
+    assert bool(store) is True
+    del store["max_parallel_requests"]
+    assert bool(store) is False

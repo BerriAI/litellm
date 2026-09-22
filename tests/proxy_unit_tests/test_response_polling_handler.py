@@ -1483,6 +1483,44 @@ class TestBackgroundStreamingTerminalEvents:
         assert final_call.kwargs["error"] == error_payload
 
     @pytest.mark.asyncio
+    async def test_named_event_failed_frame_sets_failed_status_and_error(self):
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        error_payload = {
+            "code": "cyber_policy",
+            "message": "Your request was flagged for possible cybersecurity risk and was not completed",
+        }
+        failed_event = {
+            "type": "response.failed",
+            "sequence_number": 5,
+            "response": {"id": "resp_123", "status": "failed", "error": error_payload, "output": []},
+        }
+
+        async def _body_iterator():
+            yield b'data: {"type": "response.in_progress"}\n\n'
+            yield f"event: response.failed\ndata: {json.dumps(failed_event)}\n\n".encode()
+            yield b"data: [DONE]\n\n"
+
+        mock_response = Mock()
+        mock_response.body_iterator = _body_iterator()
+        handler = AsyncMock(spec=ResponsePollingHandler)
+        kwargs = _make_background_streaming_kwargs("poll_named_event", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"] == error_payload
+
+    @pytest.mark.asyncio
     async def test_response_incomplete_sets_incomplete_status_and_details(self):
         """Test that a response.incomplete stream event results in incomplete status"""
         from litellm.proxy.response_polling.background_streaming import (

@@ -196,9 +196,9 @@ class XecGuardGuardrail(CustomGuardrail):
     async def async_logging_hook(
         self,
         kwargs: dict,
-        result: Any,
+        result: object,
         call_type: str,
-    ) -> tuple[dict, Any]:
+    ) -> tuple[dict, object]:
         """Observe-only scan for logging_only mode.
 
         Never blocks, never raises - all errors are swallowed. Records a
@@ -275,9 +275,9 @@ class XecGuardGuardrail(CustomGuardrail):
     def logging_hook(
         self,
         kwargs: dict,
-        result: Any,
+        result: object,
         call_type: str,
-    ) -> tuple[dict, Any]:
+    ) -> tuple[dict, object]:
         """Sync counterpart to ``async_logging_hook``.
 
         Runs the async version on an available loop, swallowing every
@@ -433,7 +433,7 @@ class XecGuardGuardrail(CustomGuardrail):
         return {"role": role, "content": ""}
 
     @staticmethod
-    def _synthesize_user_from_inputs(inputs: Any) -> dict | None:
+    def _synthesize_user_from_inputs(inputs: object) -> dict | None:
         if not isinstance(inputs, dict):
             return None
         texts: Final = inputs.get("texts")
@@ -490,7 +490,7 @@ class XecGuardGuardrail(CustomGuardrail):
         return None
 
     @staticmethod
-    def _content_to_text(content: Any) -> str | None:
+    def _content_to_text(content: object) -> str | None:
         if isinstance(content, str) and content:
             return content
         if isinstance(content, list):

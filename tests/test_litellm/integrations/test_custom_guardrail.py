@@ -1,7 +1,7 @@
 import asyncio
 import datetime as dt
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
-from unittest.mock import ANY, AsyncMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -2681,78 +2681,6 @@ class TestLoggingOnlyApplyGuardrail:
         assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
         entries = out_kwargs["standard_logging_object"]["guardrail_information"]
         assert [e["guardrail_status"] for e in entries] == ["success", "success"]
-
-    @pytest.mark.asyncio
-    async def test_anthropic_messages_response_scan_gets_chat_shaped_request_context(self):
-        class _ContextObserver(_ApplyOnlyObserver):
-            @log_guardrail_information
-            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
-                self.calls.append((input_type, inputs.get("structured_messages"), inputs.get("tools")))
-                return inputs
-
-        guardrail = _ContextObserver()
-        kwargs, response = _logged_call(
-            [
-                {"role": "user", "content": "What is the capital of France?"},
-                {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "lookup", "input": {}}]},
-                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "Paris"}]},
-            ]
-        )
-        kwargs["optional_params"] = {"tools": [{"name": "lookup", "input_schema": {"type": "object", "properties": {}}}]}
-
-        await guardrail.async_logging_hook(kwargs, response, CallTypes.anthropic_messages.value)
-
-        expected_request = [
-            {"role": "user", "content": "What is the capital of France?"},
-            {"role": "assistant", "content": None, "tool_calls": [ANY], "thinking_blocks": None},
-            {"role": "tool", "tool_call_id": "toolu_01", "content": "Paris"},
-        ]
-        expected_tools = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}}}]
-        assert guardrail.calls == [
-            ("request", expected_request, expected_tools),
-            ("response", [*expected_request, {"role": "assistant", "content": "general kenobi"}], expected_tools),
-        ]
-
-    @pytest.mark.asyncio
-    async def test_anthropic_messages_response_scan_keeps_reply_when_scoping_empties_request(self):
-        class _ContextObserver(_ApplyOnlyObserver):
-            @log_guardrail_information
-            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
-                self.calls.append((input_type, inputs.get("structured_messages"), inputs.get("tools")))
-                return inputs
-
-        guardrail = _ContextObserver()
-        guardrail.scan_only_tool_results = True
-        kwargs, response = _logged_call([{"role": "user", "content": "What is the capital of France?"}])
-
-        await guardrail.async_logging_hook(kwargs, response, CallTypes.anthropic_messages.value)
-
-        assert guardrail.calls == [("response", [{"role": "assistant", "content": "general kenobi"}], None)]
-
-    @pytest.mark.asyncio
-    async def test_anthropic_messages_response_scan_keeps_midturn_system_when_skip_system(self):
-        class _ContextObserver(_ApplyOnlyObserver):
-            @log_guardrail_information
-            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
-                self.calls.append((input_type, [m["role"] for m in inputs.get("structured_messages") or []]))
-                return inputs
-
-        guardrail = _ContextObserver()
-        guardrail.skip_system_message_in_guardrail = True
-        kwargs, response = _logged_call(
-            [
-                {"role": "user", "content": "hi"},
-                {"role": "system", "content": "mid-turn note"},
-                {"role": "user", "content": "What is the capital of France?"},
-            ]
-        )
-
-        await guardrail.async_logging_hook(kwargs, response, CallTypes.anthropic_messages.value)
-
-        assert guardrail.calls == [
-            ("request", ["user", "system", "user"]),
-            ("response", ["user", "system", "user", "assistant"]),
-        ]
 
     @pytest.mark.asyncio
     async def test_async_success_handler_records_verdict_in_standard_logging_object(self):

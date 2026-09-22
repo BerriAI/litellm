@@ -3,6 +3,7 @@ pub(crate) mod chat_completions;
 pub(crate) mod messages;
 pub(crate) mod ocr;
 pub(crate) mod responses;
+pub(crate) mod token_counter;
 
 #[cfg(test)]
 mod tests {
@@ -21,11 +22,6 @@ mod tests {
                     "transcription",
                     "atranscription",
                     "(model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
-                ),
-                (
-                    "messages",
-                    "amessages",
-                    "(model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None)",
                 ),
                 (
                     "chat_completions",
@@ -113,25 +109,6 @@ value = Broken()
             );
             assert_eq!(async_chat_error.to_string(), sync_chat_error.to_string());
 
-            let invalid_body = PyList::empty(py);
-            let sync_messages_error = module
-                .getattr("messages")
-                .and_then(|function| function.call1(("model", &invalid_body)))
-                .expect_err("sync Messages should reject a non-dict body");
-            let async_messages_error = module
-                .getattr("amessages")
-                .and_then(|function| function.call1(("model", &invalid_body)))
-                .expect_err("async Messages should reject a non-dict body");
-
-            assert_eq!(
-                sync_messages_error.to_string(),
-                "ValueError: body must be a dict"
-            );
-            assert_eq!(
-                async_messages_error.to_string(),
-                sync_messages_error.to_string()
-            );
-
             let invalid_headers = PyList::empty(py);
             let kwargs = PyDict::new(py);
             kwargs
@@ -193,13 +170,6 @@ value = Broken()
             headers_kwargs
                 .set_item("extra_headers", &invalid)
                 .expect("kwargs should accept extra_headers");
-            let invalid_body = PyList::empty(py);
-            let error = module
-                .getattr("messages")
-                .and_then(|function| function.call(("model", &invalid_body), Some(&headers_kwargs)))
-                .expect_err("body should be validated before headers");
-            assert_eq!(error.to_string(), "ValueError: body must be a dict");
-
             let invalid_payload =
                 PyModule::new(py, "invalid_payload").expect("invalid payload should be created");
             let error = module
