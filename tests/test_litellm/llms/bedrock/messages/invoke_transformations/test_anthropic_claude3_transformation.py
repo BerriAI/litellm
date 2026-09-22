@@ -7,7 +7,8 @@ import struct
 import zlib
 from datetime import datetime
 from types import SimpleNamespace
-from typing import AsyncIterator, Final
+from collections.abc import AsyncIterator
+from typing import Final
 from unittest.mock import Mock
 
 import httpx
@@ -3490,8 +3491,6 @@ async def test_get_async_streaming_response_iterator_yields_small_frame_before_u
     assert first.startswith(b"event: message_start\n"), first
 
     gate.set()
-    remaining: list[bytes] = []
-    async for chunk in iterator:
-        remaining.append(chunk)
+    remaining: Final = tuple([chunk async for chunk in iterator])
     assert any(chunk.startswith(b"event: message_stop\n") for chunk in remaining), remaining
     await iterator.aclose()
