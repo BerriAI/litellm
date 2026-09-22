@@ -272,6 +272,9 @@
     "tests/integration/spend/test_filtered_ledger.py::test_rotated_keys_users_and_model_groups_preserve_success_failure_cache_ledger": [
       "quota_management.spend_tracking.filtered_ledger_preserves_owner_identity_and_totals"
     ],
+    "tests/integration/spend/test_batch_completion_accounting.py::test_completed_batch_spend_row_records_reasoning_tokens_and_error_file_failures": [
+      "quota_management.spend_tracking.batch_costs.reasoning_tokens_and_error_file_failures_recorded"
+    ],
     "tests/integration/management/test_partial_update_sequences.py::test_restricted_actor_cannot_detach_key_from_project": [
       "mgmt.key.update.project_detach_denied_to_restricted_actor"
     ],
