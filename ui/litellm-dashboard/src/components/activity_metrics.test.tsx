@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { ActivityMetrics, formatKeyLabel, processActivityData } from "./activity_metrics";
+import { ActivityMetrics, formatKeyLabel, processActivityData, ResponseTimeTooltip } from "./activity_metrics";
+import type { ChartTooltipProps } from "@/components/shared/charts";
 import { Team } from "./key_team_helpers/key_list";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData } from "./UsagePage/types";
 
@@ -101,7 +102,7 @@ const createMockDailyData = (
 });
 
 const createMockKeyMetricWithMetadata = (
-  metadata: { key_alias: string | null; team_id: string | null },
+  metadata: { key_alias: string | null; team_id: string | null; user_email?: string | null },
   metrics: typeof EMPTY_SPEND_METRICS = EMPTY_SPEND_METRICS,
 ): KeyMetricWithMetadata => ({
   metrics,
@@ -653,6 +654,23 @@ describe("processActivityData", () => {
 
     expect(result).toHaveProperty("key1");
     expect(result["key1"].label).toBe("test-key-1 (team_id: team1)");
+  });
+
+  it("retains the api key metadata so key activity can be searched by user", () => {
+    const metadata = { key_alias: "test-key-1", team_id: "team1", user_id: "user-1", user_email: "user1@example.com" };
+    const withUser: { results: DailyData[] } = {
+      results: [
+        createMockDailyData("2025-01-01", mockDailyActivity.results[0].metrics, {
+          ...EMPTY_BREAKDOWN,
+          api_keys: { key1: createMockKeyMetricWithMetadata(metadata, mockDailyActivity.results[0].metrics) },
+        }),
+      ],
+    };
+
+    const result = processActivityData(withUser, "api_keys", MOCK_TEAMS);
+
+    expect(result["key1"].key_metadata).toEqual(metadata);
+    expect(processActivityData(withUser, "models")["key1"]).toBeUndefined();
   });
 
   it("should process data for models key with data", () => {
@@ -1407,6 +1425,144 @@ describe("processActivityData", () => {
 
     expect(result).toEqual({});
   });
+
+  it("sums response time per model and derives a per-day average over timed requests", () => {
+    const dayWithModel = (date: string, metrics: Partial<typeof EMPTY_SPEND_METRICS> & Record<string, number>) =>
+      createMockDailyData(date, EMPTY_SPEND_METRICS, {
+        ...EMPTY_BREAKDOWN,
+        models: {
+          "gpt-5.5": { metrics: { ...EMPTY_SPEND_METRICS, ...metrics }, metadata: {}, api_key_breakdown: {} },
+        },
+      });
+    const fourTimedRequests = {
+      api_requests: 4,
+      successful_requests: 4,
+      total_response_time_ms: 6000,
+      timed_requests: 4,
+    };
+    const oneTimedOneFailed = {
+      api_requests: 2,
+      successful_requests: 1,
+      failed_requests: 1,
+      total_response_time_ms: 500,
+      timed_requests: 1,
+    };
+    const onlyFailures = { api_requests: 1, successful_requests: 0, failed_requests: 1 };
+    const activity: { results: DailyData[] } = {
+      results: [
+        dayWithModel("2025-01-02", fourTimedRequests),
+        dayWithModel("2025-01-01", oneTimedOneFailed),
+        dayWithModel("2025-01-03", onlyFailures),
+      ],
+    };
+
+    const result = processActivityData(activity, "models");
+
+    expect(result["gpt-5.5"].total_response_time_ms).toBe(6500);
+    expect(result["gpt-5.5"].total_timed_requests).toBe(5);
+    expect(result["gpt-5.5"].daily_data.map((day) => day.metrics.avg_response_time_ms)).toEqual([500, 1500, null]);
+  });
+
+  it("treats rollups written before response time existed as zero timed requests", () => {
+    const activity: { results: DailyData[] } = {
+      results: [
+        createMockDailyData("2025-01-01", EMPTY_SPEND_METRICS, {
+          ...EMPTY_BREAKDOWN,
+          models: {
+            "gpt-5.5": {
+              metrics: { ...EMPTY_SPEND_METRICS, api_requests: 3, successful_requests: 3 },
+              metadata: {},
+              api_key_breakdown: {},
+            },
+          },
+        }),
+      ],
+    };
+
+    const result = processActivityData(activity, "models");
+
+    expect(result["gpt-5.5"].total_response_time_ms).toBe(0);
+    expect(result["gpt-5.5"].total_timed_requests).toBe(0);
+    expect(result["gpt-5.5"].daily_data[0].metrics.avg_response_time_ms).toBeNull();
+  });
+});
+
+describe("ActivityMetrics response time", () => {
+  const timedModel = createMockModelActivityData("GPT-5.5", {
+    total_response_time_ms: 6000,
+    total_timed_requests: 4,
+    daily_data: [
+      {
+        date: "2025-01-01",
+        metrics: {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15,
+          api_requests: 3,
+          spend: 1,
+          successful_requests: 3,
+          failed_requests: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          avg_response_time_ms: 2000,
+        },
+      },
+      {
+        date: "2025-01-02",
+        metrics: {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15,
+          api_requests: 1,
+          spend: 1,
+          successful_requests: 1,
+          failed_requests: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          avg_response_time_ms: 1000,
+        },
+      },
+    ],
+  });
+
+  it("shows the model's average response time in the summary card and the collapsed header", () => {
+    render(<ActivityMetrics modelMetrics={{ "gpt-5.5": timedModel }} />);
+
+    expect(screen.getByText("Avg Response Time")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "1.50s" })).toBeInTheDocument();
+    expect(screen.getByText("over 4 timed successful requests")).toBeInTheDocument();
+    expect(screen.getByText("1.50s avg response")).toBeInTheDocument();
+  });
+
+  it("renders the per-day response time chart with duration-formatted axis ticks", () => {
+    render(<ActivityMetrics modelMetrics={{ "gpt-5.5": timedModel }} />);
+
+    expect(screen.getByText("Avg Response Time per day")).toBeInTheDocument();
+    expect(screen.getByText("Avg Response Time Ms")).toBeInTheDocument();
+    expect(screen.getAllByText(/^\d+(\.\d+)?(ms|s)$/).length).toBeGreaterThan(1);
+  });
+
+  it("labels the chart tooltip with the readable series name and a formatted duration", () => {
+    const payload = [
+      { dataKey: "metrics.avg_response_time_ms", value: 1500, color: "#f59e0b", payload: timedModel.daily_data[0] },
+    ] as NonNullable<ChartTooltipProps["payload"]>;
+    render(<ResponseTimeTooltip active={true} payload={payload} label="2025-01-01" />);
+
+    expect(screen.getByText("Avg Response Time Ms")).toBeInTheDocument();
+    expect(screen.getByText("1.50s")).toBeInTheDocument();
+    expect(screen.queryByText("metrics.avg_response_time_ms")).not.toBeInTheDocument();
+  });
+
+  it("shows a dash and no response time chart when the model has no timed requests", () => {
+    render(<ActivityMetrics modelMetrics={{ "gpt-5.5": createMockModelActivityData("GPT-5.5") }} />);
+
+    expect(screen.getByText("Avg Response Time")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "-" })).toBeInTheDocument();
+    expect(screen.getByText("over 0 timed successful requests")).toBeInTheDocument();
+    expect(screen.queryByText(/avg response$/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Avg Response Time per day")).not.toBeInTheDocument();
+    expect(screen.queryByText("Avg Response Time Ms")).not.toBeInTheDocument();
+  });
 });
 
 describe("formatKeyLabel", () => {
@@ -1448,6 +1604,17 @@ describe("formatKeyLabel", () => {
 
     const result = formatKeyLabel(modelData, "actual-key", MOCK_TEAMS);
     expect(result).toBe("key-hash-actual-key (team: Test Team 1)");
+  });
+
+  it("should use user_email when key_alias is null", () => {
+    const modelData = createMockKeyMetricWithMetadata({
+      key_alias: null,
+      team_id: "team1",
+      user_email: "alice@example.com",
+    });
+
+    const result = formatKeyLabel(modelData, "actual-key", MOCK_TEAMS);
+    expect(result).toBe("alice@example.com (team: Test Team 1)");
   });
 
   it("should return key_alias with team_id when teams array is empty", () => {

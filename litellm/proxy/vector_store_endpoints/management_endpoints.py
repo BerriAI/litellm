@@ -56,13 +56,13 @@ def _row_to_vector_store(row: "_VectorStoreRow") -> LiteLLM_ManagedVectorStore:
     return LiteLLM_ManagedVectorStore(**row.model_dump())
 
 
-_LITELLM_PARAMS_MASKER: Final = SensitiveDataMasker()
+_LITELLM_PARAMS_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset(("connection",)))
 
 
 _REDACT_LITELLM_PARAMS_MAX_DEPTH: Final = 10
 
 
-def _redact_sensitive_litellm_params(litellm_params: Any, _depth: int = 0) -> Any:
+def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) -> Any:
     """
     Replace credential-bearing values in ``litellm_params`` with
     ``REDACTED_BY_LITELM`` while preserving non-secret keys (``api_base``,
@@ -88,13 +88,13 @@ def _redact_sensitive_litellm_params(litellm_params: Any, _depth: int = 0) -> An
         return None
     if isinstance(litellm_params, str):
         try:
-            parsed: Final = json.loads(litellm_params)
+            parsed: Final[object] = json.loads(litellm_params)
         except (TypeError, ValueError):
             return REDACTED_BY_LITELM_STRING
         return json.dumps(_redact_sensitive_litellm_params(parsed, _depth + 1))
     if not isinstance(litellm_params, dict):
         return litellm_params
-    out: Final[dict[str, Any]] = {}
+    out: Final[dict[str, object]] = {}
     for k, v in litellm_params.items():
         if _LITELLM_PARAMS_MASKER.is_sensitive_key(k):
             out[k] = REDACTED_BY_LITELM_STRING
@@ -589,7 +589,8 @@ async def update_vector_store(
 
     try:
         update_data: Final = data.model_dump(exclude_unset=True)
-        vector_store_id: Final[str] = update_data.pop("vector_store_id")
+        vector_store_id: Final[str] = data.vector_store_id
+        update_data.pop("vector_store_id")
 
         # Per-store access control: anyone authenticated who passes the
         # premium-feature gate could otherwise update *any* vector store —

@@ -44,6 +44,7 @@ class _NewRelicSettings(BaseSettings):
 def newrelic_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
     settings: Final = _NewRelicSettings()
     base: Final = config_overrides or OpenTelemetryV2Config()

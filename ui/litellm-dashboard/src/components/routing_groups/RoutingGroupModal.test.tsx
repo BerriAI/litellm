@@ -19,6 +19,13 @@ const EXPECTED_STORED_PAYLOAD: RoutingGroup = {
 
 const SEEDED_CREATE: RoutingGroup = { group_name: "", models: ["gemini-pro"], routing_strategy: "simple-shuffle" };
 
+const EXPECTED_SLASH_AND_SPACE_PAYLOAD: RoutingGroup = {
+  group_name: "team a/fast chat",
+  models: ["gemini-pro"],
+  routing_strategy: "simple-shuffle",
+  routing_strategy_args: null,
+};
+
 const STORED_GROUP: RoutingGroup = {
   group_name: "already-taken",
   models: ["gpt-4o", "claude-sonnet"],
@@ -52,6 +59,7 @@ const renderModal = (overrides: Partial<React.ComponentProps<typeof RoutingGroup
       strategyDescriptions={STRATEGY_DESCRIPTIONS}
       modelOptions={MODEL_OPTIONS}
       existingGroupNames={["already-taken", "other-group"]}
+      groupNameByModel={{}}
       onClose={onClose}
       onSubmit={onSubmit}
       {...overrides}
@@ -211,16 +219,28 @@ describe("RoutingGroupModal", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("rejects a name with characters outside the allowed set", async () => {
+  it("accepts a name with slashes and spaces, since the backend does", async () => {
     const user = userEvent.setup();
     const { onSubmit } = renderModal({
       initialValue: { group_name: "", models: ["gemini-pro"], routing_strategy: "simple-shuffle" },
     });
 
-    await typeName(user, "bad name");
+    await typeName(user, "team a/fast chat");
     await save(user, "Create Group");
 
-    expect(await screen.findByText("Only letters, numbers, dot, underscore, and dash are allowed")).toBeInTheDocument();
+    expect(onSubmit).toHaveBeenCalledWith(EXPECTED_SLASH_AND_SPACE_PAYLOAD);
+  });
+
+  it("rejects a whitespace-only name as missing", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderModal({
+      initialValue: { group_name: "", models: ["gemini-pro"], routing_strategy: "simple-shuffle" },
+    });
+
+    await typeName(user, "   ");
+    await save(user, "Create Group");
+
+    expect(await screen.findByText("Group name is required")).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
@@ -286,6 +306,19 @@ describe("RoutingGroupModal", () => {
       routing_strategy_args: null,
     };
     expect(onSubmit.mock.calls[0][0]).toStrictEqual(expected);
+  });
+
+  it("blocks a model another group already claims", async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderModal({ groupNameByModel: { "gpt-4o": "cheap" } });
+
+    await typeName(user, "security");
+    await pickModels(user, "gpt-4o");
+    await pickStrategy(user, "latency-based-routing");
+    await save(user, "Create Group");
+
+    expect(await screen.findByText(/Already claimed: gpt-4o/)).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("describes the selected strategy", async () => {

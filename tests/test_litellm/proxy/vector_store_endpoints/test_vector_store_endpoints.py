@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -306,6 +307,40 @@ async def test_vector_store_file_list_resolves_credentials_from_model_query_para
 
 
 @pytest.mark.asyncio
+async def test_vector_store_file_list_registry_routed_model_skips_key_model_grant():
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.get_deployment_credentials_with_provider.return_value = {
+        "api_key": "sk-team-openai",
+        "api_base": "https://api.openai.com/v1",
+        "custom_llm_provider": "openai",
+        "model": "openai/gpt-4o-mini",
+    }
+
+    data = {"vector_store_id": "vs_123", "model": "team-openai"}
+    user_api_key_dict = UserAPIKeyAuth(
+        models=["restricted-deployment"],
+        team_models=["restricted-deployment"],
+    )
+
+    result = await _update_request_data_with_model_routing_hint(
+        data=data,
+        request=request,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert result["api_key"] == "sk-team-openai"
+    assert result["model"] == "openai/gpt-4o-mini"
+    llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
+        model_id="team-openai"
+    )
+
+
+@pytest.mark.asyncio
 async def test_vector_store_file_list_resolves_single_openai_team_deployment():
     request = MagicMock(spec=Request)
     request.query_params = {}
@@ -570,6 +605,44 @@ async def test_vector_store_file_list_authorizes_model_query_param_before_creden
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
         )
+
+    llm_router.get_deployment_credentials_with_provider.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_model_query_param_enforces_project_model_grant():
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.auth_checks import ProxyException
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
+
+    request = MagicMock(spec=Request)
+    request.query_params = {"model": "team-openai"}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.model_group_alias = {}
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="team_id:team-123",
+        value=LiteLLM_TeamTableCachedObj(team_id="team-123", models=["team-openai"]),
+    )
+    await cache.async_set_cache(
+        key=project_cache_key("proj-1"),
+        value=LiteLLM_ProjectTableCachedObj(project_id="proj-1", models=["other-deployment"]),
+    )
+    user_api_key_dict = UserAPIKeyAuth(team_id="team-123", team_models=["team-openai"], project_id="proj-1")
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: proxy_server global, no seam
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: proxy_server global, no seam
+    ):
+        with pytest.raises(ProxyException):
+            await _update_request_data_with_model_routing_hint(
+                data={"vector_store_id": "vs_123"},
+                request=request,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+            )
 
     llm_router.get_deployment_credentials_with_provider.assert_not_called()
 
@@ -2462,6 +2535,41 @@ class TestRedactSensitiveLitellmParams:
         out = _redact_sensitive_litellm_params(params)
         for k, v in params.items():
             assert out[k] == v, f"{k} should be preserved verbatim"
+
+    def test_redacts_wire_protocol_connection_strings(self):
+        """
+        A MongoDB vector store's whole credential is its connection string:
+        ``mongodb+srv://<user>:<password>@<cluster>`` embeds the database
+        password, and none of the default api_key/secret/token patterns match
+        the key name, so an unextended masker returns it verbatim to every
+        caller of /vector_store/list and /vector_store/info.
+        """
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        password = "hunter2-not-for-callers"
+        params = {
+            "mongodb_connection_string": f"mongodb+srv://dbuser:{password}@cluster0.mongodb.net",
+            "mongodb_database": "sample_mflix",
+            "mongodb_collection": "embedded_movies",
+            "mongodb_embedding_field": "plot_embedding",
+            "mongodb_text_field": "plot",
+            "litellm_embedding_model": "openai/text-embedding-ada-002",
+        }
+        out = _redact_sensitive_litellm_params(params)
+
+        assert out["mongodb_connection_string"] == REDACTED_BY_LITELM_STRING
+        assert password not in json.dumps(out)
+        for k in (
+            "mongodb_database",
+            "mongodb_collection",
+            "mongodb_embedding_field",
+            "mongodb_text_field",
+            "litellm_embedding_model",
+        ):
+            assert out[k] == params[k], f"{k} is not a credential and must survive redaction"
 
     def test_handles_none_and_empty(self):
         from litellm.proxy.vector_store_endpoints.management_endpoints import (

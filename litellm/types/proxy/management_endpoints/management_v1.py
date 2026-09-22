@@ -1,5 +1,6 @@
 """Shared response shapes for the `/management/v1` control-plane surface."""
 
+from collections.abc import Sequence
 from typing import Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -38,7 +39,7 @@ class PageMeta(BaseModel):
 class FacetListResponse(BaseModel):
     """The distinct values one column takes over a filtered query. `data` holds bare values, not entity rows."""
 
-    data: list[str]
+    data: Sequence[str]
     meta: PageMeta
     links: PageLinks
 
@@ -62,6 +63,12 @@ class ListLinks(BaseModel):
     prev: str | None = None
     next: str | None = None
     last: str
+
+
+class ResourceResponse(BaseModel, Generic[TOut]):
+    """Envelope for a single resource or an action's result: `{data: ...}`, no `meta` or `links`."""
+
+    data: TOut
 
 
 class ListResponse(BaseModel, Generic[TOut]):

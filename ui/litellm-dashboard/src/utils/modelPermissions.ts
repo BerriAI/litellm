@@ -11,9 +11,8 @@ import { isProxyAdminRole, isUserTeamAdminForAnyTeam, isUserTeamAdminForSingleTe
  *
  * Past that route gate, both questions below are answered by exactly two inputs: the
  * caller's role, and whether the caller admins the team named in `model_info.team_id`.
- * `created_by` is written at creation and never read by an auth check, so it is deliberately
- * absent here; gating on it hid controls from team admins the API accepts, and showed
- * controls to former team admins the API rejects.
+ * General model management depends on team administration. The separate auto-router
+ * member grant below also requires the stored creator for configuration updates.
  */
 export interface ModelActor {
   userRole: string | null;
@@ -94,4 +93,40 @@ export const canModifyModel = (
     return false;
   }
   return isTeamAdminOf(teams, actor.userID, teamId);
+};
+
+const canMemberCreateAutoRouterForTeam = (actor: ModelActor, team: Team): boolean => {
+  if (actor.isViewOnly || !actor.userID) return false;
+  const membership = team.members_with_roles.find((member) => member.user_id === actor.userID);
+  return (
+    membership?.role === "user" &&
+    !team.blocked &&
+    team.team_member_permissions?.includes("/auto_router/manage") === true
+  );
+};
+
+export const canCreateAutoRouterForTeam = (actor: ModelActor, team: Team): boolean => {
+  if (actor.isViewOnly || !actor.userID) return false;
+  return (
+    canModifyModel(actor, [team], { teamId: team.team_id, isDbModel: true }) ||
+    canMemberCreateAutoRouterForTeam(actor, team)
+  );
+};
+
+export const autoRouterCreationScope = (actor: ModelActor, limits: ModelCreationLimits): ModelWriteScope => {
+  const scope = modelCreationScope(actor, limits);
+  if (scope !== "forbidden") return scope;
+  return limits.teams?.some((team) => canMemberCreateAutoRouterForTeam(actor, team)) ? "team-required" : "forbidden";
+};
+
+export const canEditAutoRouter = (
+  actor: ModelActor,
+  teams: Team[] | null,
+  origin: ModelRowOrigin & { createdBy: string | null | undefined; model: string | null | undefined },
+): boolean => {
+  if (canModifyModel(actor, teams, origin)) return true;
+  if (!origin.isDbModel || !actor.userID) return false;
+  if (actor.userID !== origin.createdBy || origin.model !== "auto_router/complexity_router") return false;
+  const team = teams?.find((candidate) => candidate.team_id === origin.teamId);
+  return team != null && canCreateAutoRouterForTeam(actor, team);
 };

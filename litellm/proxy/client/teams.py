@@ -40,7 +40,7 @@ class TeamsManagementClient:
         self,
         user_id: str | None = None,
         organization_id: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> builtins.list[dict[str, Any]]:
         """
         List teams that the user belongs to.
 

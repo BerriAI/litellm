@@ -18,6 +18,7 @@ from litellm.llms.anthropic.common_utils import (
     flatten_unencrypted_web_search_results_in_anthropic_messages,
     sanitize_tool_use_ids_in_anthropic_messages,
     strip_empty_content_blocks_from_anthropic_messages,
+    strip_provider_specific_fields_from_anthropic_messages,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -38,6 +39,8 @@ from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
 from ..utils import is_reasoning_auto_summary_enabled
 from .interceptors import get_messages_interceptors
 from .utils import AnthropicMessagesRequestUtils, mock_response
+
+__all__ = ("anthropic_messages", "anthropic_messages_handler")
 
 # Providers that are routed directly to the OpenAI Responses API instead of
 # going through chat/completions.
@@ -648,9 +651,14 @@ def anthropic_messages_handler(
                 "display": "summarized",
             }
 
+    resolved_api_base: Final = (
+        dynamic_api_base
+        if dynamic_api_base is not None and anthropic_messages_provider_config.uses_get_llm_provider_api_base()
+        else api_base
+    )
     return base_llm_http_handler.anthropic_messages_handler(
         model=model,
-        messages=messages,
+        messages=strip_provider_specific_fields_from_anthropic_messages(messages),
         anthropic_messages_provider_config=anthropic_messages_provider_config,
         anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
         _is_async=is_async,
@@ -659,7 +667,7 @@ def anthropic_messages_handler(
         litellm_params=litellm_params,
         logging_obj=litellm_logging_obj,
         api_key=api_key,
-        api_base=api_base,
+        api_base=resolved_api_base,
         stream=stream,
         kwargs=kwargs,
     )

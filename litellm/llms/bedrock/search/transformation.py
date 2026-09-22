@@ -39,7 +39,6 @@ from typing import Final
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
@@ -380,6 +379,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             raise BedrockError(
                 status_code=raw_response.status_code if raw_response.status_code >= 400 else 502,
                 message=f"AgentCore gateway MCP error: {error}",
+                headers=raw_response.headers,
             )
 
         # A failed tools/call is reported in-band, as HTTP 200 with result.isError
@@ -389,6 +389,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             raise BedrockError(
                 status_code=raw_response.status_code if raw_response.status_code >= 400 else 502,
                 message=f"AgentCore web search tool error: {self._tool_error_message(response_json)}",
+                headers=raw_response.headers,
             )
 
         text_items: Final = tuple(
@@ -440,6 +441,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         raise BedrockError(
             status_code=502,
             message=f"AgentCore gateway returned SSE without a JSON data frame: {text[:200]}",
+            headers=raw_response.headers,
         )
 
     def get_error_class(
@@ -448,7 +450,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         status_code: int,
         headers: dict,  # mutable-ok: BaseSearchConfig.get_error_class takes the response headers as a dict
     ) -> Exception:
-        return BaseLLMException(
+        return BedrockError(
             status_code=status_code,
             message=error_message,
             headers=headers,

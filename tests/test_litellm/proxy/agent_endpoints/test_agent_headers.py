@@ -223,7 +223,7 @@ async def test_static_overrides_dynamic():
 
 @pytest.mark.asyncio
 async def test_no_headers():
-    """When no headers are configured, agent_extra_headers is None and behaviour is unchanged."""
+    """When no headers are configured, only the caller identity is forwarded."""
     mock_agent = _make_mock_agent()  # no static_headers or extra_headers
     mock_request = _make_mock_request()
 
@@ -231,7 +231,7 @@ async def test_no_headers():
 
     call_kwargs = mock_asend.call_args.kwargs
     headers = call_kwargs.get("agent_extra_headers")
-    assert headers is None
+    assert headers == {"X-LiteLLM-User-Id": "u1"}
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +303,7 @@ async def test_convention_unrelated_prefix_not_forwarded():
     mock_asend = await _invoke(mock_agent, mock_request, None)
 
     headers = mock_asend.call_args.kwargs.get("agent_extra_headers")
-    assert headers is None
+    assert headers == {"X-LiteLLM-User-Id": "u1"}
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +393,7 @@ async def test_non_databricks_agent_skips_oauth_resolution():
 
     mock_resolve.assert_not_called()
     headers = mock_asend.call_args.kwargs.get("agent_extra_headers")
-    assert headers == {"x-custom": "v"}
+    assert headers == {"x-custom": "v", "X-LiteLLM-User-Id": "u1"}
     assert "Authorization" not in headers
 
 
@@ -477,7 +477,7 @@ async def test_convention_header_blocked_by_case_variant_static():
 
     headers = mock_asend.call_args.kwargs.get("agent_extra_headers")
     assert headers is not None
-    assert headers == {"Authorization": "Bearer admin-token"}
+    assert headers == {"Authorization": "Bearer admin-token", "X-LiteLLM-User-Id": "u1"}
     assert "authorization" not in headers
 
 

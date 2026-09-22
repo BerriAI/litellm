@@ -1,5 +1,8 @@
+import re
 from collections.abc import Awaitable, Callable, Iterator
-from typing import Any, Final, TypeVar
+from typing import Final, Protocol, TypeVar
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -16,6 +19,9 @@ _MAX_EXCEPTION_CHAIN_DEPTH: Final = 20
 _TRANSIENT_DB_UNAVAILABLE_MESSAGE: Final = (
     "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."
 )
+
+_DATABASE_ERROR_META: Final = TypeAdapter(dict[str, object])
+_BATCH_POSTGRES_ERROR_CODE: Final = re.compile(r'PostgresError \{ code: "([0-9A-Z]{5})"')
 
 
 def _exception_chain(e: BaseException) -> Iterator[BaseException]:
@@ -34,6 +40,13 @@ def _database_service_unavailable_errors(e: BaseException) -> tuple[Exception, .
         for link in _exception_chain(e)
         if isinstance(link, Exception) and PrismaDBExceptionHandler.is_database_service_unavailable_error(link)
     )
+
+
+def _batch_postgres_sqlstate(e: Exception) -> str | None:
+    """The SQLSTATE a batched statement failed with: prisma reports those without a
+    ``meta`` payload and only prints the connector error into the message."""
+    match: Final = _BATCH_POSTGRES_ERROR_CODE.search(str(e))
+    return match.group(1) if match is not None else None
 
 
 def _exception_types(*candidates: object) -> tuple[type[BaseException], ...]:
@@ -200,6 +213,12 @@ class PrismaDBExceptionHandler:
         return False
 
     @staticmethod
+    def is_prisma_error(e: Exception) -> bool:
+        import prisma
+
+        return isinstance(e, _exception_types(prisma.errors.PrismaError))
+
+    @staticmethod
     def is_deadlock_error(e: Exception) -> bool:
         """True iff ``e`` is a Postgres deadlock (P2034 / 40P01) surfaced through prisma."""
         import prisma
@@ -214,6 +233,32 @@ class PrismaDBExceptionHandler:
             or "40p01" in error_message
             or "write conflict or a deadlock" in error_message
         )
+
+    @staticmethod
+    def postgres_sqlstate(e: Exception) -> str | None:
+        """The SQLSTATE Postgres attached to a failed statement, as prisma surfaces it, or None."""
+        import prisma
+
+        if not isinstance(e, _exception_types(prisma.errors.DataError)):
+            return None
+        try:
+            meta: Final = _DATABASE_ERROR_META.validate_python(getattr(e, "meta", None))
+        except ValidationError:
+            return _batch_postgres_sqlstate(e)
+        code: Final = meta.get("code")
+        return code if isinstance(code, str) else _batch_postgres_sqlstate(e)
+
+    @staticmethod
+    def is_read_only_transaction_error(e: Exception) -> bool:
+        """True iff ``e`` is Postgres SQLSTATE 25006 surfaced through prisma: the
+        pooled session answers reads but rejects writes, so the connection is
+        poisoned until the client is recreated."""
+        import prisma
+
+        if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
+            return False
+        error_message: Final = str(e).lower()
+        return '"25006"' in error_message or "read-only transaction" in error_message
 
     @staticmethod
     def is_prisma_engine_internal_error(e: Exception) -> bool:
@@ -237,7 +282,7 @@ class PrismaDBExceptionHandler:
 
         if isinstance(e, _exception_types(prisma.errors.PrismaError)):
             return False
-        tb = getattr(e, "__traceback__", None)
+        tb = e.__traceback__ if hasattr(e, "__traceback__") else None
         while tb is not None:
             if tb.tb_frame.f_globals.get("__name__", "").startswith("prisma.engine"):
                 return True
@@ -389,7 +434,7 @@ _DEFAULT_RECONNECT_TIMEOUT_SECONDS: Final = 2.0
 _DEFAULT_RECONNECT_LOCK_TIMEOUT_SECONDS: Final = 0.1
 
 
-def _coerce_timeout(value: Any, fallback: float) -> float:
+def _coerce_timeout(value: object, fallback: float) -> float:
     """Return `value` if it is a real int/float, else `fallback`. Guards
     against tests that mock `prisma_client` and leave the timeout slots as
     MagicMock instances."""
@@ -401,8 +446,20 @@ def _coerce_timeout(value: Any, fallback: float) -> float:
 _ReadResultT: Final = TypeVar("_ReadResultT")
 
 
+class _DBReconnectClient(Protocol):
+    """The one method `call_with_db_reconnect_retry` needs from a Prisma client."""
+
+    async def attempt_db_reconnect(
+        self,
+        *,
+        reason: str,
+        timeout_seconds: float | None = None,
+        lock_timeout_seconds: float | None = None,
+    ) -> bool: ...
+
+
 async def call_with_db_reconnect_retry(
-    prisma_client: Any,
+    prisma_client: _DBReconnectClient,
     coro_factory: Callable[[], Awaitable[_ReadResultT]],
     *,
     reason: str,

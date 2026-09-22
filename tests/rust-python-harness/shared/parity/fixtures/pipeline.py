@@ -8,11 +8,11 @@ from types import MappingProxyType
 from typing import Final, Generic, Literal, Protocol, TypeVar
 
 from hypothesis.strategies import SearchStrategy
-from pydantic import BaseModel
 
 from .inputs import generate_case_inputs
 from .recording import UpstreamEndpoint, record_upstream_interactions
 from .store import (
+    CaseT,
     FixtureInput,
     canonical_json,
     fixture_cache_key,
@@ -25,7 +25,6 @@ from .store import (
 LOGGER: Final = logging.getLogger(__name__)
 InputT = TypeVar("InputT", bound=FixtureInput)
 InputT_contra = TypeVar("InputT_contra", bound=FixtureInput, contravariant=True)
-CaseT = TypeVar("CaseT", bound=BaseModel)
 
 
 class RecordingInvocation(Protocol[InputT_contra]):

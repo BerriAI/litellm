@@ -44,6 +44,11 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     user_api_key_has_admin_view,
 )
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
+    CeilingResolver,
+    resolve_agent_access_group_ceiling,
+)
+from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import (
     _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
@@ -129,10 +134,9 @@ def _is_mcp_passthrough_cold_start(mcp_servers: list[str] | None, client_ip: str
     spec-compliant WWW-Authenticate challenge instead of surfacing a generic
     admission error.
 
-    Uses "all" semantics (mirrors
-    :meth:`MCPRequestHandler._target_servers_delegate_auth_to_upstream`): one
-    non-passthrough target in a co-targeted set must not flip the bypass open
-    for the others. Fails closed when any target cannot be resolved."""
+    Uses "all" semantics: one non-passthrough target in a co-targeted set must
+    not flip the bypass open for the others. Fails closed when any target
+    cannot be resolved."""
     if not mcp_servers:
         return False
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -142,6 +146,27 @@ def _is_mcp_passthrough_cold_start(mcp_servers: list[str] | None, client_ip: str
     for name in mcp_servers:
         server = global_mcp_server_manager.get_mcp_server_by_name(name, client_ip=client_ip)
         if server is None or not getattr(server, "is_oauth_passthrough", False):
+            return False
+    return True
+
+
+def _is_legacy_delegate_cold_start(mcp_servers: list[str] | None, client_ip: str | None) -> bool:
+    """Allow only credential-free legacy delegates to reach the route's OAuth challenge."""
+    if not mcp_servers:
+        return False
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+        global_mcp_server_manager,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    for name in mcp_servers:
+        server = global_mcp_server_manager.get_mcp_server_by_name(name, client_ip=client_ip)
+        if server is None or server.auth_type != MCPAuth.oauth2:
+            return False
+        if server.delegate_auth_to_upstream is not True:
+            return False
+        if MCPServerManager.effective_oauth2_flow(server) == "client_credentials":
             return False
     return True
 
@@ -164,6 +189,21 @@ def _has_client_supplied_mcp_auth(
     return bool(mcp_auth_header) or bool(mcp_server_auth_headers)
 
 
+def _agent_capped_servers(
+    allowed_mcp_servers: Sequence[str],
+    agent_servers: Sequence[str],
+    agent_access_group_servers: frozenset[str] | None,
+) -> tuple[str, ...] | None:
+    if not agent_servers and agent_access_group_servers is None:
+        return None
+    return tuple(
+        s
+        for s in allowed_mcp_servers
+        if (not agent_servers or s in agent_servers)
+        and (agent_access_group_servers is None or s in agent_access_group_servers)
+    )
+
+
 def _is_mcp_admitted_user_subject(user_api_key_auth: UserAPIKeyAuth | None) -> bool:
     """True when this auth is a keyless subject admitted by the gateway session / bridge user
     path, as opposed to a JWT or other keyless auth that merely lacks a ``team_id``.
@@ -179,16 +219,7 @@ def _gateway_dcr_challenge_target(
     mcp_servers: list[str] | None,
     client_ip: str | None,
 ) -> str | None:
-    """The single path-named server this request targets, iff it resolves to a
-    gateway-managed oauth2 server — the one per-server shape the gateway's own keyless
-    DCR flow serves end to end, so the 401 challenge may advertise the per-server
-    protected-resource metadata (whose ``authorization_servers`` names the gateway).
-
-    Multi-server CSV paths, header/path mismatches, unknown names, and every
-    client-forwarded or delegated mode return ``None``: those cells keep their existing
-    challenge (or absence of one), and a challenge is never emitted for a name the
-    public discovery routes would 404, so this reveals exactly the server set the
-    per-server protected-resource metadata already reveals."""
+    """Resolve a single path target whose sign-in metadata advertises the gateway."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
@@ -197,7 +228,7 @@ def _gateway_dcr_challenge_target(
     if targets is None:
         return None
     server: Final = global_mcp_server_manager.get_mcp_server_by_name(targets[0], client_ip=client_ip)
-    if server is None or not server.is_gateway_managed_oauth2:
+    if server is None or not server.advertises_gateway_authorization_server:
         return None
     return targets[0]
 
@@ -217,7 +248,7 @@ def _is_gateway_dcr_challenge_scope(
     the caller is not a cold-start DCR client), on the scopes the gateway's keyless
     flow serves: the aggregate ``/mcp`` endpoint, an ``x-mcp-servers``-scoped request
     (the resource the client configured is still ``/mcp``), or a per-server path whose
-    single target is a gateway-managed oauth2 server. Every other named target keeps
+    single target advertises gateway-owned sign-in. Every other named target keeps
     its existing behavior, failing closed to the original admission error."""
     if not _is_litellm_auth_admission_error(exc):
         return False
@@ -236,7 +267,7 @@ def _gateway_dcr_challenge(
 ) -> HTTPException:
     """The RFC 9728 challenge pointing the client at the protected-resource metadata
     matching the scope it requested: the per-server document (same URL spelling the
-    request arrived on) when the single target is a gateway-managed oauth2 server,
+    request arrived on) when the single target advertises gateway-owned sign-in,
     else the gateway's aggregate document. Either way the client discovers the gateway
     as its authorization server and starts the same sign-in flow.
 
@@ -286,9 +317,18 @@ def _admission_failure_fallback(
         mcp_servers_from_path is not None
         and not _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers)
         and _is_litellm_auth_admission_error(exc)
-        and _is_mcp_passthrough_cold_start(
-            mcp_servers_from_path,
-            client_ip=IPAddressUtils.get_mcp_client_ip(request),
+        and (
+            _is_mcp_passthrough_cold_start(
+                mcp_servers_from_path,
+                client_ip=IPAddressUtils.get_mcp_client_ip(request),
+            )
+            or (
+                not bearer_presented
+                and _is_legacy_delegate_cold_start(
+                    mcp_servers_from_path,
+                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                )
+            )
         )
     ):
         verbose_logger.debug("MCP pass-through cold start: deferring admission to route 401 emitter")
@@ -443,22 +483,6 @@ class MCPRequestHandler:
                 api_key=f"Bearer {_get_bearer_token_or_received_api_key(litellm_api_key)}",
                 request=request,
             )
-        elif MCPRequestHandler._target_servers_delegate_auth_to_upstream(
-            path=request_route,
-            mcp_servers=mcp_servers,
-            client_ip=IPAddressUtils.get_mcp_client_ip(request),
-        ):
-            # Operator opted this oauth2 server into upstream-delegated auth: the
-            # client authenticates directly with the upstream MCP server, so any
-            # Authorization bearer is an upstream token, never a LiteLLM key. Skip
-            # LiteLLM validation entirely — covering both the no-credential
-            # discovery request and the authenticated call carrying the upstream
-            # bearer — so a tool call that succeeds never carries a phantom 401
-            # auth span; the bearer is forwarded upstream unchanged. Gated by
-            # _target_servers_delegate_auth_to_upstream, which returns True only
-            # when EVERY target is auth_type=oauth2 with delegate_auth_to_upstream
-            # set; fails closed otherwise.
-            validated_user_api_key_auth = UserAPIKeyAuth()
         elif MCPRequestHandler._target_servers_are_true_passthrough(
             path=request_route,
             mcp_servers=mcp_servers,
@@ -670,64 +694,6 @@ class MCPRequestHandler:
         return [servers_and_path]
 
     @staticmethod
-    def _target_servers_delegate_auth_to_upstream(
-        path: str, mcp_servers: list[str] | None, client_ip: str | None
-    ) -> bool:
-        """
-        True only when EVERY MCP server the request targets is configured for
-        ``auth_type == oauth2`` AND has ``delegate_auth_to_upstream=True``.
-        Fails closed when any target does not opt in or cannot be resolved.
-
-        Used by :meth:`process_mcp_request` to skip LiteLLM API-key/SSO auth
-        entirely (PKCE passthrough) so the client authenticates directly with
-        the upstream MCP server. Mixed-target requests (e.g. one delegated +
-        one non-delegated server) fall back to normal LiteLLM auth.
-        """
-        # Inline imports avoid a circular dependency: mcp_server_manager imports
-        # from this module.
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            MCPServerManager,
-            global_mcp_server_manager,
-        )
-        from litellm.types.mcp import MCPAuth
-
-        # Must mirror the downstream header-vs-path override
-        # (``extract_mcp_auth_context``) or an attacker could set
-        # ``x-mcp-servers`` to a delegate-enabled server while the URL path
-        # targets a non-delegate server, skipping LiteLLM auth for it.
-        target_names: Final = MCPRequestHandler._resolve_target_server_names(path=path, mcp_servers_header=mcp_servers)
-        if not target_names:
-            return False
-
-        for name in target_names:
-            server = global_mcp_server_manager.get_mcp_server_by_name(name, client_ip=client_ip)
-            if server is None or server.auth_type != MCPAuth.oauth2:
-                return False
-            # `is True` is intentional: opt-in must be an explicit boolean
-            # True. A MagicMock attribute (in tests) or any other truthy
-            # non-bool must not silently enable the bypass.
-            if getattr(server, "delegate_auth_to_upstream", False) is not True:
-                return False
-            # Never delegate for M2M (client_credentials) servers: LiteLLM
-            # fetches the upstream token automatically using stored credentials,
-            # so allowing anonymous bypass would let any external caller invoke
-            # tools authenticated as LiteLLM's service account.
-            #
-            # Resolve the flow rather than reading has_client_credentials directly:
-            # this is a security gate, and a legacy row whose oauth2_flow was never
-            # stamped still carries the M2M credential shape (client_id/secret +
-            # token_url, no authorization_url). Treating an unstamped-but-M2M-shaped
-            # row as non-M2M here would reopen the anonymous bypass the explicit
-            # column no longer closes on its own. Shares the one resolution helper
-            # with the egress backstop and the anonymous-delegate allowlist; all fail
-            # closed on the ambiguous shape and are removed together once no null rows
-            # remain. A pure-PKCE delegate server (no stored credentials) resolves to a
-            # non-M2M flow and keeps its bypass.
-            if MCPServerManager.effective_oauth2_flow(server) == "client_credentials":
-                return False
-        return True
-
-    @staticmethod
     def _target_servers_are_true_passthrough(path: str, mcp_servers: list[str] | None, client_ip: str | None) -> bool:
         """
         True only when EVERY MCP server the request targets is ``auth_type == true_passthrough``.
@@ -735,7 +701,7 @@ class MCPRequestHandler:
 
         Used by :meth:`process_mcp_request` to skip LiteLLM admission auth entirely: the gateway is a
         transparent proxy and the caller's ``Authorization`` is an upstream token, never a LiteLLM key.
-        Mirrors :meth:`_target_servers_delegate_auth_to_upstream`; a mixed-target request keeps normal auth.
+        A mixed-target request keeps normal auth.
         """
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -1208,7 +1174,7 @@ class MCPRequestHandler:
 
         Failures surface with the status the standard pipeline would give them, mirroring
         ``UserAPIKeyAuthExceptionHandler``: a disallowed route is the route gate's own 403, an
-        over-budget identity is a 429, a sub-check that raised its own ``HTTPException``/
+        over-budget identity is a 422, a sub-check that raised its own ``HTTPException``/
         ``ProxyException`` keeps that status, a transient database outage is a retryable 503, and
         only a genuinely unresolvable failure (a blocked team/project raises a bare ``Exception``,
         same as the standard pipeline's fallback) becomes the fail-closed 401. Collapsing every
@@ -1600,25 +1566,33 @@ class MCPRequestHandler:
             # Check agent permissions if agent_id is set on the key
             #########################################################
             if user_api_key_auth and user_api_key_auth.agent_id:
-                allowed_mcp_servers_for_agent: Final = await MCPRequestHandler._get_allowed_mcp_servers_for_agent(
-                    user_api_key_auth
+                agent_capped: Final = _agent_capped_servers(
+                    allowed_mcp_servers,
+                    await MCPRequestHandler._get_allowed_mcp_servers_for_agent(user_api_key_auth),
+                    await MCPRequestHandler._get_agent_access_group_server_ceiling(user_api_key_auth),
                 )
-                if len(allowed_mcp_servers_for_agent) > 0:
+                if agent_capped is not None:
                     has_lower_level_mcp_restrictions = True
-                    # Intersect: agent can only use servers allowed by BOTH key/team AND agent config
-                    allowed_mcp_servers = [s for s in allowed_mcp_servers if s in allowed_mcp_servers_for_agent]
+                    allowed_mcp_servers = list(agent_capped)
                     verbose_logger.debug(
                         "Applied agent intersection filter. Final allowed servers: %s", allowed_mcp_servers
                     )
 
             #########################################################
+            # Cap an agent key at what the user and team that invoked the agent may reach
+            #########################################################
+            caller_capped, caller_restricts = await MCPRequestHandler._apply_agent_caller_ceiling(
+                allowed_mcp_servers, user_api_key_auth
+            )
+
+            #########################################################
             # Apply the internal user's own ceiling (the entitlement attached to the human)
             #########################################################
             capped, user_restricts = await MCPRequestHandler._apply_user_server_ceiling(
-                allowed_mcp_servers, user_api_key_auth, keyless_source=keyless_source
+                caller_capped, user_api_key_auth, keyless_source=keyless_source
             )
             allowed_mcp_servers = list(capped)
-            has_lower_level_mcp_restrictions = has_lower_level_mcp_restrictions or user_restricts
+            has_lower_level_mcp_restrictions = has_lower_level_mcp_restrictions or caller_restricts or user_restricts
 
             #########################################################
             # Apply org-level ceiling if org_id is set
@@ -2170,6 +2144,10 @@ class MCPRequestHandler:
             else:
                 # No team restrictions → use key restrictions
                 allowed_tools = cast(list[str], key_tools)
+
+            allowed_tools = _as_list(
+                await MCPRequestHandler._apply_end_user_tool_ceiling(allowed_tools, server_id, user_api_key_auth)
+            )
 
             allowed_tools = _as_list(
                 await MCPRequestHandler._apply_user_tool_ceiling(
@@ -2958,6 +2936,28 @@ class MCPRequestHandler:
         return capped, True
 
     @staticmethod
+    async def _apply_agent_caller_ceiling(
+        allowed_mcp_servers: Sequence[str],
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> tuple[tuple[str, ...], bool]:
+        """Narrow an agent key's servers to those the invoking user and team (echoed back by the agent
+        as ``x-litellm-user-id`` / ``x-litellm-team-id``) may reach: the echoed team's grants when it
+        names any, then the echoed user's own entitlement. Raises like the user ceiling when that
+        entitlement is known but unreadable, so the resolver denies rather than widens."""
+        caller_auth: Final = agent_caller_auth(user_api_key_auth) if user_api_key_auth else None
+        if caller_auth is None:
+            return tuple(allowed_mcp_servers), False
+        team_servers: Final = frozenset(await MCPRequestHandler._get_allowed_mcp_servers_for_team(caller_auth))
+        team_capped: Final = (
+            tuple(server for server in allowed_mcp_servers if server in team_servers)
+            if team_servers
+            else tuple(allowed_mcp_servers)
+        )
+        user_capped, user_restricts = await MCPRequestHandler._apply_user_server_ceiling(team_capped, caller_auth)
+        verbose_logger.debug("Applied agent caller ceiling. Final allowed servers: %s", user_capped)
+        return user_capped, bool(team_servers) or user_restricts
+
+    @staticmethod
     async def _user_places_mcp_ceiling(user_api_key_auth: UserAPIKeyAuth | None = None) -> bool:
         """Whether this human's own entitlement bounds their MCP access at all.
 
@@ -3036,6 +3036,38 @@ class MCPRequestHandler:
             return list(user_tools)
         return list(set(allowed_tools) & set(user_tools))
 
+    @staticmethod
+    async def _apply_end_user_tool_ceiling(
+        allowed_tools: Sequence[str] | None,
+        server_id: str,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> Sequence[str] | None:
+        """Narrow a key/team tool allowlist by the end user's (customer's) tool entitlement."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if user_api_key_auth is None or not user_api_key_auth.end_user_id or prisma_client is None:
+            return allowed_tools
+
+        object_permissions: Final = await MCPRequestHandler._get_end_user_object_permission(
+            user_api_key_auth, prisma_client
+        )
+        if object_permissions is None:
+            return allowed_tools
+
+        end_user_direct_tools: Final = global_mcp_server_manager.expand_tool_permissions(
+            object_permissions.mcp_tool_permissions
+        ).get(server_id)
+        end_user_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(object_permissions, server_id)
+        end_user_tools: Final = MCPRequestHandler._union_tool_grants(end_user_direct_tools, end_user_toolset_tools)
+        if end_user_tools is None:
+            return allowed_tools
+        if allowed_tools is None:
+            return list(end_user_tools)
+        return list(set(allowed_tools) & set(end_user_tools))
+
     # Sentinel stored in cache when an agent has no object_permission, so we
     # don't re-query the DB on every MCP request for that agent.
     _AGENT_NO_PERMISSION_SENTINEL = "__agent_no_mcp_permission__"
@@ -3108,15 +3140,17 @@ class MCPRequestHandler:
     @staticmethod
     async def _get_allowed_mcp_servers_for_agent(
         user_api_key_auth: UserAPIKeyAuth | None = None,
-        agent_object_permission=None,
+        agent_object_permission: LiteLLM_ObjectPermissionTable | None = None,
     ) -> list[str]:
         """
         Get allowed MCP servers for an agent (from the agent's object_permission).
 
-        Returns the MCP servers from the agent's object_permission.
-        If agent has no object_permission, returns [] (no extra restriction). An entitlement the
-        agent LINKS but that cannot be read raises ``UnloadableEntitlementError`` out of here so the
-        resolver denies.
+        Returns the agent's direct servers, the servers in its access groups, and the servers reached
+        through its toolsets, exactly as the key, team, and org levels count theirs. If agent has no
+        object_permission, returns [] (no extra restriction). An entitlement the agent LINKS but that
+        cannot be read, or a declared toolset that resolves to no grants, raises
+        ``UnloadableEntitlementError`` out of here so the resolver denies instead of reading the
+        agent as unrestricted.
 
         Args:
             user_api_key_auth: User auth with agent_id
@@ -3126,45 +3160,67 @@ class MCPRequestHandler:
         if not user_api_key_auth or not user_api_key_auth.agent_id:
             return []
 
-        obj_perm = agent_object_permission
-        if obj_perm is None:
-            obj_perm = await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+        obj_perm: Final = (
+            agent_object_permission
+            if agent_object_permission is not None
+            else await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+        )
         if obj_perm is None:
             return []
 
         try:
-            direct_mcp_servers = getattr(obj_perm, "mcp_servers", None) or []
-            if isinstance(direct_mcp_servers, str):
-                direct_mcp_servers = []
-            mcp_access_groups = getattr(obj_perm, "mcp_access_groups", None) or []
-            if isinstance(mcp_access_groups, str):
-                mcp_access_groups = []
-
-            # Permission entries may be server_ids OR names/aliases — expand to ids.
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
 
-            expanded_direct_servers: Final = global_mcp_server_manager.expand_permission_list(list(direct_mcp_servers))
-
-            access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(mcp_access_groups)
-            all_servers: Final = expanded_direct_servers + access_group_servers
-            return list(set(all_servers))
+            expanded_direct_servers: Final = global_mcp_server_manager.expand_permission_list(
+                obj_perm.mcp_servers or []
+            )
+            access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                obj_perm.mcp_access_groups or []
+            )
+            toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(obj_perm)
+            return list({*expanded_direct_servers, *access_group_servers, *toolset_grants})
         except Exception as e:
+            if isinstance(e, UnloadableEntitlementError):
+                raise
             verbose_logger.warning("Failed to get allowed MCP servers for agent: %s", e)
             return []
+
+    @staticmethod
+    async def _get_agent_access_group_server_ceiling(
+        user_api_key_auth: UserAPIKeyAuth,
+        resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
+    ) -> frozenset[str] | None:
+        """
+        Server IDs the agent's attached unified access groups (``LiteLLM_AgentsTable.access_group_ids``)
+        allow, or None when the agent has none attached. Unlike the object_permission path above, an
+        attached group set that names no servers is an empty ceiling and denies every server.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        if not user_api_key_auth.agent_id:
+            return None
+        ceiling: Final = await resolve_ceiling(user_api_key_auth.agent_id)
+        if ceiling is None:
+            return None
+        return frozenset(global_mcp_server_manager.expand_permission_list(sorted(ceiling.mcp_server_ids)))
 
     @staticmethod
     async def _get_agent_tool_permissions_for_server(
         server_id: str,
         user_api_key_auth: UserAPIKeyAuth | None = None,
-        agent_object_permission=None,
+        agent_object_permission: LiteLLM_ObjectPermissionTable | None = None,
     ) -> list[str] | None:
         """
-        Get allowed tool names for a server from the agent's object_permission.
-        Returns None if agent has no tool restrictions for this server. An entitlement the agent
-        LINKS but that cannot be read raises ``UnloadableEntitlementError`` out of here, which the
-        tool resolver turns into deny-all for the server rather than an unrestricted tool list.
+        Get allowed tool names for a server from the agent's object_permission: the union of its
+        direct tool permissions and the tools its toolsets grant on that server, mirroring the key and
+        team levels. Returns None if agent has no tool restrictions for this server. An entitlement the
+        agent LINKS but that cannot be read, or a declared toolset that resolves to no grants, raises
+        ``UnloadableEntitlementError`` out of here, which the tool resolver turns into deny-all for the
+        server rather than an unrestricted tool list.
 
         Args:
             server_id: Server ID to check permissions for
@@ -3175,24 +3231,30 @@ class MCPRequestHandler:
         if not user_api_key_auth or not user_api_key_auth.agent_id:
             return None
 
-        obj_perm = agent_object_permission
-        if obj_perm is None:
-            obj_perm = await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+        obj_perm: Final = (
+            agent_object_permission
+            if agent_object_permission is not None
+            else await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+        )
         if obj_perm is None:
             return None
 
         try:
-            mcp_tool_permissions: Final = getattr(obj_perm, "mcp_tool_permissions", None)
-            if not mcp_tool_permissions or not isinstance(mcp_tool_permissions, dict):
-                return None
-            # Dict keys may be server_ids OR names/aliases; normalize before lookup.
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
 
-            tools: Final = global_mcp_server_manager.expand_tool_permissions(mcp_tool_permissions).get(server_id)
-            return list(tools) if tools else None
+            direct_tools: Final = (
+                global_mcp_server_manager.expand_tool_permissions(obj_perm.mcp_tool_permissions).get(server_id)
+                if obj_perm.mcp_tool_permissions
+                else None
+            )
+            toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(obj_perm, server_id)
+            agent_tools: Final = MCPRequestHandler._union_tool_grants(direct_tools, toolset_tools)
+            return list(agent_tools) if agent_tools else None
         except Exception as e:
+            if isinstance(e, UnloadableEntitlementError):
+                raise
             verbose_logger.warning("Failed to get agent tool permissions for server: %s", e)
             return None
 
