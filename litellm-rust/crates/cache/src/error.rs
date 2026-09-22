@@ -8,4 +8,6 @@ pub enum Error {
     UnscopedFlush,
     #[error("operation is not supported by this cache")]
     UnsupportedOperation,
+    #[error("semantic cache requires request messages")]
+    MissingPrompt,
 }
