@@ -1641,17 +1641,22 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     ) -> frozenset[int] | None:
         """Return text indices belonging to only the latest scannable human-authored (user or developer) message.
 
-        Returns None when ``texts`` cannot be aligned with ``messages`` or no user/developer
-        message contributed a text (safety fallback to the role-filter scan).
+        The latest user/developer message is chosen from ``messages`` itself, so a latest turn
+        without text (image only) yields an empty set rather than promoting an earlier turn.
+        Returns None when ``texts`` cannot be aligned with ``messages``, no user/developer
+        message exists, or the latest one carries text that never reached ``texts`` (safety
+        fallback to the role-filter scan).
         """
         sources: Final = cls._text_source_message_indices(texts, messages)
         if sources is None:
             return None
         latest_human: Final = max(
-            (idx for idx in set(sources) if messages[idx].get("role") in ("user", "developer")),
+            (idx for idx, message in enumerate(messages) if message.get("role") in ("user", "developer")),
             default=None,
         )
         if latest_human is None:
+            return None
+        if latest_human not in sources and cls._message_texts(messages[latest_human]):
             return None
         return frozenset(text_idx for text_idx, source in enumerate(sources) if source == latest_human)
 
