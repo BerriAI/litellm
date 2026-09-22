@@ -826,14 +826,26 @@ def list_batches(
                 optional_params.api_key or litellm.api_key or litellm.azure_key or get_secret_str("ANTHROPIC_API_KEY")
             )
 
-            response = anthropic_batches_instance.list_batches(
-                _is_async=_is_async,
-                after=after,
-                limit=limit,
+            provider_config = ProviderConfigManager.get_provider_batches_config(
+                model="",
+                provider=LlmProviders.ANTHROPIC,
+            )
+            litellm_logging_obj: Final = cast(  # cast-ok: the client decorator injects litellm_logging_obj into kwargs
+                LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None)
+            )
+            response = base_llm_http_handler.list_batches(
+                litellm_params=litellm_params,
+                provider_config=provider_config,
+                headers=extra_headers or {},  # mutable-ok: validate_environment fills provider headers in place
                 api_base=api_base,
                 api_key=api_key,
+                logging_obj=litellm_logging_obj,
+                after=after,
+                limit=limit,
+                _is_async=_is_async,
+                client=kwargs.get("client"),
                 timeout=timeout,
-                max_retries=optional_params.max_retries,
+                model="",
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -1036,13 +1048,25 @@ def cancel_batch(
                 optional_params.api_key or litellm.api_key or litellm.azure_key or get_secret_str("ANTHROPIC_API_KEY")
             )
 
-            response = anthropic_batches_instance.cancel_batch(
-                _is_async=_is_async,
+            provider_config = ProviderConfigManager.get_provider_batches_config(
+                model=model or "",
+                provider=LlmProviders.ANTHROPIC,
+            )
+            litellm_logging_obj: Final = cast(  # cast-ok: callers pass litellm_logging_obj through kwargs
+                LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None)
+            )
+            response = base_llm_http_handler.cancel_batch(
                 batch_id=batch_id,
+                litellm_params=litellm_params,
+                provider_config=provider_config,
+                headers=extra_headers or {},  # mutable-ok: validate_environment fills provider headers in place
                 api_base=api_base,
                 api_key=api_key,
+                logging_obj=litellm_logging_obj,
+                _is_async=_is_async,
+                client=kwargs.get("client"),
                 timeout=timeout,
-                max_retries=optional_params.max_retries,
+                model=model or "",
             )
         elif custom_llm_provider == "bedrock":
             response = BedrockBatchesHandler.cancel_batch(

@@ -138,7 +138,7 @@ def _parse_anthropic_timestamp(ts_str: str | None) -> int | None:
 
         dt: Final = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
         return int(dt.timestamp())
-    except Exception:
+    except (ValueError, OverflowError, OSError):
         return None
 
 
@@ -413,17 +413,19 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             response_data: Final[AnthropicMessageBatch] = _ANTHROPIC_MESSAGE_BATCH_ADAPTER.validate_python(
                 raw_response.json()
             )
-        except Exception as e:
+        except ValueError as e:
             raise ValueError(f"Failed to parse Anthropic batch response: {e}")
         return transform_anthropic_message_batch(response_data)
 
     def get_list_batches_url(
         self,
         api_base: str | None,
+        api_key: str | None,
+        model: str,
+        optional_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
+        litellm_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
         after: str | None,
         limit: int | None,
-        optional_params: dict,
-        litellm_params: dict,
     ) -> str:
         """Get the URL for listing Anthropic message batches, with pagination params."""
         resolved_api_base: Final = self.anthropic_model_info.get_api_base(api_base) or "https://api.anthropic.com"
@@ -439,12 +441,21 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
 
     def transform_list_batches_response(
         self,
+        model: str | None,
         raw_response: httpx.Response,
-    ) -> dict[str, object]:
+        logging_obj: LoggingClass,
+        litellm_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
+    ) -> dict[str, object]:  # mutable-ok: list responses mirror the dict payload the proxy serializes
         """Transform the Anthropic batch list response into the OpenAI list shape."""
+        if raw_response.status_code >= 400:
+            raise self.get_error_class(
+                error_message=raw_response.text,
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
         response_json: Final = _ANTHROPIC_MESSAGE_BATCH_LIST_ADAPTER.validate_python(raw_response.json())
         data: Final = tuple(transform_anthropic_message_batch(b) for b in response_json.get("data", ()))
-        return {
+        return {  # mutable-ok: list responses mirror the dict payload the proxy serializes
             "object": "list",
             "data": data,
             "first_id": response_json.get("first_id") or (data[0].id if data else None),
@@ -455,9 +466,11 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     def get_cancel_batch_url(
         self,
         api_base: str | None,
+        api_key: str | None,
+        model: str,
         batch_id: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
+        litellm_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
     ) -> str:
         """Get the URL for cancelling an Anthropic message batch."""
         resolved_api_base: Final = self.anthropic_model_info.get_api_base(api_base) or "https://api.anthropic.com"
@@ -469,7 +482,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         model: str | None,
         raw_response: httpx.Response,
         logging_obj: LoggingClass,
-        litellm_params: dict,
+        litellm_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
     ) -> LiteLLMBatch:
         """Transform Anthropic MessageBatch cancel response to LiteLLM format."""
         if raw_response.status_code >= 400:
@@ -482,7 +495,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             response_data: Final[AnthropicMessageBatch] = _ANTHROPIC_MESSAGE_BATCH_ADAPTER.validate_python(
                 raw_response.json()
             )
-        except Exception as e:
+        except ValueError as e:
             raise ValueError(f"Failed to parse Anthropic batch response: {e}")
         return transform_anthropic_message_batch(response_data)
 
@@ -534,7 +547,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         """Transform Anthropic MessageBatch retrieval response to LiteLLM format."""
         try:
             response_data: Final[AnthropicMessageBatch] = raw_response.json()
-        except Exception as e:
+        except ValueError as e:
             raise ValueError(f"Failed to parse Anthropic batch response: {e}")
         return transform_anthropic_message_batch(response_data)
 

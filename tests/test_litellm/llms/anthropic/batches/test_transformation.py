@@ -203,10 +203,12 @@ def test_create_batch_response_error_raises_anthropic_error(config):
 def test_get_list_batches_url_encodes_limit_and_after_id(config):
     url = config.get_list_batches_url(
         api_base="https://api.anthropic.com",
-        after="msgbatch_cursor",
-        limit=10,
+        api_key="sk-ant-test",
+        model="",
         optional_params={},
         litellm_params={},
+        after="msgbatch_cursor",
+        limit=10,
     )
     parsed = httpx.URL(url)
     assert parsed.path == "/v1/messages/batches"
@@ -227,7 +229,9 @@ def test_transform_list_batches_response_maps_batches_and_has_more(config):
         },
         method="GET",
     )
-    result = config.transform_list_batches_response(raw_response=raw)
+    result = config.transform_list_batches_response(
+        model=None, raw_response=raw, logging_obj=MagicMock(), litellm_params={}
+    )
     assert result["object"] == "list"
     assert result["has_more"] is True
     assert result["first_id"] == "msgbatch_1"
@@ -244,6 +248,8 @@ def test_transform_list_batches_response_maps_batches_and_has_more(config):
 def test_get_cancel_batch_url_ends_with_cancel(config):
     url = config.get_cancel_batch_url(
         api_base="https://api.anthropic.com",
+        api_key="sk-ant-test",
+        model="",
         batch_id="msgbatch_abc",
         optional_params={},
         litellm_params={},

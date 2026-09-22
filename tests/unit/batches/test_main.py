@@ -379,10 +379,10 @@ def test_list__vertex_ai_dispatch(seams):
 def test_list__anthropic_dispatch(seams):
     result = bm.list_batches(custom_llm_provider="anthropic", after="cur", limit=5)
 
-    assert result is seams.anthropic.list_batches.return_value
-    _assert_only(seams.anthropic.list_batches, seams, "list_batches")
+    assert result is seams.base_http.list_batches.return_value
+    _assert_only(seams.base_http.list_batches, seams, "list_batches")
 
-    kw = seams.anthropic.list_batches.call_args.kwargs
+    kw = seams.base_http.list_batches.call_args.kwargs
     assert kw["after"] == "cur"
     assert kw["limit"] == 5
     assert kw["_is_async"] is False
@@ -433,10 +433,10 @@ def test_cancel__vertex_ai_dispatch(seams):
 def test_cancel__anthropic_dispatch(seams):
     result = bm.cancel_batch(batch_id="msgbatch_1", custom_llm_provider="anthropic")
 
-    assert result is seams.anthropic.cancel_batch.return_value
-    _assert_only(seams.anthropic.cancel_batch, seams, "cancel_batch")
+    assert result is seams.base_http.cancel_batch.return_value
+    _assert_only(seams.base_http.cancel_batch, seams, "cancel_batch")
 
-    kw = seams.anthropic.cancel_batch.call_args.kwargs
+    kw = seams.base_http.cancel_batch.call_args.kwargs
     assert kw["batch_id"] == "msgbatch_1"
     assert kw["_is_async"] is False
 

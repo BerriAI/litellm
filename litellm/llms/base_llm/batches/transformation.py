@@ -193,6 +193,100 @@ class BaseBatchesConfig(ABC):
             LiteLLM batch object
         """
 
+    def get_list_batches_url(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+        model: str,
+        optional_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
+        litellm_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
+        after: str | None,
+        limit: int | None,
+    ) -> str:
+        """
+        Get the complete URL for listing batches.
+
+        Args:
+            api_base: Base API URL
+            api_key: API key
+            model: Model name
+            optional_params: Optional parameters
+            litellm_params: LiteLLM parameters
+            after: Pagination cursor
+            limit: Maximum number of batches to return
+
+        Returns:
+            Complete URL for the list batches request
+        """
+        raise NotImplementedError("Provider does not support listing batches")
+
+    def transform_list_batches_response(
+        self,
+        model: str | None,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
+    ) -> dict:  # mutable-ok: list responses mirror the dict payload the proxy serializes
+        """
+        Transform provider-specific batch list response to LiteLLM format.
+
+        Args:
+            model: Model name
+            raw_response: Raw HTTP response
+            logging_obj: Logging object
+            litellm_params: LiteLLM parameters
+
+        Returns:
+            Batch list in LiteLLM format
+        """
+        raise NotImplementedError("Provider does not support listing batches")
+
+    def get_cancel_batch_url(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+        model: str,
+        batch_id: str,
+        optional_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
+        litellm_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
+    ) -> str:
+        """
+        Get the complete URL for cancelling a batch.
+
+        Args:
+            api_base: Base API URL
+            api_key: API key
+            model: Model name
+            batch_id: Batch ID to cancel
+            optional_params: Optional parameters
+            litellm_params: LiteLLM parameters
+
+        Returns:
+            Complete URL for the batch cancel request
+        """
+        raise NotImplementedError("Provider does not support cancelling batches")
+
+    def transform_cancel_batch_response(
+        self,
+        model: str | None,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
+    ) -> LiteLLMBatch:
+        """
+        Transform provider-specific batch cancel response to LiteLLM format.
+
+        Args:
+            model: Model name
+            raw_response: Raw HTTP response
+            logging_obj: Logging object
+            litellm_params: LiteLLM parameters
+
+        Returns:
+            LiteLLM batch object
+        """
+        raise NotImplementedError("Provider does not support cancelling batches")
+
     @abstractmethod
     def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> "BaseLLMException":
         """
