@@ -603,7 +603,7 @@ def retrieve_batch(
 
         # Try to use provider config first (for providers like bedrock)
         model: Final[str | None] = kwargs.get("model", None)
-        if model is not None:
+        if model is not None and custom_llm_provider != "anthropic":
             provider_config = ProviderConfigManager.get_provider_batches_config(
                 model=model,
                 provider=LlmProviders(custom_llm_provider),

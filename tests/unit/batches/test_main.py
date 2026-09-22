@@ -283,6 +283,17 @@ def test_retrieve__anthropic_dispatch(seams):
     _assert_only(seams.anthropic.retrieve_batch, seams, "retrieve_batch")
 
 
+def test_retrieve__anthropic_with_model_still_uses_anthropic_instance(seams):
+    result = bm.retrieve_batch(
+        batch_id="msgbatch_1",
+        custom_llm_provider="anthropic",
+        model="anthropic/claude-sonnet-4-5",
+    )
+
+    assert result is seams.anthropic.retrieve_batch.return_value
+    _assert_only(seams.anthropic.retrieve_batch, seams, "retrieve_batch")
+
+
 def test_retrieve__provider_config_routes_to_base_http_handler(seams):
     with patch.object(
         bm.ProviderConfigManager,

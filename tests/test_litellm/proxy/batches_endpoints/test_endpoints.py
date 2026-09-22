@@ -960,6 +960,7 @@ async def test_create_anthropic_batch_for_managed_file_sends_requests_inline(mon
             "endpoint": "/v1/chat/completions",
             "input_file_id": "unified-input",
             "completion_window": "24h",
+            "model_file_id_mapping": {"unified-input": {"my-claude": "litellm_db://stored"}},
         },
         input_file_id="unified-input",
         unified_file_id="unified-file-1",
@@ -975,6 +976,7 @@ async def test_create_anthropic_batch_for_managed_file_sends_requests_inline(mon
     assert kwargs["model"] == "my-claude"
     assert kwargs["input_file_id"] == "unified-input"
     assert kwargs["disable_fallbacks"] is True
+    assert "model_file_id_mapping" not in kwargs
     requests = kwargs["extra_body"]["requests"]
     assert [request["custom_id"] for request in requests] == ["req-1", "req-2"]
     assert requests[0]["params"]["model"] == "claude-sonnet-4-5"

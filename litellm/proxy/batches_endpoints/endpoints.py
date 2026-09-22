@@ -263,7 +263,7 @@ async def _create_anthropic_batch_for_managed_file(
         )
     )
     request: Final[LiteLLMBatchCreateRequest] = {
-        **create_batch_data,
+        **{key: value for key, value in create_batch_data.items() if key != "model_file_id_mapping"},
         "model": model,
         "input_file_id": input_file_id,
         "disable_fallbacks": True,
