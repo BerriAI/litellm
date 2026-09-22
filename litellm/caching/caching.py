@@ -725,7 +725,7 @@ class Cache:
                 if hasattr(embedding_response, "model_dump")
                 else vars(embedding_response)
             )
-            return {
+            cached: Final[CachedEmbedding] = {
                 "embedding": data.get("embedding"),
                 "index": data.get("index"),
                 "object": data.get("object"),
@@ -734,6 +734,7 @@ class Cache:
                 "prompt_tokens_details": prompt_tokens_details,
                 "format_version": EMBEDDING_CACHE_FORMAT_VERSION,
             }
+            return cached
         except KeyError as e:
             raise ValueError(f"Missing expected key in embedding response: {e}")
 

@@ -2027,7 +2027,7 @@ def client(original_function):
                 _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
                 try:
                     await async_post_call_failure_deployment_hook(
-                        request_data=kwargs,
+                        request_data=call_kwargs,
                         exception=deployment_error,
                         call_type=call_type,
                     )
@@ -2068,7 +2068,7 @@ def client(original_function):
             post_call_processing(
                 original_response=result,
                 model=model,
-                optional_params=kwargs,
+                optional_params=call_kwargs,
                 original_function=original_function,
                 rules_obj=rules_obj,
             )
@@ -2076,7 +2076,7 @@ def client(original_function):
             _call_type_enum: Final = _CALL_TYPE_ENUM_MAP.get(call_type)
             if _call_type_enum is not None:
                 result = await async_post_call_success_deployment_hook(
-                    request_data=kwargs,
+                    request_data=call_kwargs,
                     response=result,
                     call_type=_call_type_enum,
                 )

@@ -21,7 +21,7 @@ import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
 
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -169,15 +169,35 @@ def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
     return request_kwargs.get("cache_key", None)
 
 
-_CACHED_EMBEDDING_ADAPTER: Final = TypeAdapter(CachedEmbedding)
+class _CachedEmbeddingRecord(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    embedding: list[float] | str | None
+    index: int | None
+    object: str | None
+    model: str | None
+    prompt_tokens: int | None
+    prompt_tokens_details: dict | None
+    format_version: int
 
 
 def _current_format_embedding_entry(entry: object) -> CachedEmbedding | None:
     try:
-        cached: Final = _CACHED_EMBEDDING_ADAPTER.validate_python(entry)
+        record: Final = _CachedEmbeddingRecord.model_validate(entry)
     except ValidationError:
         return None
-    return cached if cached["format_version"] == EMBEDDING_CACHE_FORMAT_VERSION else None
+    if record.format_version != EMBEDDING_CACHE_FORMAT_VERSION:
+        return None
+    cached: Final[CachedEmbedding] = {
+        "embedding": record.embedding,
+        "index": record.index,
+        "object": record.object,
+        "model": record.model,
+        "prompt_tokens": record.prompt_tokens,
+        "prompt_tokens_details": record.prompt_tokens_details,
+        "format_version": record.format_version,
+    }
+    return cached
 
 
 class LLMCachingHandler:
@@ -672,28 +692,24 @@ class LLMCachingHandler:
 
         cached: Final = _caching_handler_response.final_embedding_cached_response
         fresh_items: Final = iter(embedding_response.data or ())
-        cached.data = [  # mutable-ok: EmbeddingResponse.data is a pydantic list field
-            item
-            if item is not None
-            else Embedding(embedding=next(fresh_items)["embedding"], index=position, object="embedding")
-            for position, item in enumerate(cached.data)
-        ]
-        _caching_handler_response.final_embedding_cached_response._hidden_params["cache_hit"] = True
-        _caching_handler_response.final_embedding_cached_response._response_ms = (
-            end_time - start_time
-        ).total_seconds() * 1000
-
-        ## USAGE
-        if (
-            _caching_handler_response.final_embedding_cached_response.usage is not None
-            and embedding_response.usage is not None
-        ):
-            _caching_handler_response.final_embedding_cached_response.usage = self.combine_usage(
-                usage1=_caching_handler_response.final_embedding_cached_response.usage,
-                usage2=embedding_response.usage,
-            )
-
-        return _caching_handler_response.final_embedding_cached_response
+        merged_usage: Final = (
+            self.combine_usage(usage1=cached.usage, usage2=embedding_response.usage)
+            if cached.usage is not None and embedding_response.usage is not None
+            else cached.usage
+        )
+        return EmbeddingResponse(
+            model=cached.model,
+            data=[  # mutable-ok: EmbeddingResponse.data is a pydantic list field
+                item
+                if item is not None
+                else Embedding(embedding=next(fresh_items)["embedding"], index=position, object="embedding")
+                for position, item in enumerate(cached.data)
+            ],
+            usage=merged_usage,
+            response_ms=(end_time - start_time).total_seconds() * 1000,
+            hidden_params=cached._hidden_params,
+            _response_headers=cached._response_headers,
+        )
 
     def _async_log_cache_hit_on_callbacks(
         self,

@@ -360,3 +360,32 @@ async def test_embedding_cache_refetches_entries_written_without_format_version(
 
     assert embedder.provider_calls == 2, "an entry written without format_version must be a cache miss"
     assert [item["embedding"] for item in refetched.data] == [[4.0]]
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_serves_base64_string_embeddings_on_repeat(monkeypatch):
+    import litellm
+    from litellm import CustomLLM
+
+    class Base64Embedder(CustomLLM):
+        provider_calls: int = 0
+
+        async def aembedding(self, model, input, model_response, **kwargs) -> EmbeddingResponse:
+            self.provider_calls += 1
+            return EmbeddingResponse(
+                model=model,
+                data=[Embedding(embedding="AACAPwAAAEA=", index=idx, object="embedding") for idx, _ in enumerate(input)],
+            )
+
+    embedder = Base64Embedder()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "embed-b64", "custom_handler": embedder}])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "embed-b64"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "embed-b64"])
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+
+    first = await litellm.aembedding(model="embed-b64/m", input=["abcd"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    second = await litellm.aembedding(model="embed-b64/m", input=["abcd"])
+
+    assert embedder.provider_calls == 1, "a string embedding written to the cache must be served on repeat"
+    assert [item["embedding"] for item in second.data] == [item["embedding"] for item in first.data] == ["AACAPwAAAEA="]
