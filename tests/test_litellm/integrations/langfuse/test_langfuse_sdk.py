@@ -1004,7 +1004,7 @@ def test_auth_check_names_the_servers_rejection(caplog):
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         failure = client.auth_check()
     assert failure is not None
-    assert "status_code: 401" in failure.reason and "unauthorized" in failure.reason
+    assert failure.reason == "status_code: 401, body: {'message': 'unauthorized'}"
     assert failure.reason in caplog.text
 
 
@@ -1304,6 +1304,16 @@ def test_built_exporter_uses_the_shared_litellm_handler_and_langfuse_headers(mon
     assert exporter.headers["x-langfuse-public-key"] == "pk"
     assert exporter.headers["x-langfuse-sdk-version"] == installed_langfuse_version()
     assert exporter.headers["x-langfuse-ingestion-version"] == "4"
+
+
+def test_large_retry_count_builds_an_exporter_with_capped_backoff(monkeypatch):
+    """``LANGFUSE_MAX_RETRIES=1025`` constructed a v2 client; here ``2.0**1024`` would raise ``OverflowError``
+    and take the whole callback down at init."""
+    monkeypatch.setenv("LANGFUSE_MAX_RETRIES", "1025")
+    exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
+    assert len(exporter.delays) == 1025
+    assert exporter.delays[:4] == (1.0, 2.0, 4.0, 8.0)
+    assert max(exporter.delays) == exporter.delays[-1] <= 64.0
 
 
 def test_enable_langfuse_debug_logging_makes_deliveries_visible_on_the_langfuse_logger(caplog):

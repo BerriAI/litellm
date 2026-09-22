@@ -302,7 +302,7 @@ class LangFuseLogger:
             ) from e
         raise_if_unsupported_langfuse_version(self.langfuse_sdk_version)
         raise_if_unusable_prompt_cache_ttl()
-        from litellm.integrations.langfuse.langfuse_sdk import configured_release, enable_langfuse_debug_logging
+        from litellm.integrations.langfuse.langfuse_sdk import configured_release
 
         self.public_key, self.secret_key, self.langfuse_host = resolve_langfuse_credentials(
             langfuse_public_key=langfuse_public_key,
@@ -318,8 +318,6 @@ class LangFuseLogger:
             self.langfuse_environment = self.resolve_deployment_environment()
         self.langfuse_release = configured_release()
         self.langfuse_debug = parse_langfuse_debug(os.getenv("LANGFUSE_DEBUG"))
-        if self.langfuse_debug:
-            enable_langfuse_debug_logging()
         self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(flush_interval)
 
         if should_use_langfuse_mock():

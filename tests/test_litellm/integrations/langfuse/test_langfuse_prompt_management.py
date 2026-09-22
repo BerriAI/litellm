@@ -190,6 +190,31 @@ def test_langfuse_client_init_mock_mode_makes_no_network_calls(monkeypatch):
     assert received == [], f"LANGFUSE_MOCK still sent spans to the configured host: {received}"
 
 
+def test_langfuse_debug_reaches_the_export_channel_through_the_registered_callback(monkeypatch):
+    """The registry maps ``langfuse`` to this class, whose constructor never runs ``LangFuseLogger.__init__``,
+    so wiring ``LANGFUSE_DEBUG`` only there left the flag a no-op on the YAML callback path."""
+    import logging
+
+    from litellm.integrations.langfuse.langfuse_sdk import release_langfuse_tracing
+
+    monkeypatch.setenv("LANGFUSE_MOCK", "true")
+    monkeypatch.setenv("LANGFUSE_HOST", "http://127.0.0.1:1")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-pm-debug-wire")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-pm-debug-wire")
+    monkeypatch.setenv("LANGFUSE_DEBUG", "true")
+    langfuse_client_init.cache_clear()
+    langfuse_logger: Final = logging.getLogger("langfuse")
+    level_before: Final = langfuse_logger.level
+    langfuse_logger.setLevel(logging.WARNING)
+    try:
+        logger = LangfusePromptManagement()
+        assert langfuse_logger.level == logging.DEBUG
+        release_langfuse_tracing(logger.tracing, grace_seconds=0.0)
+    finally:
+        langfuse_logger.setLevel(level_before)
+        langfuse_client_init.cache_clear()
+
+
 @pytest.mark.asyncio
 async def test_async_log_failure_event_records_trace_id_for_alerting(monkeypatch):
     from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id

@@ -20,6 +20,7 @@ import httpx
 import opentelemetry.trace as otel_trace
 from langfuse import LangfuseOtelSpanAttributes
 from langfuse.api import LangfuseAPI, Prompt, Prompt_Chat
+from langfuse.api.core.api_error import ApiError
 from langfuse.model import BasePromptClient, ChatPromptClient, PromptClient, TextPromptClient
 from opentelemetry.context import Context
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
@@ -30,10 +31,11 @@ from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON, Decision, Sampler, SamplingResult
 from opentelemetry.trace import Link, NonRecordingSpan, Span, SpanContext, SpanKind, TraceFlags, Tracer, TraceState
 from opentelemetry.util.types import Attributes, AttributeValue
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.langfuse.langfuse import PROMPT_CACHE_TTL_ENV, whole_number
+from litellm.integrations.langfuse.langfuse import PROMPT_CACHE_TTL_ENV, parse_langfuse_debug, whole_number
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
 
@@ -80,6 +82,7 @@ _DEFAULT_FLUSH_AT: Final = 512
 _CHANNEL_RETIRE_GRACE_SECONDS: Final = 60.0
 _DEFAULT_TIMEOUT_SECONDS: Final = 20.0
 _DEFAULT_MAX_RETRIES: Final = 3
+_MAX_BACKOFF_EXPONENT: Final = 6
 _DEFAULT_PROMPT_CACHE_TTL_SECONDS: Final = 60.0
 _JSON_SAFE_INT: Final = 2**53 - 1
 _COMMON_RELEASE_ENVS: Final = (
@@ -686,7 +689,7 @@ def _build_span_exporter(*, public_key: str, secret_key: str, base_url: str) -> 
             }
         ),
         timeout=configured_timeout(),
-        delays=tuple(2.0**attempt for attempt in range(configured_max_retries())),
+        delays=tuple(2.0 ** min(attempt, _MAX_BACKOFF_EXPONENT) for attempt in range(configured_max_retries())),
     )
 
 
@@ -782,6 +785,8 @@ def acquire_langfuse_tracing(
     A provider owns a batch export thread, so a channel lives while any logger holds it and is
     retired through ``release_langfuse_tracing`` once the last holder lets go.
     """
+    if parse_langfuse_debug(os.getenv("LANGFUSE_DEBUG")):
+        enable_langfuse_debug_logging()
     key: Final = _TracingKey(
         public_key=public_key,
         secret_key=secret_key,
@@ -942,6 +947,19 @@ def _auth_check_failure(reason: str) -> AuthCheckFailure:
     return AuthCheckFailure(reason)
 
 
+class _ApiErrorDetail(BaseModel):
+    """The status and body of an ``ApiError``, whose own ``str`` also dumps every response header."""
+
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+    status_code: int | None
+    body: object
+
+
+def _api_error_reason(error: ApiError) -> str:
+    detail: Final = _ApiErrorDetail.model_validate(error)
+    return f"status_code: {detail.status_code}, body: {detail.body}"
+
+
 class LangfuseApiClient:
     """litellm's handle on one Langfuse project over its REST API: prompts, ``auth_check`` and the project id.
 
@@ -973,7 +991,9 @@ class LangfuseApiClient:
         """
         try:
             projects: Final = self.api.projects.get().data
-        except Exception as error:  # noqa: BLE001  # ApiError, httpx transport errors or a body the response model rejects
+        except ApiError as error:
+            return _auth_check_failure(_api_error_reason(error))
+        except Exception as error:  # noqa: BLE001  # httpx transport errors or a body the response model rejects
             return _auth_check_failure(str(error) or type(error).__name__)
         if not projects:
             return _auth_check_failure("no project found for the keys provided")
