@@ -41,7 +41,7 @@ copies), which would turn the size check into a missing-row check.
 
 A second, cheaper check holds the idle footprint: every worker's RSS as the harness
 read it at collection time, before this pytest process sent any traffic (see
-conftest.pytest_collection_modifyitems), must sit under a fixed budget. On the
+conftest.pytest_collection_finish), must sit under a fixed budget. On the
 release gate that is a fresh stack right after its readiness gate, one worker per
 gateway replica, so the reading is what a DB-backed boot costs on its own. A
 v1.100.x worker with a database idled at 886 MB RSS where v1.101.0rc1 idled at

@@ -208,14 +208,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     drill-down. See junit_properties.py.
 
     Also sort `load`-marked items last so a whole-tree run drives heavy throughput
-    traffic only after the latency-sensitive suites have finished.
-
-    Last, when a selected test asks for the `idle_rss` fixture and this is not a
-    `--collect-only` run, read every replica's RSS once, right here at collection
-    time, before this process sends any traffic: under xdist every worker finishes
-    collecting before the controller schedules the first test, so this is the idle
-    footprint of a stack that just passed its readiness gate. The fixture hands the
-    capture to the idle-budget test in router/test_reliability_memory_e2e.py."""
+    traffic only after the latency-sensitive suites have finished."""
     deselected = [item for item in items if _needs_unset_opt_in(item)]
     if deselected:
         config.hook.pytest_deselected(items=deselected)
@@ -228,9 +221,20 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         if deselected:
             deselected[0].config.hook.pytest_deselected(items=deselected)
     items.sort(key=lambda item: item.get_closest_marker("load") is not None)
-    if config.getoption("collectonly") or not any(_uses_idle_rss(item) for item in items):
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """When a selected test asks for the `idle_rss` fixture and this is not a
+    `--collect-only` run, read every replica's RSS once, right here at the end of
+    collection and before this process sends any traffic. tryfirst keeps the read
+    ahead of xdist's own collection-finish report, and the controller schedules no
+    test until every worker has reported, so this is the idle footprint of a stack
+    that just passed its readiness gate. The fixture hands the capture to the
+    idle-budget test in router/test_reliability_memory_e2e.py."""
+    if session.config.getoption("collectonly") or not any(_uses_idle_rss(item) for item in session.items):
         return
-    config.stash[_IDLE_RSS] = read_rss_everywhere(build_proxy_client(), timeout=IDLE_RSS_READ_TIMEOUT_SECONDS)
+    session.config.stash[_IDLE_RSS] = read_rss_everywhere(build_proxy_client(), timeout=IDLE_RSS_READ_TIMEOUT_SECONDS)
 
 
 def _liveness_reason(label: str, base_url: str) -> str | None:
@@ -345,8 +349,8 @@ def proxy() -> ProxyClient:
 
 @pytest.fixture(scope="session")
 def idle_rss(request: pytest.FixtureRequest) -> RssCapture:
-    """Every replica's RSS as read once at collection time, before this process sent
-    any traffic (see pytest_collection_modifyitems)."""
+    """Every replica's RSS as read once at the end of collection, before this process
+    sent any traffic (see pytest_collection_finish)."""
     return request.config.stash[_IDLE_RSS]
 
 
