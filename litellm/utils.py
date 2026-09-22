@@ -4941,7 +4941,9 @@ def add_provider_specific_params_to_optional_params(
                 **extra_body,
             }
 
-            dropped_keys: Final = EXTRA_BODY_ROUTING_KEYS | frozenset(additional_drop_params or ())
+            dropped_keys: Final = EXTRA_BODY_ROUTING_KEYS | frozenset(
+                param for param in (additional_drop_params or ()) if isinstance(param, str)
+            )
             processed_extra_body: Final = {k: v for k, v in initial_extra_body.items() if k not in dropped_keys}
 
             _ensure_extra_body_is_safe: Final = getattr(sys.modules[__name__], "_ensure_extra_body_is_safe")
