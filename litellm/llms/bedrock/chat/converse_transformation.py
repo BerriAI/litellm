@@ -1414,13 +1414,17 @@ class AmazonConverseConfig(BaseConfig):
         elif isinstance(content, list):
             for m in content:
                 if isinstance(m, dict) and m.get("type") == "text" and m.get("text"):
-                    text_block = {"type": "text", "text": m["text"]}
+                    # loop-rebuilt block
+                    text_block = {"type": "text", "text": m["text"]}  # mutable-ok: per-entry text block
                     if m.get("cache_control") is not None:
                         text_block["cache_control"] = m["cache_control"]
                     text_blocks.append(text_block)
         converted: dict = {  # mutable-ok: converted message build
             "role": "user",
-            "content": [{"type": "text", "text": self._CONVERTED_MID_CONVERSATION_SYSTEM_NOTE}] + text_blocks,
+            "content": [  # mutable-ok: fresh Bedrock message body
+                {"type": "text", "text": self._CONVERTED_MID_CONVERSATION_SYSTEM_NOTE}
+            ]
+            + text_blocks,
         }
         return cast(AllMessageValues, converted)  # cast-ok: narrow built dict to message type
 
@@ -1460,8 +1464,8 @@ class AmazonConverseConfig(BaseConfig):
         for message in reordered:
             if self._is_system_role_message(message):
                 converted = self._system_role_message_as_user(
-                    cast(Mapping, message)
-                )  # cast-ok: narrow message to mapping
+                    cast(Mapping, message)  # cast-ok: narrow message to mapping
+                )
                 # Drop entries with no text (same as the old hoist, which
                 # extracted nothing from them) instead of injecting a bare note.
                 if len(converted["content"]) > 1:
