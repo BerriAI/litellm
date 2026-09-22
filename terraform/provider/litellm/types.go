@@ -104,6 +104,7 @@ type LiteLLMParams struct {
 	VertexProject                  string                 `json:"vertex_project,omitempty"`
 	VertexLocation                 string                 `json:"vertex_location,omitempty"`
 	VertexCredentials              string                 `json:"vertex_credentials,omitempty"`
+	Tags                           []string               `json:"tags,omitempty"`
 }
 
 // ModelInfo represents information about a model.

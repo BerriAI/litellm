@@ -16,6 +16,7 @@ longer signal it.
 
 ### Added
 
+- **model**: `tags` attribute on `litellm_model`, matching what `/model/new` and `/model/update` already accept under `litellm_params.tags`, for [tag-based routing](https://docs.litellm.ai/docs/proxy/tag_routing)
 - **team_member_add**: `tpm_limit`, `rpm_limit`, `budget_duration`, and `allowed_models` attributes on `litellm_team_member_add`, applied to every member of the resource; `budget_duration` and `allowed_models` ride on `/team/member_add`, while the limits are sent through `/team/member_update`, which is where the proxy accepts them
 - **team**: Optional `team_id` argument on `litellm_team`, so teams can be created with a stable, human-readable ID instead of a provider-generated UUID; changing it forces replacement
 - `litellm_jwt_key_mapping` accepts `token_id` as an alternative to `key`, so a
