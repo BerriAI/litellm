@@ -1,21 +1,21 @@
 use std::{sync::Arc, time::Duration};
 
 use litellm_cache::{
-    BaseCache, BatchCache, BatchEntry, CacheConnectionResult, Error, ExactCacheContext, FlushCache,
+    BaseCache, BatchCache, BatchEntry, CacheConnectionResult, CacheContext, Error, FlushCache,
 };
 use serde_json::Value;
 
 use crate::{CacheControls, CacheEntry, CacheKeyInput, PartialHits, cache_key};
 
 #[derive(Clone)]
-pub struct ResponseCacheRequest {
+pub struct ResponseCacheRequest<C: CacheContext = litellm_cache::ExactCacheContext> {
     pub key: CacheKeyInput,
     pub controls: CacheControls,
-    pub context: ExactCacheContext,
+    pub context: C,
     pub max_age: Option<Duration>,
 }
 
-impl ResponseCacheRequest {
+impl<C: CacheContext + Default> ResponseCacheRequest<C> {
     pub fn new(key: CacheKeyInput) -> Self {
         Self {
             key,
@@ -26,17 +26,35 @@ impl ResponseCacheRequest {
                 default_on: true,
                 ..Default::default()
             },
-            context: ExactCacheContext::default(),
+            context: C::default(),
             max_age: None,
         }
     }
 }
 
-pub struct ResponseCache<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> {
+impl<C: CacheContext> ResponseCacheRequest<C> {
+    pub fn with_context<D: CacheContext>(self, context: D) -> ResponseCacheRequest<D> {
+        ResponseCacheRequest {
+            key: self.key,
+            controls: self.controls,
+            context,
+            max_age: self.max_age,
+        }
+    }
+}
+
+pub struct ResponseCache<B: BaseCache<Value = CacheEntry>>
+where
+    B::Context: Default + PartialEq,
+{
     backend: Arc<B>,
 }
 
-impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCache<B> {
+impl<B> ResponseCache<B>
+where
+    B: BaseCache<Value = CacheEntry>,
+    B::Context: Default + PartialEq,
+{
     pub fn new(backend: Arc<B>) -> Self {
         Self { backend }
     }
@@ -45,8 +63,12 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
         &self.backend
     }
 
+    pub fn backend_arc(&self) -> &Arc<B> {
+        &self.backend
+    }
+
     pub fn default_ttl(&self) -> Option<Duration> {
-        self.backend.get_ttl(&ExactCacheContext::default())
+        self.backend.get_ttl(&B::Context::default())
     }
 
     pub async fn async_flush(&self) -> Result<(), Error>
@@ -62,7 +84,7 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
 
     pub fn lookup(
         &self,
-        request: &ResponseCacheRequest,
+        request: &ResponseCacheRequest<B::Context>,
         now: Duration,
     ) -> Result<Option<Value>, Error> {
         if !request.controls.reads() {
@@ -81,7 +103,7 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
 
     pub async fn async_lookup(
         &self,
-        request: &ResponseCacheRequest,
+        request: &ResponseCacheRequest<B::Context>,
         now: Duration,
     ) -> Result<Option<Value>, Error> {
         if !request.controls.reads() {
@@ -101,7 +123,7 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
 
     pub fn lookup_batch(
         &self,
-        requests: &[ResponseCacheRequest],
+        requests: &[ResponseCacheRequest<B::Context>],
         now: Duration,
     ) -> Result<PartialHits, Error>
     where
@@ -126,7 +148,7 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
 
     pub async fn async_lookup_batch(
         &self,
-        requests: &[ResponseCacheRequest],
+        requests: &[ResponseCacheRequest<B::Context>],
         now: Duration,
     ) -> Result<PartialHits, Error>
     where
@@ -153,7 +175,7 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
 
     pub fn store(
         &self,
-        request: &ResponseCacheRequest,
+        request: &ResponseCacheRequest<B::Context>,
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
@@ -172,7 +194,7 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
 
     pub async fn async_store(
         &self,
-        request: &ResponseCacheRequest,
+        request: &ResponseCacheRequest<B::Context>,
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
@@ -193,7 +215,7 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
 
     pub async fn async_store_batch(
         &self,
-        entries: Vec<(ResponseCacheRequest, Value)>,
+        entries: Vec<(ResponseCacheRequest<B::Context>, Value)>,
         now: Duration,
     ) -> Result<(), Error> {
         self.async_store_entries(
@@ -209,7 +231,7 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
     /// the freshness of its original response.
     pub async fn async_store_entries(
         &self,
-        entries: Vec<(ResponseCacheRequest, Value, Duration)>,
+        entries: Vec<(ResponseCacheRequest<B::Context>, Value, Duration)>,
     ) -> Result<(), Error> {
         let writable = entries
             .into_iter()
@@ -249,8 +271,8 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
     }
 
     fn partial_hits(
-        requests: &[ResponseCacheRequest],
-        readable: Vec<(usize, &ResponseCacheRequest)>,
+        requests: &[ResponseCacheRequest<B::Context>],
+        readable: Vec<(usize, &ResponseCacheRequest<B::Context>)>,
         entries: Vec<BatchEntry<CacheEntry>>,
         now: Duration,
     ) -> Result<PartialHits, Error> {
