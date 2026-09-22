@@ -7162,6 +7162,8 @@ class Router:
         # behind the router name, and fallbacks are configured per tier, not per router.
         lookup_groups: Final[tuple[str, ...]] = fallback_lookup_groups(kwargs, model_group)
         fallback_failure_exception_str = ""
+        hop_depth: Final = kwargs.get("fallback_depth")
+        nested_fallback_hop: Final = isinstance(hop_depth, int) and hop_depth > 0
 
         if disable_fallbacks is True or original_model_group is None:
             raise e
@@ -7353,7 +7355,11 @@ class Router:
                         " -> ".join(lookup_groups),
                         masked_fallbacks,
                     )
-                    if hasattr(original_exception, "message") and litellm.expose_router_debug_in_errors:
+                    if (
+                        hasattr(original_exception, "message")
+                        and litellm.expose_router_debug_in_errors
+                        and not nested_fallback_hop
+                    ):
                         original_exception.message += format_no_fallback_group_message(lookup_groups, fallbacks)
                     raise original_exception
 
@@ -7390,6 +7396,7 @@ class Router:
             hasattr(original_exception, "message")
             and litellm.expose_router_debug_in_errors
             and not lookup_already_explained
+            and not nested_fallback_hop
         ):
             original_exception.message += format_fallback_outcome_message(
                 model_group, fallback_model_group, fallback_failure_exception_str

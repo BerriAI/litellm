@@ -431,5 +431,6 @@ async def test_flag_on_scrubs_credential_from_inner_fallback_exception_string(mo
     assert f"model group '{_INTERNAL_MODEL_GROUP_NAME}' failed with the error above" in msg, msg
     assert "Fallback to fallback-group also failed: " in msg, msg
     assert "content_filter_policy" in msg, msg
+    assert msg.count("failed with the error above") == 1, msg
     assert inner_secret not in msg, msg
     assert "REDACTED" in msg, msg
