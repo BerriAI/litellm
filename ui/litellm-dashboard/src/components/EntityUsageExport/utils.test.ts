@@ -2234,12 +2234,13 @@ describe("EntityUsageExport utils", () => {
     it("should generate the daily_with_users filename and include User ID in the rows", () => {
       const anchorElement = document.createElement("a");
       vi.spyOn(document, "createElement").mockReturnValue(anchorElement);
-
-      const today = new Date().toISOString().split("T")[0];
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2025-03-01T12:00:00Z"));
 
       handleExportCSV(usersFixture, "daily_with_users", "Team", "team", mockTeamAliasMap);
+      vi.useRealTimers();
 
-      expect(anchorElement.download).toBe(`team_usage_daily_with_users_${today}.csv`);
+      expect(anchorElement.download).toBe("team_usage_daily_with_users_2025-03-01.csv");
 
       const unparsedRows = vi.mocked(Papa.unparse).mock.calls[0][0] as Record<string, unknown>[];
       expect(unparsedRows[0]).toHaveProperty("User ID");
