@@ -101,7 +101,7 @@ describe("ComplexityRouterConfig", () => {
 
     expect(screen.getByText("Advanced: Heuristic Keyword Overrides")).toBeInTheDocument();
     expect(screen.getByText("Advanced: Housekeeping Routing")).toBeInTheDocument();
-    expect(screen.getByText("Advanced: Reminder Markers")).toBeInTheDocument();
+    expect(screen.getByText("Advanced: Ignore Custom Tags")).toBeInTheDocument();
 
     const capabilityValue = { ...defaultValue, classifier_type: "capability" as const };
     rerender(<ComplexityRouterConfig {...baseProps} value={capabilityValue} />);
@@ -128,7 +128,7 @@ describe("ComplexityRouterConfig", () => {
     renderWithProviders(
       <ComplexityRouterConfig {...baseProps} value={value} showValidationErrors={showValidationErrors} />,
     );
-    fireEvent.click(screen.getByText("Advanced: Reminder Markers"));
+    fireEvent.click(screen.getByText("Advanced: Ignore Custom Tags"));
     const validation = screen.queryByText(/needs both/i);
     if (showValidationErrors) {
       expect(validation).toBeInTheDocument();

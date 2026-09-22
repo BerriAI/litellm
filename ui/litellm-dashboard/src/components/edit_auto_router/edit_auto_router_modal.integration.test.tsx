@@ -377,9 +377,9 @@ describe("EditAutoRouterModal advanced field round trips", () => {
     expect(screen.getByRole("switch", { name: "Route housekeeping calls to the cheapest tier" })).not.toBeChecked();
     expect(screen.getByRole("combobox", { name: "e.g., conversation title" })).toHaveValue("");
 
-    await user.click(screen.getByText("Advanced: Reminder Markers"));
-    expect(screen.getByLabelText("Opening delimiter")).toHaveValue("<a>");
-    expect(screen.getByLabelText("Closing delimiter")).toHaveValue("</a>");
+    await user.click(screen.getByText("Advanced: Ignore Custom Tags"));
+    expect(screen.getByLabelText("Opening tag")).toHaveValue("<a>");
+    expect(screen.getByLabelText("Closing tag")).toHaveValue("</a>");
 
     await user.click(screen.getByText("Advanced: Response Format"));
     const maxTokensSwitch = screen.getByRole("switch", { name: "Cap max_tokens at the tier model's output ceiling" });
