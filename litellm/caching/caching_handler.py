@@ -697,7 +697,7 @@ class LLMCachingHandler:
             if cached.usage is not None and embedding_response.usage is not None
             else cached.usage
         )
-        return EmbeddingResponse(
+        merged: Final = EmbeddingResponse(
             model=cached.model,
             data=[  # mutable-ok: EmbeddingResponse.data is a pydantic list field
                 item
@@ -706,10 +706,14 @@ class LLMCachingHandler:
                 for position, item in enumerate(cached.data)
             ],
             usage=merged_usage,
-            response_ms=(end_time - start_time).total_seconds() * 1000,
-            hidden_params=cached._hidden_params,
+            hidden_params={  # mutable-ok: EmbeddingResponse._hidden_params is a mutable dict field
+                **cached._hidden_params,
+                "cache_hit": True,
+            },
             _response_headers=cached._response_headers,
         )
+        merged._response_ms = (end_time - start_time).total_seconds() * 1000
+        return merged
 
     def _async_log_cache_hit_on_callbacks(
         self,

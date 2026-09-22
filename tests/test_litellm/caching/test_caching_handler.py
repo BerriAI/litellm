@@ -817,6 +817,7 @@ async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_ord
     assert embedder.provider_inputs == (("aa", "bbbb"), ("c", "ddd", "eeeee")), embedder.provider_inputs
     assert [item["index"] for item in response.data] == [0, 1, 2, 3, 4]
     assert [item["embedding"] for item in response.data] == [[float(len(text))] for text in mixed_input]
+    assert response._hidden_params["cache_hit"] is True, "a partial hit must still be reported as a cache hit"
 
     repeat = await litellm.aembedding(model="recording-embedder/m", input=mixed_input)
 
