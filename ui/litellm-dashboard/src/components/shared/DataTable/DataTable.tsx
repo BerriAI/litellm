@@ -659,7 +659,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
         {toolbar !== undefined && <div className="shrink-0 border-b border-border px-4 py-3">{toolbar(table)}</div>}
         <div
           data-testid="data-table-scroller"
-          className={cn(stickyHeader ? "overflow-auto" : "overflow-x-auto", sticky.body, fill.body)}
+          className={cn("scrollbar-inset", stickyHeader ? "overflow-auto" : "overflow-x-auto", sticky.body, fill.body)}
           style={maxBodyHeight !== undefined ? { maxHeight: maxBodyHeight } : undefined}
         >
           <TableRoot className={enableColumnResizing ? "table-fixed" : ""} style={tableStyle}>
