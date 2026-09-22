@@ -59,7 +59,7 @@ async def count_input_tokens(
             request_body=request_body,
             raw_body=raw_body,
             tokenizer=tokenizer,
-            models=tuple(model for model, selected in tokenizers if selected is tokenizer),
+            models=tuple(model for model, selected in tokenizers if selected == tokenizer),
         )
         for tokenizer in groups
     ]
