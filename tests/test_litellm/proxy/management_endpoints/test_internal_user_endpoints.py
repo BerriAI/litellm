@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -37,6 +38,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     ui_view_users,
 )
 from litellm.proxy.proxy_server import app
+from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
 from tests.test_litellm.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
@@ -119,17 +121,17 @@ async def test_ui_view_users_proxy_admin_no_org_filter(mocker):
     )
 
 
-def _matches_user_where(row: LiteLLM_UserTableFiltered, where: dict) -> bool:
-    def field_matches(field: str, condition: dict) -> bool:
-        value = getattr(row, field)
+UserWhereCondition = InsensitiveContains | Sequence[Mapping[str, InsensitiveContains]]
+
+
+def _matches_user_where(row: LiteLLM_UserTableFiltered, where: Mapping[str, UserWhereCondition]) -> bool:
+    def matches(field: str, condition: UserWhereCondition) -> bool:
+        if not isinstance(condition, Mapping):
+            return any(_matches_user_where(row, branch) for branch in condition)
+        value: Final = {"user_id": row.user_id, "user_email": row.user_email}[field]
         return value is not None and condition["contains"].lower() in value.lower()
 
-    return all(
-        any(_matches_user_where(row, branch) for branch in condition)
-        if key == "OR"
-        else field_matches(key, condition)
-        for key, condition in where.items()
-    )
+    return all(matches(field, condition) for field, condition in where.items())
 
 
 @pytest.mark.parametrize(
@@ -145,7 +147,7 @@ def _matches_user_where(row: LiteLLM_UserTableFiltered, where: dict) -> bool:
     ],
 )
 def test_ui_view_users_search_matches_user_id_or_email(
-    mocker: MockerFixture, params: dict[str, str], expected_user_ids: list[str]
+    mocker: MockerFixture, params: Mapping[str, str], expected_user_ids: list[str]
 ):
     """
     search= returns users whose user_id or user_email contains the value (case-insensitive),
@@ -159,8 +161,8 @@ def test_ui_view_users_search_matches_user_id_or_email(
         LiteLLM_UserTableFiltered(user_id="bob", user_email="bob@corp.io"),
     )
 
-    async def mock_find_many(*args, **kwargs):
-        return [user for user in users if _matches_user_where(user, kwargs["where"])]
+    async def mock_find_many(*, where: Mapping[str, UserWhereCondition], **_: object):
+        return [user for user in users if _matches_user_where(user, where)]
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
