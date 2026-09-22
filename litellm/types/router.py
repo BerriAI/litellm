@@ -7,6 +7,7 @@ import enum
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -164,6 +165,44 @@ def _as_utc(value: datetime.datetime | None) -> datetime.datetime | None:
     return value.astimezone(datetime.timezone.utc)
 
 
+class ModelAccessWindow(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    start: datetime.time
+    end: datetime.time
+    timezone: str
+    team_ids: tuple[str, ...] = Field(min_length=1)
+
+    @field_validator("start", "end")
+    @classmethod
+    def _naive_wall_clock(cls, value: datetime.time) -> datetime.time:
+        if value.tzinfo is not None:
+            raise ValueError("start and end must be local wall-clock times without a UTC offset")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_iana_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown IANA timezone '{value}'") from exc
+        return value
+
+    @field_validator("team_ids")
+    @classmethod
+    def _non_empty_team_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not team_id for team_id in value):
+            raise ValueError("team_ids entries must be non-empty")
+        return value
+
+    @model_validator(mode="after")
+    def _start_differs_from_end(self) -> "ModelAccessWindow":
+        if self.start == self.end:
+            raise ValueError("start and end must differ")
+        return self
+
+
 class ModelInfo(MirroredPricingParams):
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
@@ -188,6 +227,8 @@ class ModelInfo(MirroredPricingParams):
 
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
     blocked: bool | None = None
+
+    access_windows: tuple[ModelAccessWindow, ...] | None = None
 
     # Bounds live on the model rather than litellm.constants: names there reach
     # litellm/__init__ through several modules' star re-exports, and a Final rebound that
