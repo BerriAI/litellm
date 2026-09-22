@@ -434,6 +434,57 @@ class TestReliabilityCache:
             )
             _assert_one_provider_call(observation, "embeddings")
 
+    @pytest.mark.covers("reliability.cache.partial.preserves_input_order")
+    @pytest.mark.replayable
+    def test_partial_embedding_cache_hit_preserves_input_order(
+        self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        marker: Final = unique_marker()
+        cached_marker: Final = unique_marker()
+        model: Final = f"e2e-cache-embeddings-partial-{marker}"
+        observation: Final = ProviderRequestObservation(cached_marker)
+        with observed_provider_edge(
+            observation,
+            mode_raw=FIXTURE_MODE_RAW,
+            bundle_dir=FIXTURE_DIR,
+            bind_host=PROVIDER_EDGE_BIND_HOST,
+            advertise_host=PROVIDER_EDGE_ADVERTISE_HOST,
+            forward_timeout=REQUEST_TIMEOUT,
+        ) as edge:
+            model_id: Final = client.proxy.create_model(model, _openai_params(edge, _OPENAI_EMBEDDING_MODEL))
+            resources.defer(lambda: client.proxy.delete_model(model_id))
+            cached_input: Final = f"cached embedding input {cached_marker}"
+            fresh_input: Final = f"fresh embedding input {marker}"
+
+            warm: Final = client.proxy.transport.send(
+                "/embeddings",
+                headers=client.proxy.transport.bearer(scoped_key),
+                json=_CacheEmbeddingsBody(model=model, input=(cached_input,)),
+            )
+            _assert_cache_miss(warm, "embeddings partial")
+            warm_answer: Final = _CachedEmbeddingsResponse.model_validate_json(warm.body)
+            assert len(warm_answer.data) == 1 and warm_answer.data[0].embedding, (
+                "embeddings partial: warm-up response has no vector"
+            )
+
+            mixed: Final = client.proxy.transport.send(
+                "/embeddings",
+                headers=client.proxy.transport.bearer(scoped_key),
+                json=_CacheEmbeddingsBody(model=model, input=(cached_input, fresh_input)),
+            )
+            require_successful_call(mixed)
+            mixed_answer: Final = _CachedEmbeddingsResponse.model_validate_json(mixed.body)
+            assert tuple(item.index for item in mixed_answer.data) == (0, 1), (
+                "embeddings partial: a partial cache hit renumbered the returned items"
+            )
+            assert mixed_answer.data[0].embedding == warm_answer.data[0].embedding, (
+                "embeddings partial: the cached input did not keep its vector"
+            )
+            assert mixed_answer.data[1].embedding and mixed_answer.data[1].embedding != warm_answer.data[0].embedding, (
+                "embeddings partial: the uncached input was served the cached vector"
+            )
+            _assert_one_provider_call(observation, "embeddings partial")
+
     @pytest.mark.covers("reliability.cache.exact.returns_cached")
     def test_rerank_exact_cache_returns_cached(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str

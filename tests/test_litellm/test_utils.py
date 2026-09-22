@@ -4250,6 +4250,27 @@ async def _wait_for_success_kwargs(capture: _SuccessKwargsCapture, count: int = 
     return capture.success_kwargs[-1]
 
 
+def _embedding_successes(capture: _SuccessKwargsCapture) -> list[tuple[dict[str, object], object]]:
+    return [
+        (kwargs, response)
+        for kwargs, response in zip(capture.success_kwargs, capture.success_responses)
+        if kwargs.get("call_type") == CallTypes.aembedding.value
+    ]
+
+
+async def _wait_for_embedding_successes(
+    capture: _SuccessKwargsCapture, count: int = 1
+) -> list[tuple[dict[str, object], object]]:
+    for _ in range(50):
+        if len(_embedding_successes(capture)) >= count and not _PENDING_CACHE_WRITES:
+            break
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.2)
+    matched: Final = _embedding_successes(capture)
+    assert len(matched) == count
+    return matched
+
+
 def _assert_cache_hit_logged_as_stream(capture: _SuccessKwargsCapture, success_kwargs: dict[str, object]) -> None:
     standard_logging_object: Final = success_kwargs["standard_logging_object"]
     assert isinstance(standard_logging_object, dict)
@@ -4528,18 +4549,17 @@ async def test_wrapper_async_logs_complete_partial_cached_embedding_response(
         api_key="sk-test",
         num_retries=0,
     )
-    first_success_kwargs: Final = await _wait_for_success_kwargs(capture)
+    first_success_kwargs: Final = (await _wait_for_embedding_successes(capture))[-1][0]
     second: Final = await litellm.aembedding(
         model="openai/text-embedding-3-small",
         input=["cached", "uncached"],
         api_key="sk-test",
         num_retries=0,
     )
-    second_success_kwargs: Final = await _wait_for_success_kwargs(capture, count=2)
+    second_success_kwargs, observed = (await _wait_for_embedding_successes(capture, count=2))[-1]
 
     first_standard_logging: Final = first_success_kwargs["standard_logging_object"]
     second_standard_logging: Final = second_success_kwargs["standard_logging_object"]
-    observed: Final = capture.success_responses[-1]
     assert isinstance(first_standard_logging, dict)
     assert isinstance(second_standard_logging, dict)
     assert isinstance(observed, EmbeddingResponse)
@@ -4547,6 +4567,53 @@ async def test_wrapper_async_logs_complete_partial_cached_embedding_response(
     assert tuple(item["index"] for item in observed.data) == (0, 1)
     assert second_standard_logging["response_cost"] == first_standard_logging["response_cost"]
     assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_wrapper_async_sends_only_uncached_embedding_inputs_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    vectors: Final = {"cached": [0.1, 0.1], "uncached": [0.9, 0.9]}
+    upstream_inputs: Final[list[list[str]]] = []
+
+    def _respond(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        upstream_inputs.append(list(payload["input"]))
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {"object": "embedding", "embedding": vectors[text], "index": index}
+                    for index, text in enumerate(payload["input"])
+                ],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": len(payload["input"]), "total_tokens": len(payload["input"])},
+            },
+        )
+
+    respx.post("https://api.openai.com/v1/embeddings").mock(side_effect=_respond)
+
+    await litellm.aembedding(
+        model="openai/text-embedding-3-small",
+        input=["cached"],
+        api_key="sk-test",
+        num_retries=0,
+    )
+    mixed: Final = await litellm.aembedding(
+        model="openai/text-embedding-3-small",
+        input=["cached", "uncached"],
+        api_key="sk-test",
+        num_retries=0,
+    )
+
+    assert upstream_inputs == [["cached"], ["uncached"]]
+    assert [item["embedding"] for item in mixed.data] == [vectors["cached"], vectors["uncached"]]
+    assert [item["index"] for item in mixed.data] == [0, 1]
 
 
 def test_function_setup_failure_after_logging_construction_restores_context(monkeypatch):
