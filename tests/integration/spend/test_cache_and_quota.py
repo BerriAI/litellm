@@ -211,6 +211,59 @@ def test_key_budget_at_boundary_blocks_provider_then_explicit_reset_restores(gat
         assert upstream.get("/__observations").json()["requests"] == []
 
 
+@pytest.mark.covers("quota_management.budget.key.count_tokens_reserves_nothing_so_completion_within_budget_succeeds")
+def test_repeated_count_tokens_on_budgeted_key_does_not_reserve_budget_or_block_later_completion(
+    gateway: Gateway,
+) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        key: Final = scenario.key(models=[model], max_budget=0.1)
+        digest: Final = sha256(key.encode()).hexdigest()
+        upstream.get("/__observations").raise_for_status()
+        counts: Final = tuple(
+            gateway.request(
+                "POST",
+                "/v1/messages/count_tokens",
+                {"model": model, "messages": [{"role": "user", "content": "hello!!!"}]},
+                key=key,
+                headers={"anthropic-version": "2023-06-01"},
+            )
+            for _ in range(3)
+        )
+        for count in counts:
+            assert count.status_code == 200, count.text
+            assert count.json() == counts[0].json(), count.text
+        input_tokens: Final = counts[0].json()["input_tokens"]
+        assert isinstance(input_tokens, int) and input_tokens > 0, counts[0].text
+        assert upstream.get("/__observations").json()["requests"] == []
+        completion: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": f"after counting {uuid.uuid4().hex}"}]},
+            key=key,
+        )
+        assert completion.status_code == 200, completion.text
+        assert completion.json()["usage"]["total_tokens"] == 40, completion.text
+        assert [request["path"] for request in upstream.get("/__observations").json()["requests"]] == [
+            "/v1/chat/completions"
+        ]
+        spent: Final = eventually(
+            lambda: read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)),
+            lambda values: len(values) == 1 and float(values[0]["spend"]) > 0,
+            seconds=70,
+        )
+        assert float(spent[0]["spend"]) == pytest.approx(20 * 0.001 + 20 * 0.002)
+        rows: Final = eventually(
+            lambda: read_rows('SELECT call_type, spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (digest,)),
+            lambda values: len(values) >= 1,
+            seconds=70,
+        )
+        assert [(row["call_type"], float(row["spend"])) for row in rows] == [("acompletion", pytest.approx(0.06))]
+
+
 @pytest.mark.covers("quota_management.response_cache.system_messages_partition_cache_identity")
 def test_different_system_messages_do_not_share_a_cached_response(gateway: Gateway) -> None:
     with (
