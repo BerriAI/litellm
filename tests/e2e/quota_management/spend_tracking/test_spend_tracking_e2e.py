@@ -21,9 +21,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from e2e_http import Result, Success
+from e2e_http import RateLimitedError, Result, Success
 from lifecycle import ResourceManager
-from models import ChatResponse, LiteLLMParamsBody, SpendLogs, SpendLogsParams
+from models import ChatResponse, KeyGenerateBody, LiteLLMParamsBody, SpendLogs, SpendLogsParams
 from spend_e2e_client import SpendClient, SpendLogRow, is_ok, unique_marker, unwrap
 
 pytestmark = pytest.mark.e2e
@@ -43,6 +43,7 @@ def _summarize(rows: list[SpendLogRow]) -> list[dict[str, object]]:
         "cache_hit",
         "call_type",
         "custom_llm_provider",
+        "model_id",
         "prompt_tokens",
         "completion_tokens",
         "total_tokens",
@@ -525,6 +526,43 @@ def test_failure_call_writes_failure_status_row(
         rows, lambda r: r.status == "failure", "with status=failure for the rejected call"
     )
     assert (failure_row.spend or 0) == 0.0, "failed call must not be charged"
+
+
+@pytest.mark.covers("quota_management.spend_tracking.failure.attributes_provider")
+def test_pre_call_rejection_row_attributes_provider_and_model_id(
+    client: SpendClient, resources: ResourceManager
+) -> None:
+    """A request the proxy rejects before the router picks a deployment (here the
+    key's rpm limit, a pre_call_hook 429) never reaches the code that stamps the
+    deployment onto the log. The failure row must still carry the provider and
+    model_id of the model group's only deployment, so per-provider failure reports
+    can count it."""
+    model = f"e2e-spend-precall-{unique_marker()}"
+    model_id = client.proxy.create_model(
+        model, LiteLLMParamsBody(model="openai/gpt-5.5", api_key="os.environ/OPENAI_API_KEY")
+    )
+    resources.defer(lambda: client.proxy.delete_model(model_id))
+    key = client.proxy.generate_key(KeyGenerateBody(models=[model], rpm_limit=1))
+    resources.defer(lambda: client.proxy.delete_key(key))
+
+    unwrap(client.chat(key, model, f"reply with one word {unique_marker()}", max_tokens=8))
+    rejected = client.chat(key, model, f"over the rpm limit {unique_marker()}", max_tokens=8)
+    assert isinstance(rejected, RateLimitedError), (
+        f"the second call on an rpm_limit=1 key must be rejected with 429 before routing, got {rejected}"
+    )
+
+    rows = client.poll_logs_for_key(key, predicate=lambda rs: any(r.status == "failure" for r in rs))
+    success_row = _require_row(rows, lambda r: r.status == "success", "for the served call")
+    failure_row = _require_row(rows, lambda r: r.status == "failure", "for the rate-limited call")
+
+    assert failure_row.custom_llm_provider == success_row.custom_llm_provider, (
+        f"rejected call lost its provider: failure row {failure_row.custom_llm_provider!r} vs "
+        f"served row {success_row.custom_llm_provider!r}; {_summarize(rows)}"
+    )
+    assert failure_row.model_id == model_id, (
+        f"rejected call lost its deployment: failure row model_id {failure_row.model_id!r} vs "
+        f"registered {model_id!r}; {_summarize(rows)}"
+    )
 
 
 @pytest.mark.covers("quota_management.spend_tracking.spend_calculate.returns_cost")

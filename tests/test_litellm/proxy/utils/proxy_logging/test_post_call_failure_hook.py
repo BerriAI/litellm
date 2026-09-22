@@ -4,7 +4,7 @@ and ``_handle_logging_proxy_only_error``."""
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from types import MappingProxyType
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -12,7 +12,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import AlertType, ProxyErrorTypes
+from litellm.proxy._types import ProxyErrorTypes
 from litellm.proxy.utils import ProxyLogging
 
 
@@ -131,10 +131,47 @@ async def test_post_call_failure_hook_attributes_single_router_deployment(
     kwargs = recorded[0]
     assert kwargs["custom_llm_provider"] == "openai"
     assert kwargs["litellm_params"]["custom_llm_provider"] == "openai"
-    assert kwargs["litellm_params"]["model_info"]["provider"] == "acme"
     assert kwargs["litellm_params"]["metadata"]["model_info"]["provider"] == "acme"
     assert kwargs["litellm_params"]["metadata"]["deployment"] == "openai/gpt-4.1"
     assert kwargs["standard_logging_object"]["custom_llm_provider"] == "openai"
+    assert (
+        kwargs["standard_logging_object"]["model_id"] == proxy_server.llm_router.get_model_list()[0]["model_info"]["id"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_attribution_does_not_count_against_the_deployment(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """The router's failure callbacks run on this path too. A proxy-side reject must not
+    bump the deployment's failure or rpm counters, or a key hitting its own limit
+    could cool down the only deployment for everyone."""
+    from litellm.proxy import proxy_server
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "internal-model",
+                "litellm_params": {"model": "openai/gpt-4.1", "api_key": "sk-test", "rpm": 100},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    proxy_logging.alert_types = []
+    deployment_id = router.get_model_list()[0]["model_info"]["id"]
+
+    for status in (403, 429):
+        await proxy_logging.post_call_failure_hook(
+            request_data={"model": "internal-model", "messages": [{"role": "user", "content": "hi"}]},
+            original_exception=HTTPException(status_code=status, detail="blocked"),
+            user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions"),
+            route="/chat/completions",
+        )
+    pending = asyncio.all_tasks() - {asyncio.current_task()}
+    await asyncio.gather(*pending, return_exceptions=True)
+
+    deployment_keys = [key for key in router.cache.in_memory_cache.cache_dict if deployment_id in key]
+    assert deployment_keys == [], f"proxy reject was counted against the deployment: {deployment_keys}"
 
 
 @pytest.mark.asyncio
@@ -178,7 +215,89 @@ async def test_post_call_failure_hook_omits_provider_for_mixed_router_deployment
     assert len(recorded) == 1
     kwargs = recorded[0]
     assert kwargs.get("custom_llm_provider") is None
-    assert kwargs["litellm_params"].get("model_info") is None
+    assert "model_info" not in (kwargs["litellm_params"].get("metadata") or {})
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_omits_provider_when_a_deployment_does_not_resolve(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """One deployment resolves to openai and its sibling resolves to nothing: the group
+    is not known to be single-provider, so no provider is stamped on the failure."""
+    from litellm.proxy import proxy_server
+
+    recorded: list[dict] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            recorded.append(kwargs)
+
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {"model_name": "internal-model", "litellm_params": {"model": "openai/gpt-4.1"}},
+        {"model_name": "internal-model", "litellm_params": {"model": "unmapped-model-with-no-provider"}},
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
+    proxy_logging.alert_types = []
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={"model": "internal-model", "messages": [{"role": "user", "content": "hi"}]},
+        original_exception=HTTPException(status_code=403, detail="blocked"),
+        user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions"),
+        route="/chat/completions",
+    )
+
+    assert len(recorded) == 1
+    kwargs = recorded[0]
+    assert kwargs.get("custom_llm_provider") is None
+    assert kwargs["litellm_params"].get("custom_llm_provider") is None
+
+
+@pytest.mark.asyncio
+async def test_handle_logging_proxy_only_path_attributes_with_read_only_metadata(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """With a logging object already on the request, its metadata is taken as given;
+    a read-only mapping there must not crash the stamp, and the failure handler
+    still receives the provider attribution."""
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "internal-model",
+                    "litellm_params": {"model": "openai/gpt-4.1", "api_key": "sk-test"},
+                    "model_info": {"provider": "acme"},
+                }
+            ]
+        ),
+    )
+    logging_obj = MagicMock()
+    logging_obj.call_type = "acompletion"
+    logging_obj.model_call_details = {}
+    logging_obj.async_failure_handler = AsyncMock()
+
+    await proxy_logging._handle_logging_proxy_only_error(
+        request_data={
+            "litellm_logging_obj": logging_obj,
+            "model": "internal-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": MappingProxyType({"user_api_key_alias": "frozen"}),
+        },
+        user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions"),
+        route="/chat/completions",
+        original_exception=HTTPException(status_code=403, detail="blocked"),
+    )
+
+    assert logging_obj.async_failure_handler.called
+    update_kwargs = logging_obj.update_environment_variables.call_args.kwargs
+    assert update_kwargs["custom_llm_provider"] == "openai"
+    assert update_kwargs["litellm_params"]["custom_llm_provider"] == "openai"
+    assert update_kwargs["litellm_params"]["metadata"] == {"user_api_key_alias": "frozen"}
 
 
 @pytest.mark.asyncio
@@ -218,7 +337,7 @@ async def test_post_call_failure_hook_fires_without_router_attribution(
     assert len(recorded) == 1
     kwargs = recorded[0]
     assert kwargs.get("custom_llm_provider") is None
-    assert kwargs["litellm_params"].get("model_info") is None
+    assert "model_info" not in (kwargs["litellm_params"].get("metadata") or {})
 
 
 @pytest.mark.asyncio

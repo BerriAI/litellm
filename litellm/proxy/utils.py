@@ -880,6 +880,24 @@ def _failure_usage_to_lift(
 _EMPTY_LIFT: Final = MappingProxyType({})
 
 
+def _stamp_deployment_attribution(litellm_params: dict[str, object], model_group: str | None) -> Mapping[str, object]:
+    """Stamp provider and logging-metadata attribution onto ``litellm_params`` and return it.
+    ``litellm_params["model_info"]`` stays unset: the router's cooldown and per-deployment rpm
+    callbacks key off it and must not count a proxy-side reject against the deployment."""
+    attribution: Final = _deployment_attribution_for_model_group(model_group)
+    if "custom_llm_provider" in attribution:
+        litellm_params["custom_llm_provider"] = attribution["custom_llm_provider"]
+    if "model_info" not in attribution:
+        return attribution
+    if litellm_params.get("metadata") is None:
+        litellm_params["metadata"] = {}  # mutable-ok: legacy logging payload is populated in place
+    metadata: Final = litellm_params["metadata"]
+    if isinstance(metadata, dict):
+        metadata.setdefault("model_info", attribution["model_info"])
+        metadata.setdefault("deployment", attribution["deployment"])
+    return attribution
+
+
 def _deployment_attribution_for_model_group(model_group: str | None) -> Mapping[str, object]:
     """Provider fields the router would have stamped had it reached a deployment:
     ``custom_llm_provider`` when every deployment in the group resolves to the same
@@ -910,11 +928,8 @@ def _deployment_attribution_for_model_group(model_group: str | None) -> Mapping[
         except Exception:  # noqa: BLE001  # get_llm_provider raises for unmapped models
             return None
 
-    providers: Final = frozenset(
-        provider
-        for provider in (_provider_for_deployment(deployment) for deployment in deployments)
-        if provider is not None
-    )
+    providers: Final = frozenset(_provider_for_deployment(deployment) for deployment in deployments)
+    shared_provider: Final = next(iter(providers)) if len(providers) == 1 else None
     single_deployment: Final = deployments[0] if len(deployments) == 1 else None
     single_deployment_params: Final = (
         cast(  # cast-ok: router deployment parameters are mapping-shaped
@@ -926,7 +941,7 @@ def _deployment_attribution_for_model_group(model_group: str | None) -> Mapping[
     return MappingProxyType(
         {
             # mutable-ok: frozen immediately by the outer MappingProxyType
-            **({"custom_llm_provider": next(iter(providers))} if len(providers) == 1 else {}),
+            **({"custom_llm_provider": shared_provider} if shared_provider is not None else {}),
             **(
                 {  # mutable-ok: frozen immediately by the outer MappingProxyType
                     "model_info": dict(  # mutable-ok: preserve the router's mutable model-info payload
@@ -3107,21 +3122,7 @@ class ProxyLogging:
                 elif k not in ("model", "user", "litellm_logging_obj"):
                     _optional_params[k] = v
 
-            attribution: Final = _deployment_attribution_for_model_group(request_data.get("model"))
-            if "custom_llm_provider" in attribution:
-                _litellm_params["custom_llm_provider"] = attribution["custom_llm_provider"]
-            if "model_info" in attribution:
-                _litellm_params["model_info"] = attribution["model_info"]
-                _litellm_params.setdefault(  # mutable-ok: legacy logging payload is populated in place
-                    "metadata", {}
-                )
-                if _litellm_params["metadata"] is None:
-                    _litellm_params["metadata"] = {}  # mutable-ok: legacy logging payload is populated in place
-                metadata: Final = cast(  # cast-ok: legacy metadata payload is a mutable mapping
-                    dict, _litellm_params["metadata"]
-                )
-                metadata.setdefault("model_info", attribution["model_info"])
-                metadata.setdefault("deployment", attribution["deployment"])
+            attribution: Final = _stamp_deployment_attribution(_litellm_params, request_data.get("model"))
 
             litellm_logging_obj.update_environment_variables(
                 model=request_data.get("model", ""),
