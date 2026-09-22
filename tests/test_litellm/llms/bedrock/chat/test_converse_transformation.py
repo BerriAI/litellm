@@ -1,12 +1,10 @@
 import json
 import os
 from typing import Final
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-
-from typing import Final
-from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm import ModelResponse
