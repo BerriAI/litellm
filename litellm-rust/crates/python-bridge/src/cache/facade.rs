@@ -368,6 +368,11 @@ impl FacadeGuard {
                 "RedisSemanticCache",
                 "redis-semantic",
             ),
+            ("qdrant_semantic", _) => (
+                "litellm.caching.qdrant_semantic_cache",
+                "QdrantSemanticCache",
+                "qdrant-semantic",
+            ),
             ("redis", true) => (
                 "litellm.caching.redis_cluster_cache",
                 "RedisClusterCache",
@@ -443,6 +448,10 @@ impl FacadeGuard {
                     "embedding_model",
                     "embedding_max_input_tokens",
                     "embedding_timeout",
+                    "qdrant_api_base",
+                    "qdrant_api_key",
+                    "collection_name",
+                    "vector_size",
                     "_index_name",
                     "_redis_url",
                     "similarity_threshold",

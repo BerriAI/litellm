@@ -30,6 +30,8 @@ litellm-cache-gcs.workspace = true
 litellm-cache-disk.workspace = true
 litellm-cache-redis-semantic.workspace = true
 litellm-cache-response.workspace = true
+litellm-cache-qdrant-semantic.workspace = true
+qdrant-client.workspace = true
 litellm-cache-valkey-semantic = { path = "../cache-valkey-semantic" }
 serde.workspace = true
 litellm-auth.workspace = true
@@ -49,8 +51,10 @@ litellm-host-python.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
 pyo3.workspace = true
 pyo3-async-runtimes.workspace = true
+reqwest.workspace = true
 redis = { version = "1.7.0", features = ["tls-rustls"] }
 serde_json.workspace = true
+url.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 
 [dev-dependencies]

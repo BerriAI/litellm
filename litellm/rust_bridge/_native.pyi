@@ -167,6 +167,20 @@ class _CacheTestHandle:
     @staticmethod
     def disk(directory: str) -> _CacheTestHandle: ...
     @staticmethod
+    def qdrant_semantic(
+        url: str,
+        *,
+        collection_name: str,
+        similarity_threshold: float,
+        vector_size: int,
+        embedding_model: str = "text-embedding-3-small",
+        api_key: str | None = None,
+        embedding_api_key: str | None = None,
+        embedding_api_base: str | None = None,
+        embedding_timeout_seconds: float | None = None,
+        quantization: str = "binary",
+    ) -> _CacheTestHandle: ...
+    @staticmethod
     def azure_blob(account_url: str, container: str) -> _CacheTestHandle: ...
     @staticmethod
     def redis_semantic(backend: object) -> _CacheTestHandle: ...

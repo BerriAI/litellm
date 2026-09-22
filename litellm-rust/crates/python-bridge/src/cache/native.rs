@@ -7,6 +7,7 @@ use litellm_cache_azure_blob::AzureBlobCache;
 use litellm_cache_disk::DiskCache;
 use litellm_cache_gcs::{GcsCache, GcsConfig, StaticTokenSource};
 use litellm_cache_memory::InMemoryCache;
+use litellm_cache_qdrant_semantic::{Embedder, OpenAiEmbedder, QdrantSemanticCache};
 use litellm_cache_redis::{RedisCache, RedisTopology};
 use litellm_cache_redis_semantic::{RedisSemanticCache, RedisSemanticConfig};
 use litellm_cache_response::{
@@ -19,6 +20,7 @@ use pyo3::{PyTraverseError, PyVisit, prelude::*};
 use serde_json::Value;
 
 use super::{
+    config::QdrantSemanticCacheConfig,
     embedder::PythonEmbedder,
     request::NativeRequest,
     semantic::{SemanticBody, SemanticOperation, drive},
@@ -92,6 +94,7 @@ pub(super) enum NativeResponseCache {
         cache: Arc<ResponseCache<RedisSemanticCache<PythonEmbedder>>>,
         embedder: PythonEmbedder,
     },
+    QdrantSemantic(Arc<ResponseCache<QdrantSemanticCache<OpenAiEmbedder, ResponseCacheCodec>>>),
     Disk(Arc<ResponseCache<DiskCache<ResponseCacheCodec>>>),
     AzureBlob(Arc<ResponseCache<AzureBlobCache<ResponseCacheCodec>>>),
 }
@@ -168,6 +171,31 @@ impl NativeResponseCache {
         })
     }
 
+    pub async fn qdrant_semantic(
+        config: QdrantSemanticCacheConfig,
+        client: reqwest::Client,
+        runtime: tokio::runtime::Handle,
+    ) -> Result<Self, Error> {
+        let qdrant = qdrant_client::Qdrant::from_url(&config.grpc_url)
+            .skip_compatibility_check()
+            .api_key(config.api_key.as_deref())
+            .build()
+            .map_err(|_| Error::Unavailable)?;
+        let qdrant_config = config.to_qdrant_config();
+        let embedder = OpenAiEmbedder::new(client, config.embedding);
+        let cache = QdrantSemanticCache::connect(
+            qdrant,
+            embedder,
+            ResponseCacheCodec,
+            qdrant_config,
+            runtime,
+        )
+        .await?;
+        Ok(Self::QdrantSemantic(Arc::new(ResponseCache::new(
+            Arc::new(cache),
+        ))))
+    }
+
     pub fn disk(directory: &str) -> Result<Self, Error> {
         let cache = DiskCache::open(directory, ResponseCacheCodec)?;
         Ok(Self::Disk(Arc::new(ResponseCache::new(Arc::new(cache)))))
@@ -209,6 +237,7 @@ impl NativeResponseCache {
             | Self::S3(_)
             | Self::ValkeySemantic { .. }
             | Self::RedisSemantic { .. }
+            | Self::QdrantSemantic(_)
             | Self::Disk(_)
             | Self::Gcs(_) => None,
         }
@@ -223,7 +252,7 @@ impl NativeResponseCache {
         }
     }
 
-    pub(super) fn redis_semantic_request(
+    pub(super) fn semantic_request(
         request: &NativeRequest,
     ) -> ResponseCacheRequest<SemanticCacheContext> {
         ResponseCacheRequest {
@@ -289,6 +318,7 @@ impl NativeResponseCache {
             Self::Gcs(_) => "gcs",
             Self::ValkeySemantic { .. } => "valkey-semantic",
             Self::RedisSemantic { .. } => "redis_semantic",
+            Self::QdrantSemantic(_) => "qdrant_semantic",
             Self::Disk(_) => "disk",
             Self::AzureBlob(_) => "azure-blob",
         }
@@ -302,6 +332,7 @@ impl NativeResponseCache {
             Self::Gcs(cache) => cache.default_ttl(),
             Self::ValkeySemantic { cache, .. } => cache.default_ttl(),
             Self::RedisSemantic { cache, .. } => cache.default_ttl(),
+            Self::QdrantSemantic(_) => None,
             Self::Disk(cache) => cache.default_ttl(),
             Self::AzureBlob(cache) => cache.default_ttl(),
         }
@@ -341,6 +372,7 @@ impl NativeResponseCache {
             | Self::S3(_)
             | Self::ValkeySemantic { .. }
             | Self::RedisSemantic { .. }
+            | Self::QdrantSemantic(_)
             | Self::Disk(_)
             | Self::AzureBlob(_)
             | Self::Gcs(_) => None,
@@ -354,6 +386,7 @@ impl NativeResponseCache {
             | Self::S3(_)
             | Self::ValkeySemantic { .. }
             | Self::RedisSemantic { .. }
+            | Self::QdrantSemantic(_)
             | Self::Disk(_)
             | Self::AzureBlob(_)
             | Self::Gcs(_) => None,
@@ -368,6 +401,7 @@ impl NativeResponseCache {
             | Self::S3(_)
             | Self::ValkeySemantic { .. }
             | Self::RedisSemantic { .. }
+            | Self::QdrantSemantic(_)
             | Self::Disk(_)
             | Self::AzureBlob(_)
             | Self::Gcs(_) => None,
@@ -381,6 +415,7 @@ impl NativeResponseCache {
             | Self::S3(_)
             | Self::ValkeySemantic { .. }
             | Self::RedisSemantic { .. }
+            | Self::QdrantSemantic(_)
             | Self::Disk(_)
             | Self::AzureBlob(_)
             | Self::Gcs(_) => None,
@@ -395,6 +430,7 @@ impl NativeResponseCache {
             | Self::S3(_)
             | Self::ValkeySemantic { .. }
             | Self::RedisSemantic { .. }
+            | Self::QdrantSemantic(_)
             | Self::AzureBlob(_)
             | Self::Gcs(_) => None,
         }
@@ -421,9 +457,33 @@ impl NativeResponseCache {
         }
     }
 
-    pub fn similarity_threshold(&self) -> Option<f32> {
+    pub fn similarity_threshold(&self) -> Option<f64> {
         match self {
-            Self::RedisSemantic { cache, .. } => Some(cache.backend().similarity_threshold()),
+            Self::RedisSemantic { cache, .. } => {
+                Some(f64::from(cache.backend().similarity_threshold()))
+            }
+            Self::QdrantSemantic(cache) => Some(cache.backend().similarity_threshold()),
+            _ => None,
+        }
+    }
+
+    pub fn collection_name(&self) -> Option<&str> {
+        match self {
+            Self::QdrantSemantic(cache) => Some(cache.backend().collection_name()),
+            _ => None,
+        }
+    }
+
+    pub fn vector_size(&self) -> Option<u64> {
+        match self {
+            Self::QdrantSemantic(cache) => Some(cache.backend().vector_size()),
+            _ => None,
+        }
+    }
+
+    pub fn embedding_model(&self) -> Option<&str> {
+        match self {
+            Self::QdrantSemantic(cache) => Some(cache.backend().embedder().model()),
             _ => None,
         }
     }
@@ -451,9 +511,10 @@ impl NativeResponseCache {
                 cache.lookup(&Self::semantic(request, scope), now)
             }
             Self::RedisSemantic { cache, .. } => {
-                cache.lookup(&Self::redis_semantic_request(request), now)
+                cache.lookup(&Self::semantic_request(request), now)
             }
             Self::Gcs(cache) => cache.lookup(&Self::exact(request), now),
+            Self::QdrantSemantic(cache) => cache.lookup(&Self::semantic_request(request), now),
             Self::Disk(cache) => cache.lookup(&Self::exact(request), now),
             Self::AzureBlob(cache) => cache.lookup(&Self::exact(request), now),
         }
@@ -473,9 +534,12 @@ impl NativeResponseCache {
                 cache.store(&Self::semantic(request, scope), response, now)
             }
             Self::RedisSemantic { cache, .. } => {
-                cache.store(&Self::redis_semantic_request(request), response, now)
+                cache.store(&Self::semantic_request(request), response, now)
             }
             Self::Gcs(cache) => cache.store(&Self::exact(request), response, now),
+            Self::QdrantSemantic(cache) => {
+                cache.store(&Self::semantic_request(request), response, now)
+            }
             Self::Disk(cache) => cache.store(&Self::exact(request), response, now),
             Self::AzureBlob(cache) => cache.store(&Self::exact(request), response, now),
         }
@@ -498,7 +562,7 @@ impl NativeResponseCache {
             Self::S3(cache) => {
                 cache.lookup_batch(&requests.iter().map(Self::exact).collect::<Vec<_>>(), now)
             }
-            Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } => {
+            Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } | Self::QdrantSemantic(_) => {
                 Err(Error::UnsupportedOperation)
             }
             Self::Gcs(cache) => {
@@ -529,7 +593,12 @@ impl NativeResponseCache {
             }
             Self::RedisSemantic { cache, .. } => {
                 cache
-                    .async_lookup(&Self::redis_semantic_request(request), now)
+                    .async_lookup(&Self::semantic_request(request), now)
+                    .await
+            }
+            Self::QdrantSemantic(cache) => {
+                cache
+                    .async_lookup(&Self::semantic_request(request), now)
                     .await
             }
             Self::Gcs(cache) => cache.async_lookup(&Self::exact(request), now).await,
@@ -573,6 +642,14 @@ impl NativeResponseCache {
                 py,
                 SemanticBody::new(self.clone(), SemanticOperation::Lookup(request)),
             ),
+            Self::QdrantSemantic(_) => {
+                let service = self.clone();
+                litellm_host_python::run_async(
+                    py,
+                    async move { service.async_lookup(&request, super::request::now()).await },
+                    super::cache_error,
+                )
+            }
         }
     }
 
@@ -616,7 +693,12 @@ impl NativeResponseCache {
             }
             Self::RedisSemantic { cache, .. } => {
                 cache
-                    .async_store(&Self::redis_semantic_request(request), response, now)
+                    .async_store(&Self::semantic_request(request), response, now)
+                    .await
+            }
+            Self::QdrantSemantic(cache) => {
+                cache
+                    .async_store(&Self::semantic_request(request), response, now)
                     .await
             }
             Self::Gcs(cache) => {
@@ -678,6 +760,18 @@ impl NativeResponseCache {
                 py,
                 SemanticBody::new(self.clone(), SemanticOperation::Store(request, response)),
             ),
+            Self::QdrantSemantic(_) => {
+                let service = self.clone();
+                litellm_host_python::run_async(
+                    py,
+                    async move {
+                        service
+                            .async_store(&request, response, super::request::now())
+                            .await
+                    },
+                    super::cache_error,
+                )
+            }
         }
     }
 
@@ -700,7 +794,7 @@ impl NativeResponseCache {
                     .async_lookup_batch(&requests.iter().map(Self::exact).collect::<Vec<_>>(), now)
                     .await
             }
-            Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } => {
+            Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } | Self::QdrantSemantic(_) => {
                 Err(Error::UnsupportedOperation)
             }
             Self::Gcs(cache) => {
@@ -755,7 +849,9 @@ impl NativeResponseCache {
                     .collect();
                 cache.async_store_batch(entries, now).await
             }
-            Self::RedisSemantic { .. } => Err(Error::UnsupportedOperation),
+            Self::RedisSemantic { .. } | Self::QdrantSemantic(_) => {
+                Err(Error::UnsupportedOperation)
+            }
             Self::Gcs(cache) => {
                 let entries = entries
                     .into_iter()
@@ -826,6 +922,7 @@ impl NativeResponseCache {
                 py,
                 SemanticBody::new(self.clone(), SemanticOperation::StoreBatch(entries.into())),
             ),
+            Self::QdrantSemantic(_) => Err(super::cache_error(Error::UnsupportedOperation)),
         }
     }
 
@@ -839,7 +936,7 @@ impl NativeResponseCache {
                 cache.async_flush().await
             }
             Self::S3(cache) => cache.async_flush().await,
-            Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } => {
+            Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } | Self::QdrantSemantic(_) => {
                 Err(Error::UnsupportedOperation)
             }
             Self::Gcs(cache) => cache.async_flush().await,
@@ -854,7 +951,9 @@ impl NativeResponseCache {
             Self::Redis { cache, .. } => cache.test_connection().await,
             Self::S3(cache) => cache.test_connection().await,
             Self::ValkeySemantic { cache, .. } => cache.test_connection().await,
-            Self::RedisSemantic { .. } => Err(Error::UnsupportedOperation),
+            Self::RedisSemantic { .. } | Self::QdrantSemantic(_) => {
+                Err(Error::UnsupportedOperation)
+            }
             Self::Gcs(cache) => cache.test_connection().await,
             Self::Disk(cache) => cache.test_connection().await,
             Self::AzureBlob(cache) => cache.test_connection().await,
