@@ -1610,18 +1610,28 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         A message's texts are consumed only when they sit at the running position of
         ``texts``; messages the translation handler added without a counterpart in
         ``texts`` (Responses ``instructions``, ``function_call_output``, ``reasoning``)
-        are skipped. Returns None when the walk does not account for every ``texts`` entry.
+        are skipped. The walk runs front-to-back and back-to-front and both must agree,
+        so an added message whose text happens to equal a neighbouring real message's
+        text cannot steal that text's attribution. Returns None otherwise.
         """
+        runs: Final = tuple(cls._message_texts(message) for message in messages)
 
-        def consume(sources: tuple[int, ...], message_idx: int) -> tuple[int, ...]:
-            run: Final = cls._message_texts(messages[message_idx])
-            start: Final = len(sources)
-            if run and tuple(texts[start : start + len(run)]) == run:
-                return sources + (message_idx,) * len(run)
-            return sources
+        def walk(ordered_runs: Sequence[tuple[str, ...]], ordered_texts: Sequence[str]) -> tuple[int, ...]:
+            def consume(sources: tuple[int, ...], item: tuple[int, tuple[str, ...]]) -> tuple[int, ...]:
+                position, run = item
+                start: Final = len(sources)
+                if run and tuple(ordered_texts[start : start + len(run)]) == run:
+                    return sources + (position,) * len(run)
+                return sources
 
-        sources: Final = functools.reduce(consume, range(len(messages)), ())
-        return sources if len(sources) == len(texts) else None
+            return functools.reduce(consume, enumerate(ordered_runs), ())
+
+        forward: Final = walk(runs, texts)
+        last: Final = len(runs) - 1
+        backward: Final = tuple(
+            last - position for position in walk(tuple(run[::-1] for run in runs[::-1]), texts[::-1])[::-1]
+        )
+        return forward if len(forward) == len(texts) and forward == backward else None
 
     @classmethod
     def _get_latest_user_text_indices(

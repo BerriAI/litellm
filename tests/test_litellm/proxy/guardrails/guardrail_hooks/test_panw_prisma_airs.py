@@ -5022,6 +5022,31 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
 
         assert [call.kwargs["content"] for call in mock_api.call_args_list] == list(inputs["texts"])
 
+    @pytest.mark.asyncio
+    async def test_flag_true_tool_output_equal_to_latest_user_text_still_scans_latest(self):
+        """A function_call_output whose text equals the latest user turn must not claim that
+        turn's slot and demote the scan to an earlier user message."""
+        from litellm.llms.openai.responses.guardrail_translation.handler import (
+            OpenAIResponsesHandler,
+        )
+
+        handler = make_handler(experimental_use_latest_role_message_only=True)
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "model": "gpt-4.1-mini",
+            "input": [
+                *self.HISTORY,
+                {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": self.LATEST},
+                {"role": "user", "content": self.LATEST},
+            ],
+        }
+        patcher, mock_api = self._scan(handler)
+        with patcher:
+            await OpenAIResponsesHandler().process_input_messages(data=request_data, guardrail_to_apply=handler)
+
+        assert self.LATEST in [call.kwargs["content"] for call in mock_api.call_args_list]
+
 
 class TestPanwAirsMcpToolCallWithoutCallId:
     """Tests for MCP tool invocations flowing through apply_guardrail without
