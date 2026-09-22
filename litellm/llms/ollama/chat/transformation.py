@@ -171,10 +171,12 @@ class OllamaChatConfig(BaseConfig):
                 if value.get("json_schema") and value["json_schema"].get("schema"):
                     optional_params["format"] = value["json_schema"]["schema"]
             if param == "reasoning_effort" and value is not None:
-                if model.startswith("gpt-oss"):
-                    optional_params["think"] = value
-                else:
-                    optional_params["think"] = value in {"low", "medium", "high"}
+                effort: Final = value.get("effort") if isinstance(value, dict) else value
+                if effort is not None:
+                    if model.startswith("gpt-oss"):
+                        optional_params["think"] = effort
+                    else:
+                        optional_params["think"] = effort in {"low", "medium", "high"}
             ### FUNCTION CALLING LOGIC ###
             # Ollama 0.4+ supports native tool calling - pass tools directly
             # and let Ollama handle model capability detection
