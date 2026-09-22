@@ -305,14 +305,15 @@ def test_response_cost_calculator_uses_router_model_id_from_litellm_metadata():
 
 
 class TestZeroCostDiagnostic:
-    DEPLOYMENT_ID: Final = "lit7898-per-second-priced-deployment"
-    MODEL_GROUP: Final = "per-second-priced-chat"
+    DEPLOYMENT_ID: Final = "lit7898-query-only-priced-deployment"
+    MODEL_GROUP: Final = "query-only-priced-chat"
+    QUERY_ONLY_PRICING: Final = {"input_cost_per_query": 0.00042}
     PER_SECOND_PRICING: Final = {"input_cost_per_second": 0.00042, "output_cost_per_second": 0.00042}
     FREE_PRICING: Final = {"input_cost_per_token": 0, "output_cost_per_token": 0}
 
-    @pytest.fixture(params=["per_second", "free"])
+    @pytest.fixture(params=["query_only", "free"])
     def deployment_pricing(self, request: pytest.FixtureRequest) -> Iterator[Mapping[str, float]]:
-        pricing: Final = self.PER_SECOND_PRICING if request.param == "per_second" else self.FREE_PRICING
+        pricing: Final = self.QUERY_ONLY_PRICING if request.param == "query_only" else self.FREE_PRICING
         litellm.register_model(model_cost={self.DEPLOYMENT_ID: pricing}, persist_across_reloads=False)
         try:
             yield pricing
@@ -557,11 +558,11 @@ class TestZeroCostDiagnostic:
         priced_pricing: Final = {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}
         usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
         litellm.register_model(
-            model_cost={self.DEPLOYMENT_ID: self.PER_SECOND_PRICING, priced_id: priced_pricing},
+            model_cost={self.DEPLOYMENT_ID: self.QUERY_ONLY_PRICING, priced_id: priced_pricing},
             persist_across_reloads=False,
         )
         try:
-            logging_obj: Final = self._logging_obj(self.PER_SECOND_PRICING)
+            logging_obj: Final = self._logging_obj(self.QUERY_ONLY_PRICING)
             with caplog.at_level(logging.WARNING, logger="LiteLLM"):
                 assert logging_obj._response_cost_calculator(result=self._response(usage)) == 0.0
                 self._assert_flagged(logging_obj, caplog)
@@ -570,7 +571,7 @@ class TestZeroCostDiagnostic:
                 assert logging_obj._response_cost_calculator(result=self._response(usage)) == pytest.approx(5e-05)
                 assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
 
-                self._route_to_deployment(logging_obj, self.PER_SECOND_PRICING)
+                self._route_to_deployment(logging_obj, self.QUERY_ONLY_PRICING)
                 assert logging_obj._response_cost_calculator(result=self._response(usage)) == 0.0
 
             assert logging_obj.model_call_details["zero_cost_diagnostic"]["reason"] == "missing_pricing_key"
@@ -585,7 +586,7 @@ class TestZeroCostDiagnostic:
         dated_model: Final = "lit7898-nano-2026-03-17"
         requested_model: Final = "lit7898-nano"
         usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
-        cost_map_entry: Final = {"litellm_provider": "openai", "mode": "chat", **self.PER_SECOND_PRICING}
+        cost_map_entry: Final = {"litellm_provider": "openai", "mode": "chat", **self.QUERY_ONLY_PRICING}
         litellm.register_model(
             model_cost={dated_model: cost_map_entry, requested_model: cost_map_entry}, persist_across_reloads=False
         )
@@ -646,6 +647,24 @@ class TestZeroCostDiagnostic:
         assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
         assert self._zero_cost_warnings(caplog) == []
 
+    def test_per_second_priced_deployment_bills_the_call_duration_and_stays_silent(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        per_second_id: Final = "lit8315-per-second-priced-deployment"
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        litellm.register_model(model_cost={per_second_id: self.PER_SECOND_PRICING}, persist_across_reloads=False)
+        try:
+            logging_obj: Final = self._logging_obj(self.PER_SECOND_PRICING, deployment_id=per_second_id)
+            response: Final = self._response(usage)
+            response._response_ms = 1000.0
+            with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+                assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.00084)
+
+            assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
+            assert self._zero_cost_warnings(caplog) == []
+        finally:
+            litellm.model_cost.pop(per_second_id, None)
+
     @pytest.mark.parametrize("spilled_over", [True, False])
     def test_ptu_deployment_is_judged_by_the_entry_the_calculator_priced_with(
         self, spilled_over: bool, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -663,7 +682,7 @@ class TestZeroCostDiagnostic:
         litellm.register_model(
             model_cost={
                 router_model_id: {**self.FREE_PRICING, "litellm_provider": "azure", "mode": "chat"},
-                served_model: {**self.PER_SECOND_PRICING, "litellm_provider": "azure", "mode": "chat"},
+                served_model: {**self.QUERY_ONLY_PRICING, "litellm_provider": "azure", "mode": "chat"},
             },
             persist_across_reloads=False,
         )
@@ -3502,6 +3521,20 @@ def _make_logging_obj(stream: bool) -> LitellmLogging:
         litellm_call_id="test-123",
         function_id="test-fn",
     )
+
+
+def test_get_response_ms_measures_a_float_start_time_against_a_datetime_end_time():
+    """The files paths construct the logging object with ``time.time()`` while the success
+    handler stamps a datetime end, and the per-second cost path reads this window."""
+    logging_obj = _make_logging_obj(stream=False)
+    logging_obj.update_environment_variables(
+        model="openai/codex-mini-latest", user="", optional_params={}, litellm_params={}
+    )
+    start_seconds = logging_obj.model_call_details["start_time"]
+    assert isinstance(start_seconds, float)
+    logging_obj.model_call_details["end_time"] = datetime.datetime.fromtimestamp(start_seconds + 1.5)
+
+    assert logging_obj.get_response_ms() == pytest.approx(1500)
 
 
 def test_get_assembled_streaming_response_returns_none_for_non_streaming():
