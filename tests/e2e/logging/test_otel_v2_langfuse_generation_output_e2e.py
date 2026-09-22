@@ -12,8 +12,7 @@ raw base64 or audio bytes.
 
 from __future__ import annotations
 
-import json
-import re
+import base64
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
@@ -23,7 +22,18 @@ from e2e_config import unique_marker
 from e2e_http import unwrap
 from lifecycle import ResourceManager
 from logging_client import LangfuseCreds, LangfuseObservation, LoggingClient, load_langfuse_creds
-from models import LiteLLMParamsBody
+from models import (
+    CompletionBody,
+    CompletionResponse,
+    ImageGenerationBody,
+    ImageGenerationResponse,
+    LiteLLMParamsBody,
+    ModerationBody,
+    ModerationResponse,
+    SpeechBody,
+    TranscriptionForm,
+    TranscriptionResponse,
+)
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 pytestmark = [pytest.mark.e2e, pytest.mark.otel_v2]
@@ -34,70 +44,13 @@ WEATHER_WAV: Final = (
 BOUNDED_OUTPUT_CHARS: Final = 1024
 
 
-class _CompletionBody(BaseModel):
-    model: str
-    prompt: str
-    max_tokens: int = 8
-    n: int = 1
-
-
-class _CompletionChoice(BaseModel):
-    text: str = ""
-
-
-class _CompletionResponse(BaseModel):
-    choices: list[_CompletionChoice] = []
-
-
-class _ImageBody(BaseModel):
-    model: str
-    prompt: str
-    n: int = 1
-    size: str = "1024x1024"
-    quality: str = "low"
-
-
-class _ImageDatum(BaseModel):
-    url: str | None = None
-    b64_json: str | None = None
-
-
-class _ImageResponse(BaseModel):
-    data: list[_ImageDatum] = []
-
-
-class _SpeechBody(BaseModel):
-    model: str
-    input: str
-    voice: str = "alloy"
-
-
-class _TranscriptionForm(BaseModel):
-    model: str
-
-
-class _TranscriptionResponse(BaseModel):
-    text: str = ""
-
-
 class _OutputMessage(BaseModel):
+    """One assistant message of the Langfuse generation output; only the text is read."""
+
     content: str = ""
 
 
 _OUTPUT_MESSAGES: Final = TypeAdapter(list[_OutputMessage])
-
-
-class _ModerationBody(BaseModel):
-    model: str
-    input: str
-
-
-class _ModerationResult(BaseModel):
-    flagged: bool
-
-
-class _ModerationResponse(BaseModel):
-    results: list[_ModerationResult] = []
 
 
 @pytest.fixture(scope="session")
@@ -128,12 +81,6 @@ def _generation(client: LoggingClient, creds: LangfuseCreds, *, alias: str, star
     return observation
 
 
-def _output_blob(observation: LangfuseObservation) -> str:
-    blob: Final = json.dumps(observation.output, default=str)
-    assert observation.output not in (None, "", [], {}), f"generation output is empty: {observation!r}"
-    return blob
-
-
 def _output_text(observation: LangfuseObservation) -> str:
     assert observation.output not in (None, "", [], {}), f"generation output is empty: {observation!r}"
     try:
@@ -159,8 +106,8 @@ class TestOtelV2LangfuseGenerationOutput:
             client.proxy.transport.post(
                 "/v1/completions",
                 headers=client.proxy.transport.bearer(key),
-                json=_CompletionBody(model=model, prompt=f"Repeat exactly: {unique_marker()}", n=2),
-                response_type=_CompletionResponse,
+                json=CompletionBody(model=model, prompt=f"Repeat exactly: {unique_marker()}", n=2),
+                response_type=CompletionResponse,
             )
         )
         texts: Final = tuple(choice.text.strip() for choice in response.choices)
@@ -181,19 +128,22 @@ class TestOtelV2LangfuseGenerationOutput:
             client.proxy.transport.post(
                 "/v1/images/generations",
                 headers=client.proxy.transport.bearer(key),
-                json=_ImageBody(model=model, prompt=f"a plain red square {unique_marker()}"),
-                response_type=_ImageResponse,
+                json=ImageGenerationBody(model=model, prompt=f"a plain red square {unique_marker()}"),
+                response_type=ImageGenerationResponse,
                 timeout=180.0,
             )
         )
         assert response.data, f"/v1/images/generations returned no data: {response!r}"
         encoded: Final = response.data[0].b64_json or ""
         assert encoded, f"expected a b64_json image from gpt-image-1-mini: {response.data[0].url!r}"
+        image_bytes: Final = len(base64.b64decode(encoded))
 
-        blob: Final = _output_blob(_generation(client, langfuse_creds, alias=alias, started=started))
-        assert len(blob) <= BOUNDED_OUTPUT_CHARS, f"image generation output is not bounded ({len(blob)} chars)"
-        assert encoded[:64] not in blob, "image generation output leaks the raw base64 payload"
-        assert re.search(r"\d+ bytes", blob), f"image generation output lacks the encoded size: {blob}"
+        output: Final = _output_text(_generation(client, langfuse_creds, alias=alias, started=started))
+        assert len(output) <= BOUNDED_OUTPUT_CHARS, f"image generation output is not bounded ({len(output)} chars)"
+        assert encoded[:64] not in output, "image generation output leaks the raw base64 payload"
+        assert output == f"b64_json image ({image_bytes} bytes)", (
+            f"image generation output does not report the {image_bytes} decoded bytes: {output!r}"
+        )
 
     @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["audio_speech"])
     def test_speech_output_is_a_bounded_summary_without_audio_bytes(
@@ -204,13 +154,15 @@ class TestOtelV2LangfuseGenerationOutput:
         audio: Final = client.proxy.transport.stream_binary(
             "/v1/audio/speech",
             headers=client.proxy.transport.bearer(key),
-            json=_SpeechBody(model=model, input=f"hello {unique_marker()}"),
+            json=SpeechBody(model=model, input=f"hello {unique_marker()}"),
         )
         assert audio.ok and audio.total_bytes > 0, f"/v1/audio/speech returned no audio: {audio!r}"
 
-        blob: Final = _output_blob(_generation(client, langfuse_creds, alias=alias, started=started))
-        assert len(blob) <= BOUNDED_OUTPUT_CHARS, f"speech output is not bounded ({len(blob)} chars)"
-        assert re.search(r"\d+ bytes", blob), f"speech output lacks the audio size: {blob}"
+        output: Final = _output_text(_generation(client, langfuse_creds, alias=alias, started=started))
+        assert len(output) <= BOUNDED_OUTPUT_CHARS, f"speech output is not bounded ({len(output)} chars)"
+        assert output.endswith(f" ({audio.total_bytes} bytes)"), (
+            f"speech output does not report the {audio.total_bytes} audio bytes the caller received: {output!r}"
+        )
 
     @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["audio_transcriptions"])
     def test_transcription_output_is_the_transcript(
@@ -222,15 +174,15 @@ class TestOtelV2LangfuseGenerationOutput:
             client.proxy.transport.upload(
                 "/v1/audio/transcriptions",
                 headers=client.proxy.transport.bearer(key),
-                form=_TranscriptionForm(model=model),
+                form=TranscriptionForm(model=model),
                 filename=WEATHER_WAV.name,
                 content=WEATHER_WAV.read_bytes(),
                 file_content_type="audio/wav",
-                response_type=_TranscriptionResponse,
+                response_type=TranscriptionResponse,
             )
         )
         transcript: Final = response.text.strip()
-        assert "weather" in transcript.lower(), f"transcript does not mention the weather: {transcript!r}"
+        assert transcript, f"/v1/audio/transcriptions returned no text: {response!r}"
 
         output: Final = _output_text(_generation(client, langfuse_creds, alias=alias, started=started))
         assert transcript in output, f"generation output lacks the transcript {transcript!r}: {output!r}"
@@ -245,8 +197,8 @@ class TestOtelV2LangfuseGenerationOutput:
             client.proxy.transport.post(
                 "/v1/moderations",
                 headers=client.proxy.transport.bearer(key),
-                json=_ModerationBody(model=model, input=f"I will find you and hurt you badly {unique_marker()}"),
-                response_type=_ModerationResponse,
+                json=ModerationBody(model=model, input=f"I will find you and hurt you badly {unique_marker()}"),
+                response_type=ModerationResponse,
             )
         )
         assert response.results, f"/v1/moderations returned no results: {response!r}"

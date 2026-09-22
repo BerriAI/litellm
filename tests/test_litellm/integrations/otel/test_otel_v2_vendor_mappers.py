@@ -6,6 +6,8 @@ backends, so one trace lights up every configured destination.
 """
 
 import json
+from collections.abc import Mapping
+from typing import Final
 
 import pytest
 
@@ -260,16 +262,16 @@ def test_langfuse_mapper_renders_an_ocr_call_with_the_page_markdown_as_output():
     ],
 )
 def test_langfuse_mapper_renders_every_non_chat_route_output_as_an_assistant_message(
-    call_type, response, expected_content
-):
-    payload = {
+    call_type: str, response: Mapping[str, object], expected_content: str
+) -> None:
+    payload: Final[dict[str, object]] = {
         "call_type": call_type,
         "custom_llm_provider": "openai",
         "model": "m",
         "messages": None,
         "response": response,
     }
-    attrs = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True))
+    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True))
 
     assert json.loads(attrs["langfuse.observation.output"]) == [
         {"role": "assistant", "content": expected_content, "refusal": None, "tool_calls": None}
