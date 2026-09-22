@@ -6,6 +6,7 @@ from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.types.router import RouterErrors
 
 _RESPONSE = httpx.Response(status_code=500, request=httpx.Request("POST", "https://example.invalid"))
 
@@ -154,6 +155,18 @@ def _proxy_exc(message: str, error_type: str, code: int) -> ProxyException:
 def test_variants_of_one_failure_share_a_normalized_error(messages: tuple[Exception, ...], expected: str) -> None:
     normalized = {StandardLoggingPayloadSetup.get_error_information(exc)["normalized_error"] for exc in messages}
     assert normalized == {expected}
+
+
+def test_router_no_healthy_deployment_wording_clusters_as_no_healthy_deployments() -> None:
+    for message in (RouterErrors.no_healthy_deployments.value, "No healthy deployments found."):
+        exc = litellm.BadRequestError(message, llm_provider="openai", model="gpt-4o")
+        assert normalize_error(exc, "400", message) == "429_NO_HEALTHY_DEPLOYMENTS", message
+
+
+def test_provider_budget_routing_wording_clusters_as_budget_exceeded() -> None:
+    message = RouterErrors.no_deployments_with_provider_budget_routing.value
+    exc = litellm.BadRequestError(message, llm_provider="openai", model="gpt-4o")
+    assert normalize_error(exc, "400", message) == "429_BUDGET_EXCEEDED"
 
 
 def test_parameter_length_error_is_not_a_context_window_error() -> None:

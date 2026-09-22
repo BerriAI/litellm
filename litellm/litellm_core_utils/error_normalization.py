@@ -62,10 +62,13 @@ class _HasProxyErrorType(Protocol):
 _MESSAGE_PATTERNS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
     (re.compile(r"no fallback model group found", re.IGNORECASE), ROUTER_NO_FALLBACK),
     (re.compile(r"error doing the fallback|MidStreamFallbackError", re.IGNORECASE), ROUTER_FALLBACK_FAILURE),
-    (re.compile(r"no healthy deployment available|no deployments available", re.IGNORECASE), NO_HEALTHY_DEPLOYMENTS),
+    (
+        re.compile(r"budget has been exceeded|max budget|exceeded.*budget|crossed budget", re.IGNORECASE),
+        BUDGET_EXCEEDED,
+    ),
+    (re.compile(r"no healthy deployments?|no deployments available", re.IGNORECASE), NO_HEALTHY_DEPLOYMENTS),
     (re.compile(r"upstream passthrough request failed", re.IGNORECASE), UPSTREAM_PASSTHROUGH),
     (re.compile(r"is not supported for provider|not implemented", re.IGNORECASE), UNSUPPORTED_OPERATION),
-    (re.compile(r"budget has been exceeded|max budget|exceeded.*budget", re.IGNORECASE), BUDGET_EXCEEDED),
     (
         re.compile(r"context window|context length|(prompt|input) is too long|tokens? ?> ?\d+ ?maximum", re.IGNORECASE),
         CONTEXT_WINDOW_EXCEEDED,
