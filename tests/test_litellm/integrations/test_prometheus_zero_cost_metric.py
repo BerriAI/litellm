@@ -83,6 +83,44 @@ async def _log_success(logger: PrometheusLogger, zero_cost_diagnostic: dict | No
     await logger.async_log_success_event(kwargs, None, now, now)
 
 
+async def _log_failure(logger: PrometheusLogger, zero_cost_diagnostic: dict | None) -> None:
+    now: Final = datetime.datetime.now()
+    kwargs: Final = {
+        "model": "openai/gpt-5.4-nano",
+        "litellm_params": {"metadata": {}},
+        "standard_logging_object": {**_payload(zero_cost_diagnostic), "status": "failure"},
+        "exception": Exception("stream cut off after the usage chunk"),
+        "stream": True,
+        "start_time": now - datetime.timedelta(seconds=3),
+        "end_time": now,
+    }
+    await logger.async_log_failure_event(kwargs, None, now, now)
+
+
+@pytest.mark.asyncio
+async def test_failure_event_counts_a_zero_cost_request_by_model_and_reason():
+    _clear_prometheus_registry()
+    try:
+        logger: Final = PrometheusLogger()
+        await _log_failure(logger, None)
+        assert _samples(METRIC) == []
+
+        await _log_failure(logger, MISSING_KEY_DIAGNOSTIC)
+
+        samples: Final = _samples(METRIC)
+        assert len(samples) == 1
+        assert samples[0].labels == {
+            "requested_model": "per-second-priced-chat",
+            "model": "openai/gpt-5.4-nano",
+            "model_id": "dep-1",
+            "api_provider": "openai",
+            "reason": "missing_pricing_key",
+        }
+        assert samples[0].value == 1.0
+    finally:
+        _clear_prometheus_registry()
+
+
 @pytest.mark.asyncio
 async def test_success_event_counts_a_zero_cost_request_by_model_and_reason():
     _clear_prometheus_registry()

@@ -325,6 +325,7 @@ class TestZeroCostDiagnostic:
         model: str = "openai/gpt-5.4-nano",
         call_type: str = "completion",
         deployment_id: str | None = DEPLOYMENT_ID,
+        custom_llm_provider: str = "openai",
     ) -> LitellmLogging:
         logging_obj: Final = LitellmLogging(
             model=model,
@@ -335,7 +336,9 @@ class TestZeroCostDiagnostic:
             litellm_call_id="lit7898",
             function_id="fn",
         )
-        self._route_to_deployment(logging_obj, pricing, model=model, deployment_id=deployment_id)
+        self._route_to_deployment(
+            logging_obj, pricing, model=model, deployment_id=deployment_id, custom_llm_provider=custom_llm_provider
+        )
         return logging_obj
 
     def _route_to_deployment(
@@ -344,6 +347,7 @@ class TestZeroCostDiagnostic:
         pricing: dict,
         model: str = "openai/gpt-5.4-nano",
         deployment_id: str | None = DEPLOYMENT_ID,
+        custom_llm_provider: str = "openai",
     ) -> None:
         model_info: Final = pricing if deployment_id is None else {"id": deployment_id, **pricing}
         logging_obj.update_environment_variables(
@@ -351,7 +355,7 @@ class TestZeroCostDiagnostic:
             user="",
             optional_params={},
             litellm_params={"metadata": {"model_group": self.MODEL_GROUP, "model_info": model_info}},
-            custom_llm_provider="openai",
+            custom_llm_provider=custom_llm_provider,
         )
 
     @staticmethod
@@ -578,6 +582,64 @@ class TestZeroCostDiagnostic:
             assert self._zero_cost_warnings(caplog) == []
         finally:
             litellm.model_cost.pop(global_model, None)
+
+    def test_cache_hit_priced_for_saved_cost_stays_silent(self, deployment_pricing, caplog):
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj(deployment_pricing)
+        logging_obj.model_call_details["cache_hit"] = True
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            assert logging_obj._response_cost_calculator(result=self._response(usage), cache_hit=False) == 0.0
+
+        assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
+        assert self._zero_cost_warnings(caplog) == []
+
+    @pytest.mark.parametrize("spilled_over", [True, False])
+    def test_ptu_deployment_is_judged_by_the_entry_the_calculator_priced_with(self, spilled_over, monkeypatch, caplog):
+        router_model_id: Final = "lit7898-ptu-router-model-id"
+        served_model: Final = "azure/lit7898-ptu-served-model"
+        ptu_model_info: Final = {
+            "team_id": "team-1",
+            "ptu_count": 100,
+            "cost_per_ptu_per_hour": 1.0,
+            "ptu_effective_from": "2026-01-01",
+            **self.FREE_PRICING,
+        }
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        litellm.register_model(
+            model_cost={
+                router_model_id: {**self.FREE_PRICING, "litellm_provider": "azure", "mode": "chat"},
+                served_model: {**self.PER_SECOND_PRICING, "litellm_provider": "azure", "mode": "chat"},
+            },
+            persist_across_reloads=False,
+        )
+        monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+        try:
+            logging_obj: Final = self._logging_obj(
+                ptu_model_info, model=served_model, deployment_id=router_model_id, custom_llm_provider="azure"
+            )
+            spillover_headers: Final = {"llm_provider-x-ms-is-spilled-over": "true"} if spilled_over else {}
+            response: Final = self._response(
+                usage, model=served_model, custom_llm_provider="azure", additional_headers=spillover_headers
+            )
+            with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+                assert logging_obj._response_cost_calculator(result=response) == 0.0
+
+            warnings: Final = self._zero_cost_warnings(caplog)
+            if not spilled_over:
+                assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
+                assert warnings == []
+                return
+            assert logging_obj.model_call_details["zero_cost_diagnostic"] == {
+                "reason": "missing_pricing_key",
+                "pricing_model": served_model,
+                "missing_pricing_keys": ("input_cost_per_token", "output_cost_per_token"),
+            }
+            assert len(warnings) == 1
+            assert f"pricing entry '{served_model}' has no input_cost_per_token, output_cost_per_token" in warnings[0]
+        finally:
+            litellm.model_cost.pop(router_model_id, None)
+            litellm.model_cost.pop(served_model, None)
 
 
 class TestGetRouterModelId:

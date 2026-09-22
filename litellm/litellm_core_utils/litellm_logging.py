@@ -1766,11 +1766,6 @@ class Logging(LiteLLMLoggingBaseClass):
             result = transformed_result
 
         result_hidden_params: Final = getattr(result, "_hidden_params", None) or MappingProxyType({})
-        result_additional_headers: Final = (
-            result_hidden_params.get("additional_headers")
-            if isinstance(result_hidden_params, dict)
-            else getattr(result_hidden_params, "additional_headers", None)
-        )
         if isinstance(result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(result, "_hidden_params"):
             hidden_params: Final = result_hidden_params
             if (
@@ -1793,18 +1788,7 @@ class Logging(LiteLLMLoggingBaseClass):
             router_model_id = self.get_router_model_id()
 
         ## RESPONSE COST ##
-        spilled_over: Final = is_spilled_over_ptu_request(
-            model_info=_deployment_model_info(self.litellm_params if hasattr(self, "litellm_params") else None),
-            response_headers=self.model_call_details.get("response_headers"),
-            additional_headers=result_additional_headers,
-        )
-        custom_pricing: Final = (
-            False
-            if spilled_over
-            else use_custom_pricing_for_model(
-                litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None)
-            )
-        )
+        custom_pricing: Final = self._custom_pricing_for(result)
 
         prompt = self._prompt_for_cost_calculation()
 
@@ -1899,6 +1883,9 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> None:
         if response_cost is None and not calculation_failed:
             return
+        if self.model_call_details.get("cache_hit") is True:
+            self.model_call_details["zero_cost_diagnostic"] = None
+            return
         try:
             finding: Final = self._zero_cost_finding(
                 result,
@@ -1937,7 +1924,7 @@ class Logging(LiteLLMLoggingBaseClass):
             model=model,
             completion_response=result,
             custom_llm_provider=custom_llm_provider,
-            custom_pricing=use_custom_pricing_for_model(litellm_params=self.litellm_params),
+            custom_pricing=self._custom_pricing_for(result),
             base_model=_get_base_model_from_metadata(model_call_details=self.model_call_details),
             router_model_id=router_model_id or self.get_router_model_id(),
             region_name=_resolve_mantle_region_for_cost(
@@ -1961,6 +1948,21 @@ class Logging(LiteLLMLoggingBaseClass):
             custom_llm_provider=custom_llm_provider,
             usage=usage,
         )
+
+    def _custom_pricing_for(self, result: object) -> bool:
+        litellm_params: Final = getattr(self, "litellm_params", None)
+        result_hidden_params: Final = getattr(result, "_hidden_params", None) or MappingProxyType({})
+        additional_headers: Final = (
+            result_hidden_params.get("additional_headers")
+            if isinstance(result_hidden_params, dict)
+            else getattr(result_hidden_params, "additional_headers", None)
+        )
+        spilled_over: Final = is_spilled_over_ptu_request(
+            model_info=_deployment_model_info(litellm_params),
+            response_headers=self.model_call_details.get("response_headers"),
+            additional_headers=additional_headers,
+        )
+        return False if spilled_over else use_custom_pricing_for_model(litellm_params=litellm_params)
 
     def _prompt_for_cost_calculation(self) -> str:
         """

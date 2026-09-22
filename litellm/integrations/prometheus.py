@@ -2373,6 +2373,8 @@ class PrometheusLogger(CustomLogger):
                 team_alias=user_api_team_alias,
                 user=user_id,
                 model_id=standard_logging_payload.get("model_id", ""),
+                requested_model=standard_logging_payload.get("model_group"),
+                api_provider=standard_logging_payload.get("custom_llm_provider"),
                 custom_metadata_labels=get_custom_labels_from_metadata(
                     metadata=_get_combined_custom_metadata_from_standard_logging_payload(
                         standard_logging_payload=standard_logging_payload
@@ -2384,6 +2386,11 @@ class PrometheusLogger(CustomLogger):
                 self.litellm_llm_api_failed_requests_metric,
                 "litellm_llm_api_failed_requests_metric",
                 enum_values,
+            )
+            self._increment_zero_cost_requests_metric(
+                zero_cost_diagnostic=standard_logging_payload.get("zero_cost_diagnostic"),
+                enum_values=enum_values,
+                label_context=PrometheusLabelFactoryContext(enum_values),
             )
             self.set_llm_deployment_failure_metrics(kwargs)
             await self._set_org_budget_metrics_after_api_request(

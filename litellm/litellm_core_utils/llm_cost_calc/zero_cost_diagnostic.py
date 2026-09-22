@@ -90,13 +90,13 @@ def diagnose_zero_cost(
     missing_keys: Final = tuple(key for key in used_keys if pricing_entry.get(key) is None)
     if not missing_keys and all(_is_explicit_zero(pricing_entry[key]) for key in used_keys):
         return None
+    if not _declares_a_rate(pricing_entry):
+        return None
     if calculation_failed:
         return StandardLoggingZeroCostDiagnostic(
             reason="cost_calculation_error", pricing_model=pricing_model, missing_pricing_keys=()
         )
     if missing_keys:
-        if not _declares_a_rate(pricing_entry):
-            return None
         return StandardLoggingZeroCostDiagnostic(
             reason="missing_pricing_key", pricing_model=pricing_model, missing_pricing_keys=missing_keys
         )

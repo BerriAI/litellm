@@ -100,6 +100,11 @@ def test_calculator_failure_on_a_free_entry_stays_silent():
     )
 
 
+def test_calculator_failure_on_an_entry_that_declares_no_rate_stays_silent():
+    entry: Final = {"litellm_provider": "openai", "mode": "chat", "supports_prompt_caching": True}
+    assert diagnose_zero_cost(usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=entry, calculation_failed=True) is None
+
+
 def test_audio_tokens_need_the_audio_rates():
     usage = Usage(
         prompt_tokens=10,
