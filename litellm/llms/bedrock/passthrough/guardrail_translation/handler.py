@@ -9,6 +9,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
 )
+from litellm.types.llms.bedrock import RequestObject
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -184,16 +185,19 @@ def _converse_block_attachments(block: Mapping[str, object]) -> tuple[tuple[str,
     )
 
 
-def _converse_input_blocks(body: dict, skip_tool: bool) -> tuple[Mapping[str, object], ...]:
+def _converse_input_blocks(body: RequestObject, skip_tool: bool) -> tuple[Mapping[str, object], ...]:
     """Content blocks the attachment walk covers, at the same positions
     ``_extract_converse_texts`` scans: message content blocks and toolResult inner
     content blocks."""
     top_level: Final = tuple(
         block
         for message in body.get("messages") or ()
-        if isinstance(message, dict)
+        if isinstance(message, dict)  # pyright: ignore[reportUnnecessaryIsInstance]  # raw request json may carry non-dict items
         for block in message.get("content") or ()
-        if isinstance(block, dict) and not (skip_tool and ("toolUse" in block or "toolResult" in block))
+        if isinstance(block, dict)
+        and not (  # pyright: ignore[reportUnnecessaryIsInstance]  # raw request json may carry non-dict items
+            skip_tool and ("toolUse" in block or "toolResult" in block)
+        )
     )
     nested: Final = tuple(
         inner
@@ -201,12 +205,12 @@ def _converse_input_blocks(body: dict, skip_tool: bool) -> tuple[Mapping[str, ob
         for tool_result in (block.get("toolResult"),)
         if isinstance(tool_result, dict)
         for inner in tool_result.get("content") or ()
-        if isinstance(inner, dict)
+        if isinstance(inner, dict)  # pyright: ignore[reportUnnecessaryIsInstance]  # raw request json may carry non-dict items
     )
     return top_level + nested
 
 
-def _extract_converse_attachments(body: dict, skip_tool: bool) -> tuple[list[str], list[str]]:
+def _extract_converse_attachments(body: RequestObject, skip_tool: bool) -> tuple[list[str], list[str]]:
     """Collect image and document/video references the text walk would skip."""
     attachments: Final = tuple(_converse_block_attachments(block) for block in _converse_input_blocks(body, skip_tool))
     images: Final = [ref for pair in attachments for ref in pair[0]]  # mutable-ok: inputs takes list[str]

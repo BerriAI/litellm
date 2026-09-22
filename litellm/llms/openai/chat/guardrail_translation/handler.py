@@ -255,7 +255,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     def _build_input_guardrail_inputs(
         self,
-        data: dict,
+        data: dict[str, object],
         texts_to_check: list[str],
         images_to_check: list[str],
         files_to_check: list[str],
@@ -282,10 +282,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if structured_messages:
             inputs["structured_messages"] = [structured_messages[index] for index in scoped_message_indices]
         tools: Final = data.get("tools")
-        if tools and not scan_only_tool_results:
-            inputs["tools"] = tools
+        if isinstance(tools, list) and not scan_only_tool_results:
+            inputs["tools"] = cast("list[ChatCompletionToolParam]", tools)  # cast-ok: raw request json
         model: Final = data.get("model")
-        if model:
+        if isinstance(model, str):
             inputs["model"] = model
         return inputs, structured_messages, scoped_message_indices
 
