@@ -9,6 +9,11 @@ from integration._support.wire import Reply, Request, wire_server
 _MODEL: Final = "bytedance/seedance-2.5/text-to-video"
 _H3_MODEL: Final = "minimax/h3/text-to-video"
 _MP4: Final = b"\x00\x00\x00\x18ftypmp42" + uuid.uuid4().bytes * 4
+_OVERSIZED_SIDE: Final = "9" * 30
+
+
+def _h3_queue_reply(request_id: str) -> Reply:
+    return Reply(body=json.dumps({"status": "IN_QUEUE", "request_id": request_id, "queue_position": 0}).encode())
 
 
 @pytest.mark.covers("other.provider_wire.fal_ai.video_queue_create_status_and_content_download")
@@ -177,3 +182,61 @@ def test_fal_video_failed_result_reports_failed_status_and_fal_error(gateway: Ga
         content: Final = gateway.request("GET", f"/v1/videos/{video_id}/content")
         assert content.status_code == 422, content.text
         assert "Failed to download the file" in content.text
+
+
+@pytest.mark.covers("other.provider_wire.fal_ai.h3_auto_duration_omits_duration_and_queues")
+def test_fal_h3_auto_duration_omits_duration_and_queues(gateway: Gateway) -> None:
+    request_id: Final = "fal-h3-auto-" + uuid.uuid4().hex
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == f"/{_H3_MODEL}"
+        assert json.loads(request.body) == {
+            "prompt": "a cat playing volleyball on a beach",
+            "resolution": "768P",
+            "aspect_ratio": "16:9",
+        }
+        return _h3_queue_reply(request_id)
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"fal_ai/{_H3_MODEL}", api_base=wire.url, api_key="synthetic-fal-key")
+        response: Final = gateway.request(
+            "POST",
+            "/v1/videos",
+            {"model": model, "prompt": "a cat playing volleyball on a beach", "seconds": "auto", "size": "1280x720"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "queued"
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", f"/{_H3_MODEL}")]
+
+
+@pytest.mark.covers("other.provider_wire.fal_ai.h3_oversized_size_uses_top_resolution_tier")
+def test_fal_h3_oversized_size_uses_top_resolution_tier_and_queues(gateway: Gateway) -> None:
+    request_id: Final = "fal-h3-oversized-" + uuid.uuid4().hex
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == f"/{_H3_MODEL}"
+        assert json.loads(request.body) == {
+            "prompt": "a cat playing volleyball on a beach",
+            "duration": 5,
+            "resolution": "4K",
+            "aspect_ratio": "1:1",
+        }
+        return _h3_queue_reply(request_id)
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"fal_ai/{_H3_MODEL}", api_base=wire.url, api_key="synthetic-fal-key")
+        response: Final = gateway.request(
+            "POST",
+            "/v1/videos",
+            {
+                "model": model,
+                "prompt": "a cat playing volleyball on a beach",
+                "seconds": "5",
+                "size": f"{_OVERSIZED_SIDE}x{_OVERSIZED_SIDE}",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "queued"
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", f"/{_H3_MODEL}")]
