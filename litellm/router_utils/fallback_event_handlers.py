@@ -562,6 +562,29 @@ def creates_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
     return getattr(kwargs.get("original_function"), "__name__", None) in PROVIDER_SCOPED_CREATION_FUNCTION_NAMES
 
 
+ALLOWED_FALLBACK_PROMPT_PARAMS: Final = frozenset(
+    {
+        "prompt_id",
+        "prompt_variables",
+        "prompt_label",
+        "prompt_version",
+        "prompt_environment",
+    }
+)
+
+
+def _restore_fallback_prompt_state(kwargs: dict[str, object]) -> None:
+    unrendered: Final = kwargs.get("_unrendered_messages")
+    if isinstance(unrendered, list):
+        kwargs["messages"] = safe_deep_copy(unrendered)
+    original_prompt_params: Final = kwargs.get("_original_prompt_params")
+    if isinstance(original_prompt_params, dict):
+        for key in ALLOWED_FALLBACK_PROMPT_PARAMS:
+            if key in original_prompt_params:
+                kwargs[key] = original_prompt_params[key]
+    kwargs.pop("_in_prompt_factory", None)
+
+
 async def run_async_fallback(
     *args: object,
     litellm_router: LitellmRouter,
@@ -651,6 +674,7 @@ async def run_async_fallback(
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
             verbose_router_logger.info("Falling back to model_group = %s", mask_sensitive_structure(mg))
             kwargs.pop("_target_order", None)  # rebind-ok: next hop must not inherit the previous order target
+            _restore_fallback_prompt_state(kwargs)
             if isinstance(mg, str):
                 kwargs["model"] = mg
             elif isinstance(mg, dict):

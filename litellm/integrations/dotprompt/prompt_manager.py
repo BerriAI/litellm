@@ -24,6 +24,9 @@ def strip_version_suffix(prompt_id: str) -> str | None:
     base, separator, version = prompt_id.rpartition(".v")
     if separator and base and version.isdigit():
         return base
+    base_us, separator_us, version_us = prompt_id.rpartition("_v")
+    if separator_us and base_us and version_us.isdigit():
+        return base_us
     return None
 
 
@@ -72,10 +75,12 @@ class PromptManager:
         prompt_directory: str | None = None,
         prompt_data: dict[str, dict[str, Any]] | None = None,
         prompt_file: str | None = None,
+        prompt_version: int | None = None,
     ):
         self.prompt_directory = Path(prompt_directory) if prompt_directory else None
         self.prompts: dict[str, PromptTemplate] = {}
         self.prompt_file = prompt_file
+        self.prompt_version = prompt_version
         # Sandboxed env: templates can come from user input via /prompts/test,
         # so we must block access to unsafe Python attributes and mutation of
         # caller-supplied mutables.
@@ -101,6 +106,11 @@ class PromptManager:
 
             template: Final = self._load_prompt_file(self.prompt_file, prompt_id)
             self.prompts[prompt_id] = template
+            if self.prompt_version is not None:
+                if not prompt_id.endswith(f".v{self.prompt_version}"):
+                    self.prompts[f"{prompt_id}.v{self.prompt_version}"] = template
+                if not prompt_id.endswith(f"_v{self.prompt_version}"):
+                    self.prompts[f"{prompt_id}_v{self.prompt_version}"] = template
 
         # Load prompts from JSON data if provided
         if prompt_data:
@@ -157,6 +167,11 @@ class PromptManager:
                     template_id=template_id,
                 )
                 self.prompts[template_id] = template
+                if self.prompt_version is not None:
+                    if not template_id.endswith(f".v{self.prompt_version}"):
+                        self.prompts[f"{template_id}.v{self.prompt_version}"] = template
+                    if not template_id.endswith(f"_v{self.prompt_version}"):
+                        self.prompts[f"{template_id}_v{self.prompt_version}"] = template
             except Exception:
                 pass
 
@@ -284,10 +299,12 @@ class PromptManager:
             The prompt template if found, None otherwise
         """
         if version is not None:
-            # Try versioned prompt first: prompt_id.v{version}
             versioned_id: Final = f"{prompt_id}.v{version}"
             if versioned_id in self.prompts:
                 return self.prompts[versioned_id]
+            versioned_id_us: Final = f"{prompt_id}_v{version}"
+            if versioned_id_us in self.prompts:
+                return self.prompts[versioned_id_us]
 
         direct_match: Final = self.prompts.get(prompt_id)
         if direct_match is not None:
@@ -315,6 +332,11 @@ class PromptManager:
         """Add a prompt template programmatically."""
         template: Final = PromptTemplate(content=content, metadata=metadata or {}, template_id=prompt_id)
         self.prompts[prompt_id] = template
+        if self.prompt_version is not None:
+            if not prompt_id.endswith(f".v{self.prompt_version}"):
+                self.prompts[f"{prompt_id}.v{self.prompt_version}"] = template
+            if not prompt_id.endswith(f"_v{self.prompt_version}"):
+                self.prompts[f"{prompt_id}_v{self.prompt_version}"] = template
 
     def prompt_file_to_json(self, file_path: str | Path) -> _PromptFileJson:
         """Convert a .prompt file to JSON format.

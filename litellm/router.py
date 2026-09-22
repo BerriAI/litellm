@@ -351,6 +351,7 @@ if TYPE_CHECKING:
         ResponseInputParam,
         ResponsesAPIResponse,
     )
+    from litellm.types.prompts.init_prompts import PromptSpec
 
     Span = _Span
 else:
@@ -2705,6 +2706,9 @@ class Router:
         **kwargs,
     ):
         try:
+            kwargs.pop("_unrendered_messages", None)
+            kwargs.pop("_original_prompt_params", None)
+            kwargs.pop("_in_prompt_factory", None)
             kwargs["model"] = model
             kwargs["messages"] = messages
             kwargs["stream"] = stream
@@ -4413,8 +4417,12 @@ class Router:
         messages: list[AllMessageValues],
         kwargs: dict[str, Any],
     ):
+        original_function: Final = kwargs.get("original_function", self._acompletion)
+        original_model_name: Final[str] = model
+        unrendered_messages: Final = copy.deepcopy(messages)
         litellm_logging_object = kwargs.get("litellm_logging_obj", None)
         if litellm_logging_object is None:
+            kwargs.setdefault("litellm_call_id", str(uuid.uuid4()))
             litellm_logging_object, kwargs = function_setup(
                 **{
                     "original_function": "acompletion",
@@ -4447,6 +4455,36 @@ class Router:
         prompt_label: Final = kwargs.get("prompt_label", None) or prompt_management_deployment["litellm_params"].get(
             "prompt_label", None
         )
+        raw_prompt_version: Final = kwargs.get("prompt_version", None) or prompt_management_deployment[
+            "litellm_params"
+        ].get("prompt_version", None)
+        raw_prompt_environment: Final = kwargs.get("prompt_environment", None) or prompt_management_deployment[
+            "litellm_params"
+        ].get("prompt_environment", None)
+        prompt_environment: Final = raw_prompt_environment if isinstance(raw_prompt_environment, str) else None
+
+        from litellm.proxy.prompts.prompt_registry import (
+            IN_MEMORY_PROMPT_REGISTRY,
+            parse_prompt_version,
+        )
+
+        prompt_version: Final = parse_prompt_version(raw_prompt_version)
+
+        prompt_spec: PromptSpec | None = None
+        prompt_management_logger: CustomLogger | None = None
+        if prompt_id is not None and isinstance(prompt_id, str):
+            try:
+                prompt_spec = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec(
+                    prompt_id=prompt_id,
+                    version=prompt_version,
+                    environment=prompt_environment,
+                )
+                if prompt_spec is not None:
+                    prompt_management_logger = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(
+                        prompt=prompt_spec
+                    )
+            except Exception as e:
+                verbose_router_logger.debug("Prompt registry resolution in router prompt management failed: %s", e)
 
         if not is_litellm_agent_model and (prompt_id is None or not isinstance(prompt_id, str)):
             raise ValueError(f"Prompt ID is not set or not a string. Got={prompt_id}, type={type(prompt_id)}")
@@ -4465,7 +4503,10 @@ class Router:
             non_default_params=get_non_default_completion_params(kwargs=kwargs),
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
+            prompt_spec=prompt_spec,
+            prompt_management_logger=prompt_management_logger,
             prompt_label=prompt_label,
+            prompt_version=prompt_version,
             request_kwargs=kwargs,
             injected_for_every_deployment=True,
         )
@@ -4478,6 +4519,10 @@ class Router:
             "prompt_variables",
             "prompt_label",
             "prompt_version",
+            "prompt_environment",
+        }
+        original_prompt_params: Final[dict[str, Any]] = {  # mutable-ok: preserved prompt parameters dict
+            k: kwargs[k] for k in prompt_management_params if k in kwargs
         }
         filtered_data: Final = {k: v for k, v in data.items() if k not in prompt_management_params}
 
@@ -4485,16 +4530,73 @@ class Router:
         kwargs["model"] = model
         kwargs["messages"] = messages
         kwargs["litellm_logging_obj"] = litellm_logging_object
-        kwargs["prompt_id"] = prompt_id
-        kwargs["prompt_variables"] = prompt_variables
-        kwargs["prompt_label"] = prompt_label
+        kwargs["_in_prompt_factory"] = True
 
+        return await self._dispatch_prompt_completion(
+            model=model,
+            original_model_name=original_model_name,
+            unrendered_messages=unrendered_messages,
+            original_prompt_params=original_prompt_params,
+            original_function=original_function,
+            prompt_management_params=prompt_management_params,
+            kwargs=kwargs,
+        )
+
+    async def _dispatch_prompt_completion(
+        self,
+        model: str,
+        original_model_name: str,
+        unrendered_messages: list[AllMessageValues],
+        original_prompt_params: dict[str, Any],
+        original_function: Callable,
+        prompt_management_params: set[str],
+        kwargs: dict[str, Any],
+    ) -> ModelResponse | CustomStreamWrapper:
         _model_list: Final = self.get_model_list(model_name=model)
         if _model_list is None or len(_model_list) == 0:  # if direct call to model
-            kwargs.pop("original_function")
-            return await litellm.acompletion(**kwargs)
+            direct_kwargs: Final[dict[str, Any]] = kwargs.copy()
+            for param in prompt_management_params:
+                direct_kwargs.pop(param, None)
+            direct_kwargs.pop("original_function", None)
+            direct_kwargs.pop("_in_prompt_factory", None)
+            direct_kwargs.pop("_unrendered_messages", None)
+            direct_kwargs.pop("_original_prompt_params", None)
+            try:
+                return await litellm.acompletion(**direct_kwargs)
+            except Exception as e:
+                fallbacks: Final = kwargs.get("fallbacks", self.fallbacks)
+                context_window_fallbacks: Final = kwargs.get("context_window_fallbacks", self.context_window_fallbacks)
+                content_policy_fallbacks: Final = kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks)
+                if fallbacks or context_window_fallbacks or content_policy_fallbacks:
+                    fallback_kwargs: Final[dict[str, Any]] = {  # mutable-ok: kwargs dict for fallback hop
+                        **kwargs,
+                        **original_prompt_params,
+                    }
+                    fallback_kwargs["messages"] = copy.deepcopy(unrendered_messages)
+                    fallback_kwargs["model"] = original_model_name
+                    fallback_kwargs["original_function"] = original_function
+                    fallback_kwargs["_unrendered_messages"] = copy.deepcopy(unrendered_messages)
+                    fallback_kwargs["_original_prompt_params"] = original_prompt_params
+                    fallback_kwargs.pop("_in_prompt_factory", None)
+                    return await self.async_function_with_fallbacks_common_utils(
+                        e=e,
+                        disable_fallbacks=kwargs.get("disable_fallbacks"),
+                        fallbacks=fallbacks,
+                        context_window_fallbacks=context_window_fallbacks,
+                        content_policy_fallbacks=content_policy_fallbacks,
+                        model_group=original_model_name,
+                        args=(),
+                        kwargs=fallback_kwargs,
+                    )
+                raise e
 
-        return await self.async_function_with_fallbacks(**kwargs)
+        router_call_kwargs: Final[dict[str, Any]] = {**kwargs}  # mutable-ok: kwargs dict for router call
+        for param in prompt_management_params:
+            router_call_kwargs.pop(param, None)
+        router_call_kwargs["original_function"] = original_function
+        router_call_kwargs["_unrendered_messages"] = copy.deepcopy(unrendered_messages)
+        router_call_kwargs["_original_prompt_params"] = original_prompt_params
+        return await self.async_function_with_fallbacks(**router_call_kwargs)
 
     def image_generation(self, prompt: str, model: str, **kwargs):
         try:
@@ -7404,6 +7506,22 @@ class Router:
         if compaction_surface is not None:
             kwargs["_context_compaction_state"] = initialize_compaction_state(kwargs, compaction_surface)
         clear_pre_routing_selection(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # **kwargs is untyped at this boundary
+        if (
+            not kwargs.get("_in_prompt_factory", False)
+            and model_group is not None
+            and self._is_prompt_management_model(model_group)
+        ):
+            input_messages: Final = kwargs.get("messages") or (
+                args[0]
+                if len(args) > 0 and isinstance(args[0], list)
+                else []  # mutable-ok: empty message list for kwargs fallback
+            )
+            prompt_factory: Final = getattr(self, "_prompt_management_factory")  # noqa: B009  # dynamic dispatch preserves async_function_with_fallbacks return type
+            return await prompt_factory(
+                model=model_group,
+                messages=input_messages,
+                kwargs=kwargs,
+            )
         if not isinstance(kwargs.get("attempted_targets"), AttemptedFallbackTargets):
             _fallback_metadata_key: Final = _get_router_metadata_variable_name(
                 function_name=getattr(kwargs.get("original_function"), "__name__", None)
