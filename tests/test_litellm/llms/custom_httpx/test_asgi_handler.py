@@ -3,8 +3,10 @@ from collections.abc import Mapping
 from typing import Final
 
 import pytest
-from fastapi import FastAPI, Request
+from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
+from starlette.routing import Route
 
 from litellm.llms.custom_httpx.asgi_handler import get_async_asgi_client
 
@@ -14,9 +16,6 @@ async def test_cached_client_isolates_concurrent_apps_and_request_credentials() 
     ready: Final = (asyncio.Event(), asyncio.Event())
 
     async def call(index: int) -> Mapping[str, object]:
-        app: Final = FastAPI()
-
-        @app.post("/child")
         async def endpoint(request: Request) -> JSONResponse:
             ready[index].set()
             await ready[1 - index].wait()
@@ -25,6 +24,7 @@ async def test_cached_client_isolates_concurrent_apps_and_request_credentials() 
             assert request.headers["authorization"] == f"Bearer key-{index}"
             return JSONResponse({"app": index}, headers={"set-cookie": f"session=app-{index}; Path=/"})
 
+        app: Final = Starlette(routes=[Route("/child", endpoint, methods=["POST"])])
         with get_async_asgi_client(app, f"/gateway-{index}", (f"192.0.2.{index + 1}", 4321)) as client:
             response: Final = await client.post(
                 f"https://proxy.test/gateway-{index}/child", headers={"authorization": f"Bearer key-{index}"},
@@ -41,13 +41,12 @@ async def test_cached_client_isolates_concurrent_apps_and_request_credentials() 
 
 @pytest.mark.asyncio
 async def test_internal_client_does_not_follow_redirects_or_environment_proxies(monkeypatch: pytest.MonkeyPatch) -> None:
-    app: Final = FastAPI()
     monkeypatch.setenv("HTTPS_PROXY", "http://unreachable.invalid:8080")
 
-    @app.post("/redirect")
-    async def endpoint() -> RedirectResponse:
+    async def endpoint(request: Request) -> RedirectResponse:
         return RedirectResponse("https://external.invalid/credentials")
 
+    app: Final = Starlette(routes=[Route("/redirect", endpoint, methods=["POST"])])
     with get_async_asgi_client(app) as client:
         response: Final = await client.post("https://proxy.test/redirect", headers={"authorization": "Bearer fixture"})
         assert response.status_code == 307
