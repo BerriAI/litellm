@@ -179,8 +179,6 @@ class UsageTelemetryRecorder(CustomLogger):
         except ValidationError:
             verbose_proxy_logger.debug("Usage telemetry: standard_logging_object missing expected fields, skipping")
             return
-        # Only the resolved public model name leaves the process: never the
-        # model group, alias, api_base, or anything under metadata.
         attrs: Final[Mapping[str, str]] = MappingProxyType(
             {
                 "litellm.model": payload.model,

@@ -1290,10 +1290,6 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         raise_unless_tolerated=PrismaDBExceptionHandler.handle_db_exception,
     )
 
-    ## USAGE TELEMETRY: opt-in anonymous OSS metrics (LITELLM_TELEMETRY=true) ##
-    ## Built here, after the YAML environment_variables and the prisma client
-    ## are both loaded, so the flag works from either source and the instance
-    ## id can persist in LiteLLM_Config.
     if usage_telemetry_enabled():
         usage_telemetry_recorder = build_usage_telemetry_recorder(
             litellm_version=version,
@@ -2536,9 +2532,6 @@ open_telemetry_logger: OpenTelemetry | None = None
 # Folded in memory by BillableRequestMetricsMiddleware, drained to
 # LiteLLM_DailyGatewayRequests by the update_gateway_requests scheduler job.
 gateway_request_accumulator: Final = GatewayRequestAccumulator()
-### USAGE TELEMETRY ###
-# Built in proxy_startup_event when LITELLM_TELEMETRY=true; also a callback and
-# a second middleware sink. Module global so the sink_factory lambda can read it.
 usage_telemetry_recorder: UsageTelemetryRecorder | None = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj: ProxyLogging = ProxyLogging(user_api_key_cache=user_api_key_cache, premium_user=premium_user)
