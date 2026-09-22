@@ -89,7 +89,7 @@ def test_record_aggregates_by_route_and_status_class() -> None:
         assert point.attributes["litellm.endpoint.category"] == "llm"
 
 
-_PUBLIC_MODEL: Final = next(key for key in litellm.model_cost if "/" not in key)
+_PUBLIC_MODEL: Final = next(key for key in ut._PUBLIC_MODELS if "/" not in key)
 
 _SUCCESS_PAYLOAD: Final[dict] = {
     "model": _PUBLIC_MODEL,
@@ -153,7 +153,7 @@ async def test_success_event_exports_only_anonymous_attributes() -> None:
 
 
 async def test_private_model_name_collapses_to_other() -> None:
-    """A model name absent from the public pricing map could be an internal
+    """A model name absent from the shipped pricing map could be an internal
     identifier (a fine-tune name, a private deployment alias), so it must not
     be exported; the label falls back to "other"."""
     recorder, reader = _recorder_with_reader()
@@ -174,6 +174,22 @@ async def test_private_model_name_collapses_to_other() -> None:
     llm_points: Final = _data_points(reader, "litellm.usage.llm_requests")
     assert len(llm_points) == 1
     assert llm_points[0].attributes["litellm.model"] == "other"
+
+
+def test_model_registered_at_runtime_still_labels_other(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Operators can add private names to litellm.model_cost for billing
+    (register_model, custom pricing config). Those names are private
+    identifiers and must still label as "other": only the pricing map
+    shipped with the package counts as public."""
+    monkeypatch.setitem(litellm.model_cost, "my-private-finetune", {"input_cost_per_token": 0.0})
+    assert ut._public_model_label("my-private-finetune", "openai") == "other"
+    assert ut._public_model_label("openai/my-private-finetune", "openai") == "other"
+
+
+def test_shipped_provider_prefixed_model_labels_as_itself() -> None:
+    shipped: Final = next(key for key in ut._PUBLIC_MODELS if "/" in key)
+    provider, _, model = shipped.partition("/")
+    assert ut._public_model_label(model, provider) == shipped
 
 
 async def test_success_event_with_missing_payload_records_nothing() -> None:
@@ -278,6 +294,25 @@ def test_exporter_ignores_otlp_header_env_vars(monkeypatch: pytest.MonkeyPatch) 
     assert "authorization" not in {key.lower() for key in headers}
     assert "x-api-key" not in {key.lower() for key in headers}
     assert headers["User-Agent"] == "litellm-proxy/1.2.3"
+
+
+def test_meter_provider_ignores_otel_resource_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resource.create merges OTEL_RESOURCE_ATTRIBUTES and OTEL_SERVICE_NAME,
+    which would stamp a deployment's host name and service name onto the
+    telemetry resource. The plain Resource constructor reads no env."""
+    monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "host.name=secret-host,k8s.pod.name=p1")
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "customer-svc")
+
+    provider: Final = ut.build_usage_meter_provider(
+        _config(endpoint="http://127.0.0.1:1", litellm_version="9.9", instance_id="i-9")
+    )
+    attrs: Final = provider._sdk_config.resource.attributes  # pyright: ignore[reportPrivateUsage]  # asserts the resource actually exported
+
+    assert dict(attrs) == {
+        "service.name": "litellm-proxy",
+        "litellm.version": "9.9",
+        "litellm.instance.id": "i-9",
+    }
 
 
 class _SpySink:

@@ -10,8 +10,9 @@ same exporter shape, no license key, no client certificate, no hostname.
 Only aggregate counts leave the process: request totals by endpoint category
 and status class, plus per-call provider, call type, token counts, and cost
 from the standard logging payload. Model names are exported only when they are
-present in the public pricing map; anything else is reported as "other". No
-API keys, teams, users, model groups, or api_base values are ever exported.
+present in the pricing map shipped with the package; anything else is
+reported as "other". No API keys, teams, users, model groups, or api_base
+values are ever exported.
 """
 
 import json
@@ -29,9 +30,9 @@ from opentelemetry.sdk.resources import Resource
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
     BillableCategory,
     GatewayRequestSink,
@@ -111,7 +112,7 @@ def _build_exporter(config: UsageTelemetryConfig) -> OTLPMetricExporter:
 def build_usage_meter_provider(config: UsageTelemetryConfig) -> MeterProvider:
     exporter: Final = _build_exporter(config)
     reader: Final = PeriodicExportingMetricReader(exporter, export_interval_millis=config.export_interval_ms)
-    resource: Final = Resource.create(
+    resource: Final = Resource(
         MappingProxyType(
             {
                 "service.name": "litellm-proxy",
@@ -214,13 +215,15 @@ class UsageTelemetryRecorder(CustomLogger):
         self._provider.shutdown(timeout_millis=SHUTDOWN_FLUSH_TIMEOUT_MS)
 
 
+_PUBLIC_MODELS: Final[frozenset[str]] = frozenset(GetModelCostMap.load_local_model_cost_map())
+
+
 def _public_model_label(model: str, provider: str | None) -> str:
-    """Only public model names leave the process. A name absent from the
-    public pricing map (fine-tunes, aliases, internal deployments) collapses
-    to "other" so a private model identifier cannot leak."""
-    if model in litellm.model_cost:
+    """Only names shipped in the packaged pricing map are exported; anything
+    else, including names operators registered for billing, becomes "other"."""
+    if model in _PUBLIC_MODELS:
         return model
-    if provider is not None and f"{provider}/{model}" in litellm.model_cost:
+    if provider is not None and f"{provider}/{model}" in _PUBLIC_MODELS:
         return f"{provider}/{model}"
     return "other"
 
