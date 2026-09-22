@@ -8,6 +8,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 import psycopg
+from e2e_metadata import step
 from psycopg import sql
 from pydantic import TypeAdapter
 
@@ -42,19 +43,23 @@ class Database:
             connection.execute("SET statement_timeout = '15s'")
             yield connection
 
+    @step("run a SQL statement")
     def execute(self, statement: LiteralString | sql.Composed, params: tuple[Scalar, ...] = ()) -> None:
         with self.connection() as connection:
             connection.execute(statement, params or None)
 
+    @step("query the database")
     def query(
         self, statement: LiteralString | sql.Composed, params: tuple[Scalar, ...] = ()
     ) -> tuple[tuple[Scalar, ...], ...]:
         with self.connection() as connection:
             return ROWS.validate_python(connection.execute(statement, params or None).fetchall())
 
+    @step("check whether a table exists")
     def exists(self, name: str) -> bool:
         return self.query("SELECT to_regclass(%s) IS NOT NULL", (name,)) == ((True,),)
 
+    @step("read the _prisma_migrations history")
     def history(self) -> tuple[tuple[Scalar, ...], ...]:
         if not self.exists("_prisma_migrations"):
             return ()
@@ -63,6 +68,7 @@ class Database:
             "applied_steps_count, logs FROM _prisma_migrations ORDER BY id"
         )
 
+    @step("list backends waiting on an advisory lock")
     def blocked(self, key: int = GATE_KEY) -> tuple[tuple[Scalar, ...], ...]:
         return self.query(
             "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND NOT granted "
@@ -71,6 +77,7 @@ class Database:
             (key >> 32, key & 0xFFFFFFFF),
         )
 
+    @step("hold an advisory lock")
     @contextmanager
     def lock(self, key: int = GATE_KEY) -> Generator[None]:
         with self.connection() as connection:
@@ -86,6 +93,7 @@ class Databases:
     admin_url: str
     container_admin_url: str
 
+    @step("create a test database")
     @contextmanager
     def create(self, template: Database | None = None, schema: str = "public") -> Generator[Database]:
         name: Final = f"litellm_migration_test_{uuid4().hex[:20]}"
@@ -105,6 +113,7 @@ class Databases:
                 connection.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
 
 
+@step("create a read-only database role")
 @contextmanager
 def restricted_user(database: Database) -> Generator[Database]:
     role: Final = f"migration_reader_{uuid4().hex[:16]}"

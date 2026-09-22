@@ -23,6 +23,7 @@ from websockets.sync.connection import Connection
 
 from e2e_config import unique_marker, ws_base_url
 from proxy_client import ProxyClient
+from e2e_metadata import step
 from models import LiteLLMParamsBody
 
 _M = TypeVar("_M", bound=BaseModel)
@@ -294,9 +295,11 @@ def _as_text(message: str | bytes) -> str:
 class RealtimeSession:
     connection: Connection
 
+    @step("send a realtime client event")
     def send(self, event: BaseModel) -> None:
         self.connection.send(event.model_dump_json(by_alias=True, exclude_none=True))
 
+    @step("poll the realtime socket for the awaited event")
     def collect_until(
         self, stop_type: str, *, timeout: float
     ) -> tuple[ReceivedEvent, ...]:
@@ -324,6 +327,7 @@ class RealtimeSession:
 class RealtimeClient:
     proxy: ProxyClient
 
+    @step("register a realtime deployment")
     def provision(self, provider: RealtimeProvider) -> tuple[str, str]:
         """Register this provider's realtime deployment through /model/new and return
         (model_name, model_id). The name is marker-unique so it never collides with a
@@ -336,6 +340,7 @@ class RealtimeClient:
         )
         return model_name, model_id
 
+    @step("open the /v1/realtime websocket")
     @contextmanager
     def connect(
         self, *, key: str, model: str, timeout: float = 15.0

@@ -36,6 +36,7 @@ from pydantic import BaseModel, RootModel
 
 from e2e_config import unique_marker
 from e2e_http import Success
+from e2e_metadata import step
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody, SpendLogsParams
 from proxy_client import ProxyClient
@@ -98,6 +99,7 @@ def approx_equal(actual: float, expected: float) -> bool:
     return abs(actual - expected) <= max(1e-9, abs(expected) * 1e-2)
 
 
+@step("assert the row's total is the sum of its components")
 def assert_total_is_sum_of_components(row: CostRow) -> None:
     """The row's total is input + output + tool usage. The cache components are
     already inside the gross input cost, so adding them again would double-bill."""
@@ -114,6 +116,7 @@ def assert_total_is_sum_of_components(row: CostRow) -> None:
     )
 
 
+@step("assert fresh input tokens are billed at the model's rate")
 def assert_fresh_tokens_billed_at(row: CostRow, input_rate: float) -> None:
     """Strip the cache components out of the gross input cost and what is left must
     be the freshly-read tokens at the deployment's input rate."""
@@ -133,6 +136,7 @@ def assert_fresh_tokens_billed_at(row: CostRow, input_rate: float) -> None:
     )
 
 
+@step("poll /spend/logs for the request's cost row")
 def poll_cost_row(proxy: ProxyClient, request_id: str) -> CostRow | None:
     """Poll /spend/logs for the call's row until it lands with a cost breakdown
     (rows flush ~60s behind the call via proxy_batch_write_at); None on timeout."""
@@ -156,6 +160,7 @@ def poll_cost_row(proxy: ProxyClient, request_id: str) -> CostRow | None:
     return None
 
 
+@step("poll /spend/logs for a matching cost row")
 def poll_cost_row_where(
     proxy: ProxyClient, api_key: str, predicate: Callable[[CostRow], bool]
 ) -> CostRow | None:
@@ -182,6 +187,7 @@ def poll_cost_row_where(
     return None
 
 
+@step("register a deployment with custom pricing")
 def register_priced_model(
     proxy: ProxyClient,
     resources: ResourceManager,

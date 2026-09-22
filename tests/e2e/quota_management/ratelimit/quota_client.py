@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from proxy_client import ProxyClient
 from e2e_http import StreamingResponse
+from e2e_metadata import step
 from models import ChatBody, ChatMessage
 
 
@@ -16,6 +17,7 @@ from models import ChatBody, ChatMessage
 class QuotaClient:
     proxy: ProxyClient
 
+    @step("POST /chat/completions")
     def chat(self, key: str, model: str, content: str, *, max_tokens: int = 16) -> StreamingResponse:
         return self.proxy.transport.send(
             "/chat/completions",

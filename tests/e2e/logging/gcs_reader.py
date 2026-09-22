@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT
 from e2e_http import URL, Headers, probe
+from e2e_metadata import step
 
 _GCS_API = "https://storage.googleapis.com"
 #: Tolerance for clock skew between this host and GCS object timestamps.
@@ -146,6 +147,7 @@ class GcsLogReader:
             )
         return result.body
 
+    @step("read GCS log records for the response")
     def records_for_response_id(self, response_id: str, *, since: datetime) -> list[GcsLogRecord]:
         """Every payload written for ``response_id``: the direct
         ``{date}/{response_id}`` object plus any hit inside batch NDJSON
@@ -168,6 +170,7 @@ class GcsLogReader:
                     )
         return records
 
+    @step("poll GCS for the response's log records")
     def poll_records_for_response_id(self, response_id: str, *, since: datetime) -> list[GcsLogRecord]:
         """Poll until the payload is readable (the gcs_bucket callback flushes
         on a ~20s timer), then keep re-reading for GCS_SETTLE_SECONDS - past a

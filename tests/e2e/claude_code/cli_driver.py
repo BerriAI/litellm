@@ -25,6 +25,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
+from e2e_metadata import step
+
 from claude_code.rate_limiter import (
     RateLimiter,
     get_default_limiter,
@@ -211,6 +213,7 @@ class DriverResult:
     duration_ms: Optional[int] = None
 
 
+@step("run the claude CLI")
 def run_claude(
     *,
     prompt: Optional[str],
@@ -394,6 +397,7 @@ def _matches_failure_shape(outcome: ModelResult, pattern: "re.Pattern[str]") -> 
     return bool(pattern.search(failure_diagnostic(outcome)))
 
 
+@step("run the claude CLI")
 def run_claude_models_parallel(
     *,
     models: Sequence[str],

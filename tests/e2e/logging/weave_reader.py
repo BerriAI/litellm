@@ -37,6 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT
 from e2e_http import URL, AuthHeaders, send
+from e2e_metadata import step
 
 _WEAVE_TRACE_API: Final = "https://trace.wandb.ai"
 
@@ -232,6 +233,7 @@ class WeaveReader:
             )
         return tuple(WeaveCall.model_validate_json(line) for line in outcome.body.splitlines() if line.strip())
 
+    @step("query Weave calls for the marker")
     def calls_matching(self, marker: str, *, since: float, op: str = LITELLM_REQUEST_OP) -> tuple[WeaveCall, ...]:
         """Every call under ``op`` started after ``since`` whose inputs carry
         ``marker``, paging until the window is exhausted.
@@ -247,6 +249,7 @@ class WeaveReader:
         )
         return tuple(call for page in pages for call in page if call.mentions(marker))
 
+    @step("poll Weave for the marker's calls")
     def poll_calls_matching(self, marker: str, *, since: float, op: str = LITELLM_REQUEST_OP) -> tuple[WeaveCall, ...]:
         """Poll until the call is readable, then keep re-reading for
         WEAVE_SETTLE_SECONDS so a duplicate exported by a later batch flush

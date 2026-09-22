@@ -6,6 +6,7 @@ import os
 from collections.abc import Sequence
 
 from e2e_config import datadog_mcp_url, unique_marker
+from e2e_metadata import step
 from lifecycle import ResourceManager
 from mcp_client import McpClient
 
@@ -31,6 +32,7 @@ def assert_dd_mcp_creds() -> None:
         )
 
 
+@step("register the Datadog MCP server")
 def register_datadog_mcp(
     client: McpClient,
     resources: ResourceManager,

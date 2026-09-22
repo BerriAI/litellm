@@ -20,6 +20,7 @@ from collections.abc import Iterable
 
 import pytest
 from coverage_registry.management_cases import case_properties
+from e2e_metadata import step_properties
 
 # Hardcoded because the runner image copies tests/e2e/ to /app/e2e, so nothing
 # at runtime names this suite's place in the repo. test_junit_properties.py
@@ -105,3 +106,21 @@ def attach_result_properties(item: pytest.Item) -> None:
     if any(name == "package" for name, _ in item.user_properties):
         return
     item.user_properties.extend(result_properties(item))
+
+
+def attach_step_properties(item: pytest.Item) -> None:
+    """Attach the runtime-recorded steps; called after setup and after call.
+
+    Separate from `attach_result_properties` because it cannot share its home:
+    that one runs in `pytest_collection_modifyitems`, before any test body has
+    executed, so the recorder is necessarily empty there.
+
+    Any `step` entries already on the item are dropped first, which is what makes
+    the second call of a test safe: the story attached after setup is replaced by
+    the longer one attached after call. It also covers `--reruns 1`, where a flaky
+    test's second attempt would otherwise append a second copy of the story behind
+    the first, and the report would read as one very long test that did everything
+    twice. Last attempt wins, which is the attempt whose outcome JUnit records.
+    """
+    item.user_properties[:] = [entry for entry in item.user_properties if entry[0] != "step"]
+    item.user_properties.extend(step_properties())
