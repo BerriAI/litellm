@@ -943,6 +943,21 @@ class LiteLLMAnthropicMessagesAdapter:
             text_parts.append(self._add_prompt_cache_breakpoint_if_present(block, text_obj))
         return ChatCompletionSystemMessage(role="system", content=text_parts) if text_parts else None
 
+    def _ensure_openai_messages_have_user_or_system(
+        self,
+        messages: list[AllMessageValues],
+    ) -> list[AllMessageValues]:
+        """Ensure translated messages contain at least one user or system role.
+
+        Anthropic allows a tool-result continuation with no system prompt and no
+        prior user text. That shape becomes ``assistant`` + ``tool`` only, which
+        OpenAI-compatible providers reject with HTTP 400. Inject an empty user
+        message so the request stays valid upstream (#42432).
+        """
+        if any(m.get("role") in ("user", "system") for m in messages):
+            return messages
+        return [ChatCompletionUserMessage(role="user", content=""), *messages]
+
     def _add_system_message_to_messages(
         self,
         new_messages: list[AllMessageValues],
@@ -1243,6 +1258,8 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
         self._add_system_message_to_messages(new_messages, anthropic_message_request)
+        # OpenAI-compatible providers require at least one user/system role
+        new_messages = self._ensure_openai_messages_have_user_or_system(new_messages)
 
         new_kwargs: Final[ChatCompletionRequest] = {
             "model": anthropic_message_request["model"],

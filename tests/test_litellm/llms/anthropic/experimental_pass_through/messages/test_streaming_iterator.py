@@ -206,8 +206,9 @@ def test_parse_anthropic_error_event_from_sse_bytes():
 
 
 def test_parse_anthropic_error_event_defaults_status_for_unknown_type():
+    # Unknown vendor/client error types must not escalate to synthetic 500 (#42432).
     chunk = {"type": "error", "error": {"type": "some_future_error_type", "message": "?"}}
-    assert parse_anthropic_error_event(chunk) == ("some_future_error_type", "?", 500)
+    assert parse_anthropic_error_event(chunk) == ("some_future_error_type", "?", 400)
 
 
 def test_parse_anthropic_error_event_missing_message_falls_back_to_type():

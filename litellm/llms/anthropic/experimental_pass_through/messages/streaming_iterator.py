@@ -15,7 +15,10 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.anthropic.common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP
+from litellm.llms.anthropic.common_utils import (
+    ANTHROPIC_ERROR_STATUS_CODE_DEFAULT,
+    ANTHROPIC_ERROR_STATUS_CODE_MAP,
+)
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
@@ -139,7 +142,8 @@ def parse_anthropic_error_event(chunk: object) -> tuple[str, str, int] | None:
     ``chunk`` is not an error event.
 
     The status code is looked up via ANTHROPIC_ERROR_STATUS_CODE_MAP,
-    defaulting to 500 for an error ``type`` Anthropic hasn't documented yet.
+    defaulting to 400 for an unrecognized error ``type`` so vendor/client
+    errors are not escalated into synthetic 500s (#42432).
     """
     error_body: Final = _anthropic_error_body(chunk)
     if error_body is None:
@@ -151,7 +155,7 @@ def parse_anthropic_error_event(chunk: object) -> tuple[str, str, int] | None:
     return (
         error_type,
         message if isinstance(message, str) else error_type,
-        ANTHROPIC_ERROR_STATUS_CODE_MAP.get(error_type, 500),
+        ANTHROPIC_ERROR_STATUS_CODE_MAP.get(error_type, ANTHROPIC_ERROR_STATUS_CODE_DEFAULT),
     )
 
 
