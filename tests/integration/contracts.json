@@ -1770,6 +1770,9 @@
     ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[bearer]": [
       "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
+    ],
+    "tests/integration/providers/test_bedrock_auth_wire.py::test_client_anthropic_oauth_authorization_header_does_not_replace_bedrock_sigv4_signature": [
+      "providers.bedrock_auth.client_anthropic_oauth_token_never_replaces_sigv4_authorization"
     ]
   },
   "browser": {
