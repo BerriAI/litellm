@@ -18,7 +18,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from fastapi import HTTPException
 from jsonschema import validate
 
 import litellm
@@ -4422,7 +4421,9 @@ async def test_success_deployment_hook_raising_keeps_video_response_and_runs_lat
 ) -> None:
     second_hook: Final = _RewritingSuccessDeploymentHook()
     monkeypatch.setattr(litellm, "callbacks", [_ChatShapedSuccessDeploymentHook(), second_hook])
-    video: Final = VideoObject(id="video_abc", object="video", status="queued", model="sora-2", seconds="4", size="720x1280")
+    video: Final = VideoObject(
+        id="video_abc", object="video", status="queued", model="sora-2", seconds="4", size="720x1280"
+    )
 
     result: Final = await async_post_call_success_deployment_hook(
         request_data={"model": "sora-2"}, response=video, call_type=CallTypes.avideo_generation
@@ -4432,11 +4433,15 @@ async def test_success_deployment_hook_raising_keeps_video_response_and_runs_lat
     assert second_hook.seen_responses == (video,)
 
 
+class _GuardrailBlocked(Exception):
+    pass
+
+
 class _BlockingSuccessDeploymentGuardrail(CustomGuardrail):
     async def async_post_call_success_deployment_hook(
         self, request_data: dict, response: LLMResponseTypes, call_type: CallTypes | None
     ) -> LLMResponseTypes | None:
-        raise HTTPException(status_code=400, detail={"error": "Violated moderation policy"})
+        raise _GuardrailBlocked("Violated moderation policy")
 
 
 @pytest.mark.asyncio
@@ -4446,7 +4451,7 @@ async def test_success_deployment_hook_still_propagates_guardrail_block(monkeypa
         litellm, "callbacks", [_BlockingSuccessDeploymentGuardrail(guardrail_name="blocking"), later_hook]
     )
 
-    with pytest.raises(HTTPException):
+    with pytest.raises(_GuardrailBlocked):
         await async_post_call_success_deployment_hook(
             request_data={"model": "gpt-5.6"}, response=ModelResponse(model="gpt-5.6"), call_type=CallTypes.acompletion
         )
