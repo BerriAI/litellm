@@ -4369,13 +4369,8 @@ export interface paths {
          *     versions, deployment kind, and config flags whose keys and values LiteLLM defines.
          *     Nothing from the operator's config values, request data, or errors
          *
-         *     verbose=true walks the whole loaded config instead: every key path, with booleans, numbers
-         *     and LiteLLM-defined enum values shown, every other string shown as <str> and operator-keyed
-         *     maps (environment_variables, model_group_alias, headers, metadata) shown as a key count
-         *
          *     Example usage:
          *     curl http://localhost:4000/debug/report -H "Authorization: Bearer sk-1234"
-         *     curl "http://localhost:4000/debug/report?verbose=true" -H "Authorization: Bearer sk-1234"
          */
         get: operations["get_debug_report_debug_report_get"];
         put?: never;
@@ -48597,9 +48592,7 @@ export interface operations {
     };
     get_debug_report_debug_report_get: {
         parameters: {
-            query?: {
-                verbose?: boolean;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -48613,15 +48606,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnvironmentReport"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
