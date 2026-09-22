@@ -61,7 +61,7 @@ class GenAIEventRecorder:
                 severity_number=SeverityNumber.WARN,
                 body=message,
                 attributes=attributes,
-                resource=self.resource,
+                resource=self.resource,  # pyright: ignore[reportCallIssue]  # SDK-only kwarg absent from the API LogRecord signature on the pin
             )
             if SDK_LOG_RECORD is not None
             else LogRecord(
@@ -72,7 +72,7 @@ class GenAIEventRecorder:
                 severity_number=SeverityNumber.WARN,
                 body=message,
                 attributes=attributes,
-                event_name=GenAIEvent.OPERATION_EXCEPTION,
+                event_name=GenAIEvent.OPERATION_EXCEPTION,  # pyright: ignore[reportCallIssue]  # kwarg exists only on OTel 1.44+, absent from the pinned API signature
             )
         )
         self.event_logger.emit(record)
