@@ -226,17 +226,22 @@ def _get_proxy_llm_router() -> Router | None:
     return llm_router
 
 
-def _bounded_requested_model_label(requested_model: str | None, router_originated: bool = False) -> str | None:
+def _bounded_requested_model_label(requested_model: object, router_originated: bool = False) -> str | None:
     """
     Bound ``requested_model`` label cardinality: names the router recognizes
     (model names, deployment ids, aliases, routing groups, team public model
     names) or matches via a global or team wildcard/pattern route keep their
     own label value; any other client-supplied string collapses into the
-    single ``other`` bucket. With no proxy router to vouch for the string,
-    client-supplied values collapse to ``other`` while ``router_originated``
-    values (emitted by an SDK ``Router``'s own deployment failure and
-    fallback events, where the proxy router never exists) pass through.
+    single ``other`` bucket, as does any non-string request ``model`` value.
+    With no proxy router to vouch for the string, client-supplied values
+    collapse to ``other`` while ``router_originated`` values (emitted by an
+    SDK ``Router``'s own deployment failure and fallback events, where the
+    proxy router never exists) pass through.
     """
+    if requested_model is None:
+        return None
+    if not isinstance(requested_model, str):
+        return UNRECOGNIZED_REQUESTED_MODEL_LABEL
     if not requested_model:
         return requested_model
     llm_router: Final = _get_proxy_llm_router()
