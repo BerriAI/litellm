@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import type { FieldSourceMap } from "@/components/shared/ConfigOwnedField";
+import type { SourcesState } from "@/components/shared/ConfigOwnedField";
 import { toast } from "@/lib/toast";
 import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "./RouterSettingsForm";
@@ -25,7 +25,11 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
   const [availableRoutingStrategies, setAvailableRoutingStrategies] = useState<string[]>([]);
   const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
   const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
-  const [routerSources, setRouterSources] = useState<FieldSourceMap | null>(null);
+  const [sourcesState, setSourcesState] = useState<SourcesState | null>(null);
+  const sessionKey = `${accessToken}:${userRole}:${userID}`;
+  const loadedSources = sourcesState?.sessionKey === sessionKey ? sourcesState : null;
+  const routerSources = loadedSources?.sources ?? null;
+  const sourcesFailed = loadedSources?.failed ?? false;
 
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
@@ -44,43 +48,45 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
         selectedStrategy: initialStrategy,
       }));
     });
-    getRouterSettingsCall(accessToken).then((data) => {
-      setRouterSources(data.source ?? {});
-      if (data.fields) {
-        // Build metadata map for easy lookup
-        const fieldsMap: { [key: string]: any } = {};
-        data.fields.forEach((field: any) => {
-          fieldsMap[field.field_name] = {
-            ui_field_name: field.ui_field_name,
-            field_description: field.field_description,
-            options: field.options,
-            link: field.link,
-          };
-        });
-        setRouterFieldsMetadata(fieldsMap);
+    getRouterSettingsCall(accessToken)
+      .then((data) => {
+        setSourcesState({ sessionKey, sources: data.source ?? {}, failed: false });
+        if (data.fields) {
+          // Build metadata map for easy lookup
+          const fieldsMap: { [key: string]: any } = {};
+          data.fields.forEach((field: any) => {
+            fieldsMap[field.field_name] = {
+              ui_field_name: field.ui_field_name,
+              field_description: field.field_description,
+              options: field.options,
+              link: field.link,
+            };
+          });
+          setRouterFieldsMetadata(fieldsMap);
 
-        // Extract routing strategies from the routing_strategy field's options
-        const routingStrategyField = data.fields.find((field: any) => field.field_name === "routing_strategy");
-        if (routingStrategyField?.options) {
-          setAvailableRoutingStrategies(routingStrategyField.options);
-        }
+          // Extract routing strategies from the routing_strategy field's options
+          const routingStrategyField = data.fields.find((field: any) => field.field_name === "routing_strategy");
+          if (routingStrategyField?.options) {
+            setAvailableRoutingStrategies(routingStrategyField.options);
+          }
 
-        // Store routing strategy descriptions
-        if (data.routing_strategy_descriptions) {
-          setRoutingStrategyDescriptions(data.routing_strategy_descriptions);
-        }
+          // Store routing strategy descriptions
+          if (data.routing_strategy_descriptions) {
+            setRoutingStrategyDescriptions(data.routing_strategy_descriptions);
+          }
 
-        // Set enable_tag_filtering value
-        const tagFilteringField = data.fields.find((field: any) => field.field_name === "enable_tag_filtering");
-        if (tagFilteringField?.field_value !== null && tagFilteringField?.field_value !== undefined) {
-          setFormValue((prev) => ({
-            ...prev,
-            enableTagFiltering: tagFilteringField.field_value,
-          }));
+          // Set enable_tag_filtering value
+          const tagFilteringField = data.fields.find((field: any) => field.field_name === "enable_tag_filtering");
+          if (tagFilteringField?.field_value !== null && tagFilteringField?.field_value !== undefined) {
+            setFormValue((prev) => ({
+              ...prev,
+              enableTagFiltering: tagFilteringField.field_value,
+            }));
+          }
         }
-      }
-    });
-  }, [accessToken, userRole, userID]);
+      })
+      .catch(() => setSourcesState({ sessionKey, sources: null, failed: true }));
+  }, [accessToken, userRole, userID, sessionKey]);
 
   const handleSaveChanges = async () => {
     if (!accessToken) {
@@ -177,7 +183,19 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
     }
   };
 
-  if (!accessToken || routerSources === null) {
+  if (!accessToken) {
+    return null;
+  }
+
+  if (sourcesFailed) {
+    return (
+      <div role="alert" className="text-sm text-destructive">
+        Failed to load router settings. Reload the page to try again
+      </div>
+    );
+  }
+
+  if (routerSources === null) {
     return null;
   }
 

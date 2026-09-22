@@ -203,6 +203,25 @@ describe("RouterSettings", () => {
       expect(await screen.findByText("Set in config.yaml and cannot be changed here")).toBeInTheDocument();
     });
 
+    it("drops the previous source map while a new session is loading", async () => {
+      vi.mocked(getRouterSettingsCall).mockResolvedValueOnce({ ...mockRouterSettingsResponse, source: {} });
+      const { rerender } = renderWithProviders(<RouterSettings {...defaultProps} />);
+      expect(await screen.findByRole("button", { name: /save changes/i })).toBeInTheDocument();
+
+      vi.mocked(getRouterSettingsCall).mockReturnValue(new Promise(() => {}));
+      rerender(<RouterSettings {...defaultProps} accessToken="other-token" />);
+
+      expect(screen.queryByRole("button", { name: /save changes/i })).not.toBeInTheDocument();
+    });
+
+    it("shows an error instead of a blank page when the source request fails", async () => {
+      vi.mocked(getRouterSettingsCall).mockRejectedValue(new Error("boom"));
+      renderWithProviders(<RouterSettings {...defaultProps} />);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("Failed to load router settings");
+      expect(screen.queryByRole("button", { name: /save changes/i })).not.toBeInTheDocument();
+    });
+
     it("holds the form until the source map has loaded so config owned fields never render editable", async () => {
       let resolveSources: (
         value: typeof mockRouterSettingsResponse & { source: Record<string, string> },

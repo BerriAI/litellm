@@ -417,6 +417,15 @@ describe("Fallbacks", () => {
       expect(screen.queryByTestId("delete-modal")).not.toBeInTheDocument();
     });
 
+    it("keeps fallbacks visible and explains why edits are unavailable when the source request fails", async () => {
+      vi.mocked(networkingModule.getRouterSettingsCall).mockRejectedValue(new Error("boom"));
+      renderWithQueryClient(<Fallbacks {...defaultProps} />);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("Failed to load router settings");
+      expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+      expect(screen.queryByTestId("add-fallbacks-button")).not.toBeInTheDocument();
+    });
+
     it("hides write actions until the source map has loaded", async () => {
       let resolveSources: (value: { fields: never[]; source: Record<string, string> }) => void = () => {};
       vi.mocked(networkingModule.getRouterSettingsCall).mockReturnValue(

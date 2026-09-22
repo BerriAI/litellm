@@ -6,6 +6,12 @@ import type { components } from "@/lib/http/schema";
 export type FieldSource = components["schemas"]["RouterSettingsResponse"]["source"][string];
 export type FieldSourceMap = Partial<Record<string, FieldSource>>;
 
+export interface SourcesState {
+  sessionKey: string;
+  sources: FieldSourceMap | null;
+  failed: boolean;
+}
+
 export const CONFIG_OWNED_MESSAGE = "Set in config.yaml and cannot be changed here";
 
 export const isConfigOwned = (sources: FieldSourceMap | null | undefined, fieldName: string): boolean =>

@@ -8,7 +8,7 @@ import DeleteResourceModal from "../../../common_components/DeleteResourceModal"
 import { ProviderLogo } from "../../../molecules/models/ProviderLogo";
 import { toast } from "@/lib/toast";
 import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "../../../networking";
-import { CONFIG_OWNED_MESSAGE, type FieldSourceMap, isConfigOwned } from "@/components/shared/ConfigOwnedField";
+import { CONFIG_OWNED_MESSAGE, isConfigOwned, type SourcesState } from "@/components/shared/ConfigOwnedField";
 import { isProxyAdminRole } from "@/utils/roles";
 import AddFallbacks from "./AddFallbacks";
 import EditFallbacks from "./EditFallbacks";
@@ -122,7 +122,11 @@ async function testFallbackModelResponse(selectedModel: string, accessToken: str
 
 const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) => {
   const [routerSettings, setRouterSettings] = useState<{ [key: string]: any }>({});
-  const [routerSources, setRouterSources] = useState<FieldSourceMap | null>(null);
+  const [sourcesState, setSourcesState] = useState<SourcesState | null>(null);
+  const sessionKey = `${accessToken}:${userRole}:${userID}`;
+  const loadedSources = sourcesState?.sessionKey === sessionKey ? sourcesState : null;
+  const routerSources = loadedSources?.sources ?? null;
+  const sourcesFailed = loadedSources?.failed ?? false;
   const [isDeleting, setIsDeleting] = useState(false);
   const [fallbackToDelete, setFallbackToDelete] = useState<FallbackEntry | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -147,10 +151,10 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
       }
       setRouterSettings(router_settings);
     });
-    getRouterSettingsCall(accessToken).then((data) => {
-      setRouterSources(data.source ?? {});
-    });
-  }, [accessToken, userRole, userID]);
+    getRouterSettingsCall(accessToken)
+      .then((data) => setSourcesState({ sessionKey, sources: data.source ?? {}, failed: false }))
+      .catch(() => setSourcesState({ sessionKey, sources: null, failed: true }));
+  }, [accessToken, userRole, userID, sessionKey]);
 
   const handleDeleteClick = (fallbackEntry: FallbackEntry) => {
     setFallbackToDelete(fallbackEntry);
@@ -260,6 +264,11 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
 
   return (
     <TooltipProvider>
+      {sourcesFailed && (
+        <div role="alert" className="text-sm text-destructive">
+          Failed to load router settings. Reload the page to edit fallbacks
+        </div>
+      )}
       {canModify && (
         <AddFallbacks
           accessToken={accessToken || ""}
