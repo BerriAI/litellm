@@ -272,6 +272,9 @@
     "tests/integration/spend/test_filtered_ledger.py::test_rotated_keys_users_and_model_groups_preserve_success_failure_cache_ledger": [
       "quota_management.spend_tracking.filtered_ledger_preserves_owner_identity_and_totals"
     ],
+    "tests/integration/spend/test_model_router_selected_model.py::test_model_router_alias_without_router_in_name_keeps_selected_model_in_response_and_spend_log": [
+      "spend.model_router.selected_model_is_returned_and_persisted_for_plain_alias"
+    ],
     "tests/integration/management/test_partial_update_sequences.py::test_restricted_actor_cannot_detach_key_from_project": [
       "mgmt.key.update.project_detach_denied_to_restricted_actor"
     ],
