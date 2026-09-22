@@ -319,7 +319,7 @@ async def _authorize_models_this_test_can_call(
     its calls through the proxy. Team and member budgets are already enforced on every route.
     """
     models: Final = _models_this_test_can_call(config)
-    if not models:
+    if not models and config.classifier_type != "jev":
         return
 
     from litellm.proxy.proxy_server import proxy_logging_obj
@@ -344,6 +344,14 @@ async def _authorize_models_this_test_can_call(
             param=None,
             code=status.HTTP_400_BAD_REQUEST,
         ) from e
+
+    if config.classifier_type == "jev" and user_api_key_dict.budget_throttle_pct is not None:
+        raise ProxyException(
+            message="Budget has been exceeded! JEV Test Routing requires available budget.",
+            type=ProxyErrorTypes.budget_exceeded,
+            param=None,
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 @router.post(
