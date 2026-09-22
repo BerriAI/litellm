@@ -175,6 +175,12 @@ func resourceLiteLLMModel() *schema.Resource {
 				Optional:    true,
 				Description: "Name of the LiteLLM credential to use",
 			},
+			"tags": {
+				Type:        schema.TypeList,
+				Optional:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString},
+				Description: "Tags for tag-based routing (see https://docs.litellm.ai/docs/proxy/tag_routing)",
+			},
 			"additional_litellm_params": {
 				Type:     schema.TypeMap,
 				Optional: true,

@@ -163,6 +163,9 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	if thinking != nil {
 		litellmParams["thinking"] = thinking
 	}
+	if v, ok := d.GetOk("tags"); ok || d.HasChange("tags") {
+		litellmParams["tags"] = v
+	}
 
 	// Add additional parameters if provided
 	if additionalParams, ok := d.GetOk("additional_litellm_params"); ok {
@@ -327,6 +330,11 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("tier", GetStringValue(modelResp.ModelInfo.Tier, d.Get("tier").(string)))
 	d.Set("mode", GetStringValue(modelResp.ModelInfo.Mode, d.Get("mode").(string)))
 	d.Set("team_id", GetStringValue(modelResp.ModelInfo.TeamID, d.Get("team_id").(string)))
+	if modelResp.LiteLLMParams.Tags != nil {
+		d.Set("tags", modelResp.LiteLLMParams.Tags)
+	} else {
+		d.Set("tags", d.Get("tags"))
+	}
 
 	// Preserve credential name from state since it might not be returned by API
 	d.Set("litellm_credential_name", d.Get("litellm_credential_name").(string))

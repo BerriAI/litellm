@@ -33,6 +33,7 @@ resource "litellm_model" "advanced_gpt4" {
   tier                = "paid"
   team_id             = "team-123"
   mode                = "chat"
+  tags                = ["team:platform"]
   reasoning_effort    = "medium"
   thinking_enabled    = true
   thinking_budget_tokens = 1024
@@ -121,6 +122,8 @@ The following arguments are supported:
 * `pricing_base_model` - (Optional) string. A pricing key fed to `model_info.base_model` **independently of routing**. When set, `litellm_params.model` still routes via `base_model`, but LiteLLM looks up cost against this key. Useful when the routing/deployment name differs from the cost-map key — e.g. an Azure deployment routed as `azure/gpt-4.1` whose real tier is Data Zone: set `pricing_base_model = "us/gpt-4.1-2025-04-14"` so it is billed at the Data Zone rate. When unset, `base_model` drives pricing as before.
 
 * `litellm_credential_name` - (Optional) string. Name of a LiteLLM credential to use for this model.
+
+* `tags` - (Optional) list(string). Tags applied to this model deployment, used for [tag-based routing](https://docs.litellm.ai/docs/proxy/tag_routing) so requests carrying a matching tag are routed to it.
 
 * `tier` - (Optional) string. The usage tier for this model. Valid values are `"free"` or `"paid"`. Default: `"free"`.
 
