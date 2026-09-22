@@ -44,7 +44,6 @@ def test_online_model_experiment_deployment_is_registered():
 @pytest.mark.asyncio
 async def test_online_model_experiment_dispatches_stably_for_an_identity():
     router = _router()
-    request_kwargs = {"metadata": {"user_id": "user-123"}}
 
     first_kwargs = {"metadata": {"user_id": "user-123"}}
     second_kwargs = {"metadata": {"user_id": "user-123"}}
@@ -62,6 +61,15 @@ async def test_online_model_experiment_dispatches_stably_for_an_identity():
         "online_model_experiment_variant"
     ]
     assert "user-123" not in first_kwargs["metadata"]["online_model_experiment_assignment_key"]
+    assert first_kwargs["litellm_params"]["metadata"]["spend_logs_metadata"] == {
+        key: first_kwargs["metadata"][key]
+        for key in (
+            "online_model_experiment_id",
+            "online_model_experiment_variant",
+            "online_model_experiment_assignment_key",
+            "online_model_experiment_bucket",
+        )
+    }
 
 
 @pytest.mark.asyncio

@@ -40,18 +40,18 @@ async def online_model_experiment_metrics(
     rows: Final = await prisma_client.db.query_raw(
         """
         SELECT
-            metadata->>'online_model_experiment_variant' AS variant,
+            metadata->'spend_logs_metadata'->>'online_model_experiment_variant' AS variant,
             COUNT(*)::int AS requests,
-            COUNT(DISTINCT NULLIF(metadata->>'online_model_experiment_assignment_key', ''))::int AS subjects,
+            COUNT(DISTINCT NULLIF(metadata->'spend_logs_metadata'->>'online_model_experiment_assignment_key', ''))::int AS subjects,
             COALESCE(SUM(spend), 0)::float AS cost,
             COALESCE(SUM(total_tokens), 0)::int AS total_tokens,
             COALESCE(AVG(request_duration_ms), 0)::float AS latency_ms,
             COUNT(*) FILTER (WHERE COALESCE(status, 'success') NOT IN ('success', ''))::int AS errors
         FROM "LiteLLM_SpendLogs"
-        WHERE metadata->>'online_model_experiment_id' = $1
-          AND "startTime" >= $2::timestamptz
-          AND "startTime" <= $3::timestamptz
-        GROUP BY metadata->>'online_model_experiment_variant'
+        WHERE metadata->'spend_logs_metadata'->>'online_model_experiment_id' = $1
+          AND "startTime" >= ($2::timestamptz AT TIME ZONE 'UTC')
+          AND "startTime" <= ($3::timestamptz AT TIME ZONE 'UTC')
+        GROUP BY metadata->'spend_logs_metadata'->>'online_model_experiment_variant'
         ORDER BY variant
         """,
         experiment_id,

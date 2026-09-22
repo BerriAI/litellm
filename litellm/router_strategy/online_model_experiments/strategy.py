@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.router_strategy.online_model_experiments.assignment import (
     ExperimentAssignment,
     ExperimentAssignmentError,
@@ -149,14 +150,40 @@ def _stamp_experiment_metadata(
         "online_model_experiment_assignment_key": assignment_key,
         "online_model_experiment_bucket": bucket,
     }
-    metadata: Final = request_kwargs.get("metadata")
-    metadata_values: Final = dict(metadata) if isinstance(metadata, Mapping) else {}
-    request_kwargs["metadata"] = {**metadata_values, **experiment_metadata}
+    metadata_key, metadata_bucket = get_or_create_metadata_bucket(request_kwargs)
+    metadata_values: Final = dict(metadata_bucket)
     litellm_params: Final = request_kwargs.get("litellm_params")
     litellm_params_values: Final = dict(litellm_params) if isinstance(litellm_params, Mapping) else {}
     litellm_metadata: Final = litellm_params_values.get("metadata")
     litellm_metadata_values: Final = dict(litellm_metadata) if isinstance(litellm_metadata, Mapping) else {}
+    request_spend_logs_metadata: Final = metadata_values.get("spend_logs_metadata")
+    request_spend_logs_metadata_values: Final = (
+        dict(request_spend_logs_metadata) if isinstance(request_spend_logs_metadata, Mapping) else {}
+    )
+    litellm_spend_logs_metadata: Final = litellm_metadata_values.get("spend_logs_metadata")
+    litellm_spend_logs_metadata_values: Final = (
+        dict(litellm_spend_logs_metadata) if isinstance(litellm_spend_logs_metadata, Mapping) else {}
+    )
+    spend_logs_metadata_values: Final = {
+        **request_spend_logs_metadata_values,
+        **litellm_spend_logs_metadata_values,
+    }
+    request_kwargs[metadata_key] = {
+        **metadata_values,
+        **experiment_metadata,
+        "spend_logs_metadata": {
+            **spend_logs_metadata_values,
+            **experiment_metadata,
+        },
+    }
     request_kwargs["litellm_params"] = {
         **litellm_params_values,
-        "metadata": {**litellm_metadata_values, **experiment_metadata},
+        "metadata": {
+            **litellm_metadata_values,
+            **experiment_metadata,
+            "spend_logs_metadata": {
+                **spend_logs_metadata_values,
+                **experiment_metadata,
+            },
+        },
     }

@@ -52,6 +52,9 @@ async def test_metrics_returns_aggregates_grouped_by_variant(monkeypatch: pytest
         }
     ]
     query_raw.assert_awaited_once()
+    query = query_raw.await_args.args[0]
+    assert "metadata->'spend_logs_metadata'->>'online_model_experiment_variant'" in query
+    assert "AT TIME ZONE 'UTC'" in query
     assert query_raw.await_args.args[1:] == (
         "support-v1",
         result["start_date"],
