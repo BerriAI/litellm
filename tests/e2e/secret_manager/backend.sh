@@ -1,18 +1,6 @@
 #!/usr/bin/env bash
-# Boot (or stop) one secret manager backend in Docker for a secret_manager lane.
-#
-#   bash tests/e2e/secret_manager/backend.sh up <system>
-#   bash tests/e2e/secret_manager/backend.sh down <system>
-#
-# <system> is a key of secret_backends.BACKENDS. `up` replaces any earlier container
-# of this script's for that system, waits for the manager to answer, and writes two
-# env files under ${E2E_SECRET_MANAGER_DIR:-/tmp/litellm-e2e-secret-manager}/<system>/:
-#   proxy.env  the manager's credentials for the proxy booted from
-#              tests/e2e/gateway/secret_manager_<system>_ci_config.yml
-#   tests.env  E2E_SECRET_MANAGER=<system> plus the store's E2E_* env for pytest
-# The manager listens on 127.0.0.1:${E2E_SECRET_MANAGER_PORT:-<its usual port>}.
-# Keep the directory private: both files hold a working admin credential.
 set -euo pipefail
+umask 077
 
 usage() {
   local systems
@@ -23,7 +11,7 @@ usage() {
 
 action=${1:-}
 system=${2:-}
-dir=${E2E_SECRET_MANAGER_DIR:-/tmp/litellm-e2e-secret-manager}/$system
+dir=${E2E_SECRET_MANAGER_DIR:-$HOME/.cache/litellm-e2e-secret-manager}/$system
 name=litellm-e2e-$system
 
 wait_for() {
@@ -73,17 +61,14 @@ up_cyberark() {
     "$port" "$api_key" >"$dir/tests.env"
 }
 
-# A system is supported exactly when it has an up_<system> above.
 [[ $# -eq 2 && -n $system ]] && declare -F "up_$system" >/dev/null || usage
 
 case $action in
   up)
     down
     mkdir -p "$dir"
-    chmod 700 "$dir"
     "up_$system"
     echo "E2E_SECRET_MANAGER=$system" >>"$dir/tests.env"
-    chmod 600 "$dir/proxy.env" "$dir/tests.env"
     echo "$system is up; env in $dir/proxy.env (proxy) and $dir/tests.env (pytest)"
     ;;
   down) down ;;

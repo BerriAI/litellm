@@ -123,9 +123,9 @@ To reproduce the CI topology on a dedicated machine, `bash .github/e2e-stack/up.
 
 ```bash
 bash tests/e2e/secret_manager/backend.sh up cyberark
-(set -a; . /tmp/litellm-e2e-secret-manager/cyberark/proxy.env; set +a; env -u OPENAI_API_KEY LITELLM_LICENSE=... \
+(set -a; . ~/.cache/litellm-e2e-secret-manager/cyberark/proxy.env; set +a; env -u OPENAI_API_KEY LITELLM_LICENSE=... \
   LITELLM_MASTER_KEY=sk-1234 DATABASE_URL=... uv run litellm --config tests/e2e/gateway/secret_manager_cyberark_ci_config.yml --port 4000)
-(set -a; . /tmp/litellm-e2e-secret-manager/cyberark/tests.env; set +a; OPENAI_API_KEY=... \
+(set -a; . ~/.cache/litellm-e2e-secret-manager/cyberark/tests.env; set +a; OPENAI_API_KEY=... \
   uv run --group e2e-dev pytest tests/e2e/secret_manager/ -v)
 bash tests/e2e/secret_manager/backend.sh down cyberark
 ```
@@ -141,8 +141,6 @@ To add a backend, leave the tests and markers alone and add:
 3. `gateway/secret_manager_<system>_ci_config.yml`, a copy of an existing lane's with only `key_management_system` changed
 4. an `up_<system>` function in `secret_manager/backend.sh` that starts the manager and writes `proxy.env` and `tests.env`
 5. a CI step that runs `backend.sh up <system>` (or the same containers as sidecars), boots the proxy with `proxy.env` and a license, and runs pytest with `tests.env`
-
-`test_secret_backends.py` checks that the registry, the lane configs and `backend.sh` agree, so a backend missing any of steps 1 to 4 fails without a live stack
 
 ### Record and replay
 

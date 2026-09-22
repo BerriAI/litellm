@@ -1,16 +1,3 @@
-"""The secret_manager suite's store for CyberArk Conjur (`cyberark`).
-
-The lane's proxy runs against a real Conjur (the open-source server in CI), and this
-store talks to that same Conjur directly over its REST API. It goes through e2e_http's
-external helpers, so no test ever calls requests itself.
-
-Conjur holds a secret as a policy-declared variable with raw-text values, which is how
-CyberArkSecretManager writes it: append `- !variable <name>` to the root policy, then
-post the value. It has no API to delete a variable's value, so the store's teardown
-deletes the variable itself with a policy patch, and the backend does not claim
-`deletes_stored_keys`: the proxy's own async_delete_secret answers not_supported.
-"""
-
 from __future__ import annotations
 
 import base64
@@ -104,8 +91,6 @@ class Conjur:
             pytest.fail(f"Conjur refused to write {name}: HTTP {result.status_code} {result.body[:300]}")
 
     def read(self, name: str) -> str | None:
-        """The current value of `name`, or None when Conjur has no such variable or
-        the variable holds no value yet (Conjur answers 404 to both)."""
         result: Final = send_text_external("GET", self._secret_url(name), headers=self._headers())
         self._fail_unless_reached(result, f"read {name}")
         if result.status_code == 404:
@@ -115,9 +100,6 @@ class Conjur:
         return result.body
 
     def destroy(self, name: str) -> None:
-        """Delete the variable `name` and every value it held, the teardown for a secret
-        a test seeded or the proxy wrote. Idempotent: Conjur accepts deleting a record
-        that is not there."""
         self._update_root_policy("PATCH", f"- !delete\n  record: !variable {_policy_scalar(name)}\n", f"destroy {name}")
 
 

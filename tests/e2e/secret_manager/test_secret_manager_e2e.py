@@ -1,20 +1,3 @@
-"""Live e2e: the proxy reads deployment credentials from, and stores virtual keys in,
-a real secret manager.
-
-Backend-agnostic: E2E_SECRET_MANAGER names the backend (secret_backends.BACKENDS),
-and the proxy runs from tests/e2e/gateway/secret_manager_<system>_ci_config.yml,
-which sets that `key_management_system` with read-and-write access and virtual-key
-storage under VIRTUAL_KEY_PREFIX. Deselected unless E2E_SECRET_MANAGER is set,
-because the default stack runs no secret manager.
-
-Every secret a test seeds is named with a fresh marker, and the proxy's own
-environment never holds it, so a deployment can only get its key from the manager:
-get_secret falls back to os.environ when the manager errors, and a name the proxy
-has never seen cannot be rescued by that fallback. The runner, not the proxy,
-holds OPENAI_API_KEY; the tests copy it into the manager, so a passing call proves the
-value travelled through the manager.
-"""
-
 from __future__ import annotations
 
 import os
@@ -34,12 +17,12 @@ from secret_store import SecretStore
 pytestmark = [pytest.mark.e2e, pytest.mark.secret_manager]
 
 BACKEND_MODEL: Final = "openai/gpt-4o-mini"
-# Mirrors key_management_settings.prefix_for_stored_virtual_keys in every lane's config
-# (checked by test_secret_backends.py).
 VIRTUAL_KEY_PREFIX: Final = "litellm-e2e/virtual-keys/"
 PROVIDER_KEY_ENV: Final = "OPENAI_API_KEY"
 
 
+# The proxy's env never holds OPENAI_API_KEY and each test seeds it under a fresh name, so a passing
+# call proves the key came from the manager and not get_secret's os.environ fallback.
 def _provider_key() -> str:
     key: Final = os.environ.get(PROVIDER_KEY_ENV, "").strip()
     if not key:
@@ -48,7 +31,6 @@ def _provider_key() -> str:
 
 
 def _seed(store: SecretStore, resources: ResourceManager, value: str) -> str:
-    """Write `value` under a fresh secret name, destroyed on teardown, and return the name."""
     name: Final = f"litellm-e2e-openai-{unique_marker()}"
     store.write(name, value)
     resources.defer(lambda: store.destroy(name))
@@ -56,8 +38,6 @@ def _seed(store: SecretStore, resources: ResourceManager, value: str) -> str:
 
 
 def _deploy(proxy: ProxyClient, resources: ResourceManager, secret_name: str) -> str:
-    """Register a deployment whose api_key is the manager's secret, and return its model name.
-    provider_live keeps it off the provider cache, which would answer without the key."""
     model_name: Final = f"secret-manager-backed-{unique_marker()}"
     model_id: Final = proxy.create_model(
         model_name,
@@ -80,8 +60,6 @@ def _chat(proxy: ProxyClient, key: str, model: str) -> Result[ChatResponse]:
 
 
 def _eventually(proxy: ProxyClient, read: Callable[[], str | None], expected: str | None, context: str) -> None:
-    """Poll `read` until it returns `expected`: the proxy writes to the manager from its key
-    management hooks, which need not have finished when the key route answers."""
     deadline: Final = time.monotonic() + proxy.poll_timeout
     last: str | None = read()
     while last != expected and time.monotonic() < deadline:

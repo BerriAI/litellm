@@ -1,14 +1,3 @@
-"""The secret_manager suite's store for HashiCorp Vault (`hashicorp_vault`).
-
-The lane's proxy runs against a real Vault (dev mode in CI), and this store talks
-to that same Vault directly over its KV v2 HTTP API. It goes through e2e_http's
-external helpers, so no test ever calls requests itself.
-
-litellm stores and reads every Vault secret under the data key `key`
-(HashicorpSecretManager._get_secret_value_from_json_response), so the bodies here
-model exactly that one field.
-"""
-
 from __future__ import annotations
 
 import os
@@ -89,8 +78,6 @@ class Vault:
             pytest.fail(f"Vault refused to write {name}: HTTP {write.status_code} {write.body[:300]}")
 
     def read(self, name: str) -> str | None:
-        """The current value under `name`, or None when Vault holds no live version
-        of it (never written, or its latest version deleted)."""
         result: Final = get_external(self._data_url(name), headers=self._headers(), response_type=KvReadResponse)
         match result:
             case Success(data=body):
@@ -103,8 +90,6 @@ class Vault:
                 return pytest.fail(f"Vault refused to read {name}: {result}")
 
     def destroy(self, name: str) -> None:
-        """Remove every version and the metadata of `name`, the teardown for a secret
-        a test seeded or the proxy wrote. Idempotent: an absent secret is fine."""
         write: Final = delete_external(self._metadata_url(name), headers=self._headers())
         if not write.ok and write.status_code != 404:
             pytest.fail(f"Vault refused to destroy {name}: HTTP {write.status_code} {write.body[:300]}")
