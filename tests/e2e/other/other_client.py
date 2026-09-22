@@ -15,15 +15,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from e2e_http import NoBody, ProbeResult, Result
+from e2e_http import AuthHeaders, NoBody, ProbeResult, Result
 from idp import Keycloak, keycloak_from_env
 from models import (
+    ChatBody,
+    ChatResponse,
     ReadinessDetailsResponse,
     ReadinessResponse,
     UserListParams,
     UserListResponse,
 )
 from proxy_client import ProxyClient
+from pydantic import Field
+
+
+class TeamHeaders(AuthHeaders):
+    """Bearer auth plus ``x-litellm-team-id``, the header a JWT caller sends to
+    pick one of the teams it belongs to."""
+
+    x_litellm_team_id: str = Field(serialization_alias="x-litellm-team-id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +74,18 @@ class OtherClient:
             headers=NoBody(),
             params=NoBody(),
             response_type=ReadinessDetailsResponse,
+        )
+
+    def chat_as_team(self, token: str, team: str, body: ChatBody) -> Result[ChatResponse]:
+        """POST /chat/completions under `token` with `x-litellm-team-id: team`."""
+        return self.proxy.transport.post(
+            "/chat/completions",
+            headers=TeamHeaders(
+                authorization=self.proxy.transport.bearer(token).authorization,
+                x_litellm_team_id=team,
+            ),
+            json=body,
+            response_type=ChatResponse,
         )
 
     def list_users_as(self, key: str) -> Result[UserListResponse]:
