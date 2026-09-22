@@ -75,7 +75,8 @@ _MESSAGE_PATTERNS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
     (re.compile(r"overloaded|unable to process your request", re.IGNORECASE), PROVIDER_OVERLOADED),
     (
         re.compile(
-            r"connection error|APIConnectionError|TransferEncodingError|payload is not completed|connection reset",
+            r"connection error|APIConnectionError|TransferEncodingError|payload is not completed|connection reset"
+            r"|peer closed connection|incomplete chunked read",
             re.IGNORECASE,
         ),
         PROVIDER_CONNECTION_ERROR,

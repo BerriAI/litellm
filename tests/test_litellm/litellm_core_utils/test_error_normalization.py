@@ -83,6 +83,9 @@ def _proxy_exc(message: str, error_type: str, code: int) -> ProxyException:
                 litellm.APIConnectionError("Connection error", llm_provider="openai", model="gpt"),
                 litellm.InternalServerError("TransferEncodingError", llm_provider="openai", model="gpt"),
                 litellm.APIError(500, "Response payload is not completed", llm_provider="openai", model="gpt"),
+                httpx.RemoteProtocolError(
+                    "peer closed connection without sending complete message body (incomplete chunked read)"
+                ),
             ),
             "500_PROVIDER_CONNECTION_ERROR",
         ),
