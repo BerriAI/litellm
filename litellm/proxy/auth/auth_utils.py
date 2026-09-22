@@ -338,6 +338,10 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # re-route the request's retention and accounting to any project
     # reachable with the deployment's shared AWS credentials.
     "aws_bedrock_project_id",
+    "workspace_id",
+    "aws_workspace_id",
+    "anthropic_workspace_id",
+    "anthropic-workspace-id",
     "bedrock_tags",
     # Provider-specific endpoint overrides that flow into the outbound
     # request via ``optional_params``. Same threat as ``api_base``:
