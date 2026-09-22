@@ -10,10 +10,11 @@ def apply_routing_group_priority(
 ) -> DeploymentTypedDict:
     if group.routing_strategy != "priority" or group.model_priorities is None:
         return deployment
-    return {  # mutable-ok: deployment selection accepts dict rows, without mutating stored deployments
+    prioritized: Final[DeploymentTypedDict] = {
         **deployment,
         "litellm_params": {**deployment["litellm_params"], "order": group.model_priorities[member]},
     }
+    return prioritized
 
 
 VALID_ROUTING_STRATEGIES: Final = ("simple-shuffle", "lar1", *(s.value for s in RoutingStrategy))

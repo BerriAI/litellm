@@ -188,7 +188,7 @@ class TestRouterSettingsEndpoints:
         )
         assert global_options is not None
         assert "priority" not in global_options
-        assert response.routing_group_strategies == [*global_options, "priority"]
+        assert response.model_dump(mode="json")["routing_group_strategies"] == [*global_options, "priority"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("from_config", (False, True))
