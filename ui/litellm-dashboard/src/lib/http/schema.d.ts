@@ -1246,9 +1246,10 @@ export interface paths {
          * @description Benchmarks for the auto-router dashboard: session shape, savings against the configured
          *     baseline, and prompt-caching behaviour bucketed by what the router did.
          *
-         *     Reads the LiteLLM_AutoRouterSession rollup, folded once per request at spend-write time,
-         *     so this endpoint never scans LiteLLM_SpendLogs. A session is in the window when it
-         *     overlaps it: its last turn is on or after start_date and its first turn is on or before
+         *     Reads session rollups folded once per request at spend-write time, so this endpoint
+         *     never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
+         *     internal user when written; older key-only history remains outside user views. A session
+         *     is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
          *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
          *     over that bucket's turns.
          *
@@ -23639,6 +23640,8 @@ export interface components {
         };
         /** AgentConfig */
         AgentConfig: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
             agent_card_params: components["schemas"]["AgentCard"];
             /** Agent Name */
             agent_name: string;
@@ -23786,6 +23789,8 @@ export interface components {
         };
         /** AgentResponse */
         AgentResponse: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
             /** Agent Card Params */
             agent_card_params: {
                 [key: string]: unknown;
@@ -34982,6 +34987,8 @@ export interface components {
         };
         /** PatchAgentRequest */
         PatchAgentRequest: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
             agent_card_params?: components["schemas"]["AgentCard"];
             /** Agent Name */
             agent_name?: string;
@@ -36884,8 +36891,8 @@ export interface components {
             embedding_model?: string | null;
             /**
              * Enable Context Window Escalation
-             * @description Escalate a request off a tier whose models provably cannot hold its prompt, before dispatch. The classifier scores complexity and never prompt size, so a long agentic session whose newest ask is trivial lands on a small-window tier and the provider rejects it with a context-window 400 that nothing retries. When every model of the decided tier has a declared window smaller than the estimated prompt, the request moves to the lowest configured tier with a model whose declared window fits; when only some of the tier's models fit, the pick is restricted to those and the tier keeps the request. Models with no resolvable window are never escalated away from and never escalated onto. Set false to dispatch on complexity alone, as before.
-             * @default true
+             * @description Escalate a request off a tier whose models provably cannot hold its prompt, before dispatch. The classifier scores complexity and never prompt size, so a long agentic session whose newest ask is trivial lands on a small-window tier and the provider rejects it with a context-window 400 that nothing retries. When every model of the decided tier has a declared window smaller than the estimated prompt, the request moves to the lowest configured tier with a model whose declared window fits; when only some of the tier's models fit, the pick is restricted to those and the tier keeps the request. Models with no resolvable window are never escalated away from and never escalated onto. Disabled by default: omit or set false to dispatch on complexity alone; set true to enable context-window escalation.
+             * @default false
              */
             enable_context_window_escalation: boolean;
             /**
@@ -37243,6 +37250,13 @@ export interface components {
              */
             routing_strategy_descriptions: {
                 [key: string]: string;
+            };
+            /**
+             * Source
+             * @description Source of each current router setting
+             */
+            source: {
+                [key: string]: "config" | "db" | "env" | "default" | "unset";
             };
         };
         /**
@@ -39706,6 +39720,10 @@ export interface components {
             /** Field Schema */
             field_schema: {
                 [key: string]: unknown;
+            };
+            /** Source */
+            source: {
+                [key: string]: "config" | "db" | "env" | "default" | "unset";
             };
             /** Values */
             values: {
@@ -43881,6 +43899,8 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one virtual key token hash */
                 api_key?: string | null;
+                /** @description Filter to one canonical internal user recorded on each turn */
+                user_id?: string | null;
             };
             header?: never;
             path?: never;

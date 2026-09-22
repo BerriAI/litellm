@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
+from litellm.types.agents import AgentCaller
 from litellm.types.integrations.compression_interception import (
     CompressionSavingsMetadata,
 )
@@ -3274,6 +3275,15 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             "user id."
         ),
     )
+    agent_caller: AgentCaller | None = Field(
+        default=None,
+        exclude=True,
+        description=(
+            "Set per request from the x-litellm-user-id / x-litellm-team-id headers an agent echoes back on "
+            "calls made with its own key. Every check treats it as a ceiling, so a forged value can only "
+            "narrow the agent's access."
+        ),
+    )
     budget_reservation: dict[str, Any] | None = Field(default=None, exclude=True)
     team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
     user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
@@ -3306,6 +3316,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("mcp_session_resource_server_id", None)
         values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
+        values.pop("agent_caller", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
             if isinstance(values.get("api_key"), str):
@@ -4261,6 +4272,11 @@ class ProxyErrorTypes(str, enum.Enum):
     Project does not have access to the model
     """
 
+    agent_model_access_denied = "agent_model_access_denied"
+    """
+    The agent behind the key does not have access to the model
+    """
+
     model_cost_map_missing = "model_cost_map_missing"
 
     expired_key = "expired_key"
@@ -4335,7 +4351,7 @@ class ProxyErrorTypes(str, enum.Enum):
 
     @classmethod
     def get_model_access_error_type_for_object(
-        cls, object_type: Literal["key", "user", "team", "org", "project"]
+        cls, object_type: Literal["key", "user", "team", "org", "project", "agent"]
     ) -> "ProxyErrorTypes":
         """
         Get the model access error type for object_type
@@ -4350,6 +4366,8 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.org_model_access_denied
         elif object_type == "project":
             return cls.project_model_access_denied
+        elif object_type == "agent":
+            return cls.agent_model_access_denied
 
     @classmethod
     def get_vector_store_access_error_type_for_object(

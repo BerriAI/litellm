@@ -58,6 +58,7 @@ LlmRoute = Literal[
     "openai",
     "together_ai",
     "vertex",
+    "xiaomi_mimo",
 ]
 
 LlmCapability = Literal[
