@@ -97,7 +97,7 @@ Each suite provides its own `client` fixture (see `llm_translation/passthrough_c
 
 Request and response bodies are typed pydantic models in `models.py`; only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
 
-Mark live tests with `@pytest.mark.e2e` (on the class or the module). Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
+Mark live tests with `@pytest.mark.e2e` (on the class or the module). Add `@pytest.mark.quiet_stack` to a test that measures the proxy itself (RSS, latency): the shared stack lock in `stack_lock.py` then runs it while no other test on the host is hitting the stack, marked or not, so the reading depends only on the test's own traffic. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
 
 ## Record and replay fixtures
 
