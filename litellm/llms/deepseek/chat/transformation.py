@@ -228,14 +228,14 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     def _normalize_thinking_tool_choice(
         optional_params: dict[str, object], model: str, drop_params: bool
     ) -> dict[str, object]:
-        """Relax named choices only when the caller opted into dropping unsupported parameters."""
+        """Relax forced choices only when the caller opted into dropping unsupported parameters."""
         tool_choice: Final = optional_params.get("tool_choice")
         if tool_choice is None or tool_choice in ("none", "auto"):
             return optional_params
-        if tool_choice != "required" and not drop_params:
+        if not drop_params:
             raise litellm.UnsupportedParamsError(
                 message=(
-                    "DeepSeek thinking mode does not support forced named `tool_choice`. "
+                    "DeepSeek thinking mode does not support forced `tool_choice` values. "
                     "To relax it to `auto`, set `drop_params=True`."
                 ),
                 model=model,

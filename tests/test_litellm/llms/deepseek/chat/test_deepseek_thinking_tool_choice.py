@@ -15,7 +15,7 @@ def _function_tool(name: str) -> dict:
 @pytest.mark.parametrize(
     ("model", "thinking", "tool_choice", "drop_params", "expected"),
     [
-        ("deepseek-v4-pro", {"type": "enabled"}, "required", False, "auto"),
+        ("deepseek-v4-pro", {"type": "enabled"}, "required", True, "auto"),
         (
             "deepseek-v4-pro",
             {"type": "enabled"},
@@ -62,8 +62,16 @@ async def test_transform_request_normalizes_tool_choice_for_thinking(
 
 
 @pytest.mark.parametrize("is_async", [False, True])
-async def test_transform_request_rejects_named_tool_choice_without_drop_params(
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        "required",
+        {"type": "function", "function": {"name": "shell"}},
+    ],
+)
+async def test_transform_request_rejects_forced_tool_choice_without_drop_params(
     is_async: bool,
+    tool_choice: object,
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(litellm, "drop_params", False)
@@ -74,10 +82,7 @@ async def test_transform_request_rejects_named_tool_choice_without_drop_params(
         "optional_params": {
             "thinking": {"type": "enabled"},
             "tools": [_function_tool("shell"), _function_tool("read_file")],
-            "tool_choice": {
-                "type": "function",
-                "function": {"name": "shell"},
-            },
+            "tool_choice": tool_choice,
         },
         "litellm_params": {},
         "headers": {},
