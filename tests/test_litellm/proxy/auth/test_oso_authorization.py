@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import patch
 
@@ -413,6 +414,53 @@ async def test_oso_image_query_model_takes_precedence_over_image_default() -> No
     )
 
     assert tuple(decision.resource_id for decision in authorizer.requests) == ("query-model",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "settings", "expected_model"),
+    (
+        (
+            "/v1/images/generations",
+            MappingProxyType({"image_generation_model": "server-image-model"}),
+            "cli-model",
+        ),
+        (
+            "/v1/images/edits",
+            MappingProxyType(
+                {"completion_model": "server-completion-model", "image_generation_model": "server-image-model"}
+            ),
+            "server-completion-model",
+        ),
+    ),
+)
+async def test_oso_image_model_precedence_matches_final_dispatch(
+    route: str,
+    settings: Mapping[str, str],
+    expected_model: str,
+) -> None:
+    authorizer: Final = RecordingAuthorizer()
+    request: Final = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "path": route,
+            "headers": (),
+            "query_string": b"model=query-model",
+        }
+    )
+    with patch.object(litellm.proxy.proxy_server, "user_model", "cli-model"):
+        await _enforce_configured_oso_authorization(
+            user_api_key_auth_obj=UserAPIKeyAuth(user_id="user-alice"),
+            request=request,
+            request_data={"model": "body-model"},
+            route=route,
+            general_settings={**_enabled_settings(), **settings},
+            llm_router=None,
+            oso_authorizer=authorizer,
+        )
+
+    assert tuple(decision.resource_id for decision in authorizer.requests) == (expected_model,)
 
 
 @pytest.mark.asyncio
