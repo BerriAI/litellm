@@ -990,3 +990,89 @@ def test_responses_zero_image_gen_tokens_fall_back_to_per_image_pricing(local_mo
         )
     )
     assert cost > 0
+
+
+def test_responses_auto_size_image_generation_call_billed_at_default_size(local_model_cost_map):
+    """An image_generation_call with size "auto" bills at the default size instead of erroring to $0."""
+    from litellm.cost_calculator import default_image_cost_calculator
+
+    response = _openai_responses_response(
+        "gpt-5",
+        [
+            {
+                "type": "image_generation_call",
+                "id": "ig_1",
+                "status": "completed",
+                "quality": "high",
+                "size": "auto",
+                "result": "AAAA",
+            }
+        ],
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(
+        default_image_cost_calculator(
+            model="gpt-image-1",
+            custom_llm_provider="openai",
+            quality="high",
+            n=1,
+            size=None,
+        )
+    )
+    assert cost > 0
+
+
+def test_responses_image_gen_total_without_token_details_falls_back_to_per_image(local_model_cost_map):
+    """A positive image_gen total with no token details falls back to per-image pricing, not $0."""
+    tool_model = "gpt-image-1"
+    quality = "low"
+    size = "1024x1024"
+    response = _openai_responses_response(
+        "gpt-5",
+        [
+            {
+                "type": "image_generation_call",
+                "id": "ig_1",
+                "status": "completed",
+                "quality": quality,
+                "size": size,
+                "result": "AAAA",
+            }
+        ],
+        usage={
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "total_tokens": 15,
+            "tool_usage": {"image_gen": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10}},
+        },
+        tools=[{"type": "image_generation", "model": tool_model, "quality": quality, "size": size}],
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    from litellm.cost_calculator import default_image_cost_calculator
+
+    assert cost == pytest.approx(
+        default_image_cost_calculator(
+            model=tool_model,
+            custom_llm_provider="openai",
+            quality=quality,
+            n=1,
+            size=size,
+        )
+    )
+    assert cost > 0

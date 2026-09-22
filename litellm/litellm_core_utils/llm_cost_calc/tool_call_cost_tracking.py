@@ -277,7 +277,7 @@ class StandardBuiltInToolCostTracking:
                 custom_llm_provider=custom_llm_provider or "openai",
                 quality=quality if isinstance(quality, str) and quality != "auto" else None,
                 n=1,
-                size=size if isinstance(size, str) else None,
+                size=size if isinstance(size, str) and size != "auto" else None,
             )
         except Exception as e:  # noqa: BLE001  # pricing helpers raise bare Exception for unmapped models; bill 0.0
             verbose_logger.debug("Could not price Responses API image_generation_call item: %s", e)
@@ -294,19 +294,20 @@ class StandardBuiltInToolCostTracking:
             model_info: Final = litellm.get_model_info(
                 model=tool_model, custom_llm_provider=custom_llm_provider or "openai"
             )
-        except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; bill 0.0
+        except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; fall back
             verbose_logger.debug("Could not resolve pricing for image tool model %s: %s", tool_model, e)
-            return 0.0
+            return None
         image_gen: Final = tool_usage.image_gen
         input_details: Final = image_gen.input_tokens_details
         output_details: Final = image_gen.output_tokens_details
-        return (
+        token_cost: Final = (
             (input_details.text_tokens if input_details else 0) * (model_info.get("input_cost_per_token") or 0)
             + (input_details.image_tokens if input_details else 0) * (model_info.get("input_cost_per_image_token") or 0)
             + (output_details.image_tokens if output_details else 0)
             * (model_info.get("output_cost_per_image_token") or 0)
             + (output_details.text_tokens if output_details else 0) * (model_info.get("output_cost_per_token") or 0)
         )
+        return token_cost if token_cost > 0 else None
 
     @staticmethod
     def _handle_image_generation_cost(response_object: object, custom_llm_provider: str | None) -> float:
