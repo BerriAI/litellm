@@ -21,7 +21,7 @@ from litellm.types.utils import (
 from ...common_utils import VertexAIError
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class VertexAILlama3Config(OpenAIGPTConfig):
@@ -112,7 +112,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
