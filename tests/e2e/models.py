@@ -60,6 +60,7 @@ class KeyMetadata(BaseModel):
     priority: str | None = None
     batch_enqueued_token_limit: int | None = None
     tag: str | None = None
+    guardrails: list[str] | None = None
 
 
 class ObjectPermission(BaseModel):
@@ -192,7 +193,7 @@ class ImageUrl(BaseModel):
 class TextContentPart(BaseModel):
     type: str = "text"
     text: str
-    cache_control: "CacheControl | None" = None
+    cache_control: CacheControl | None = None
 
 
 class ImageContentPart(BaseModel):
@@ -298,6 +299,7 @@ class ChatBody(BaseModel):
     max_completion_tokens: int | None = None
     temperature: float | None = None
     user: str | None = None
+    safety_identifier: str | None = None
     metadata: ChatMetadata | None = None
     reasoning_effort: str | None = None
     thinking: ThinkingParam | None = None
@@ -572,6 +574,10 @@ class McpInfo(BaseModel):
     logo_url: str | None = None
 
 
+class McpOauthCredentials(BaseModel):
+    upstream_resource: str
+
+
 class McpServerCreateBody(BaseModel):
     """POST /v1/mcp/server. For a gateway-managed OAuth server, `auth_type` is
     `oauth2` and `oauth2_flow` is `authorization_code`; the upstream endpoints
@@ -584,8 +590,11 @@ class McpServerCreateBody(BaseModel):
     allow_all_keys: bool = True
     auth_type: str | None = None
     oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
+    per_server_oauth_discovery: bool | None = None
     authorization_url: str | None = None
     token_url: str | None = None
+    registration_url: str | None = None
+    credentials: McpOauthCredentials | None = None
     server_name: str | None = None
     description: str | None = None
     mcp_info: McpInfo | None = None
@@ -623,6 +632,26 @@ class McpServerRow(McpServerInfo):
 
 class McpServerListResponse(RootModel[list[McpServerRow]]):
     """GET /v1/mcp/server answers with a bare array of servers."""
+
+
+class McpServerUserCredentialRow(BaseModel):
+    user_id: str
+    credential_type: Literal["oauth2", "byok"]
+    expires_at: str | None = None
+    connected_at: str | None = None
+    updated_at: str
+
+
+class McpServerUserCredentialListResponse(RootModel[tuple[McpServerUserCredentialRow, ...]]):
+    """GET /v1/mcp/server/{server_id}/user-credentials answers with a bare array."""
+
+
+class McpOauthUserCredentialStatus(BaseModel):
+    server_id: str
+    has_credential: bool
+    expires_at: str | None = None
+    is_expired: bool = False
+    connected_at: str | None = None
 
 
 class ToolsetTool(BaseModel):
@@ -667,6 +696,40 @@ class EmbedBody(BaseModel):
 
 class EmbedResponse(BaseModel):
     model: str | None = None
+
+
+# ---------- videos ----------
+
+
+class VideoCreateBody(BaseModel):
+    model: str
+    prompt: str
+    seconds: str | None = None
+
+
+class VideoCreateResponse(BaseModel):
+    id: str
+    status: str | None = None
+
+
+# ---------- rerank ----------
+
+
+class RerankBody(BaseModel):
+    model: str
+    query: str
+    documents: list[str]
+    top_n: int
+    cache: dict[str, bool] | None = {"no-cache": True}
+
+
+class RerankItem(BaseModel):
+    index: int | None = None
+    relevance_score: float | None = None
+
+
+class RerankResponse(BaseModel):
+    results: list[RerankItem] = []
 
 
 # ---------- ocr ----------
@@ -888,6 +951,23 @@ class RouterSettingsResponse(BaseModel):
     current_values: RouterCurrentValues
 
 
+class ConfigListParams(BaseModel):
+    config_type: Literal["general_settings"]
+
+
+class ConfigField(BaseModel):
+    """One row of GET /config/list: a general_settings field and the value the
+    proxy is running with, the two fields a test preconditions on."""
+
+    model_config = ConfigDict(extra="ignore")
+    field_name: str
+    field_value: JsonValue = None
+
+
+class ConfigFieldList(RootModel[tuple[ConfigField, ...]]):
+    """GET /config/list answers with a bare array of general_settings fields."""
+
+
 class CostMapEntry(BaseModel):
     model_config = ConfigDict(extra="ignore")
     litellm_provider: str | None = None
@@ -949,6 +1029,7 @@ class LiteLLMParamsBody(BaseModel):
     api_base: str | None = None
     api_version: str | None = None
     realtime_protocol: str | None = None
+    allowed_openai_params: list[str] | None = None
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_region_name: str | None = None
@@ -962,6 +1043,7 @@ class LiteLLMParamsBody(BaseModel):
     s3_region_name: str | None = None
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
+    s3_encryption_key_id: str | None = None
     aws_batch_role_arn: str | None = None
     aws_role_name: str | None = None
     aws_session_name: str | None = None
@@ -1001,6 +1083,7 @@ class ModelInfoBody(BaseModel):
     mode: ModelMode | None = None
     access_groups: list[str] | None = None
     team_id: str | None = None
+    allowed_fails: int | None = None
     allowed_fails_policy: dict[str, int] | None = None
 
 
@@ -1172,8 +1255,9 @@ class TeamNewResponse(BaseModel):
 
 class TeamUpdateBody(BaseModel):
     team_id: str
-    team_alias: str
+    team_alias: str | None = None
     models: list[str] | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class TeamInfoParams(BaseModel):

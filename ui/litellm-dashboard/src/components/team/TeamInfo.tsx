@@ -1,4 +1,5 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import type { components } from "@/lib/http/schema";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useQueryClient } from "@tanstack/react-query";
@@ -247,10 +248,13 @@ export const retainedMcpToolPermissions = (
 export const mcpUnresolvableSaveError = (reason: string): string =>
   `Cannot save MCP tool permissions because ${reason}. Retry once the page has finished loading`;
 
+export type TeamMemberBudgetSource = components["schemas"]["TeamMemberResetBudgetResponse"]["budget_source"];
+
 export interface TeamMembership {
   user_id: string;
   team_id: string;
-  budget_id: string;
+  budget_id: string | null;
+  budget_source: TeamMemberBudgetSource;
   spend: number;
   total_spend: number | null;
   litellm_budget_table: {
@@ -675,6 +679,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       console.error("Error fetching team info:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const refreshTeamData = async () => {
+    if (!accessToken) return;
+    try {
+      setTeamData(await teamInfoCall(accessToken, teamId));
+    } catch {
+      toast.fromError("Failed to load team information");
     }
   };
 
@@ -1351,6 +1364,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           teamData={teamData}
           canEditTeam={canEditTeam}
           handleMemberDelete={handleMemberDelete}
+          onMemberSpendReset={refreshTeamData}
+          onMemberBudgetReset={refreshTeamData}
           setSelectedEditMember={setSelectedEditMember}
           setIsEditMemberModalVisible={setIsEditMemberModalVisible}
           setIsAddMemberModalVisible={setIsAddMemberModalVisible}
