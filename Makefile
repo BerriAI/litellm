@@ -150,8 +150,8 @@ lint-install:
 # Diff-scoped format check, mirroring test-linting.yml's "Check ruff format" step:
 # only the litellm Python files changed vs the base are checked, so a pre-existing
 # format issue elsewhere doesn't block an unrelated commit. Git pathspecs match
-# recursively, so 'litellm/*.py' covers nested modules and the top-level files that
-# CI's 'litellm/**/*.py' skips, which makes this target a superset of the CI step.
+# recursively, so 'litellm/*.py' covers top-level files and nested modules alike,
+# the same set CI's ':(glob)litellm/**/*.py' selects.
 lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	@base_ref=$$($(RESOLVE_BASE)) && \
 	changed=$$(git diff --name-only --diff-filter=ACMR "$$base_ref...HEAD" -- 'litellm/*.py') && \
@@ -164,6 +164,7 @@ lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 
 # Linting targets
 lint-ruff: $(LINT_DEP_INSTALL)
+	$(UV_RUN) python scripts/check_mcp_operation_boundary.py
 	cd litellm && $(UV_RUN) ruff check . && cd ..
 	$(UV_RUN) ruff check --config ruff-tests.toml tests
 
@@ -299,6 +300,9 @@ test-rust-extension:
 	[ "$$#" -eq 1 ] && \
 	UV_PROJECT_ENVIRONMENT="$$temporary/venv" $(UV) sync --python 3.12 --frozen --no-install-project --all-groups --all-extras && \
 	$(UV) pip install --python "$$temporary/venv/bin/python" --no-deps "$$1" && \
+	"$$temporary/venv/bin/python" -I -m mypy.stubtest \
+		--mypy-config-file tests/test_litellm/rust_bridge/stubtest.ini \
+		litellm.rust_bridge._native && \
 	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
 	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
 

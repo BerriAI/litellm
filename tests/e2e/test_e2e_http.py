@@ -29,6 +29,7 @@ from e2e_http import (
     request_with_retry,
     streaming_outcome,
     wire_body,
+    without_retries,
 )
 from pydantic import BaseModel, TypeAdapter
 
@@ -56,6 +57,15 @@ def _issue_from(responses: Sequence[FakeResponse]) -> Callable[[], FakeResponse]
 
 
 class TestTransientRetryPolicy:
+    def test_qualification_disables_retries_and_restores_the_default(self) -> None:
+        responses: Final = (FakeResponse(529), FakeResponse(200))
+        sleep: Final = SleepRecorder()
+        with without_retries():
+            assert request_with_retry(_issue_from(responses), sleep=sleep) is responses[0]
+        assert sleep.delays == ()
+        assert request_with_retry(_issue_from(responses), sleep=sleep) is responses[1]
+        assert sleep.delays == (0.5,)
+
     def test_transient_set_is_only_statuses_the_proxy_cannot_emit(self) -> None:
         assert TRANSIENT_STATUSES == frozenset({529})
         assert 429 not in TRANSIENT_STATUSES

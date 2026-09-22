@@ -38,12 +38,16 @@ _STUB_TEMPLATE = """#!/bin/sh
 _ENTRYPOINT_RE = re.compile(r"^ENTRYPOINT\s+(\[.*\])\s*$", re.MULTILINE)
 _CMD_RE = re.compile(r"^CMD\s+(\[.*\])\s*$", re.MULTILINE)
 _COPY_RE = re.compile(r"^COPY\s+(?!--from)(\S+)\s+(\S+)\s*$", re.MULTILINE)
-_APP_TARGET_RE = re.compile(r"(?:gateway|backend)\.main:app")
+_APP_TARGET_RE = re.compile(r"(?:gateway|backend)\.main:app|gateway\.launch")
 _TF_STRING_LOCAL_RE = re.compile(r'^\s*(\w+)\s*=\s*"((?:[^"\\]|\\.)*)"\s*$', re.MULTILINE)
 _TF_INTERPOLATION_RE = re.compile(r"\$\{(local|var)\.(\w+)\}")
 
 TERRAFORM_LAUNCH_SITES = {TERRAFORM_ECS: 2, TERRAFORM_CLOUDRUN: 2}
 TERRAFORM_VAR_STUBS = {"gateway_num_workers": "2"}
+COMPONENT_LAUNCHERS = {
+    "gateway": ("python", "-m", "gateway.launch"),
+    "backend": ("uvicorn", "backend.main:app"),
+}
 _MAX_INTERPOLATION_PASSES = 5
 
 
@@ -63,7 +67,7 @@ def _run_entrypoint(
     """Run `script` with stubbed executables on PATH and return the recorded lines."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(parents=True)
-    _write_stubs(bin_dir, ("ddtrace-run", "uvicorn", "litellm"))
+    _write_stubs(bin_dir, ("ddtrace-run", "uvicorn", "python", "litellm"))
     record = tmp_path / "record.txt"
 
     env = {
@@ -330,20 +334,61 @@ def test_entrypoint_script_has_no_carriage_returns() -> None:
 
 
 @pytest.mark.parametrize(
-    "dockerfile, app_target",
+    "dockerfile, launcher",
     [
-        (GATEWAY_DOCKERFILE, "gateway.main:app"),
-        (BACKEND_DOCKERFILE, "backend.main:app"),
+        (GATEWAY_DOCKERFILE, "python -m gateway.launch"),
+        (BACKEND_DOCKERFILE, "uvicorn backend.main:app"),
     ],
 )
-def test_component_images_launch_uvicorn_through_the_entrypoint(dockerfile: Path, app_target: str) -> None:
+def test_component_images_launch_uvicorn_through_the_entrypoint(dockerfile: Path, launcher: str) -> None:
     entrypoint = " ".join(_entrypoint_argv(dockerfile))
 
     assert IMAGE_ENTRYPOINT_PATH in entrypoint, f"{dockerfile} bypasses the ddtrace-aware entrypoint"
-    assert app_target in entrypoint
-    assert entrypoint.index(IMAGE_ENTRYPOINT_PATH) < entrypoint.index("uvicorn"), (
+    assert launcher in entrypoint
+    assert entrypoint.index(IMAGE_ENTRYPOINT_PATH) < entrypoint.index(launcher), (
         f"{dockerfile} must invoke uvicorn through the entrypoint, not the other way around"
     )
+
+
+@pytest.mark.parametrize(
+    "use_ddtrace, num_workers, expected_exec, expected_args",
+    [
+        (None, "4", "exec=python", "args=-m gateway.launch --workers 4 --host 0.0.0.0 --port 4000"),
+        (None, None, "exec=python", "args=-m gateway.launch --workers 1 --host 0.0.0.0 --port 4000"),
+        ("true", "4", "exec=ddtrace-run", "args=python -m gateway.launch --workers 4 --host 0.0.0.0 --port 4000"),
+    ],
+)
+def test_gateway_image_execs_the_supervisor_with_its_worker_count(
+    use_ddtrace: str | None, num_workers: str | None, expected_exec: str, expected_args: str, tmp_path: Path
+) -> None:
+    """Run the gateway image's ENTRYPOINT + CMD and record what the container execs.
+
+    The Dockerfile's `/app/...` script path is resolved to the checked-in script and `python`
+    is stubbed on PATH, so the assertion is on the argv `gateway.launch` receives, not on the
+    Dockerfile text.
+    """
+    entrypoint = tuple(
+        part.replace(IMAGE_ENTRYPOINT_PATH, str(COMPONENT_ENTRYPOINT)) for part in _entrypoint_argv(GATEWAY_DOCKERFILE)
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True)
+    _write_stubs(bin_dir, ("ddtrace-run", "python", "uvicorn"))
+    record = tmp_path / "record.txt"
+    overrides = {"USE_DDTRACE": use_ddtrace, "NUM_WORKERS": num_workers}
+    env = {
+        **{k: v for k, v in os.environ.items() if k not in ("DD_TRACE_OPENAI_ENABLED", *overrides)},
+        **{k: v for k, v in overrides.items() if v is not None},
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "RECORD": str(record),
+        "PYTHONPATH": PYTHONPATH_SENTINEL,
+    }
+
+    result = subprocess.run(
+        [*entrypoint, *_cmd_argv(GATEWAY_DOCKERFILE)], env=env, capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, f"stdout={result.stdout} stderr={result.stderr}"
+    assert tuple(record.read_text().splitlines())[:2] == (expected_exec, expected_args)
 
 
 @pytest.mark.parametrize("dockerfile", [GATEWAY_DOCKERFILE, BACKEND_DOCKERFILE])
@@ -367,17 +412,18 @@ def test_terraform_launch_command_matches_the_script_contract(
     implementations under the same environment and asserts they agree on which binary is exec'd
     and on whether the openai integration is disabled.
     """
-    app_target = f"{component}.main:app"
+    launcher = COMPONENT_LAUNCHERS[component]
+    app_target = " ".join(launcher[1:])
     command = _resolve_tf_local(terraform_file, f"{component}_launch_cmd")
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(parents=True)
-    _write_stubs(bin_dir, ("ddtrace-run", "uvicorn"))
+    _write_stubs(bin_dir, ("ddtrace-run", "uvicorn", "python"))
     from_terraform = _run_shell_command(command, bin_dir, tmp_path / "terraform.txt", use_ddtrace)
 
     from_script = _run_entrypoint(
         COMPONENT_ENTRYPOINT,
-        ("uvicorn", app_target),
+        launcher,
         use_ddtrace=use_ddtrace,
         tmp_path=tmp_path / "script",
     )
@@ -387,12 +433,14 @@ def test_terraform_launch_command_matches_the_script_contract(
     )
     assert from_terraform[2] == from_script[2], f"{terraform_file} disagrees with the script on the openai integration"
     assert app_target in from_terraform[1]
+    assert "gateway.main:app" not in from_terraform[1], f"{terraform_file} bypasses the gateway.launch supervisor"
 
     if use_ddtrace in TRUTHY_USE_DDTRACE:
         assert from_terraform[0] == "exec=ddtrace-run"
+        assert from_terraform[1].startswith(f"args={launcher[0]} ")
         assert from_terraform[2] == "DD_TRACE_OPENAI_ENABLED=False"
     else:
-        assert from_terraform[0] == "exec=uvicorn"
+        assert from_terraform[0] == f"exec={launcher[0]}"
         assert from_terraform[2] == "DD_TRACE_OPENAI_ENABLED=<unset>"
 
 

@@ -1,0 +1,87 @@
+{
+  "name": "litellm-vscode",
+  "displayName": "LiteLLM",
+  "description": "Chat with every model behind your LiteLLM AI Gateway in VS Code, with live pricing and reasoning effort controls in the model picker",
+  "version": "0.1.0",
+  "publisher": "litellm",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BerriAI/litellm.git",
+    "directory": "vscode-extension"
+  },
+  "homepage": "https://docs.litellm.ai",
+  "bugs": {
+    "url": "https://github.com/BerriAI/litellm/issues"
+  },
+  "engines": {
+    "vscode": "^1.115.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "keywords": [
+    "litellm",
+    "ai gateway",
+    "llm",
+    "chat",
+    "copilot"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "litellm",
+        "displayName": "LiteLLM",
+        "configuration": {
+          "type": "object",
+          "properties": {
+            "baseUrl": {
+              "type": "string",
+              "title": "Gateway URL",
+              "description": "Base URL of your LiteLLM AI Gateway, for example https://litellm.example.com",
+              "default": "http://localhost:4000"
+            },
+            "apiKey": {
+              "type": "string",
+              "title": "API key",
+              "description": "A LiteLLM virtual key. The models offered are the ones this key can access",
+              "secret": true
+            }
+          },
+          "required": [
+            "baseUrl",
+            "apiKey"
+          ]
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "litellm.refreshModels",
+        "title": "Refresh Models",
+        "category": "LiteLLM"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node22",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "vscode:prepublish": "npm run typecheck && npm run build",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "openai": "^7.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.3",
+    "@types/vscode": "1.115.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

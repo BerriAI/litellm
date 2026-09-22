@@ -10,9 +10,12 @@ in the x-litellm-attempted-fallbacks header. Empty content is accepted only when
 gpt-5.5 counts reasoning against max_tokens and can consume the whole budget
 before emitting any text; a fallback that produced nothing at all still fails.
 
-The context-window case is a different reroute from a plain failure: the provider
-refuses the prompt on length, and `context_window_fallbacks` is the setting that
-reroutes it, not `fallbacks`.
+The context-window and content-policy cases are different reroutes from a plain
+failure: the provider refuses the prompt itself, on length or on policy, and
+`context_window_fallbacks` / `content_policy_fallbacks` are the settings that
+reroute those, not `fallbacks`. The policy refusal is a real one, from an Azure
+OpenAI content filter rejecting a jailbreak prompt, and a control call first
+proves the refusal reaches the customer as a 400 when no reroute is configured.
 """
 
 from __future__ import annotations
@@ -25,10 +28,12 @@ from e2e_http import StreamingResponse
 from lifecycle import ResourceManager
 from models import RouterSettingsOverride
 from reliability_support import (
+    CONTENT_POLICY_PROMPT,
     chat_override,
     completion_tokens_of,
     content_of,
     create_bad_base_deployment,
+    create_content_filtered_deployment,
     create_small_context_deployment,
     create_timeout_deployment,
     finish_reason_of,
@@ -46,8 +51,7 @@ def _assert_served_by_fallback(resp: StreamingResponse) -> None:
     completion_tokens = completion_tokens_of(resp) or 0
     reasoning_tokens = reasoning_tokens_of(resp) or 0
     assert isinstance(content, str), (
-        f"the gpt-5.5 fallback should have returned a completion body, got content {content!r} "
-        f"(body={resp.body[:300]})"
+        f"the gpt-5.5 fallback should have returned a completion body, got content {content!r} (body={resp.body[:300]})"
     )
     assert content or (finish_reason == "length" and completion_tokens > 0), (
         f"the gpt-5.5 fallback returned empty content with finish_reason={finish_reason!r}, "
@@ -70,7 +74,10 @@ class TestReliabilityFallbacks:
         resources.defer(lambda: client.proxy.delete_model(model_id))
 
         resp = chat_override(
-            client.proxy, scoped_key, primary, f"say hi {unique_marker()}",
+            client.proxy,
+            scoped_key,
+            primary,
+            f"say hi {unique_marker()}",
             override=RouterSettingsOverride(fallbacks=[{primary: ["gpt-5.5"]}]),
         )
         _assert_served_by_fallback(resp)
@@ -84,7 +91,10 @@ class TestReliabilityFallbacks:
         resources.defer(lambda: client.proxy.delete_model(model_id))
 
         resp = chat_override(
-            client.proxy, scoped_key, primary, f"say hi {unique_marker()}",
+            client.proxy,
+            scoped_key,
+            primary,
+            f"say hi {unique_marker()}",
             override=RouterSettingsOverride(fallbacks=[{primary: ["gpt-5.5"]}]),
         )
         _assert_served_by_fallback(resp)
@@ -98,7 +108,33 @@ class TestReliabilityFallbacks:
         resources.defer(lambda: client.proxy.delete_model(model_id))
 
         resp = chat_override(
-            client.proxy, scoped_key, primary, oversized_prompt(unique_marker()),
+            client.proxy,
+            scoped_key,
+            primary,
+            oversized_prompt(unique_marker()),
             override=RouterSettingsOverride(context_window_fallbacks=[{primary: ["gpt-5.5"]}]),
+        )
+        _assert_served_by_fallback(resp)
+
+    @pytest.mark.covers("reliability.fallback.content_policy.routes_to_fallback")
+    def test_content_policy_routes_to_fallback(
+        self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        primary = f"reliability-policyfail-{unique_marker()}"
+        model_id = create_content_filtered_deployment(client.proxy, primary)
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+
+        refused = chat_override(client.proxy, scoped_key, primary, f"{CONTENT_POLICY_PROMPT} {unique_marker()}")
+        assert refused.status_code == 400, (
+            f"the content filter should have refused the jailbreak prompt with a 400, got {refused.status_code}: "
+            f"{refused.body[:300]}"
+        )
+
+        resp = chat_override(
+            client.proxy,
+            scoped_key,
+            primary,
+            f"{CONTENT_POLICY_PROMPT} {unique_marker()}",
+            override=RouterSettingsOverride(content_policy_fallbacks=[{primary: ["gpt-5.5"]}]),
         )
         _assert_served_by_fallback(resp)

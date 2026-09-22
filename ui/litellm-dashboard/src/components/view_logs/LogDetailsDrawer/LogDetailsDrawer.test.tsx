@@ -14,8 +14,13 @@ vi.mock("@/app/(dashboard)/hooks/logDetails/useLogDetails", () => ({
   useLogDetails: () => ({ data: null, isLoading: false }),
 }));
 
+const mockUseUserLookup = vi.fn(() => ({ data: undefined }));
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
+  useUserLookup: (userId: string | null) => mockUseUserLookup(userId),
+}));
+
 vi.mock("./LogDetailContent", () => ({
-  LogDetailContent: () => null,
+  LogDetailContent: ({ userEmail }: { userEmail?: string }) => <span>user-email:{userEmail ?? "none"}</span>,
   GuardrailJumpLink: () => null,
 }));
 
@@ -121,6 +126,38 @@ describe("LogDetailsDrawer session sidebar sorting", () => {
     rerender(drawer(true));
 
     await waitFor(() => expect(sidebarEventNames()).toEqual(["tool-early", "llm-late", "llm-early", "tool-late"]));
+  });
+});
+
+describe("LogDetailsDrawer internal user email", () => {
+  const renderSingleLog = (user: string | undefined) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <LogDetailsDrawer
+          open
+          onClose={() => {}}
+          logEntry={makeLog({ request_id: "single", user })}
+          accessToken="token"
+        />
+      </QueryClientProvider>,
+    );
+  };
+
+  it("looks up the log's internal user and hands the resolved email to the detail content", () => {
+    mockUseUserLookup.mockReturnValue({ data: { user_id: "u-1", user_email: "alice@example.com" } });
+    renderSingleLog("u-1");
+
+    expect(mockUseUserLookup).toHaveBeenCalledWith("u-1");
+    expect(screen.getByText("user-email:alice@example.com")).toBeInTheDocument();
+  });
+
+  it("skips the lookup and passes no email when the log has no internal user", () => {
+    mockUseUserLookup.mockReturnValue({ data: undefined });
+    renderSingleLog(undefined);
+
+    expect(mockUseUserLookup).toHaveBeenCalledWith(null);
+    expect(screen.getByText("user-email:none")).toBeInTheDocument();
   });
 });
 

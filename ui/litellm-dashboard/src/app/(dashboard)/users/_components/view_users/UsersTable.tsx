@@ -192,7 +192,7 @@ export function UsersTable({
                   <SearchSelect
                     options={roleOptions}
                     value={(get("user_role") as string) || undefined}
-                    onValueChange={(value) => set("user_role", value)}
+                    onValueChange={(value) => set("user_role", value ?? undefined)}
                     placeholder="Select a role…"
                     emptyText="No roles found"
                   />
@@ -201,7 +201,7 @@ export function UsersTable({
                   <SearchSelect
                     options={teamOptions}
                     value={(get("team") as string) || undefined}
-                    onValueChange={(value) => set("team", value)}
+                    onValueChange={(value) => set("team", value ?? undefined)}
                     placeholder="Select a team…"
                     emptyText="No teams found"
                   />

@@ -2,19 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from enum import Enum
 from typing import Final, Generic, NoReturn, TypeAlias, TypeVar
 
+from typing_extensions import assert_never
+
 from litellm.exceptions import APIError
-from litellm.rust_bridge.bindings import native_exception_types
+from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
+from litellm.rust_bridge.catalog import RouteContext, Rules, decision
+from litellm.rust_bridge.configuration import Decision
+from litellm.rust_bridge.response_metadata import mark_rust_response
 
 NativeT = TypeVar("NativeT")
 ResultT = TypeVar("ResultT")
-
-
-class FallbackMode(Enum):
-    PYTHON = "python"
-    RUST_REQUIRED = "rust_required"
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,36 +41,68 @@ class BridgeErrorContext:
     model: str
 
 
-def invoke(
+def run(
+    context: RouteContext,
     *,
-    native_call: Callable[[], NativeT] | None,
-    fallback: Callable[[], ResultT],
-    adapt: Callable[[NativeT], ResultT],
-    mode: FallbackMode,
-    context: BridgeErrorContext,
+    binding: NativeBinding[NativeT],
+    native: Callable[[NativeT], ResultT],
+    python: Callable[[], ResultT],
+    rules: Rules | None = None,
 ) -> ResultT:
-    result: Final = attempt(native_call=native_call, adapt=adapt, context=context)
-    if isinstance(result, RustHandled):
-        return result.value
-    if mode is FallbackMode.PYTHON:
-        return fallback()
-    _raise_required(result, context)
+    selected: Final = decision(context, rules)
+    match selected:
+        case Decision.PYTHON:
+            return python()
+        case Decision.RUST_WITH_FALLBACK | Decision.RUST_REQUIRED:
+            loaded: Final = binding.load()
+            result: Final = attempt(
+                native_call=None if loaded is None else lambda: native(loaded),
+                adapt=_identity,
+                context=_error_context(context),
+            )
+            if isinstance(result, RustHandled):
+                return mark_rust_response(result.value)
+            if selected is Decision.RUST_REQUIRED:
+                _raise_required(result, _error_context(context))
+            return python()
+        case _:
+            assert_never(selected)
 
 
-async def ainvoke(
+async def arun(
+    context: RouteContext,
     *,
-    native_call: Callable[[], Awaitable[NativeT]] | None,
-    fallback: Callable[[], Awaitable[ResultT]],
-    adapt: Callable[[NativeT], ResultT],
-    mode: FallbackMode,
-    context: BridgeErrorContext,
+    binding: NativeBinding[NativeT],
+    native: Callable[[NativeT], Awaitable[ResultT]],
+    python: Callable[[], Awaitable[ResultT]],
+    rules: Rules | None = None,
 ) -> ResultT:
-    result: Final = await aattempt(native_call=native_call, adapt=adapt, context=context)
-    if isinstance(result, RustHandled):
-        return result.value
-    if mode is FallbackMode.PYTHON:
-        return await fallback()
-    _raise_required(result, context)
+    selected: Final = decision(context, rules)
+    match selected:
+        case Decision.PYTHON:
+            return await python()
+        case Decision.RUST_WITH_FALLBACK | Decision.RUST_REQUIRED:
+            loaded: Final = binding.load()
+            result: Final = await aattempt(
+                native_call=None if loaded is None else lambda: native(loaded),
+                adapt=_identity,
+                context=_error_context(context),
+            )
+            if isinstance(result, RustHandled):
+                return mark_rust_response(result.value)
+            if selected is Decision.RUST_REQUIRED:
+                _raise_required(result, _error_context(context))
+            return await python()
+        case _:
+            assert_never(selected)
+
+
+def _identity(value: ResultT) -> ResultT:
+    return value
+
+
+def _error_context(context: RouteContext) -> BridgeErrorContext:
+    return BridgeErrorContext(route=context.route.value, provider=context.provider or "", model=context.model or "")
 
 
 def attempt(

@@ -34,7 +34,7 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
 _verbose_state = VerboseReporterState()
 
 PROXY_CONFIG_PATH = Path(__file__).parent / "google_genai_proxy_test_config.yaml"
-PROXY_MASTER_KEY = "sk-1234"
+PROXY_MASTER_KEY = "sk-unified-google-tests-4f9b2c7d8e1a"
 PROXY_START_TIMEOUT_S = 30.0
 
 
@@ -102,7 +102,7 @@ def google_genai_proxy_url() -> Iterator[str]:
         credentials_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
         if not (credentials_file and os.path.isfile(credentials_file)):
             vertex_credentials_path = load_vertex_ai_credentials(
-                model="vertex_ai/gemini-2.5-flash-lite"
+                model="vertex_ai/gemini-3.5-flash-lite"
             )
             if vertex_credentials_path:
                 temp_credentials_path = vertex_credentials_path
