@@ -62,6 +62,7 @@ class CompactionState:
     candidates: tuple[str, ...] = ()
     summary: tuple[str, asyncio.Task[str]] | None = None
     parent_model: str | None = None
+    surface: Surface | None = None
 
 
 def surface_for_call(function_name: str) -> Surface | None:
@@ -90,12 +91,12 @@ def native_compaction_parent(model: str) -> str | None:
     return parent[0] if parent is not None and parent[1] == model and _native_child.get() else None
 
 
-def initialize_compaction_state(kwargs: Mapping[str, object]) -> CompactionState:
+def initialize_compaction_state(kwargs: Mapping[str, object], surface: Surface) -> CompactionState:
     existing: Final = kwargs.get(_STATE_KEY)
-    return existing if isinstance(existing, CompactionState) else CompactionState()
+    return existing if isinstance(existing, CompactionState) else CompactionState(surface=surface)
 
 
-def arm_compaction(
+async def arm_compaction(
     kwargs: Mapping[str, object],
     config: ContextCompactionConfig | Literal[False] | None,
     candidates: tuple[str, ...] = (),
@@ -103,41 +104,38 @@ def arm_compaction(
     *,
     router: Router | None = None,
     allow_escalation: bool = False,
+    messages: Sequence[Mapping[str, object]] | None = None,
 ) -> None:
     state: Final = kwargs.get(_STATE_KEY)
     if isinstance(state, CompactionState):
-        state.config = (
-            config
-            if isinstance(config, ContextCompactionConfig)
-            and not _client_managed(kwargs)
-            and not (
-                allow_escalation
-                and router is not None
-                and not _has_compactor(router, (config.model,) if config.model else candidates)
-            )
-            else None
-        )
+        state.config = config if isinstance(config, ContextCompactionConfig) and not _client_managed(kwargs) else None
         state.candidates = candidates
         state.parent_model = parent_model
-
-
-def _has_compactor(router: Router, candidates: tuple[str, ...]) -> bool:
-    return any(
-        deployments
-        and all(
-            (
-                provider := get_native_compaction_provider(
-                    params := _MAPPING.validate_python(deployment["litellm_params"])
-                )
+        if allow_escalation and router is not None and state.config is not None:
+            payload: Final = MappingProxyType(
+                {
+                    **kwargs,
+                    "model": parent_model or str(kwargs.get("model", "")),
+                    **({"messages": messages} if messages is not None and state.surface != "responses" else {}),
+                }
             )
-            is not None
-            and provider.supports_native_compaction(params)
-            and provider.compatible_defaults(params)
-            for deployment in deployments
+            if not await _has_compactor(router, state, payload):
+                state.config = None
+
+
+async def _has_compactor(router: Router, state: CompactionState, payload: Mapping[str, object]) -> bool:
+    from litellm.exceptions import ContextWindowExceededError
+
+    if state.surface is None or state.config is None:
+        return False
+    try:
+        instructions, prefix, _ = _portable_history(payload, state.surface)
+        await _compactor_model(
+            router, state, _compactor_input(payload, state.surface, instructions, prefix, state.config.max_tokens)
         )
-        for candidate in candidates
-        for deployments in (tuple(router.get_model_list(model_name=candidate) or ()),)
-    )
+        return True
+    except ContextWindowExceededError:
+        return False
 
 
 def _client_managed(payload: Mapping[str, object]) -> bool:
@@ -338,6 +336,27 @@ async def _generate_summary(
     )
 
 
+def _compactor_input(
+    payload: Mapping[str, object],
+    surface: Surface,
+    instructions: Sequence[Mapping[str, object]],
+    prefix: Sequence[Mapping[str, object]],
+    output: int,
+) -> Mapping[str, object]:
+    key: Final = "input" if surface == "responses" else "messages"
+    older: Final = _native_prefix(
+        MappingProxyType({**payload, key: _ITEMS.validate_python((*instructions, *prefix))}), surface
+    )
+    return MappingProxyType(
+        {
+            "model": str(payload["model"]),
+            "messages": older["messages"],
+            "max_tokens": output,
+            **{key: older[key] for key in ("system", "tools", "user") if key in older},
+        }
+    )
+
+
 async def compact_to_fit(
     router: Router, deployment: Mapping[str, object], payload: Mapping[str, object], surface: Surface | None
 ) -> Mapping[str, object]:
@@ -432,9 +451,7 @@ async def _compact_to_fit(
     retained: Final = MappingProxyType({**payload, key: _ITEMS.validate_python((*instructions, *tail))})
     if await _count(router, retained) >= budget:
         _unavailable(model, "Retained instructions, tools and the latest turn leave no room for a summary")
-    older: Final = _native_prefix(
-        MappingProxyType({**payload, key: _ITEMS.validate_python((*instructions, *prefix))}), surface
-    )
+    older: Final = _compactor_input(payload, surface, instructions, prefix, config.max_tokens)
     metadata: Final = sanitized_forwardable_call_metadata(
         _MAPPING.validate_python(payload.get("litellm_metadata") or payload.get("metadata") or _EMPTY),
         "autorouter_compaction",
@@ -442,9 +459,7 @@ async def _compact_to_fit(
     protocol: Final[CompactionProtocol] = "messages" if surface == "messages" else "chat"
     request: Final = MappingProxyType(
         {
-            "model": model,
-            "messages": older["messages"],
-            "max_tokens": config.max_tokens,
+            **older,
             "stream": False,
             "num_retries": 0,
             "disable_fallbacks": True,
@@ -459,7 +474,6 @@ async def _compact_to_fit(
                 )
             ),
             **parent_session_kwargs(payload),
-            **MappingProxyType({key: older[key] for key in ("system", "tools", "user") if key in older}),
         }
     )
     compactor, provider = await _compactor_model(router, state, request)

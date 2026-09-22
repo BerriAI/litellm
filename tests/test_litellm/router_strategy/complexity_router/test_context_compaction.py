@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import Iterator, Mapping
 from copy import deepcopy
+from functools import partial
 from typing import Final, Literal
 
 import httpx
@@ -19,6 +20,7 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     compaction_executor,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+from litellm.types.router import Deployment
 
 pytestmark: Final = [pytest.mark.asyncio, pytest.mark.usefixtures("local_model_cost_map")]
 SCHEMA: Final = {"type": "object", "properties": {"code": {"type": "string"}}}
@@ -120,9 +122,9 @@ def native_reply(summary: str = "Project code MAPLE-47", signed: bool = True, tr
     })
 
 
-def answer_reply(request: httpx.Request) -> httpx.Response:
+def answer_reply(request: httpx.Request, expected_model: str = "arbitrary-answer") -> httpx.Response:
     payload: Final = json.loads(request.content)
-    assert payload["model"] == "arbitrary-answer"
+    assert payload["model"] == expected_model
     assert request.headers["authorization"] == "Bearer answer-test"
     if request.url.path.endswith("responses"):
         return httpx.Response(200, json={
@@ -165,7 +167,8 @@ async def test_all_surfaces_compact_and_keep_selected_answerer(
     counted: Final = make_router()._count_pre_call_check_tokens(payload.get("messages"), payload.get("input"), payload)
     window: Final = int((counted + 32) / ContextCompactionConfig().trigger_ratio) + 1 if near else 512
     assert (counted < window) is near
-    settings: Final = {"context_compaction": {"model": "large", "max_tokens": 512}} if configured else {}
+    settings: Final = {"enable_context_window_escalation": True,
+        **({"context_compaction": {"model": "large", "max_tokens": 512}} if configured else {})}
     router: Final = make_router(window, settings)
     captured: Final = asyncio.Queue[Mapping[str, object]]()
     compactor, answer = wire
@@ -289,6 +292,26 @@ async def test_no_native_compactor_respects_explicit_escalation(
     assert answer.call_count == 0
 
 
+@pytest.mark.parametrize("surface", ["chat", "messages", "responses"])
+async def test_undersized_native_compactor_does_not_block_explicit_escalation(
+    wire: tuple[respx.Route, respx.Route], surface: Surface,
+) -> None:
+    router: Final = make_router(compactor_window=512, settings={
+        "enable_context_window_escalation": True,
+        "tiers": {"SIMPLE": "small", "MEDIUM": "large", "COMPLEX": "wide", "REASONING": "wide"},
+    })
+    router.add_deployment(Deployment(
+        model_name="wide", litellm_params={
+            "model": "openai/wide-answer", "api_base": "https://answer.test/v1", "api_key": "answer-test",
+        }, model_info={"id": "wide-answer", "max_input_tokens": 32000, "max_output_tokens": 64},
+    ))
+    compactor, answer = wire
+    answer.mock(side_effect=partial(answer_reply, expected_model="wide-answer"))
+    await invoke(router, surface, history(surface))
+    assert compactor.call_count == 0 and answer.call_count == 1
+    assert json.loads(answer.calls[0].request.content)["model"] == "wide-answer"
+
+
 @pytest.mark.parametrize(
     ("surface", "failure"),
     [(surface, failure) for surface in ("chat", "messages", "responses") for failure in ("unsigned", "oversized", "provider")]
@@ -358,7 +381,7 @@ async def test_client_owned_history_bypasses_compaction(
     request: Final = {**history("responses"), **owned, "model": "small", "max_tokens": 64, "_context_compaction_state": state}
     original: Final = deepcopy({key: value for key, value in request.items() if key != "_context_compaction_state"})
     before_defaults: Final = {"_context_compaction_state": state} if arm_first else request
-    arm_compaction(before_defaults, ContextCompactionConfig(), ("large",))
+    await arm_compaction(before_defaults, ContextCompactionConfig(), ("large",))
     counted: Final = router._count_pre_call_check_tokens(None, request["input"], request)
     if arm_first and counted > 512:
         with pytest.raises(litellm.ContextWindowExceededError):

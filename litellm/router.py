@@ -7398,13 +7398,11 @@ class Router:
         If it fails after num_retries, fall back to another model group
         """
         model_group: Final[str | None] = kwargs.get("model")
-        if (
-            surface_for_call(
-                getattr(kwargs.get("original_generic_function") or kwargs.get("original_function"), "__name__", "")
-            )
-            is not None
-        ):
-            kwargs["_context_compaction_state"] = initialize_compaction_state(kwargs)
+        compaction_surface: Final = surface_for_call(
+            getattr(kwargs.get("original_generic_function") or kwargs.get("original_function"), "__name__", "")
+        )
+        if compaction_surface is not None:
+            kwargs["_context_compaction_state"] = initialize_compaction_state(kwargs, compaction_surface)
         clear_pre_routing_selection(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # **kwargs is untyped at this boundary
         if not isinstance(kwargs.get("attempted_targets"), AttemptedFallbackTargets):
             _fallback_metadata_key: Final = _get_router_metadata_variable_name(
@@ -13542,7 +13540,7 @@ class Router:
             model=registered_model_name, request_kwargs=request_kwargs
         )
         if selected_strategy is None:
-            arm_compaction(request_kwargs, None)
+            await arm_compaction(request_kwargs, None)
             self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
             self._stamp_or_clear_metadata_key(
                 request_kwargs=request_kwargs, key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, value=None
@@ -13556,7 +13554,7 @@ class Router:
         from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
 
         reject_recursive_compactor(registered_model_name)
-        arm_compaction(
+        await arm_compaction(
             request_kwargs,
             selected_strategy.strategy.config.context_compaction
             if isinstance(selected_strategy.strategy, ComplexityRouter)
@@ -13574,6 +13572,7 @@ class Router:
             router=self,
             allow_escalation=isinstance(selected_strategy.strategy, ComplexityRouter)
             and selected_strategy.strategy.config.enable_context_window_escalation,
+            messages=messages,
         )
 
         await authorize_member_auto_router_inference(

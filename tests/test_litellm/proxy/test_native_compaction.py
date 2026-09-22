@@ -137,7 +137,8 @@ async def test_real_proxy_child_auth_privacy_and_body_policy(
 
 
 @pytest.mark.asyncio
-async def test_cancelling_parent_cancels_and_drains_child() -> None:
+@pytest.mark.parametrize("timeout", [False, True])
+async def test_cancelling_parent_cancels_and_drains_child(timeout: bool) -> None:
     app: Final = FastAPI()
     started: Final = asyncio.Event()
     stopped: Final = asyncio.Event()
@@ -152,7 +153,11 @@ async def test_cancelling_parent_cancels_and_drains_child() -> None:
 
     parent: Final = asyncio.create_task(with_proxy_compaction_executor(_child(), _request(app)))
     await asyncio.wait_for(started.wait(), timeout=5)
-    parent.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await parent
+    if timeout:
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(parent, timeout=0)
+    else:
+        parent.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await parent
     assert stopped.is_set() and compaction_executor.get() is None
