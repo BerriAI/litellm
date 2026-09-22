@@ -133,6 +133,15 @@ impl<'py> Field<'py> {
         self.value.is(PyBool::new(self.value.py(), true))
     }
 
+    pub(crate) fn schema_bool(&self) -> Result<bool, ProjectionError> {
+        if !self.value.is_instance_of::<PyBool>() {
+            return Err(ProjectionError::InternalSchemaFailure(
+                self.expected("a Boolean")?,
+            ));
+        }
+        Ok(self.exact_true())
+    }
+
     pub(crate) fn strict_string(&self) -> Result<String, ProjectionError> {
         let value = self
             .value

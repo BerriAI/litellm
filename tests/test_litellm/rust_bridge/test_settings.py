@@ -8,6 +8,7 @@ import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.custom_httpx.http_handler import default_user_agent
 from litellm.rust_bridge import settings
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 def test_url_policy_reads_the_litellm_globals(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -85,6 +86,28 @@ class _VaultSecrets(CustomSecretManager):
         return self.secrets.get(secret_name)
 
 
+@pytest.mark.parametrize(
+    ("access_mode", "readable"),
+    [("read_only", True), ("read_and_write", True), ("write_only", False)],
+)
+def test_secret_manager_is_readable_only_when_litellm_would_read_secrets_from_it(
+    monkeypatch: pytest.MonkeyPatch, access_mode: str, readable: bool
+) -> None:
+    monkeypatch.setenv("MISTRAL_API_KEY", "env-key")
+    monkeypatch.setattr(litellm, "secret_manager_client", _VaultSecrets({"MISTRAL_API_KEY": "vault-key"}))
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode=access_mode))
+
+    assert settings.secret_manager() == settings.SecretManager(readable=readable)
+    assert (get_secret_str("MISTRAL_API_KEY") == "vault-key") is readable
+
+
+def test_secret_manager_is_not_readable_without_a_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+
+    assert settings.secret_manager() == settings.SecretManager(readable=False)
+
+
 def test_secret_manager_projects_custom_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     manager_settings: Final = KeyManagementSettings(
         access_mode="read_and_write",
@@ -97,7 +120,7 @@ def test_secret_manager_projects_custom_settings(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
     monkeypatch.setattr(litellm, "_key_management_settings", manager_settings)
 
-    assert settings.secret_manager() == settings.SecretManager(
+    assert settings.secret_manager_binding() == settings.SecretManagerBinding(
         system="custom",
         access_mode="read_and_write",
         hosted_keys=["MISTRAL_API_KEY"],
@@ -122,7 +145,7 @@ def test_secret_manager_projects_custom_settings(monkeypatch: pytest.MonkeyPatch
 def test_secret_manager_without_a_client_has_no_system(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "secret_manager_client", None)
 
-    assert settings.secret_manager().system is None
+    assert settings.secret_manager_binding().system is None
 
 
 def test_secret_manager_uses_key_management_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -130,9 +153,9 @@ def test_secret_manager_uses_key_management_defaults(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(litellm, "_key_management_settings", None)
 
     defaults: Final = KeyManagementSettings()
-    result: Final = settings.secret_manager()
+    result: Final = settings.secret_manager_binding()
 
-    assert result == settings.SecretManager(
+    assert result == settings.SecretManagerBinding(
         system=None,
         access_mode=defaults.access_mode,
         hosted_keys=defaults.hosted_keys,

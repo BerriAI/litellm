@@ -33,6 +33,11 @@ class ProviderDefaults:
 
 @dataclass(frozen=True, slots=True)
 class SecretManager:
+    readable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SecretManagerBinding:
     system: object
     access_mode: object
     hosted_keys: object
@@ -60,6 +65,14 @@ def warn(message: str) -> None:
 
 
 def secret_manager() -> SecretManager:
+    from litellm.secret_managers.main import (
+        _should_read_secret_from_secret_manager,  # pyright: ignore[reportPrivateUsage]  # canonical resolver is private
+    )
+
+    return SecretManager(readable=_should_read_secret_from_secret_manager())
+
+
+def secret_manager_binding() -> SecretManagerBinding:
     import litellm
     from litellm.types.secret_managers.main import KeyManagementSettings
 
@@ -73,7 +86,7 @@ def secret_manager() -> SecretManager:
     system: Final = (
         configured_system.value if litellm.secret_manager_client is not None and configured_system is not None else None
     )
-    return SecretManager(
+    return SecretManagerBinding(
         system=system,
         access_mode=settings.access_mode,
         hosted_keys=settings.hosted_keys,

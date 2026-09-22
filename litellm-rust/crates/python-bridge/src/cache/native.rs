@@ -503,8 +503,13 @@ impl NativeResponseCache {
                     .collect();
                 cache.async_store_batch(entries, now).await
             }
-            Self::RedisSemantic { .. } | Self::QdrantSemantic(_) => {
-                Err(Error::UnsupportedOperation)
+            Self::RedisSemantic { .. } => Err(Error::UnsupportedOperation),
+            Self::QdrantSemantic(cache) => {
+                let entries = entries
+                    .into_iter()
+                    .map(|(request, value)| (request.semantic(), value))
+                    .collect();
+                cache.async_store_batch(entries, now).await
             }
         }
     }
@@ -515,7 +520,7 @@ impl NativeResponseCache {
         entries: Vec<(NativeRequest, Value)>,
     ) -> PyResult<Bound<'py, PyAny>> {
         match self {
-            Self::Exact(_) => {
+            Self::Exact(_) | Self::QdrantSemantic(_) => {
                 let service = self.clone();
                 litellm_host_python::run_async(
                     py,
@@ -526,7 +531,6 @@ impl NativeResponseCache {
             Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } => {
                 self.python_semantic(py, SemanticOperation::StoreBatch(entries.into()))
             }
-            Self::QdrantSemantic(_) => Err(super::cache_error(Error::UnsupportedOperation)),
         }
     }
 

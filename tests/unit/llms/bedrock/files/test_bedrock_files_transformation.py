@@ -6,6 +6,7 @@ import json
 import os
 from collections.abc import Mapping
 from contextlib import AsyncExitStack, closing
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock
 from urllib.parse import unquote, urlparse
@@ -3789,3 +3790,82 @@ class TestBedrockFileListTransformation:
 
         assert denied.value.status_code == 403
         assert "AccessDenied" in denied.value.message
+
+
+_SPLIT_IDENTITY_PARAMS: Final = {
+    "aws_region_name": "us-east-1",
+    "aws_access_key_id": "AKIABEDROCKONLY",
+    "aws_secret_access_key": "bedrock-only-secret",
+    "s3_access_key_id": "AKIAS3ONLY",
+    "s3_secret_access_key": "s3-only-secret",
+    "s3_bucket_name": "safe-bucket",
+}
+
+
+def _authorization(headers: Mapping[str, str]) -> str:
+    return {key.lower(): value for key, value in headers.items()}["authorization"]
+
+
+def test_sign_s3_request_uses_the_s3_pair_when_it_differs_from_the_aws_identity():
+    from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+    signed_headers, _signed_body = BedrockFilesConfig()._sign_s3_request(
+        content='{"custom_id": "req-1"}',
+        api_base="https://s3.us-east-1.amazonaws.com/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+        optional_params=dict(_SPLIT_IDENTITY_PARAMS),
+    )
+
+    assert _authorization(signed_headers).startswith("AWS4-HMAC-SHA256 Credential=AKIAS3ONLY/"), (
+        "the S3 PutObject must be signed by s3_access_key_id, not the Bedrock aws_access_key_id"
+    )
+
+
+def test_sign_s3_request_with_the_s3_pair_ignores_ambient_aws_session_token_role_and_profile(monkeypatch):
+    from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "pod-token")
+    monkeypatch.setenv("AWS_ROLE_NAME", "arn:aws:iam::123456789012:role/pod")
+    monkeypatch.setenv("AWS_PROFILE_NAME", "pod-profile")
+    signed_headers, _signed_body = BedrockFilesConfig()._sign_s3_request(
+        content='{"custom_id": "req-1"}',
+        api_base="https://s3.us-east-1.amazonaws.com/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+        optional_params=dict(_SPLIT_IDENTITY_PARAMS),
+    )
+
+    lowered: Final = {key.lower(): value for key, value in signed_headers.items()}
+    assert lowered["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAS3ONLY/")
+    assert "x-amz-security-token" not in lowered, "an ambient AWS_SESSION_TOKEN must not be mixed into the s3_* pair"
+
+
+@pytest.mark.parametrize("method", ["GET", "DELETE"])
+def test_sign_s3_request_without_body_uses_the_s3_pair_when_it_differs_from_the_aws_identity(method):
+    from litellm.llms.bedrock.files.transformation import BedrockFilesConfig, _BedrockS3RequestParams
+
+    signed_headers = BedrockFilesConfig()._sign_s3_request_without_body(
+        method=method,
+        api_base="https://s3.us-east-1.amazonaws.com/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+        aws_region_name="us-east-1",
+        request_params=_BedrockS3RequestParams.model_validate(_SPLIT_IDENTITY_PARAMS),
+    )
+
+    assert _authorization(signed_headers).startswith("AWS4-HMAC-SHA256 Credential=AKIAS3ONLY/"), (
+        f"the S3 {method} must be signed by s3_access_key_id, not the Bedrock aws_access_key_id"
+    )
+
+
+def test_transform_file_content_request_signs_with_the_s3_pair_from_litellm_params():
+    from litellm.llms.bedrock.files.transformation import S3_SIGNED_REQUEST_HEADERS_PARAM, BedrockFilesConfig
+
+    litellm_params = {
+        **_SPLIT_IDENTITY_PARAMS,
+        "_litellm_internal_model_credentials": MappingProxyType({"s3_bucket_name": "safe-bucket"}),
+    }
+    BedrockFilesConfig().transform_file_content_request(
+        file_content_request={"file_id": "s3://safe-bucket/litellm-bedrock-files-model-id-abc.jsonl"},
+        optional_params={},
+        litellm_params=litellm_params,
+    )
+
+    assert _authorization(litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]).startswith(
+        "AWS4-HMAC-SHA256 Credential=AKIAS3ONLY/"
+    )

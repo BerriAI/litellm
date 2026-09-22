@@ -94,7 +94,7 @@ impl SecretManagerSnapshot {
 
 /// Reads and projects the secret manager settings group in one attached operation.
 pub(crate) fn read(py: Python<'_>) -> PyResult<SecretManagerSnapshot> {
-    Ok(project(&PythonSettings::SecretManager.read(py)?)?)
+    Ok(project(&PythonSettings::SecretManagerBinding.read(py)?)?)
 }
 
 pub(crate) fn project(snapshot: &Snapshot<'_>) -> Result<SecretManagerSnapshot, ProjectionError> {
@@ -246,7 +246,7 @@ root = SimpleNamespace(secret_manager=SecretManager(
             Some(&locals),
         )
         .unwrap();
-        PythonSettings::SecretManager.snapshot(
+        PythonSettings::SecretManagerBinding.snapshot(
             locals
                 .get_item("root")
                 .unwrap()

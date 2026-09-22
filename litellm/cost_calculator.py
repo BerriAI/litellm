@@ -948,7 +948,7 @@ def _extract_service_tier(source: object) -> str | None:
     return None
 
 
-def _get_usage_object(
+def get_usage_object(
     completion_response: object,
 ) -> Usage | None:
     usage_obj: Final = cast(
@@ -1336,7 +1336,7 @@ def completion_cost(
         cache_creation_input_tokens: int | None = None
         cache_read_input_tokens: int | None = None
         audio_transcription_file_duration: float = 0.0
-        provider_usage_object: Final = _get_usage_object(completion_response=completion_response)
+        provider_usage_object: Final = get_usage_object(completion_response=completion_response)
         cost_per_token_usage_object: Final[Usage | None] = (
             _without_provider_stated_cost(provider_usage_object) if custom_pricing else provider_usage_object
         )
@@ -2031,6 +2031,45 @@ def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelIn
         return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
         return None
+
+
+def _raw_cost_map_entry(key: str) -> Mapping[str, object] | None:
+    raw_entry: Final = litellm.model_cost.get(key)
+    return raw_entry if isinstance(raw_entry, Mapping) else None
+
+
+def pricing_entry_for_cost_calc(
+    model: str | None,
+    completion_response: object | None,
+    custom_llm_provider: str | None,
+    custom_pricing: bool | None,
+    base_model: str | None,
+    router_model_id: str | None,
+    region_name: str | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+) -> tuple[str, Mapping[str, object]] | None:
+    deployment_entry: Final = _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id)
+    deployment_key: Final = router_model_id or model
+    if deployment_entry is not None and deployment_key is not None:
+        registered_entry: Final = _raw_cost_map_entry(router_model_id) if router_model_id is not None else None
+        return deployment_key, registered_entry or deployment_entry
+    selected_model: Final = _select_model_name_for_cost_calc(
+        model=model,
+        completion_response=completion_response,
+        base_model=base_model,
+        custom_pricing=custom_pricing,
+        custom_llm_provider=custom_llm_provider,
+        router_model_id=router_model_id,
+        region_name=region_name,
+    )
+    candidates: Final = (selected_model, _get_response_model(completion_response), model)
+    resolved: Final = next(
+        (info for info in (_cost_map_model_info(name, custom_llm_provider) for name in candidates if name) if info),
+        None,
+    )
+    if resolved is None:
+        return None
+    return resolved["key"], _raw_cost_map_entry(resolved["key"]) or resolved
 
 
 def ocr_cost(

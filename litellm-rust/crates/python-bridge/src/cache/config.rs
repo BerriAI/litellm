@@ -1075,12 +1075,13 @@ mod tests {
     use pyo3::{prelude::*, types::PyDict};
 
     use litellm_cache_redis::{RedisNode, RedisTopology};
+    use litellm_cache_redis_semantic::RedisSemanticConfig;
 
     use super::{
-        CacheBackendConfig, CacheConfigProjection, CertificateRequirement, GcsCacheConfig,
-        NativeCacheConfig, RedisProtocol, UnsupportedCacheConfig,
+        CacheBackendConfig, CacheConfigProjection, CachePolicy, CertificateRequirement,
+        GcsCacheConfig, NativeCacheConfig, RedisProtocol, UnsupportedCacheConfig,
     };
-    use crate::cache::native::NativeResponseCache;
+    use crate::cache::{embedder::PythonEmbedder, native::NativeResponseCache};
 
     fn cluster_facade<'py>(py: Python<'py>, startup_nodes: &str, hook: &str) -> Bound<'py, PyAny> {
         facade(
@@ -1150,6 +1151,49 @@ mod tests {
                 matching_config.service_mismatch(&mismatched),
                 Some("facade and native backend item limits must match")
             );
+        });
+    }
+
+    #[test]
+    fn redis_semantic_service_mismatch_accepts_backend_precision_threshold() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = facade(
+                py,
+                "backend = SimpleNamespace(_redis_url='redis://127.0.0.1/', _index_name='semantic_idx', similarity_threshold=0.8, embedding_model='text-embedding-3-small', embedding_max_input_tokens=None, embedding_timeout=None)\n\
+                 facade = SimpleNamespace(type='redis-semantic', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+            );
+            let backend = facade.getattr("cache").unwrap();
+            let embedder = PythonEmbedder::new(backend.clone().unbind());
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("Redis semantic cache should be supported");
+            };
+            let CacheBackendConfig::RedisSemantic(config) = config.backend else {
+                panic!("expected Redis semantic configuration");
+            };
+            let service = NativeResponseCache::redis_semantic(
+                &config.redis_url,
+                embedder,
+                RedisSemanticConfig {
+                    index_name: config.index_name.clone(),
+                    similarity_threshold: config.similarity_threshold as f32,
+                },
+            )
+            .unwrap();
+            let matching_config = NativeCacheConfig {
+                policy: CachePolicy {
+                    mode: "default-on".into(),
+                    ttl: None,
+                    namespace: None,
+                    supported_call_types: None,
+                    redis_flush_size: None,
+                    semantic_cache_scope: "key".into(),
+                },
+                backend: CacheBackendConfig::RedisSemantic(config),
+            };
+            assert_eq!(matching_config.service_mismatch(&service), None);
         });
     }
 

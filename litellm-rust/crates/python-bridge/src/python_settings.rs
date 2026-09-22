@@ -10,6 +10,7 @@ pub(crate) enum PythonSettings {
     UrlPolicy,
     ProviderDefaults,
     SecretManager,
+    SecretManagerBinding,
 }
 
 pub(crate) struct Snapshot<'py> {
@@ -30,6 +31,7 @@ impl PythonSettings {
             Self::UrlPolicy => "url_policy",
             Self::ProviderDefaults => "provider_defaults",
             Self::SecretManager => "secret_manager",
+            Self::SecretManagerBinding => "secret_manager_binding",
         }
     }
 

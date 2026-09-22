@@ -133,10 +133,80 @@ impl ExternalSecretManager for PythonSecretManager {
 
 #[cfg(test)]
 mod tests {
-    use litellm_secrets::KeyManagementSystem;
+    use std::sync::Arc;
+
+    use litellm_secrets::{
+        FailurePolicy, KeyManagementSettings, KeyManagementSystem, OidcResolver, SecretManager,
+        SecretManagerState, SecretResolver,
+    };
     use pyo3::{prelude::*, types::PyDict};
 
-    use super::{HANDLER_MODULE, PythonSecretManager, python_name};
+    use super::{HANDLER_MODULE, PythonSecretManager, python_error, python_name};
+
+    #[tokio::test]
+    async fn callback_failures_preserve_python_exceptions_even_with_environment_fallback() {
+        Python::initialize();
+        for failure_type in ["ValueError", "asyncio.CancelledError"] {
+            for fallback in [None, Some("environment-key")] {
+                let (reader, locals) = Python::attach(|py| {
+                    let locals = PyDict::new(py);
+                    locals.set_item("failure_type", failure_type).unwrap();
+                    py.run(
+                        c"
+import asyncio
+failure = eval(failure_type)('secret manager failed')
+cause = RuntimeError('original cause')
+context = RuntimeError('original context')
+failure.__cause__ = cause
+failure.__context__ = context
+class Manager:
+    def sync_read_secret(self, secret_name):
+        raise failure
+manager = Manager()
+",
+                        Some(&locals),
+                        Some(&locals),
+                    )
+                    .unwrap();
+                    let reader = PythonSecretManager::new(
+                        locals.get_item("manager").unwrap().unwrap().unbind(),
+                        None,
+                        None,
+                    );
+                    (reader, locals.unbind())
+                });
+                let resolver = SecretResolver::new(
+                    Arc::new(SecretManagerState::new(
+                        SecretManager::External(Arc::new(reader)),
+                        KeyManagementSettings::default(),
+                    )),
+                    Arc::new(move |_: &str| fallback.map(str::to_owned)),
+                    OidcResolver::default(),
+                )
+                .with_failure_policy(FailurePolicy::EnvironmentFallback);
+                let error = resolver.get_secret("API_KEY", None).await.unwrap_err();
+                Python::attach(|py| {
+                    let original = python_error(py, &error).unwrap();
+                    let locals = locals.bind(py);
+                    assert!(
+                        original
+                            .value(py)
+                            .is(locals.get_item("failure").unwrap().unwrap())
+                    );
+                    for (attribute, name) in [("__cause__", "cause"), ("__context__", "context")] {
+                        assert!(
+                            original
+                                .value(py)
+                                .getattr(attribute)
+                                .unwrap()
+                                .is(locals.get_item(name).unwrap().unwrap())
+                        );
+                    }
+                    assert!(original.traceback(py).is_some());
+                });
+            }
+        }
+    }
 
     /// Installs a fake `get_secret_from_manager` that records its kwargs, runs `body`, and
     /// removes the fake modules again.

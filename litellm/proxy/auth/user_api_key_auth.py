@@ -650,6 +650,7 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
         "type": "http",
         "headers": scope_headers,
         "path": ws_scope.get("path", ""),
+        "state": ws_scope.setdefault("state", {}),  # mutable-ok: Starlette's socket state, shared with the request
     }
     for key in ("root_path", "app_root_path"):
         if key in ws_scope:
@@ -3086,31 +3087,30 @@ async def _reserve_budget_after_common_checks(
     request: Request | None = None,
 ) -> None:
     user_api_key_auth_obj.budget_reservation = None
-    if skip_budget_checks:
-        return
-    if general_settings.get("disable_budget_reservation") is True:
-        return
+    if not skip_budget_checks and general_settings.get("disable_budget_reservation") is not True:
+        from litellm.proxy.spend_tracking.budget_reservation import (
+            reserve_budget_for_request,
+        )
 
-    from litellm.proxy.spend_tracking.budget_reservation import (
-        reserve_budget_for_request,
-    )
-
-    user_api_key_auth_obj.budget_reservation = await reserve_budget_for_request(
-        request_body=request_data,
-        route=route,
-        llm_router=llm_router,
-        valid_token=user_api_key_auth_obj,
-        team_object=team_object,
-        user_object=user_object,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-        end_user_id=end_user_id,
-        end_user_object=end_user_object,
-        apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
-        fail_closed_budget_enforcement=general_settings.get("fail_closed_budget_enforcement") is True,
-        raw_body=await read_raw_json_body(request=request),
-    )
+        user_api_key_auth_obj.budget_reservation = await reserve_budget_for_request(
+            request_body=request_data,
+            route=route,
+            llm_router=llm_router,
+            valid_token=user_api_key_auth_obj,
+            team_object=team_object,
+            user_object=user_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            end_user_id=end_user_id,
+            end_user_object=end_user_object,
+            apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
+            fail_closed_budget_enforcement=general_settings.get("fail_closed_budget_enforcement") is True,
+            raw_body=await read_raw_json_body(request=request),
+        )
+    if request is not None:
+        reservation: Final = user_api_key_auth_obj.budget_reservation
+        request.state.budget_reservation = reservation  # rebind-ok: read by the release middleware
 
 
 def _should_skip_budget_checks(

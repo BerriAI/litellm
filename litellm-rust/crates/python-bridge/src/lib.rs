@@ -7,6 +7,10 @@ mod http;
 mod marshal;
 mod python_settings;
 mod routes;
+#[allow(
+    dead_code,
+    reason = "secret-manager foundations await rollout activation"
+)]
 mod secrets;
 mod token_counter;
 
