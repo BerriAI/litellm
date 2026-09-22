@@ -6725,6 +6725,122 @@ async def test_bridge_mint_unresolvable_identity_is_500_before_upstream():
     post.assert_not_called()
 
 
+async def _exchange_for_bridge_server_with_jwt(jwt_auth_result, upstream_body=None):
+    """Drive exchange_token_with_server for a bridge oauth_delegate authorization_code request whose
+    presented credential is JWT-shaped, with _resolve_jwt_auth stubbed to a given result. Returns
+    (response, post_mock) so a test can assert the minted envelope's sealed identity or the mapped
+    error status."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import exchange_token_with_server
+    from litellm.types.mcp import MCPAuth
+
+    request = _bridge_mock_request()
+    request.headers = {"x-litellm-api-key": "aaa.bbb.ccc"}
+    fake_http_response = MagicMock()
+    fake_http_response.json.return_value = upstream_body or {
+        "access_token": "UP",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+    }
+    fake_http_response.raise_for_status = MagicMock()
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=fake_http_response)
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_http_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._resolve_jwt_auth",
+            new=AsyncMock(return_value=jwt_auth_result),
+        ),
+        patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
+    ):
+        response = await exchange_token_with_server(
+            request=request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="https://claude.ai/api/mcp/auth_callback",
+            client_id="dcr-client-123",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+    return response, fake_http_client.post
+
+
+@pytest.mark.asyncio
+async def test_bridge_mint_jwt_user_identity_seals_user_subject():
+    """A JWT that resolves to a user identity (no virtual-key mapping) mints a user_id-subject
+    envelope, matching the interactive SSO subject so admission reloads the same principal type."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
+        BridgeEnvelopeAdmitted,
+        envelope_keys_from_master_key,
+        resolve_bridge_envelope,
+    )
+    from litellm.proxy.auth.handle_jwt import JWTIdentity
+
+    response, _post = await _exchange_for_bridge_server_with_jwt(
+        JWTIdentity(user_id="jwt-user-5", user_object=None, agent_id=None)
+    )
+    assert response.status_code == 200
+    token = json.loads(response.body)["access_token"]
+    assert token.startswith("llm_env_")
+    keys = envelope_keys_from_master_key(_BRIDGE_MASTER_KEY)
+    opened = resolve_bridge_envelope(token, keys, datetime.now(timezone.utc), "bridge_srv")
+    assert isinstance(opened, BridgeEnvelopeAdmitted)
+    assert opened.identity.subject_type == "user_id"
+    assert opened.identity.subject == "jwt-user-5"
+
+
+@pytest.mark.asyncio
+async def test_bridge_mint_jwt_mapped_to_virtual_key_seals_key_hash_subject():
+    """A JWT mapped to a virtual key mints a key_hash-subject envelope sealing the mapped key's hash
+    (UserAPIKeyAuth.api_key holds the hashed token), so admission reloads that key just like a
+    presented raw key."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
+        BridgeEnvelopeAdmitted,
+        envelope_keys_from_master_key,
+        resolve_bridge_envelope,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    response, _post = await _exchange_for_bridge_server_with_jwt(
+        UserAPIKeyAuth(api_key="mapped-key-hash-99", user_id="mapped-user")
+    )
+    assert response.status_code == 200
+    token = json.loads(response.body)["access_token"]
+    keys = envelope_keys_from_master_key(_BRIDGE_MASTER_KEY)
+    opened = resolve_bridge_envelope(token, keys, datetime.now(timezone.utc), "bridge_srv")
+    assert isinstance(opened, BridgeEnvelopeAdmitted)
+    assert opened.identity.subject_type == "key_hash"
+    assert opened.identity.subject == "mapped-key-hash-99"
+
+
+@pytest.mark.asyncio
+async def test_bridge_mint_jwt_with_no_resolved_identity_is_400_before_upstream():
+    """A JWT that resolves to nothing (or to an identity with no user_id) cannot back an envelope:
+    the mint returns 400 invalid_request WITHOUT consuming the single-use code upstream, matching
+    the no-credential path rather than hashing the raw JWT string."""
+    response, post = await _exchange_for_bridge_server_with_jwt(None)
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_request"
+    post.assert_not_called()
+
+    from litellm.proxy.auth.handle_jwt import JWTIdentity
+
+    response, post = await _exchange_for_bridge_server_with_jwt(
+        JWTIdentity(user_id=None, user_object=None, agent_id=None)
+    )
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_request"
+    post.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_bridge_mint_upstream_expired_lifetime_is_502():
     """An upstream token response reporting an already-elapsed lifetime (a parseable non-positive

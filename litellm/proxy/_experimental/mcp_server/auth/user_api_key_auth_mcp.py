@@ -42,6 +42,7 @@ from litellm.proxy._types import (
     SpecialMCPServerName,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
+    hash_token,
     user_api_key_has_admin_view,
 )
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
@@ -180,6 +181,30 @@ def _is_litellm_auth_admission_error(exc: Exception) -> bool:
         except (TypeError, ValueError):
             return False
     return False
+
+
+def _explicit_credential_matches_envelope(
+    explicit_auth: UserAPIKeyAuth,
+    presented_token: str,
+    identity: EnvelopeIdentity,
+) -> bool:
+    """True when the envelope's sealed identity is the same principal the explicit
+    litellm credential validated to.
+
+    ``explicit_auth.api_key`` is the hashed token of the resolved key record (also for
+    a JWT mapped to a virtual key, where it is the mapped key's hash), so the
+    ``key_hash`` arm compares both against ``hash_token`` of the presented token
+    (covers any auth pipeline that leaves ``api_key`` unset) and against the record's
+    stored hash (covers a JWT whose raw presentation never equals the sealed key
+    hash). A dual-credential request that binds to a different principal is rejected
+    by the caller, never silently admitted on one credential alone."""
+    match identity.subject_type:
+        case "key_hash":
+            return identity.subject in (hash_token(presented_token), explicit_auth.api_key)
+        case "user_id":
+            return explicit_auth.user_id is not None and explicit_auth.user_id == identity.subject
+        case _:
+            assert_never(identity.subject_type)
 
 
 def _has_client_supplied_mcp_auth(
@@ -475,6 +500,31 @@ class MCPRequestHandler:
         # Only OAuth metadata routes registered under /.well-known/ are public.
         if request_route.startswith("/.well-known/"):
             validated_user_api_key_auth = UserAPIKeyAuth()
+        elif (
+            has_explicit_litellm_key
+            and oauth2_headers
+            and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
+            and (
+                dual_bridge_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
+                    path=request_route,
+                    mcp_servers=mcp_servers,
+                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                )
+            )
+            is not None
+        ):
+            (
+                validated_user_api_key_auth,
+                mcp_server_auth_headers,
+            ) = await MCPRequestHandler._admit_dcr_bridge_dual_credential(
+                server=dual_bridge_target.server,
+                requested_name=dual_bridge_target.requested_name,
+                authorization_value=oauth2_headers["Authorization"],
+                litellm_api_key=litellm_api_key,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                request=request,
+                route=request_route,
+            )
         elif has_explicit_litellm_key:
             # An explicit x-litellm-api-key is always a LiteLLM credential, even
             # for a delegated server, so validate it: identity / spend / rate
@@ -782,6 +832,38 @@ class MCPRequestHandler:
         higher-priority alias slot, pairing the admitted identity with an attacker's upstream
         credential; the alias-keyed injection overwrites any such caller value.
         """
+        result: Final = await MCPRequestHandler._open_dcr_bridge_envelope(
+            server=server,
+            requested_name=requested_name,
+            authorization_value=authorization_value,
+            request=request,
+            route=route,
+        )
+        header_key: Final = server.alias or server.server_name
+        if header_key is None:
+            raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
+        admitted: Final = await MCPRequestHandler._reload_admitted_principal(result.identity)
+        await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
+        injected: Final = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
+        new_headers: Final = {**(mcp_server_auth_headers or {}), **injected}
+        return admitted, new_headers
+
+    @staticmethod
+    async def _open_dcr_bridge_envelope(
+        server: MCPServer,
+        requested_name: str,
+        authorization_value: str,
+        request: Request,
+        route: str,
+    ) -> BridgeEnvelopeAdmitted:
+        """Open a bridge envelope after the pre-DB gates, or fail closed with the scope's challenge.
+
+        Shared by the envelope-only arm (:meth:`_admit_dcr_bridge_delegate`) and the dual-credential
+        arm (:meth:`_admit_dcr_bridge_dual_credential`): both require master_key, run the same
+        proxy-wide pre-DB checks the standard pipeline applies before any key lookup, and resolve
+        the envelope's crypto. Returns only the ``BridgeEnvelopeAdmitted`` result; an invalid,
+        expired, tampered, or non-envelope value raises the requested scope's ``invalid_token``
+        challenge instead."""
         from litellm.proxy.proxy_server import master_key
 
         if not master_key:
@@ -793,20 +875,56 @@ class MCPRequestHandler:
         result: Final = resolve_bridge_envelope(authorization_value, keys, datetime.now(timezone.utc), server.server_id)
         match result:
             case BridgeEnvelopeAdmitted():
-                header_key: Final = server.alias or server.server_name
-                if header_key is None:
-                    raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
-                admitted: Final = await MCPRequestHandler._reload_admitted_principal(result.identity)
-                await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
-                injected: Final = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
-                new_headers: Final = {**(mcp_server_auth_headers or {}), **injected}
-                return admitted, new_headers
+                return result
             case BridgeEnvelopeInvalid() | NotBridgeEnvelope():
                 raise MCPRequestHandler._dcr_bridge_invalid_token_challenge(
                     requested_name=requested_name, request=request
                 )
             case _:
                 assert_never(result)
+
+    @staticmethod
+    async def _admit_dcr_bridge_dual_credential(
+        server: MCPServer,
+        requested_name: str,
+        authorization_value: str,
+        litellm_api_key: str,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+        request: Request,
+        route: str,
+    ) -> tuple[UserAPIKeyAuth, dict[str, dict[str, str]] | None]:
+        """Admit a request carrying BOTH an explicit litellm credential and a bridge envelope.
+
+        MCP clients send ``x-litellm-api-key`` on every request, including the ``tools/list`` that
+        follows the ``/{server}/token`` mint, so the envelope arrives alongside the key rather than
+        alone. The explicit credential is validated first (its own pipeline, so a bad key keeps the
+        normal 401/403), then the envelope is opened and its sealed identity must match the explicit
+        credential's principal — a mismatch is a 403, never a fallback onto either credential alone.
+        On a match the explicit credential's ``UserAPIKeyAuth`` is the admission context (key
+        permissions, budgets, rate limits) and the sealed upstream token is injected under the
+        server's per-server auth-header key, while the leak-defense chokepoint strips the envelope
+        ``Authorization`` itself from egress."""
+        presented_token: Final = _get_bearer_token_or_received_api_key(litellm_api_key)
+        explicit_auth: Final = await user_api_key_auth(api_key=f"Bearer {presented_token}", request=request)
+        result: Final = await MCPRequestHandler._open_dcr_bridge_envelope(
+            server=server,
+            requested_name=requested_name,
+            authorization_value=authorization_value,
+            request=request,
+            route=route,
+        )
+        if not _explicit_credential_matches_envelope(
+            explicit_auth=explicit_auth,
+            presented_token=presented_token,
+            identity=result.identity,
+        ):
+            raise HTTPException(status_code=403, detail={"error": "oauth_principal_mismatch"})
+        header_key: Final = server.alias or server.server_name
+        if header_key is None:
+            raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
+        injected: Final = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
+        new_headers: Final = {**(mcp_server_auth_headers or {}), **injected}
+        return explicit_auth, new_headers
 
     @staticmethod
     async def _admit_dcr_bridge_authorization(
