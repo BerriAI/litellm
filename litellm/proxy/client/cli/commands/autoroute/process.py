@@ -68,7 +68,7 @@ def is_port_available(port: int) -> bool:
 
 def launch_proxy(config_path: Path, port: int, log_path: Path) -> "subprocess.Popen[bytes]":
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "w") as log_file:
+    with open(log_path, "w", encoding="utf-8") as log_file:
         return subprocess.Popen(
             [
                 sys.executable,
@@ -89,8 +89,6 @@ def launch_proxy(config_path: Path, port: int, log_path: Path) -> "subprocess.Po
 def _tail(log_path: Path, lines: int = 40) -> str:
     if not log_path.exists():
         return "(no log output captured)"
-    # The proxy writes its log as UTF-8; pin the encoding (and tolerate stray bytes) so reading
-    # it does not depend on the locale default (e.g. cp936 on Windows, LC_ALL=C on Linux).
     return "\n".join(log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])
 
 
@@ -170,8 +168,6 @@ def stream_log(log_path: Path, stop_event: threading.Event) -> None:
         time.sleep(0.1)
     if stop_event.is_set() or not log_path.exists():
         return
-    # The proxy writes its log as UTF-8; pin the encoding (and tolerate stray bytes) so the
-    # stream does not crash or mojibake under a non-UTF-8 locale (e.g. cp936 on Windows).
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         while not stop_event.is_set():
             line = f.readline()
