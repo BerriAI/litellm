@@ -225,7 +225,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         )
 
     @staticmethod
-    def _normalize_thinking_tool_choice(optional_params: dict) -> dict:
+    def _normalize_thinking_tool_choice(optional_params: dict[str, object]) -> dict[str, object]:
         tool_choice: Final = optional_params.get("tool_choice")
         if tool_choice is None or tool_choice in ("none", "auto"):
             return optional_params
