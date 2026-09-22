@@ -1439,11 +1439,22 @@ async def async_post_call_success_deployment_hook(
     modified_response = response
 
     CustomLogger: Final = _get_cached_custom_logger()
+    CustomGuardrail: Final = _get_cached_custom_guardrail()
     for callback in litellm.callbacks:
         if isinstance(callback, CustomLogger):
-            result = await callback.async_post_call_success_deployment_hook(
-                request_data, cast(LLMResponseTypes, modified_response), typed_call_type
-            )
+            try:
+                result = await callback.async_post_call_success_deployment_hook(
+                    request_data, cast(LLMResponseTypes, modified_response), typed_call_type
+                )
+            except Exception:  # noqa: BLE001  # a broken callback must not fail a completed request
+                if isinstance(callback, CustomGuardrail):
+                    raise
+                verbose_logger.exception(
+                    "async_post_call_success_deployment_hook error in %s for call_type=%s",
+                    type(callback).__name__,
+                    typed_call_type,
+                )
+                continue
             if result is not None:
                 modified_response = result
 

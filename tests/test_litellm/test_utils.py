@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
+from fastapi import HTTPException
 from jsonschema import validate
 
 import litellm
@@ -32,6 +33,7 @@ from litellm._logging import (
 from litellm.caching.caching import Cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
@@ -45,6 +47,7 @@ from litellm.types.utils import (
     Choices,
     Delta,
     LlmProviders,
+    LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
@@ -53,6 +56,7 @@ from litellm.types.utils import (
     all_litellm_params,
     bedrock_batch_litellm_params,
 )
+from litellm.types.videos.main import VideoObject
 from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
@@ -1694,7 +1698,7 @@ class TestProxyFunctionCalling:
         direct_result = supports_function_calling(model=direct_model)
         proxy_result = supports_function_calling(model=proxy_model)
 
-        print(f"\nDemonstration of proxy model resolution:")
+        print("\nDemonstration of proxy model resolution:")
         print(f"Direct model '{direct_model}' supports function calling: {direct_result}")
         print(f"Proxy model '{proxy_model}' supports function calling: {proxy_result}")
 
@@ -4405,6 +4409,51 @@ async def test_converted_chat_stream_hook_skips_unhandled_wrappers(
     assert wrapper.completion_stream is completion_stream
 
 
+class _ChatShapedSuccessDeploymentHook(CustomLogger):
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: object, call_type: CallTypes | None
+    ) -> None:
+        raise AttributeError(f"{type(response).__name__!r} object has no attribute 'choices'")
+
+
+@pytest.mark.asyncio
+async def test_success_deployment_hook_raising_keeps_video_response_and_runs_later_hooks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    second_hook: Final = _RewritingSuccessDeploymentHook()
+    monkeypatch.setattr(litellm, "callbacks", [_ChatShapedSuccessDeploymentHook(), second_hook])
+    video: Final = VideoObject(id="video_abc", object="video", status="queued", model="sora-2", seconds="4", size="720x1280")
+
+    result: Final = await async_post_call_success_deployment_hook(
+        request_data={"model": "sora-2"}, response=video, call_type=CallTypes.avideo_generation
+    )
+
+    assert result is video
+    assert second_hook.seen_responses == (video,)
+
+
+class _BlockingSuccessDeploymentGuardrail(CustomGuardrail):
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict, response: LLMResponseTypes, call_type: CallTypes | None
+    ) -> LLMResponseTypes | None:
+        raise HTTPException(status_code=400, detail={"error": "Violated moderation policy"})
+
+
+@pytest.mark.asyncio
+async def test_success_deployment_hook_still_propagates_guardrail_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    later_hook: Final = _RewritingSuccessDeploymentHook()
+    monkeypatch.setattr(
+        litellm, "callbacks", [_BlockingSuccessDeploymentGuardrail(guardrail_name="blocking"), later_hook]
+    )
+
+    with pytest.raises(HTTPException):
+        await async_post_call_success_deployment_hook(
+            request_data={"model": "gpt-5.6"}, response=ModelResponse(model="gpt-5.6"), call_type=CallTypes.acompletion
+        )
+
+    assert later_hook.seen_responses == ()
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_wrapper_async_leaves_success_deployment_hook_off_requested_fake_stream(
@@ -5533,7 +5582,6 @@ async def test_success_deployment_hook_chains_past_callback_returning_response(
 
         async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
             self.seen.append(response)
-            return None
 
     replacer = ReplacingLogger()
     observer = ObservingLogger()
