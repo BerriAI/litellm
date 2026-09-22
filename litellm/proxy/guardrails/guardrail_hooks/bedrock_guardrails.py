@@ -251,23 +251,29 @@ def _decoded_base64_length(encoded: str) -> int:
     return len(encoded) * 3 // 4 - encoded[-2:].count("=")
 
 
-def _flatten_tool_result_part(part: object) -> tuple[object, ...]:
-    """A tool_result block yields its nested content as leaf parts, so a document or
-    image inside it is counted, scanned, or refused exactly like a top-level part."""
-    if isinstance(part, dict) and part.get("type") == "tool_result":
-        content: Final = part.get("content")
-        if isinstance(content, str):
-            return (content,)
-        if isinstance(content, list):
-            return tuple(leaf for nested in content for leaf in _flatten_tool_result_part(nested))
-        return ()
-    return (part,)
-
-
 def _content_leaf_parts(content: object) -> tuple[object, ...]:
+    """Leaf content parts with Anthropic tool_result blocks flattened.
+
+    A tool_result carrying nested blocks hands the model their contents, so a nested
+    document or image must be counted, scanned, or refused exactly like a top-level
+    part. Its string content becomes a text leaf. Iterative (no recursion): the
+    code-quality check bans new recursive functions.
+    """
     if not isinstance(content, list):
         return ()
-    return tuple(leaf for part in content for leaf in _flatten_tool_result_part(part))
+    stack: Final[list[object]] = list(reversed(content))  # mutable-ok: LIFO walk keeps leaf order
+    leaves: Final[list[object]] = []  # mutable-ok: accumulated in source order, returned as a tuple
+    while stack:
+        part = stack.pop()
+        if isinstance(part, dict) and part.get("type") == "tool_result":
+            inner = part.get("content")
+            if isinstance(inner, str):
+                leaves.append(inner)
+            elif isinstance(inner, list):
+                stack.extend(reversed(inner))
+            continue
+        leaves.append(part)
+    return tuple(leaves)
 
 
 def _is_responses_api_route(request_route: str | None) -> bool:
