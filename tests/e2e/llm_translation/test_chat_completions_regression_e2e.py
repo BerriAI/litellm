@@ -1213,6 +1213,7 @@ class TestAnthropicChatCompletions:
             )
             assert_client_error(result, f"bare string content item {text!r}")
 
+    @pytest.mark.owned_gateway
     @pytest.mark.covers(
         "llm.chat_completions.anthropic.input_validation.nonstream.works",
         exercised_on=["chat_completions"],
