@@ -32,6 +32,11 @@ SAMPLE_LITELLM_PARAMS = {
 }
 
 
+def _signed_header_names(authorization: str) -> set[str]:
+    signed_headers = next(part for part in authorization.split(", ") if part.startswith("SignedHeaders="))
+    return set(signed_headers.removeprefix("SignedHeaders=").split(";"))
+
+
 class TestTransformation:
     """Test URL construction and JSON-RPC envelope building."""
 
@@ -124,12 +129,13 @@ class TestTransformation:
         assert headers["x-mcp-token"] == "mcp-abc"
         assert headers["x-tenant"] == "t1"
 
-    def test_agent_extra_headers_signed_for_sigv4(self):
-        """agent_extra_headers must be present in the dict passed to _sign_request."""
+    def test_agent_extra_headers_signed_for_sigv4(self, monkeypatch):
+        """agent_extra_headers ride alongside a real SigV4 signature on the SigV4 path."""
         from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
             BedrockAgentCoreA2ATransformation,
         )
 
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
         litellm_params_no_key = {
             "model": SAMPLE_MODEL,
             "custom_llm_provider": "bedrock",
@@ -138,23 +144,18 @@ class TestTransformation:
             "aws_region_name": "us-west-2",
         }
 
-        captured: dict = {}
+        _, headers, body = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+            request_id="req-001",
+            params=SAMPLE_PARAMS,
+            litellm_params=litellm_params_no_key,
+            agent_extra_headers={"x-mcp-token": "mcp-abc"},
+        )
 
-        def fake_sign(self, headers, **kwargs):
-            captured.update(headers)
-            return headers, b'{"jsonrpc":"2.0"}'
-
-        with patch(
-            "litellm.llms.bedrock.chat.agentcore.transformation.AmazonAgentCoreConfig._sign_request",
-            new=fake_sign,
-        ):
-            BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
-                request_id="req-001",
-                params=SAMPLE_PARAMS,
-                litellm_params=litellm_params_no_key,
-                agent_extra_headers={"x-mcp-token": "mcp-abc"},
-            )
-        assert captured.get("x-mcp-token") == "mcp-abc"
+        normalized = {k.lower(): v for k, v in headers.items()}
+        assert normalized["x-mcp-token"] == "mcp-abc"
+        assert normalized["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/")
+        assert "x-amzn-bedrock-agentcore-runtime-session-id" in _signed_header_names(normalized["authorization"])
+        assert json.loads(body)["params"] == SAMPLE_PARAMS
 
     def test_reserved_headers_filtered_from_agent_extra_headers(self):
         """
@@ -205,7 +206,7 @@ class TestTransformation:
         assert normalized.get("host") != "attacker.example.com"
         assert normalized.get("x-amz-content-sha256") != "deadbeef"
 
-    def test_reserved_headers_filtered_before_sigv4_signing(self):
+    def test_reserved_headers_filtered_before_sigv4_signing(self, monkeypatch):
         """
         Reserved headers in agent_extra_headers must be stripped BEFORE the
         SigV4 signer sees them, so the signature does not bind a spoofed
@@ -215,6 +216,7 @@ class TestTransformation:
             BedrockAgentCoreA2ATransformation,
         )
 
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
         litellm_params_no_key = {
             "model": SAMPLE_MODEL,
             "custom_llm_provider": "bedrock",
@@ -224,34 +226,24 @@ class TestTransformation:
             "runtimeUserId": "legit-user",
         }
 
-        captured: dict = {}
+        _, headers, _ = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+            request_id="req-001",
+            params=SAMPLE_PARAMS,
+            litellm_params=litellm_params_no_key,
+            agent_extra_headers={
+                "x-amzn-bedrock-agentcore-runtime-user-id": "victim-user",
+                "x-amz-date": "20990101T000000Z",
+                "authorization": "Bearer attacker",
+                "x-mcp-token": "mcp-abc",
+            },
+        )
 
-        def fake_sign(self, headers, **kwargs):
-            captured.update(headers)
-            return headers, b'{"jsonrpc":"2.0"}'
-
-        with patch(
-            "litellm.llms.bedrock.chat.agentcore.transformation.AmazonAgentCoreConfig._sign_request",
-            new=fake_sign,
-        ):
-            BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
-                request_id="req-001",
-                params=SAMPLE_PARAMS,
-                litellm_params=litellm_params_no_key,
-                agent_extra_headers={
-                    "x-amzn-bedrock-agentcore-runtime-user-id": "victim-user",
-                    "x-amz-date": "20990101T000000Z",
-                    "authorization": "Bearer attacker",
-                    "x-mcp-token": "mcp-abc",
-                },
-            )
-
-        normalized = {k.lower(): v for k, v in captured.items()}
+        normalized = {k.lower(): v for k, v in headers.items()}
         assert normalized["x-amzn-bedrock-agentcore-runtime-user-id"] == "legit-user"
-        assert normalized.get("x-amz-date") != "20990101T000000Z"
-        assert normalized.get("authorization") != "Bearer attacker"
-        # Non-reserved header still makes it into the signed dict.
-        assert captured.get("x-mcp-token") == "mcp-abc"
+        assert normalized["x-amz-date"] != "20990101T000000Z"
+        assert normalized["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/")
+        assert "x-amzn-bedrock-agentcore-runtime-user-id" in _signed_header_names(normalized["authorization"])
+        assert normalized["x-mcp-token"] == "mcp-abc"
 
 
 SESSION_HEADER = "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"

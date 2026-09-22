@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 from types import TracebackType
 from typing import Final
@@ -103,15 +104,25 @@ def test_client_secret_session_model_takes_priority_over_top_level(monkeypatch):
 
 
 async def _hanging_resolver(credentials, project_id, custom_llm_provider) -> tuple[str, str]:
-    await asyncio.sleep(30)
+    await asyncio.Event().wait()
     return "", ""
 
 
-async def _thread_offloaded_hanging_resolver(credentials, project_id, custom_llm_provider) -> tuple[str, str]:
+@pytest.fixture
+def stalled_worker_release():
+    release = threading.Event()
+    yield release
+    release.set()
+
+
+def _thread_offloaded_hanging_resolver(release: threading.Event):
     from litellm.litellm_core_utils.asyncify import asyncify
 
-    await asyncify(time.sleep)(30)
-    return "", ""
+    async def resolver(credentials, project_id, custom_llm_provider) -> tuple[str, str]:
+        await asyncify(release.wait)()
+        return "", ""
+
+    return resolver
 
 
 async def _instant_resolver(credentials, project_id, custom_llm_provider) -> tuple[str, str]:
@@ -145,7 +156,7 @@ async def test_vertex_credential_resolution_times_out_instead_of_hanging():
 
 
 @pytest.mark.asyncio
-async def test_vertex_credential_resolution_bounds_a_thread_offloaded_refresh():
+async def test_vertex_credential_resolution_bounds_a_thread_offloaded_refresh(stalled_worker_release):
     """The real stall is a blocking google-auth refresh that runs in a worker
     thread via asyncify, not a plain awaitable sleep. A timeout that only bounds
     cancellable awaits would leave that shape hanging, so bound the shape the
@@ -155,7 +166,7 @@ async def test_vertex_credential_resolution_bounds_a_thread_offloaded_refresh():
         await realtime_main._resolve_vertex_access_token_bounded(
             credentials="fake-credentials",
             project_id="fake-project",
-            resolver=_thread_offloaded_hanging_resolver,
+            resolver=_thread_offloaded_hanging_resolver(stalled_worker_release),
             timeout_seconds=0.05,
         )
     assert time.monotonic() - start < 5
@@ -195,7 +206,7 @@ async def test_arealtime_vertex_branch_resolves_credentials_under_a_bound(monkey
     prompt error there rather than as an accepted-then-silent websocket."""
 
     async def hanging_token_refresh(**kwargs):
-        await asyncio.sleep(30)
+        await asyncio.Event().wait()
 
     def mock_get_llm_provider(model, api_base, api_key):
         return model, "vertex_ai", None, api_base

@@ -273,22 +273,16 @@ def test_transform_text_to_speech_response(
     """
     Test TTS response transformation
     """
-    # Create a mock response
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.content = b"fake_audio_data"
-    mock_response.status_code = 200
-    mock_response.headers = {"content-type": "audio/mpeg"}
-
-    mock_logging = Mock()
-
-    result = azure_tts_config.transform_text_to_speech_response(
-        model="azure-tts", raw_response=mock_response, logging_obj=mock_logging
+    raw_response = httpx.Response(
+        200, content=b"fake_audio_data", headers={"content-type": "audio/mpeg"}
     )
 
-    # Should return HttpxBinaryResponseContent wrapper
-    from litellm.types.llms.openai import HttpxBinaryResponseContent
+    result = azure_tts_config.transform_text_to_speech_response(
+        model="azure-tts", raw_response=raw_response, logging_obj=Mock()
+    )
 
-    assert isinstance(result, HttpxBinaryResponseContent)
+    assert result.content == b"fake_audio_data"
+    assert result.response.headers["content-type"] == "audio/mpeg"
 
 
 # Tests for helper methods

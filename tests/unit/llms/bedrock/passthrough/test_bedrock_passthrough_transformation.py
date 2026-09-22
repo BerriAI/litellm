@@ -332,41 +332,6 @@ def test_bedrock_passthrough_without_model_id_backward_compatibility():
         assert url_str == expected_url
 
 
-def test_bedrock_passthrough_region_extraction_from_inference_profile_arn():
-    """Test that AWS region is correctly extracted from Application Inference Profile ARN"""
-    config = BedrockPassthroughConfig()
-
-    model = "anthropic.claude-sonnet-4-20250514-v1:0"
-    # ARN contains us-west-2 region
-    model_id = (
-        "arn:aws:bedrock:us-west-2:123456789:application-inference-profile/test123"
-    )
-    endpoint = f"model/{model}/invoke"
-
-    # Don't provide aws_region_name in litellm_params to test ARN extraction
-    with patch.object(
-        config,
-        "get_runtime_endpoint",
-        return_value=(
-            "https://bedrock-runtime.us-west-2.amazonaws.com",
-            "https://bedrock-runtime.us-west-2.amazonaws.com",
-        ),
-    ):
-        url, api_base = config.get_complete_url(
-            api_base=None,
-            api_key=None,
-            model=model,
-            endpoint=endpoint,
-            request_query_params=None,
-            litellm_params={
-                "model_id": model_id
-            },  # Region should be extracted from ARN
-        )
-
-        # Verify that the region from ARN is used in the base URL
-        assert (
-            "us-west-2" in api_base
-        ), f"Expected region 'us-west-2' from ARN in base URL, but got: {api_base}"
 def test_bedrock_passthrough_model_id_arn_encoding():
     """
     Test that model_id ARNs are properly URL-encoded when used in endpoints.

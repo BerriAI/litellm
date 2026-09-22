@@ -2,13 +2,11 @@ import os
 from unittest.mock import MagicMock, patch
 
 import httpx
-import pytest
 
-
+from litellm.llms.vercel_ai_gateway.common_utils import VercelAIGatewayException
 from litellm.llms.vercel_ai_gateway.embedding.transformation import (
     VercelAIGatewayEmbeddingConfig,
 )
-from litellm.llms.vercel_ai_gateway.common_utils import VercelAIGatewayException
 from litellm.types.utils import EmbeddingResponse
 
 
@@ -190,8 +188,12 @@ def test_vercel_ai_gateway_embedding_transform_response():
         litellm_params={},
     )
 
-    assert response is not None
-    mock_logging.post_call.assert_called_once()
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert response.data[0]["index"] == 0
+    assert response.model == "openai/text-embedding-3-small"
+    assert response.usage.prompt_tokens == 2
+    assert response.usage.total_tokens == 2
+    mock_logging.post_call.assert_called_once_with(original_response=mock_response.text)
 
 
 def test_vercel_ai_gateway_embedding_env_vars():

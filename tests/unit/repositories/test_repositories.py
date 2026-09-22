@@ -51,6 +51,43 @@ class MockRecord:
         return self._data.get(name)
 
 
+def _field_matches(actual: Any, condition: Any) -> bool:
+    if not isinstance(condition, dict):
+        return actual == condition
+    for op, operand in condition.items():
+        if op == "equals" and actual != operand:
+            return False
+        if op == "not" and actual == operand:
+            return False
+        if op == "in" and actual not in operand:
+            return False
+        if op == "contains" and (actual is None or operand not in actual):
+            return False
+        if op == "has" and (actual is None or operand not in actual):
+            return False
+        if op == "gt" and (actual is None or actual <= operand):
+            return False
+        if op == "lt" and (actual is None or actual >= operand):
+            return False
+    return True
+
+
+def _record_matches(record: dict[str, Any], where: dict[str, Any]) -> bool:
+    for field, condition in where.items():
+        if field == "OR":
+            if not any(_record_matches(record, clause) for clause in condition):
+                return False
+        elif field == "AND":
+            if not all(_record_matches(record, clause) for clause in condition):
+                return False
+        elif field == "NOT":
+            if _record_matches(record, condition):
+                return False
+        elif not _field_matches(record.get(field), condition):
+            return False
+    return True
+
+
 class MockTable:
     """Mock Prisma table for testing."""
 
@@ -59,10 +96,8 @@ class MockTable:
         self._pk_field = pk_field
 
     async def find_unique(self, where: Dict[str, Any]) -> Optional[MockRecord]:
-        key_field = list(where.keys())[0]
-        key_value = where[key_field]
-        data = self._records.get(key_value)
-        return MockRecord(data) if data else None
+        matches = [r for r in self._records.values() if _record_matches(r, where)]
+        return MockRecord(matches[0]) if matches else None
 
     async def find_many(
         self,
@@ -71,8 +106,13 @@ class MockTable:
         take: Optional[int] = None,
         order: Optional[Dict[str, str]] = None,
     ) -> List[MockRecord]:
-        records = list(self._records.values())
-        return [MockRecord(r) for r in records]
+        records = [r for r in self._records.values() if _record_matches(r, where or {})]
+        if order:
+            field, direction = next(iter(order.items()))
+            records = sorted(records, key=lambda r: r[field], reverse=(direction == "desc"))
+        start = skip or 0
+        end = None if take is None else start + take
+        return [MockRecord(r) for r in records[start:end]]
 
     async def create(self, data: Dict[str, Any]) -> MockRecord:
         record_data = dict(data)
@@ -101,13 +141,13 @@ class MockTable:
         return None
 
     async def delete(self, where: Dict[str, Any]) -> Optional[MockRecord]:
-        key_field = list(where.keys())[0]
-        key_value = where[key_field]
-        data = self._records.pop(key_value, None)
-        return MockRecord(data) if data else None
+        keys = [k for k, r in self._records.items() if _record_matches(r, where)]
+        if not keys:
+            return None
+        return MockRecord(self._records.pop(keys[0]))
 
     async def count(self, where: Optional[Dict[str, Any]] = None) -> int:
-        return len(self._records)
+        return sum(1 for r in self._records.values() if _record_matches(r, where or {}))
 
     async def upsert(self, where: Dict[str, Any], data: Dict[str, Any]) -> MockRecord:
         key_field = list(where.keys())[0]
@@ -190,10 +230,15 @@ class TestBaseRepository:
     async def test_find_many_with_all_kwargs(self, prisma_client):
         repo = BudgetRepository(prisma_client)
         prisma_client.db.litellm_budgettable._records = {
+            "b3": {"budget_id": "b3", "max_budget": 300.0},
             "b1": {"budget_id": "b1", "max_budget": 100.0},
+            "b2": {"budget_id": "b2", "max_budget": 200.0},
+            "b4": {"budget_id": "b4", "max_budget": 400.0},
         }
-        budgets = await repo.find_many(where={"budget_id": "b1"}, skip=0, take=10, order={"budget_id": "asc"})
-        assert len(budgets) == 1
+        budgets = await repo.find_many(
+            where={"budget_id": {"in": ["b1", "b3", "b4"]}}, skip=1, take=1, order={"budget_id": "asc"}
+        )
+        assert [b.budget_id for b in budgets] == ["b3"]
 
     def test_record_to_dict_branches(self):
         from litellm.repositories.base_repository import record_to_dict
@@ -430,9 +475,15 @@ class TestModelRepository:
                 "litellm_params": '{"model": "gpt-4"}',
                 "blocked": False,
             },
+            "m2": {
+                "model_id": "m2",
+                "model_name": "claude-3",
+                "litellm_params": '{"model": "claude-3"}',
+                "blocked": True,
+            },
         }
         models = await repo.find_unblocked()
-        assert len(models) == 1
+        assert [m.model_id for m in models] == ["m1"]
 
     @pytest.mark.asyncio
     @patch(
@@ -446,9 +497,14 @@ class TestModelRepository:
                 "model_name": "gpt-4",
                 "litellm_params": '{"model": "gpt-4"}',
             },
+            "m2": {
+                "model_id": "m2",
+                "model_name": "claude-3",
+                "litellm_params": '{"model": "claude-3"}',
+            },
         }
         models = await repo.find_by_name("gpt-4")
-        assert len(models) == 1
+        assert [m.model_id for m in models] == ["m1"]
 
     @pytest.mark.asyncio
     @patch(
@@ -479,13 +535,20 @@ class TestModelRepository:
         side_effect=lambda v, **kw: v,
     )
     async def test_delete_model(self, mock_decrypt, repo):
-        repo._prisma_client.db.litellm_proxymodeltable._records["m1"] = {
+        table = repo._prisma_client.db.litellm_proxymodeltable
+        table._records["m1"] = {
             "model_id": "m1",
             "model_name": "gpt-4",
             "litellm_params": '{"model": "gpt-4"}',
         }
+        table._records["m2"] = {
+            "model_id": "m2",
+            "model_name": "claude-3",
+            "litellm_params": '{"model": "claude-3"}',
+        }
         deleted = await repo.delete_model("m1")
-        assert deleted is not None
+        assert deleted is not None and deleted.model_id == "m1"
+        assert list(table._records) == ["m2"]
 
     @pytest.mark.asyncio
     @patch(
@@ -733,50 +796,40 @@ class TestTeamRepository:
 
     @pytest.mark.asyncio
     async def test_find_by_alias(self, repo):
-        repo._prisma_client.db.litellm_teamtable._records["team-1"] = {
-            "team_id": "team-1",
-            "team_alias": "Engineering",
-            "admins": [],
-            "members": [],
-            "models": [],
+        repo._prisma_client.db.litellm_teamtable._records = {
+            "team-1": {"team_id": "team-1", "team_alias": "Engineering", "admins": [], "members": [], "models": []},
+            "team-2": {"team_id": "team-2", "team_alias": "Sales", "admins": [], "members": [], "models": []},
         }
-        team = await repo.find_by_alias("Engineering")
+        team = await repo.find_by_alias("Sales")
         assert team is not None
-        assert team.team_id == "team-1"
+        assert team.team_id == "team-2"
 
     @pytest.mark.asyncio
     async def test_find_by_organization_id(self, repo):
-        repo._prisma_client.db.litellm_teamtable._records["team-1"] = {
-            "team_id": "team-1",
-            "organization_id": "org-1",
-            "admins": [],
-            "members": [],
-            "models": [],
+        repo._prisma_client.db.litellm_teamtable._records = {
+            "team-1": {"team_id": "team-1", "organization_id": "org-1", "admins": [], "members": [], "models": []},
+            "team-2": {"team_id": "team-2", "organization_id": "org-2", "admins": [], "members": [], "models": []},
         }
         teams = await repo.find_by_organization_id("org-1")
-        assert len(teams) == 1
+        assert [t.team_id for t in teams] == ["team-1"]
 
     @pytest.mark.asyncio
     async def test_find_by_member(self, repo):
-        repo._prisma_client.db.litellm_teamtable._records["team-1"] = {
-            "team_id": "team-1",
-            "admins": [],
-            "members": ["user1"],
-            "models": [],
+        repo._prisma_client.db.litellm_teamtable._records = {
+            "team-1": {"team_id": "team-1", "admins": [], "members": ["user1"], "models": []},
+            "team-2": {"team_id": "team-2", "admins": ["user1"], "members": ["user2"], "models": []},
         }
         teams = await repo.find_by_member("user1")
-        assert len(teams) == 1
+        assert [t.team_id for t in teams] == ["team-1"]
 
     @pytest.mark.asyncio
     async def test_find_by_admin(self, repo):
-        repo._prisma_client.db.litellm_teamtable._records["team-1"] = {
-            "team_id": "team-1",
-            "admins": ["admin1"],
-            "members": [],
-            "models": [],
+        repo._prisma_client.db.litellm_teamtable._records = {
+            "team-1": {"team_id": "team-1", "admins": ["admin1"], "members": [], "models": []},
+            "team-2": {"team_id": "team-2", "admins": ["admin2"], "members": ["admin1"], "models": []},
         }
         teams = await repo.find_by_admin("admin1")
-        assert len(teams) == 1
+        assert [t.team_id for t in teams] == ["team-1"]
 
 
 class TestUserRepository:
@@ -835,13 +888,14 @@ class TestUserRepository:
 
     @pytest.mark.asyncio
     async def test_delete_user(self, repo):
-        repo._prisma_client.db.litellm_usertable._records["user-1"] = {
-            "user_id": "user-1",
-            "teams": [],
-            "models": [],
+        table = repo._prisma_client.db.litellm_usertable
+        table._records = {
+            "user-1": {"user_id": "user-1", "teams": [], "models": []},
+            "user-2": {"user_id": "user-2", "teams": [], "models": []},
         }
         deleted = await repo.delete_user("user-1")
-        assert deleted is not None
+        assert deleted is not None and deleted.user_id == "user-1"
+        assert list(table._records) == ["user-2"]
 
     @pytest.mark.asyncio
     async def test_add_to_team(self, repo):
@@ -882,46 +936,41 @@ class TestUserRepository:
 
     @pytest.mark.asyncio
     async def test_find_by_email(self, repo):
-        repo._prisma_client.db.litellm_usertable._records["user-1"] = {
-            "user_id": "user-1",
-            "user_email": "test@example.com",
-            "teams": [],
-            "models": [],
+        repo._prisma_client.db.litellm_usertable._records = {
+            "user-1": {"user_id": "user-1", "user_email": "one@example.com", "teams": [], "models": []},
+            "user-2": {"user_id": "user-2", "user_email": "two@example.com", "teams": [], "models": []},
         }
-        user = await repo.find_by_email("test@example.com")
+        user = await repo.find_by_email("two@example.com")
         assert user is not None
+        assert user.user_id == "user-2"
 
     @pytest.mark.asyncio
     async def test_find_by_sso_id(self, repo):
-        repo._prisma_client.db.litellm_usertable._records["sso-123"] = {
-            "user_id": "user-1",
-            "sso_user_id": "sso-123",
-            "teams": [],
-            "models": [],
+        repo._prisma_client.db.litellm_usertable._records = {
+            "user-1": {"user_id": "user-1", "sso_user_id": "sso-123", "teams": [], "models": []},
+            "user-2": {"user_id": "user-2", "sso_user_id": "sso-456", "teams": [], "models": []},
         }
-        user = await repo.find_by_sso_id("sso-123")
+        user = await repo.find_by_sso_id("sso-456")
         assert user is not None
+        assert user.user_id == "user-2"
 
     @pytest.mark.asyncio
     async def test_find_by_organization_id(self, repo):
-        repo._prisma_client.db.litellm_usertable._records["user-1"] = {
-            "user_id": "user-1",
-            "organization_id": "org-1",
-            "teams": [],
-            "models": [],
+        repo._prisma_client.db.litellm_usertable._records = {
+            "user-1": {"user_id": "user-1", "organization_id": "org-1", "teams": [], "models": []},
+            "user-2": {"user_id": "user-2", "organization_id": "org-2", "teams": [], "models": []},
         }
         users = await repo.find_by_organization_id("org-1")
-        assert len(users) == 1
+        assert [u.user_id for u in users] == ["user-1"]
 
     @pytest.mark.asyncio
     async def test_find_by_team_id(self, repo):
-        repo._prisma_client.db.litellm_usertable._records["user-1"] = {
-            "user_id": "user-1",
-            "teams": ["team-1"],
-            "models": [],
+        repo._prisma_client.db.litellm_usertable._records = {
+            "user-1": {"user_id": "user-1", "teams": ["team-1"], "models": []},
+            "user-2": {"user_id": "user-2", "teams": ["team-2"], "models": []},
         }
         users = await repo.find_by_team_id("team-1")
-        assert len(users) == 1
+        assert [u.user_id for u in users] == ["user-1"]
 
 
 class TestVerificationTokenRepository:
@@ -1014,47 +1063,52 @@ class TestVerificationTokenRepository:
 
     @pytest.mark.asyncio
     async def test_update_last_active(self, repo):
-        repo._prisma_client.db.litellm_verificationtoken._records["sk-test"] = {
-            "token": "sk-test",
+        table = repo._prisma_client.db.litellm_verificationtoken
+        table._records = {
+            "sk-test": {"token": "sk-test", "last_active": None},
+            "sk-other": {"token": "sk-other", "last_active": None},
         }
         token = await repo.update_last_active("sk-test")
-        assert token.last_active is not None
+        assert isinstance(token.last_active, datetime)
+        assert table._records["sk-test"]["last_active"] == token.last_active
+        assert table._records["sk-other"]["last_active"] is None
 
     @pytest.mark.asyncio
     async def test_find_by_alias(self, repo):
-        repo._prisma_client.db.litellm_verificationtoken._records["sk-test"] = {
-            "token": "sk-test",
-            "key_alias": "my-key",
+        repo._prisma_client.db.litellm_verificationtoken._records = {
+            "sk-test": {"token": "sk-test", "key_alias": "my-key"},
+            "sk-other": {"token": "sk-other", "key_alias": "other-key"},
         }
-        token = await repo.find_by_alias("my-key")
+        token = await repo.find_by_alias("other-key")
         assert token is not None
+        assert token.token == "sk-other"
 
     @pytest.mark.asyncio
     async def test_find_by_user_id(self, repo):
-        repo._prisma_client.db.litellm_verificationtoken._records["sk-test"] = {
-            "token": "sk-test",
-            "user_id": "user-1",
+        repo._prisma_client.db.litellm_verificationtoken._records = {
+            "sk-test": {"token": "sk-test", "user_id": "user-1"},
+            "sk-other": {"token": "sk-other", "user_id": "user-2"},
         }
         tokens = await repo.find_by_user_id("user-1")
-        assert len(tokens) == 1
+        assert [t.token for t in tokens] == ["sk-test"]
 
     @pytest.mark.asyncio
     async def test_find_by_team_id(self, repo):
-        repo._prisma_client.db.litellm_verificationtoken._records["sk-test"] = {
-            "token": "sk-test",
-            "team_id": "team-1",
+        repo._prisma_client.db.litellm_verificationtoken._records = {
+            "sk-test": {"token": "sk-test", "team_id": "team-1"},
+            "sk-other": {"token": "sk-other", "team_id": "team-2"},
         }
         tokens = await repo.find_by_team_id("team-1")
-        assert len(tokens) == 1
+        assert [t.token for t in tokens] == ["sk-test"]
 
     @pytest.mark.asyncio
     async def test_find_by_project_id(self, repo):
-        repo._prisma_client.db.litellm_verificationtoken._records["sk-test"] = {
-            "token": "sk-test",
-            "project_id": "project-1",
+        repo._prisma_client.db.litellm_verificationtoken._records = {
+            "sk-test": {"token": "sk-test", "project_id": "project-1"},
+            "sk-other": {"token": "sk-other", "project_id": "project-2"},
         }
         tokens = await repo.find_by_project_id("project-1")
-        assert len(tokens) == 1
+        assert [t.token for t in tokens] == ["sk-test"]
 
 
 class TestOrganizationRepository:
@@ -1123,15 +1177,26 @@ class TestOrganizationRepository:
 
     @pytest.mark.asyncio
     async def test_delete_organization(self, repo):
-        repo._prisma_client.db.litellm_organizationtable._records["org-1"] = {
-            "organization_id": "org-1",
-            "organization_alias": "Acme",
-            "budget_id": "b1",
-            "created_by": "admin",
-            "updated_by": "admin",
+        table = repo._prisma_client.db.litellm_organizationtable
+        table._records = {
+            "org-1": {
+                "organization_id": "org-1",
+                "organization_alias": "Acme",
+                "budget_id": "b1",
+                "created_by": "admin",
+                "updated_by": "admin",
+            },
+            "org-2": {
+                "organization_id": "org-2",
+                "organization_alias": "Globex",
+                "budget_id": "b2",
+                "created_by": "admin",
+                "updated_by": "admin",
+            },
         }
         deleted = await repo.delete_organization("org-1")
-        assert deleted is not None
+        assert deleted is not None and deleted.organization_id == "org-1"
+        assert list(table._records) == ["org-2"]
 
     @pytest.mark.asyncio
     async def test_update_spend(self, repo):
@@ -1148,15 +1213,25 @@ class TestOrganizationRepository:
 
     @pytest.mark.asyncio
     async def test_find_by_alias(self, repo):
-        repo._prisma_client.db.litellm_organizationtable._records["org-1"] = {
-            "organization_id": "org-1",
-            "organization_alias": "Acme",
-            "budget_id": "b1",
-            "created_by": "admin",
-            "updated_by": "admin",
+        repo._prisma_client.db.litellm_organizationtable._records = {
+            "org-1": {
+                "organization_id": "org-1",
+                "organization_alias": "Acme",
+                "budget_id": "b1",
+                "created_by": "admin",
+                "updated_by": "admin",
+            },
+            "org-2": {
+                "organization_id": "org-2",
+                "organization_alias": "Globex",
+                "budget_id": "b2",
+                "created_by": "admin",
+                "updated_by": "admin",
+            },
         }
-        org = await repo.find_by_alias("Acme")
+        org = await repo.find_by_alias("Globex")
         assert org is not None
+        assert org.organization_id == "org-2"
 
 
 class TestProjectRepository:
@@ -1228,11 +1303,14 @@ class TestProjectRepository:
 
     @pytest.mark.asyncio
     async def test_delete_project(self, repo):
-        repo._prisma_client.db.litellm_projecttable._records["proj-1"] = {
-            "project_id": "proj-1",
+        table = repo._prisma_client.db.litellm_projecttable
+        table._records = {
+            "proj-1": {"project_id": "proj-1"},
+            "proj-2": {"project_id": "proj-2"},
         }
         deleted = await repo.delete_project("proj-1")
-        assert deleted is not None
+        assert deleted is not None and deleted.project_id == "proj-1"
+        assert list(table._records) == ["proj-2"]
 
     @pytest.mark.asyncio
     async def test_update_spend(self, repo):
@@ -1245,21 +1323,22 @@ class TestProjectRepository:
 
     @pytest.mark.asyncio
     async def test_find_by_alias(self, repo):
-        repo._prisma_client.db.litellm_projecttable._records["proj-1"] = {
-            "project_id": "proj-1",
-            "project_alias": "MyProject",
+        repo._prisma_client.db.litellm_projecttable._records = {
+            "proj-1": {"project_id": "proj-1", "project_alias": "MyProject"},
+            "proj-2": {"project_id": "proj-2", "project_alias": "OtherProject"},
         }
-        project = await repo.find_by_alias("MyProject")
+        project = await repo.find_by_alias("OtherProject")
         assert project is not None
+        assert project.project_id == "proj-2"
 
     @pytest.mark.asyncio
     async def test_find_by_team_id(self, repo):
-        repo._prisma_client.db.litellm_projecttable._records["proj-1"] = {
-            "project_id": "proj-1",
-            "team_id": "team-1",
+        repo._prisma_client.db.litellm_projecttable._records = {
+            "proj-1": {"project_id": "proj-1", "team_id": "team-1"},
+            "proj-2": {"project_id": "proj-2", "team_id": "team-2"},
         }
         projects = await repo.find_by_team_id("team-1")
-        assert len(projects) == 1
+        assert [p.project_id for p in projects] == ["proj-1"]
 
 
 class TestObjectPermissionRepository:
@@ -1328,11 +1407,14 @@ class TestObjectPermissionRepository:
 
     @pytest.mark.asyncio
     async def test_delete_permission(self, repo):
-        repo._prisma_client.db.litellm_objectpermissiontable._records["perm-1"] = {
-            "object_permission_id": "perm-1",
+        table = repo._prisma_client.db.litellm_objectpermissiontable
+        table._records = {
+            "perm-1": {"object_permission_id": "perm-1"},
+            "perm-2": {"object_permission_id": "perm-2"},
         }
         deleted = await repo.delete_permission("perm-1")
-        assert deleted is not None
+        assert deleted is not None and deleted.object_permission_id == "perm-1"
+        assert list(table._records) == ["perm-2"]
 
 
 class TestCredentialsRepository:
@@ -1490,13 +1572,14 @@ class TestVerificationTokenRepositoryExtended:
 
     @pytest.mark.asyncio
     async def test_find_active_tokens(self, repo):
-        repo._prisma_client.db.litellm_verificationtoken._records["sk-active"] = {
-            "token": "sk-active",
-            "blocked": False,
-            "expires": None,
+        repo._prisma_client.db.litellm_verificationtoken._records = {
+            "sk-active": {"token": "sk-active", "blocked": False, "expires": None},
+            "sk-future": {"token": "sk-future", "blocked": None, "expires": datetime.max},
+            "sk-blocked": {"token": "sk-blocked", "blocked": True, "expires": None},
+            "sk-expired": {"token": "sk-expired", "blocked": False, "expires": datetime.min},
         }
         tokens = await repo.find_active_tokens()
-        assert len(tokens) >= 1
+        assert sorted(t.token for t in tokens) == ["sk-active", "sk-future"]
 
     @pytest.mark.asyncio
     async def test_delete_token_with_audit(self, repo):
@@ -1851,13 +1934,14 @@ class TestProjectRepositoryExtended:
 
     @pytest.mark.asyncio
     async def test_delete_project_simple(self, repo):
-        repo._prisma_client.db.litellm_projecttable._records["proj-delete"] = {
-            "project_id": "proj-delete",
-            "project_alias": "Delete Project",
-            "spend": 0.0,
+        table = repo._prisma_client.db.litellm_projecttable
+        table._records = {
+            "proj-delete": {"project_id": "proj-delete", "project_alias": "Delete Project", "spend": 0.0},
+            "proj-keep": {"project_id": "proj-keep", "project_alias": "Keep Project", "spend": 0.0},
         }
         deleted = await repo.delete_project("proj-delete")
-        assert deleted is not None
+        assert deleted is not None and deleted.project_alias == "Delete Project"
+        assert list(table._records) == ["proj-keep"]
 
 
 class TestBudgetRepositoryExtended:
@@ -1931,16 +2015,17 @@ class TestBaseRepositoryExtended:
             "b2": {"budget_id": "b2", "max_budget": 200.0},
             "b3": {"budget_id": "b3", "max_budget": 300.0},
         }
-        budgets = await repo.find_many(skip=0, take=2, order={"budget_id": "asc"})
-        assert len(budgets) >= 2
+        budgets = await repo.find_many(skip=1, take=1, order={"budget_id": "desc"})
+        assert [b.budget_id for b in budgets] == ["b2"]
 
     @pytest.mark.asyncio
     async def test_find_many_with_where(self, repo):
         repo._prisma_client.db.litellm_budgettable._records = {
             "b1": {"budget_id": "b1", "max_budget": 100.0},
+            "b2": {"budget_id": "b2", "max_budget": 200.0},
         }
         budgets = await repo.find_many(where={"budget_id": "b1"})
-        assert len(budgets) >= 1
+        assert [b.budget_id for b in budgets] == ["b1"]
 
     @pytest.mark.asyncio
     async def test_to_model_list_with_none(self, repo):

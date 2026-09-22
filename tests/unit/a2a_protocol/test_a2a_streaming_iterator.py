@@ -4,7 +4,6 @@ success_handler on the thread-pool executor concurrently with
 async_success_handler (cross-thread pydantic mutation segfaults pydantic-core).
 """
 
-import asyncio
 import time
 from types import SimpleNamespace
 
@@ -16,6 +15,7 @@ from litellm.a2a_protocol.streaming_iterator import A2AStreamingIterator
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import thread_pool_executor as thread_pool_executor_module
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from tests.unit._support.waiting import until
 
 
 class RecordingCustomLogger(CustomLogger):
@@ -77,7 +77,7 @@ async def test_custom_logger_only_never_submits_sync_success_handler(monkeypatch
     )
 
     await iterator._handle_stream_complete()
-    await asyncio.sleep(0.5)
+    await until(lambda: recorder.async_hook_fired)
 
     assert recorder.async_hook_fired is True
     assert recording_executor.submitted_for(logging_obj) == []
@@ -94,13 +94,11 @@ class _AgentChunk:
 @pytest.mark.asyncio
 async def test_stream_completion_counts_tokens_off_the_event_loop(monkeypatch):
     from tests.large_text import text
-    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
-        assert_loop_stayed_free,
-        timed_with_loop_lags,
-        warm_tokenizer,
+    from tests.unit._support.event_loop_lag import (
+        assert_counted_off_the_event_loop,
+        recording_tokenizer_threads,
     )
 
-    warm_tokenizer("gpt-5.6-luna")
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     logging_obj = LitellmLogging(
@@ -125,13 +123,11 @@ async def test_stream_completion_counts_tokens_off_the_event_loop(monkeypatch):
         agent_name="test-agent",
     )
 
-    async def drain() -> int:
-        return len([chunk async for chunk in iterator])
-
-    yielded, took, lags = await timed_with_loop_lags(drain)
+    with recording_tokenizer_threads() as tokenizer_threads:
+        yielded = len([chunk async for chunk in iterator])
 
     assert yielded == 1
     usage = logging_obj.model_call_details["usage"]
     assert usage.prompt_tokens > 100_000
     assert usage.completion_tokens > 100_000
-    assert_loop_stayed_free(took, lags)
+    assert_counted_off_the_event_loop(tokenizer_threads)

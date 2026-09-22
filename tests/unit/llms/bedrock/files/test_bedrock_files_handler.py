@@ -1,12 +1,14 @@
 import base64
 import os
 from types import MappingProxyType
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
+import httpx
 import pytest
 
 import litellm.files.main as files_main
 from litellm.llms.bedrock.files.handler import BedrockFilesHandler
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import SpecialEnums
 
 
@@ -165,45 +167,84 @@ class TestBedrockFilesHandler:
                 )
 
 
-def test_should_forward_trusted_model_credentials_to_bedrock_provider_config():
+def _recording_http_handler(response: httpx.Response) -> tuple[HTTPHandler, list[httpx.Request]]:
+    sent: list[httpx.Request] = []
+
+    def _transport(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return response
+
+    handler = HTTPHandler()
+    handler.client = httpx.Client(transport=httpx.MockTransport(_transport))
+    return handler, sent
+
+
+def test_should_forward_trusted_model_credentials_to_bedrock_provider_config(monkeypatch):
+    monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
     trusted_credentials = MappingProxyType({"s3_bucket_name": "safe-bucket"})
-    mock_response = MagicMock()
+    client, sent = _recording_http_handler(httpx.Response(200, content=b'{"custom_id": "req-1"}'))
+    aws_params = {
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "AKIAFILESDOWNLOADCALLER",
+        "aws_secret_access_key": "pod-caller-secret",
+    }
 
-    with patch.object(
-        files_main.base_llm_http_handler,
-        "retrieve_file_content",
-        return_value=mock_response,
-    ) as mock_retrieve_file_content:
-        response = files_main.file_content(
-            file_id="s3://safe-bucket/litellm-bedrock-files/file.jsonl",
+    response = files_main.file_content(
+        file_id="s3://safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+        custom_llm_provider="bedrock",
+        client=client,
+        _litellm_internal_model_credentials=trusted_credentials,
+        **aws_params,
+    )
+
+    assert response.content == b'{"custom_id": "req-1"}'
+    assert len(sent) == 1
+    assert sent[0].method == "GET"
+    assert sent[0].url.path == "/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl"
+    assert sent[0].headers["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAFILESDOWNLOADCALLER/")
+
+    with pytest.raises(ValueError, match="S3 bucket_name is required"):
+        files_main.file_content(
+            file_id="s3://safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
             custom_llm_provider="bedrock",
-            _litellm_internal_model_credentials=trusted_credentials,
+            client=client,
+            s3_bucket_name="safe-bucket",
+            **aws_params,
         )
-
-    assert response is mock_response
-    litellm_params = mock_retrieve_file_content.call_args.kwargs["litellm_params"]
-    assert litellm_params["_litellm_internal_model_credentials"] is trusted_credentials
-    assert "s3_bucket_name" not in litellm_params
+    assert len(sent) == 1
 
 
-def test_should_forward_trusted_model_credentials_to_retrieve_provider_config():
-    trusted_credentials = MappingProxyType({"allow_legacy_cloud_file_ids": True})
-    mock_response = MagicMock()
+def test_should_forward_trusted_model_credentials_to_retrieve_provider_config(monkeypatch):
+    monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
+    gcs_object = {
+        "id": "safe-bucket/private/file.jsonl/1700000000",
+        "name": "private/file.jsonl",
+        "size": "42",
+        "timeCreated": "2024-01-01T00:00:00.000Z",
+    }
+    client, sent = _recording_http_handler(httpx.Response(200, json=gcs_object))
+    common = {
+        "file_id": "gs://safe-bucket/private/file.jsonl",
+        "custom_llm_provider": "vertex_ai",
+        "client": client,
+        "api_key": "gcp-access-token",
+        "gcs_bucket_name": "safe-bucket",
+    }
 
-    with patch.object(
-        files_main.base_llm_http_handler,
-        "retrieve_file",
-        return_value=mock_response,
-    ) as mock_retrieve_file:
-        response = files_main.file_retrieve(
-            file_id="gs://safe-bucket/private/file.jsonl",
-            custom_llm_provider="vertex_ai",
-            _litellm_internal_model_credentials=trusted_credentials,
-        )
+    response = files_main.file_retrieve(
+        _litellm_internal_model_credentials=MappingProxyType({"allow_legacy_cloud_file_ids": True}),
+        **common,
+    )
 
-    assert response is mock_response
-    litellm_params = mock_retrieve_file.call_args.kwargs["litellm_params"]
-    assert litellm_params["_litellm_internal_model_credentials"] is trusted_credentials
+    assert response.id == "gs://safe-bucket/private/file.jsonl"
+    assert response.bytes == 42
+    assert len(sent) == 1
+    assert sent[0].url == "https://storage.googleapis.com/storage/v1/b/safe-bucket/o/private%2Ffile.jsonl"
+
+    with pytest.raises(ValueError, match="LiteLLM-managed"):
+        files_main.file_retrieve(allow_legacy_cloud_file_ids=True, **common)
+    assert len(sent) == 1
 
 
 @pytest.mark.asyncio

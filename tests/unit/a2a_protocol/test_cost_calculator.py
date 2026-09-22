@@ -2,7 +2,6 @@
 Test A2A cost calculator with cost_per_query parameter.
 """
 
-import asyncio
 from typing import Any, AsyncIterator, Optional
 from unittest.mock import MagicMock, patch
 
@@ -10,6 +9,7 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from tests.unit._support.waiting import until
 
 
 def _make_send_message_request(request_id: str, user_text: str = "Hello"):
@@ -151,7 +151,7 @@ async def test_asend_message_uses_cost_per_query(monkeypatch):
             cost_per_query=0.05,
         )
 
-    await asyncio.sleep(0.1)
+    await until(lambda: cost_logger.response_cost is not None)
 
     assert cost_logger.response_cost == 0.05
 
@@ -188,7 +188,7 @@ async def test_asend_message_uses_cost_per_query_from_litellm_params_dict(monkey
             },
         )
 
-    await asyncio.sleep(0.1)
+    await until(lambda: cost_logger.response_cost is not None)
 
     assert cost_logger.response_cost == 0.5
 
@@ -251,7 +251,7 @@ async def test_asend_message_uses_input_output_cost_per_token(monkeypatch):
             output_cost_per_token=output_cost_per_token,
         )
 
-    await asyncio.sleep(0.1)
+    await until(lambda: token_cost_logger.response_cost is not None)
 
     # Get actual token counts from logger
     prompt_tokens = token_cost_logger.prompt_tokens
@@ -323,7 +323,7 @@ async def test_asend_message_passes_agent_id_to_callback(monkeypatch):
             agent_id=test_agent_id,
         )
 
-    await asyncio.sleep(0.1)
+    await until(lambda: agent_id_logger.kwargs is not None)
 
     # Verify agent_id was passed to callback
     assert agent_id_logger.agent_id == test_agent_id, (
@@ -390,7 +390,7 @@ async def test_asend_message_streaming_propagates_metadata():
         ):
             chunks.append(chunk)
 
-    await asyncio.sleep(0.2)
+    await until(lambda: metadata_logger.litellm_params is not None)
 
     # Verify metadata was propagated to callback
     assert metadata_logger.user_api_key == "sk-test-key-hash-12345"
@@ -433,7 +433,7 @@ async def test_asend_message_streaming_triggers_callbacks():
         ):
             chunks.append(chunk)
 
-    await asyncio.sleep(0.2)
+    await until(lambda: callback_logger.kwargs is not None)
 
     # Verify chunks were received
     assert len(chunks) == 2

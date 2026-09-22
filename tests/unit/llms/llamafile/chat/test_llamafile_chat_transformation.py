@@ -1,4 +1,3 @@
-from typing import Optional
 from unittest.mock import patch
 
 import pytest
@@ -111,39 +110,20 @@ def test_resolve_api_base(
 def test_get_openai_compatible_provider_info(
     api_base, api_key, env_base, env_key, expected_base, expected_key
 ):
-    config = LlamafileChatConfig()
-
     env = {}
     if env_base is not None:
         env["LLAMAFILE_API_BASE"] = env_base
     if env_key is not None:
         env["LLAMAFILE_API_KEY"] = env_key
 
-    patch_base = patch.object(
-        LlamafileChatConfig,
-        "_resolve_api_base",
-        wraps=LlamafileChatConfig._resolve_api_base,
-    )
-    patch_key = patch.object(
-        LlamafileChatConfig,
-        "_resolve_api_key",
-        wraps=LlamafileChatConfig._resolve_api_key,
-    )
-
-    with (
-        patch.dict("os.environ", env, clear=True),
-        patch_base as mock_base,
-        patch_key as mock_key,
-    ):
-        result_base, result_key = config._get_openai_compatible_provider_info(
-            api_base, api_key
+    with patch.dict("os.environ", env, clear=True):
+        model, provider, resolved_key, resolved_base = litellm.get_llm_provider(
+            "llamafile/my-model", api_base=api_base, api_key=api_key
         )
 
-        assert result_base == expected_base
-        assert result_key == expected_key
-
-        mock_base.assert_called_once_with(api_base)
-        mock_key.assert_called_once_with(api_key)
+    assert (model, provider) == ("my-model", "llamafile")
+    assert resolved_base == expected_base
+    assert resolved_key == expected_key
 
 
 def test_completion_with_custom_llamafile_model():

@@ -528,23 +528,20 @@ async def test_pre_call_hook_no_compression_records_no_savings(monkeypatch):
 @pytest.mark.asyncio
 async def test_pre_call_hook_counts_tokens_off_the_event_loop():
     from tests.large_text import text
-    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
-        assert_loop_stayed_free,
-        timed_with_loop_lags,
-        warm_tokenizer,
+    from tests.unit._support.event_loop_lag import (
+        assert_counted_off_the_event_loop,
+        recording_tokenizer_threads,
     )
 
     model = "anthropic/claude-fable-5"
-    warm_tokenizer(model)
     logger = CompressionInterceptionLogger(compression_trigger=10_000_000)
     messages = [{"role": "user", "content": text * 100}]
     kwargs = {"model": model, "messages": messages}
 
-    result, took, lags = await timed_with_loop_lags(
-        lambda: logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.anthropic_messages)
-    )
+    with recording_tokenizer_threads() as tokenizer_threads:
+        result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.anthropic_messages)
 
     assert result is not None
     assert result["messages"] is messages
     assert "tools" not in result
-    assert_loop_stayed_free(took, lags)
+    assert_counted_off_the_event_loop(tokenizer_threads)

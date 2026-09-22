@@ -1,19 +1,4 @@
-import pytest
-
 import litellm
-
-
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
 
 
 def test_reasoning_effort_stays_unsupported_on_vertex_partner_models(local_model_cost_map):
