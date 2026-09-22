@@ -10,7 +10,7 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [features]
-default = ["abi3", "fast"]
+default = ["abi3", "fast", "huggingface", "tiktoken"]
 abi3 = ["pyo3/abi3-py310"]
 extension-module = ["pyo3/extension-module"]
 panic-test = []
@@ -52,8 +52,9 @@ pyo3-async-runtimes.workspace = true
 reqwest.workspace = true
 redis = { version = "1.7.0", features = ["tls-rustls"] }
 serde_json.workspace = true
-url.workspace = true
+thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
+url.workspace = true
 
 [dev-dependencies]
 litellm-secrets-aws.workspace = true

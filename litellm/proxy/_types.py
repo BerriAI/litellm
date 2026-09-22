@@ -491,6 +491,7 @@ class LiteLLMRoutes(enum.Enum):
         "/openai_passthrough",
         "/assemblyai",
         "/eu.assemblyai",
+        "/tinyfish",
         "/vllm",
         "/mistral",
         "/typesafe",
@@ -532,6 +533,9 @@ class LiteLLMRoutes(enum.Enum):
     mcp_inference_routes = [
         "/mcp",
         "/mcp/",
+        "/mcp/sse/",
+        "/mcp/sse/messages",
+        "/mcp/sse/messages/",
         "/mcp/proxy",
         "/mcp/{subpath}",
         "/mcp/tools",

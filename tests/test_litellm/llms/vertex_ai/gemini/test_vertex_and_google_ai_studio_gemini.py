@@ -2435,10 +2435,16 @@ def test_is_gemini_3_or_newer():
         VertexGeminiConfig,
     )
 
-    # Gemini 3 models
+    # Gemini 3+ models
     assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-pro-preview") == True
     assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-flash") == True
     assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3-pro") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-3.1-pro-preview") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-test-id-bla") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("test-id-bla") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-flash-latest") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-flash-lite-latest") == True
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-pro-latest") == True
     assert (
         VertexGeminiConfig._is_gemini_3_or_newer("vertex_ai/gemini-3-pro-preview")
         == True
@@ -2453,9 +2459,51 @@ def test_is_gemini_3_or_newer():
     assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-2.0-flash") == False
     assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-1.5-pro") == False
     assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-pro") == False
+    assert VertexGeminiConfig._is_gemini_3_or_newer("gemini-flash") == False
 
     # Edge cases
     assert VertexGeminiConfig._is_gemini_3_or_newer("") == False
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash",
+        "gemini-test-id-bla",
+        "test-id-bla",
+    ],
+)
+def test_gemini_3_reasoning_effort_maps_to_thinking_level(model: str):
+    """Test that reasoning_effort maps to thinkingLevel and default temperature=1.0"""
+    from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    vertex_cfg = VertexGeminiConfig()
+    studio_cfg = GoogleAIStudioGeminiConfig()
+
+    for cfg in (vertex_cfg, studio_cfg):
+        supported = cfg.get_supported_openai_params(model)
+        assert "reasoning_effort" in supported
+        assert "thinking" in supported
+
+    for effort in ("low", "medium", "high"):
+        mapped = vertex_cfg.map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        assert mapped["thinkingConfig"] == {
+            "thinkingLevel": effort,
+            "includeThoughts": True,
+        }
+        assert mapped["temperature"] == 1.0
+        assert "thinkingBudget" not in mapped["thinkingConfig"]
+
+
 
 
 def _tool_call_messages(tool_call_id: str):
@@ -2643,7 +2691,7 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
     assert result["thinkingConfig"]["thinkingLevel"] == "low"
     assert result["thinkingConfig"]["includeThoughts"] is True
 
-    # Test medium -> high + includeThoughts=True (medium not available yet)
+    # Test medium -> medium + includeThoughts=True
     optional_params = {}
     non_default_params = {"reasoning_effort": "medium"}
     result = v.map_openai_params(
@@ -2652,7 +2700,7 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         model=model,
         drop_params=False,
     )
-    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["thinkingLevel"] == "medium"
     assert result["thinkingConfig"]["includeThoughts"] is True
 
     # Test high -> high + includeThoughts=True
@@ -2853,7 +2901,7 @@ def test_reasoning_effort_dict_format_gemini_3():
         model=model,
         drop_params=False,
     )
-    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["thinkingLevel"] == "medium"
     assert result["thinkingConfig"]["includeThoughts"] is True
 
     # Test dict format without effort key - no thinkingConfig should be set

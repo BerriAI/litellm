@@ -45,7 +45,11 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
 )
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
-from litellm.litellm_core_utils.realtime_errors import realtime_error_event, websocket_close_reason
+from litellm.litellm_core_utils.realtime_errors import (
+    close_after_upstream_handshake_refusal,
+    realtime_error_event,
+    websocket_close_reason,
+)
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -192,12 +196,12 @@ def _rust_responses_websocket_enabled(
 from .http_handler import get_shared_realtime_ssl_context
 
 if TYPE_CHECKING:
-    import tiktoken
     from aiohttp import ClientSession
     from websockets.asyncio.client import ClientConnection
 
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
         FakeAnthropicMessagesStreamIterator,
     )
@@ -493,7 +497,7 @@ class BaseLLMHTTPHandler:
         messages: list,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         client: AsyncHTTPHandler | None = None,
         json_mode: bool = False,
@@ -559,7 +563,7 @@ class BaseLLMHTTPHandler:
         api_base: str | None,
         custom_llm_provider: str,
         model_response: ModelResponse,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         timeout: float | httpx.Timeout,
@@ -6384,9 +6388,9 @@ class BaseLLMHTTPHandler:
 
                 await realtime_streaming.bidirectional_forward()
 
-        except websockets.exceptions.InvalidStatusCode as e:
+        except websockets.exceptions.InvalidStatus as e:
             verbose_logger.exception("Error connecting to backend: %s", e)
-            await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
+            await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
         except Exception as e:
             verbose_logger.exception("Error connecting to backend: %s", e)
             redacted_error: Final = _redact_string(str(e))
@@ -6799,9 +6803,9 @@ class BaseLLMHTTPHandler:
                 )
                 return await streaming.bidirectional_forward()
 
-        except websockets.exceptions.InvalidStatusCode as e:
+        except websockets.exceptions.InvalidStatus as e:
             verbose_logger.exception("Error connecting to responses WS backend: %s", e)
-            await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
+            await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
         except Exception as e:
             verbose_logger.exception("Error in responses WS: %s", e)
             try:
