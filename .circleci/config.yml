@@ -3100,7 +3100,9 @@ jobs:
               tests/e2e/test_provider_edge.py tests/e2e/test_fixture_bundle.py \
               tests/e2e/test_fixture_canonical.py tests/e2e/test_fixture_mode.py \
               tests/code_coverage_tests/test_provider_replay_harness.py \
-              tests/code_coverage_tests/test_provider_cache.py
+              tests/code_coverage_tests/test_provider_cache.py \
+              tests/code_coverage_tests/test_e2e_metadata.py \
+              tests/code_coverage_tests/test_e2e_junit_report.py
       - store_test_results:
           path: test-results/provider-replay-harness
 

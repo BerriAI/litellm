@@ -19,7 +19,7 @@ while IFS= read -r file || [ -n "$file" ]; do
   esac
   case "$file" in
     tests/e2e/*/*.py) : ;;
-    tests/e2e/*.py | tests/code_coverage_tests/test_provider_cache.py | tests/code_coverage_tests/test_provider_replay_harness.py | tests/test_litellm/test_circleci_path_filter.py | .circleci/* | pyproject.toml | uv.lock)
+    tests/e2e/*.py | tests/code_coverage_tests/test_provider_cache.py | tests/code_coverage_tests/test_provider_replay_harness.py | tests/code_coverage_tests/test_e2e_metadata.py | tests/code_coverage_tests/test_e2e_junit_report.py | tests/test_litellm/test_circleci_path_filter.py | .circleci/* | pyproject.toml | uv.lock)
       has_provider_harness=true ;;
   esac
   case "$file" in

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import inspect
 import threading
+from collections import deque
 from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager
 from functools import wraps
@@ -44,21 +45,25 @@ class _StepRecorder:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._steps: list[str] = []
+        self._steps: deque[str] = deque(maxlen=MAX_STEPS)
+        self._dropped = 0
 
     def reset(self) -> None:
         """Called first thing in every test's setup phase, so each test starts
         empty."""
         with self._lock:
             self._steps.clear()
+            self._dropped = 0
 
     def record(self, label: str) -> None:
-        """Append `label`, unless it repeats the previous step or the log is full.
+        """Append `label`, unless it repeats the previous step.
 
         A retrying helper (poll_cost_row) or a load test calling a decorated
         helper in a loop would otherwise emit thousands of <property> entries per
         testcase: a consecutive repeat collapses, so a poll loop is one step in
-        the story rather than fifty, and the log stops growing at MAX_STEPS.
+        the story rather than fifty, and past MAX_STEPS the oldest step makes way.
+        It is the oldest that goes because the last step is the one that has to
+        survive: it is where a failing test died.
         """
         cleaned = " ".join(label.split())[:MAX_STEP_CHARS]
         if not cleaned:
@@ -66,13 +71,16 @@ class _StepRecorder:
         with self._lock:
             if self._steps and self._steps[-1] == cleaned:
                 return
-            if len(self._steps) >= MAX_STEPS:
-                return
+            if len(self._steps) == MAX_STEPS:
+                self._dropped += 1
             self._steps.append(cleaned)
 
     def taken(self) -> tuple[str, ...]:
+        """The story so far, led by a line counting the steps a full log dropped,
+        so a story that starts mid-test says so rather than reading as complete."""
         with self._lock:
-            return tuple(self._steps)
+            dropped: Final = (f"({self._dropped} earlier steps not recorded)",) if self._dropped else ()
+            return dropped + tuple(self._steps)
 
 
 STEPS: Final = _StepRecorder()

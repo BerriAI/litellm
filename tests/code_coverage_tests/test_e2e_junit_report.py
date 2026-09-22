@@ -1,11 +1,11 @@
 """The JUnit report itself, written by a real pytest run.
 
-No proxy and no ``e2e`` marker. test_junit_properties.py pins the functions that
-build the properties; this pins what reaches the XML once pytest, its junitxml
-plugin, pytest-rerunfailures and xdist are all in the loop. Each case writes a
-throwaway suite into a tmp dir and runs it in a child interpreter with THIS
-directory's conftest.py loaded as a plugin, so the hooks under test are the ones
-the live suite runs and the recorder is the real one, never a copy of either.
+No proxy. test_e2e_metadata.py pins the functions that build the properties;
+this pins what reaches the XML once pytest, its junitxml plugin,
+pytest-rerunfailures and xdist are all in the loop. Each case writes a throwaway
+suite into a tmp dir and runs it in a child interpreter with tests/e2e's
+conftest.py loaded as a plugin, so the hooks under test are the ones the live
+suite runs and the recorder is the real one, never a copy of either.
 
 The timing that makes the recorded half work is pytest's, which is why it is
 pinned here against the real thing: junitxml writes a testcase's properties from
@@ -29,7 +29,7 @@ from xml.etree import ElementTree
 
 import pytest
 
-SUITE_DIR: Final = Path(__file__).resolve().parent
+SUITE_DIR: Final = Path(__file__).resolve().parents[1] / "e2e"
 CHILD_TIMEOUT_SECONDS: Final = 180
 
 STORY_SUITE: Final = """
@@ -154,7 +154,7 @@ def write_suite(directory: Path, modules: Mapping[str, str]) -> None:
     """Lay a child suite out in ``directory``, with an ini file of its own.
 
     The ini pins the child's rootdir to the tmp dir wherever that lives, and its
-    ``pythonpath`` is what makes this directory's conftest.py, and the harness
+    ``pythonpath`` is what makes tests/e2e's conftest.py, and the harness
     modules the child suite imports, importable under ``-I``.
     """
     _ = (directory / "pytest.ini").write_text(f"[pytest]\npythonpath = {shlex.quote(str(SUITE_DIR))}\n")
@@ -165,7 +165,7 @@ def write_suite(directory: Path, modules: Mapping[str, str]) -> None:
 def run_child_pytest(suite: Path, *args: str) -> subprocess.CompletedProcess[str]:
     """Run pytest over ``suite`` in a fresh interpreter, hooked up like the live suite.
 
-    ``-p conftest`` registers this directory's conftest.py as a plugin, since a
+    ``-p conftest`` registers tests/e2e's conftest.py as a plugin, since a
     tmp dir outside tests/e2e would never pick it up by location. The parent's
     fixture-mode and addopts settings are dropped so a replay lane cannot leak
     into the child.
