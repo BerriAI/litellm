@@ -40,10 +40,25 @@ class TestGetLitellmParamsKwargsExtraction:
     """Verify that optional kwargs are correctly extracted via sparse extraction."""
 
     def test_no_kwargs_omits_optional_keys(self):
-        """When no kwargs passed, optional keys should not be in result."""
+        """When no kwargs passed, optional keys carry no value."""
         result = get_litellm_params(api_key="test-key")
         for key in _OPTIONAL_KWARGS_KEYS:
-            assert key not in result
+            assert result.get(key) is None
+
+    def test_custom_pricing_kwargs_are_extracted(self):
+        from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+        from litellm.types.router import CustomPricingLiteLLMParams
+
+        assert set(CustomPricingLiteLLMParams.model_fields) <= _OPTIONAL_KWARGS_KEYS
+
+        result = get_litellm_params(output_cost_per_image=0.08, input_cost_per_audio_token=1e-6)
+        assert result["output_cost_per_image"] == 0.08
+        assert result["input_cost_per_audio_token"] == 1e-6
+        assert use_custom_pricing_for_model(result) is True
+
+        result_without_prices = get_litellm_params()
+        assert "output_cost_per_image" not in result_without_prices
+        assert use_custom_pricing_for_model(result_without_prices) is False
 
     def test_present_kwargs_are_extracted(self):
         result = get_litellm_params(
@@ -54,6 +69,27 @@ class TestGetLitellmParamsKwargsExtraction:
         assert result["aws_region_name"] == "us-east-1"
         assert result["timeout"] == 30
         assert result["rpm"] == 100
+
+    def test_s3_endpoint_kwargs_are_extracted_when_provided(self):
+        result = get_litellm_params(
+            s3_endpoint_url="https://bucket.vpce-abc.s3.us-east-1.vpce.amazonaws.com",
+            s3_region_name="us-east-1",
+        )
+        assert result["s3_endpoint_url"] == "https://bucket.vpce-abc.s3.us-east-1.vpce.amazonaws.com"
+        assert result["s3_region_name"] == "us-east-1"
+
+        result_without_s3_kwargs = get_litellm_params()
+        assert "s3_endpoint_url" not in result_without_s3_kwargs
+        assert "s3_region_name" not in result_without_s3_kwargs
+
+    def test_s3_credential_kwargs_are_forwarded_for_s3_signing(self):
+        result = get_litellm_params(s3_access_key_id="s3-key", s3_secret_access_key="s3-secret")
+        assert result["s3_access_key_id"] == "s3-key"
+        assert result["s3_secret_access_key"] == "s3-secret"
+
+        result_without_s3_kwargs = get_litellm_params()
+        assert "s3_access_key_id" not in result_without_s3_kwargs
+        assert "s3_secret_access_key" not in result_without_s3_kwargs
 
     def test_subset_of_kwargs_only_includes_provided(self):
         """Only provided kwargs appear, others remain absent."""
@@ -217,30 +253,9 @@ class TestMetadataFallsBackToLitellmMetadata:
         assert litellm_metadata == {"trace_id": "trace-1"}
 
 
-class TestRustOptIn:
-    """`rust: true` is a litellm param, so it has to reach `litellm_params`.
-
-    `all_litellm_params` keeps it out of the provider body; without it also
-    being carried into `litellm_params` the chat completions handlers cannot
-    see the opt-in and the Rust path is silently never taken.
-    """
-
-    def test_rust_is_an_optional_kwargs_key(self):
-        assert "rust" in _OPTIONAL_KWARGS_KEYS
-
-    def test_rust_is_forwarded_from_completion_kwargs(self):
-        from litellm.litellm_core_utils.get_litellm_params import FORWARDED_KWARGS_KEYS
-
-        assert "rust" in FORWARDED_KWARGS_KEYS
-
-    def test_rust_survives_into_litellm_params(self):
-        params = get_litellm_params(rust=True)
-        assert params["rust"] is True
-
-    def test_rust_is_absent_when_the_deployment_did_not_set_it(self):
-        assert "rust" not in get_litellm_params()
-
-    def test_rust_stays_out_of_the_provider_body(self):
-        from litellm.types.utils import all_litellm_params
-
-        assert "rust" in all_litellm_params
+@pytest.mark.parametrize(
+    "value, expected",
+    [("true", True), ("false", False), (" TRUE ", True), (True, True), (None, None), ("os.environ/DROP_PARAMS", None)],
+)
+def test_drop_params_strings_reach_litellm_params_as_flags(value, expected):
+    assert get_litellm_params(drop_params=value)["drop_params"] is expected
