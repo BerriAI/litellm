@@ -8,6 +8,7 @@ from __future__ import annotations
 import ast
 import atexit
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -15,10 +16,18 @@ import socket
 import sys
 import threading
 from collections import defaultdict
-from typing import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Final
 
+import aiohttp
+import httpx
 import pytest
+import vcr
 import vcr.matchers as _vcr_matchers
+import vcr.patch as _vcr_patch
 
 from tests._vcr_redis_persister import (
     MAX_EPISODES_PER_CASSETTE,
@@ -2092,3 +2101,71 @@ class VerboseReporterState:
         if not verdict:
             return
         reporter.write_line(f"{verdict} :: {report.nodeid}")
+
+
+_VCR_TRANSPORT_PATCH_POINTS: Final = (
+    (httpx.HTTPTransport, "handle_request", _vcr_patch._HttpxHttpTransport_handle_request),
+    (httpx.AsyncHTTPTransport, "handle_async_request", _vcr_patch._HttpxAsyncHttpTransport_handle_async_request),
+    (httpx.WSGITransport, "handle_request", _vcr_patch._HttpxWsgiTransport_handle_request),
+    (httpx.ASGITransport, "handle_async_request", _vcr_patch._HttpxAsgiTransport_handle_async_request),
+    (httpx.MockTransport, "handle_request", _vcr_patch._HttpxMockTransport_handle_request),
+    (httpx.MockTransport, "handle_async_request", _vcr_patch._HttpxMockTransport_handle_async_request),
+    (aiohttp.ClientSession, "_request", _vcr_patch._AiohttpClientSessionRequest),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class VcrPatchLeak:
+    patch_points: tuple[str, ...]
+    cassette_paths: tuple[str, ...]
+
+
+def _cassette_paths_wrapped_into(fn: object) -> tuple[str, ...]:
+    if not inspect.isfunction(fn):
+        return ()
+    cassette: Final = inspect.getclosurevars(fn).nonlocals.get("cassette")
+    own: Final = (str(cassette._path),) if isinstance(cassette, vcr.cassette.Cassette) else ()
+    return own + _cassette_paths_wrapped_into(getattr(fn, "__wrapped__", None))
+
+
+def detect_vcr_patch_leak() -> VcrPatchLeak | None:
+    leaked: Final = tuple(
+        (f"{owner.__name__}.{attr}", getattr(owner, attr))
+        for owner, attr, original in _VCR_TRANSPORT_PATCH_POINTS
+        if getattr(owner, attr) is not original
+    )
+    if not leaked:
+        return None
+    return VcrPatchLeak(
+        patch_points=tuple(name for name, _ in leaked),
+        cassette_paths=tuple(dict.fromkeys(path for _, fn in leaked for path in _cassette_paths_wrapped_into(fn))),
+    )
+
+
+def restore_vcr_patch_points() -> None:
+    for owner, attr, original in _VCR_TRANSPORT_PATCH_POINTS:
+        setattr(owner, attr, original)
+
+
+def guard_vcr_patch_points(item: pytest.Item, teardown_failed: bool) -> None:
+    leak: Final = detect_vcr_patch_leak()
+    if leak is None:
+        return
+    restore_vcr_patch_points()
+    if teardown_failed:
+        return
+    pytest.fail(
+        f"{item.nodeid} finished with a vcrpy cassette still patched into "
+        f"{', '.join(leak.patch_points)} (cassettes: {', '.join(leak.cassette_paths) or 'unknown'}); "
+        "the originals were restored so later tests are unaffected",
+        pytrace=False,
+    )
+
+
+@contextmanager
+def rewound_new_episodes_cassette(cassette_dir: Path) -> Iterator[vcr.cassette.Cassette]:
+    cassette_path: Final = cassette_dir / "rewound_owner.yaml"
+    cassette_path.write_text("interactions: []\nversion: 1\n")
+    recorder: Final = vcr.VCR(cassette_library_dir=str(cassette_dir))
+    with recorder.use_cassette(cassette_path.name, record_mode="new_episodes") as cassette:
+        yield cassette
