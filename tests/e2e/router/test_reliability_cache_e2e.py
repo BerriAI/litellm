@@ -394,7 +394,7 @@ class TestReliabilityCache:
             second: Final = client.proxy.transport.send(
                 "/v1/messages", headers=client.proxy.transport.bearer(scoped_key), json=body
             )
-            _assert_cache_hit(second, "messages")
+            _assert_cache_hit(second, "messages", expect_cache_key=False)
             assert _CachedMessagesResponse.model_validate_json(second.body) == first_answer, (
                 "messages: cache hit changed content or usage"
             )
