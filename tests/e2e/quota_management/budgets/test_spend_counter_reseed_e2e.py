@@ -28,6 +28,7 @@ from pydantic import TypeAdapter, ValidationError
 from budget_client import BudgetClient
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 
 if TYPE_CHECKING:
@@ -144,6 +145,15 @@ def _accumulate(client: BudgetClient, key: str, count: int) -> None:
 
 
 @pytest.mark.covers("quota_management.budget.spend_counter.reseed_matches_db")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.ANTHROPIC,),
+        models=(MODEL,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_cold_counter_reseed_keeps_counter_equal_to_db_spend(
     client: BudgetClient, resources: ResourceManager
 ) -> None:

@@ -24,6 +24,7 @@ import pytest
 from budget_client import BudgetClient, is_budget_block, window_reset_at
 from e2e_http import StreamingResponse, require_successful_call
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import BudgetWindow
 
@@ -52,6 +53,15 @@ def _drive_to_block(client: BudgetClient, key: str) -> StreamingResponse:
 
 
 @pytest.mark.covers("quota_management.budget.team_multi_window.blocks_then_resets")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.ANTHROPIC,),
+        models=("claude-haiku-4-5",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_team_short_window_blocks_then_resets(client: BudgetClient, resources: ResourceManager) -> None:
     team_id = client.create_team(
         alias=f"e2e-team-window-{unique_marker()}",
@@ -85,6 +95,15 @@ def test_team_short_window_blocks_then_resets(client: BudgetClient, resources: R
 
 
 @pytest.mark.covers("quota_management.budget.team_multi_window.blocks_then_resets")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.ANTHROPIC,),
+        models=("claude-haiku-4-5",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_team_long_window_blocks_after_short_window_resets(client: BudgetClient, resources: ResourceManager) -> None:
 
     # 0. key with a short budget window and a long budget window

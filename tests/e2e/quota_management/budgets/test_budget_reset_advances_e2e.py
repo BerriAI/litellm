@@ -22,6 +22,7 @@ import pytest
 from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import BudgetWindow
 
@@ -70,6 +71,12 @@ def _drive_to_block(client: BudgetClient, key: str) -> None:
 # ---- Rung 1: scheduling exists at creation -----------------------------------
 
 
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.KEY_MANAGEMENT,
+    )
+)
 def test_key_with_budget_duration_schedules_reset_at_creation(client: BudgetClient, resources: ResourceManager) -> None:
     """Baseline: a key created with a budget_duration has budget_reset_at populated
     immediately. The reset job can only advance a timestamp that was scheduled in
@@ -86,6 +93,15 @@ def test_key_with_budget_duration_schedules_reset_at_creation(client: BudgetClie
 
 
 @pytest.mark.covers("quota_management.budget.key.blocks_over_limit")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.ANTHROPIC,),
+        models=("claude-haiku-4-5",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_key_spend_blocks_at_cap(client: BudgetClient, resources: ResourceManager) -> None:
     """Sanity that the tiny cap is enforced before we test that it resets: spend
     accrues across calls and eventually returns budget_exceeded, never a 5xx."""
@@ -103,6 +119,15 @@ def test_key_spend_blocks_at_cap(client: BudgetClient, resources: ResourceManage
 
 
 @pytest.mark.covers("quota_management.budget.key.resets_after_window")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.ANTHROPIC,),
+        models=("claude-haiku-4-5",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_key_budget_reset_at_advances_after_window(client: BudgetClient, resources: ResourceManager) -> None:
     """The core #25109 guard: after the window elapses the reset job must move
     budget_reset_at strictly forward AND zero key.spend. The broken nullable-JSON
@@ -139,6 +164,15 @@ def test_key_budget_reset_at_advances_after_window(client: BudgetClient, resourc
 
 
 @pytest.mark.covers("quota_management.budget.key_multi_window.resets_windows_independently")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.ANTHROPIC,),
+        models=("claude-haiku-4-5",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_multi_window_key_resets_each_window_independently(client: BudgetClient, resources: ResourceManager) -> None:
     """The JSON-backed path #25109 specifically touched. A tight 30s window and a
     roomy 1m window: the tight window must reset on its own boundary while the roomy
@@ -183,6 +217,15 @@ def test_multi_window_key_resets_each_window_independently(client: BudgetClient,
 
 
 @pytest.mark.covers("quota_management.budget.team_member.resets_after_window")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.ANTHROPIC,),
+        models=("claude-haiku-4-5",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_team_member_budget_reset_at_advances(client: BudgetClient, resources: ResourceManager) -> None:
     """Per-team member windows are also JSON-backed. member_budget_reset_at must
     advance after the window; the explicit before<after assertion is the #25109
@@ -216,6 +259,15 @@ def test_team_member_budget_reset_at_advances(client: BudgetClient, resources: R
 # ---- Rung 6: error-path edge - resets surface as blocks, never 5xx -----------
 
 
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.ANTHROPIC,),
+        models=("claude-haiku-4-5",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_reset_wait_never_yields_non_budget_error(client: BudgetClient, resources: ResourceManager) -> None:
     """The other #25109 failure mode: a reset job that ERRORS on the nullable-JSON
     column surfaces to the caller as a non-budget 5xx. Across the whole reset wait

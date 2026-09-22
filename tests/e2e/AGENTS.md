@@ -130,6 +130,28 @@ Current limits: Bedrock cannot be mounted in record or replay (SigV4 signs the H
 
 The harness is fully typed with no error budget: `make lint-e2e-basedpyright` must report zero basedpyright errors, and CI enforces that on any PR touching `tests/e2e/**/*.py`. When a response field is untyped, model it in `models.py` (just the fields you read) and let pydantic validate it, rather than threading a `dict` or `Any` through the test
 
+## Typed test metadata
+
+Separate from the coverage registry and additive to it: `@meta(Subject(...))` from `e2e_metadata.py` says what a test DRIVES, as closed enums rather than a string id. `@pytest.mark.covers("cell.id")` is untouched and keeps working exactly as before; the two markers coexist on the same test, and `@meta` always goes BELOW `@covers` so `Item.location` still anchors at the first decorator and every `source` deep link stays put
+
+```python
+@pytest.mark.covers("quota_management.budget.key.blocks_over_limit")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.ANTHROPIC,),
+        models=(CHEAP_ANTHROPIC_MODEL,),
+        mode=Mode.NONSTREAM,
+    )
+)
+def test_bare_key_blocks_over_its_own_budget(...) -> None: ...
+```
+
+Every field is optional today (the backfill of the rest of the suite is a later PR) and every field is a closed enum, so a typo is a basedpyright error at the call site rather than a property that silently never appears. `providers`, `models` and `capabilities` are tuples even with one member, because one test node routinely drives several: the claude_code matrix runs haiku, sonnet and opus in a single body, and a spend test calls two providers on one key. Declare every provider and every model the test drives, fallbacks included. The three are independent sets with no positional pairing between them (one provider x three models is the common case), and each is deduped and sorted at declaration so the committed run artifacts diff cleanly. `models=("gpt-5.5")` is a str and not a tuple, so anything but a tuple raises a `TypeError` where the decorator runs and shows up as a collection error naming the file. `Subject` is serialized with `dataclasses.asdict`, so a new scalar field needs no serializer edit; empty fields emit no `<property>` at all. A declared model names the constant the test drives (`CHEAP_ANTHROPIC_MODEL`, the file's own `BACKEND`), never a copy of its value, so the property cannot claim one model while an env override runs another. `e2e_metadata` is stdlib-only and so are its call sites: `Provider` mirrors litellm's `LlmProviders` values instead of importing them, because tests/e2e is shipped to the runner image on its own and a `from litellm...` at module scope would make the litellm package a hard dependency of COLLECTING the suite. `TestProviderMirrorsLitellm` in `tests/code_coverage_tests/test_e2e_metadata.py` fails on drift wherever litellm is importable and skips where it is not, so adding a provider is one line in `e2e_metadata`
+
+Declared fields ride out as JUnit `<property>` entries behind the fixed prefix, the same way steps do: each scalar under its field name, and each plural value as a repeated property under its SINGULAR name (`provider`, `model`, `capability`). The results JSON downstream regroups them under the plural key, so `providers`, `models` and `capabilities` are arrays there, `[]` when empty
+
 ## Recorded test steps
 
 `@step("POST /chat/completions")` from `e2e_metadata.py` goes on HARNESS helpers - client methods, `ResourceManager.key`, poll loops - never on a test, and appends its label to the running test's `user_properties` in call order. The list IS the test's user story, and because the label is recorded BEFORE the wrapped call, a failing test's LAST step is where it died. Nothing about steps is hand-written: the call sequence cannot drift from what the test actually did. A new public harness method that performs an action (an HTTP call, a poll, a login, a CLI run) gets a `@step`; pure builders, parsers and `_private` helpers do not. Labels are static, lowercase, one beat of the story: a plain-English action ("create team with a budget") or, for a raw route call, the route itself ("POST /v1/messages")

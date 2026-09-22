@@ -14,6 +14,7 @@ from typing import Final
 
 import pytest
 from e2e_http import ProbeResult
+from e2e_metadata import Domain, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from proxy_client import Converged, await_converged
 from pydantic import BaseModel
@@ -82,6 +83,14 @@ def _probe(client: SpendClient, params: BaseModel) -> ProbeResult:
 class TestTeamDailyActivity:
     @pytest.mark.replayable
     @pytest.mark.covers("mgmt.team.daily_activity.happy_path")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.SPEND_REPORTING,
+            providers=(Provider.OPENAI,),
+            models=("openai/gpt-5.6-luna",),
+        )
+    )
     def test_valid_date_range_returns_results_and_metadata(
         self, client: SpendClient, resources: ResourceManager
     ) -> None:
@@ -199,6 +208,12 @@ class TestTeamDailyActivity:
         assert empty.metadata.total_failed_requests == 0
 
     @pytest.mark.covers("mgmt.team.daily_activity.missing_start_date_rejected")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.SPEND_REPORTING,
+        )
+    )
     def test_missing_start_date_is_rejected(self, client: SpendClient) -> None:
         end = datetime.now(timezone.utc).date().isoformat()
         result = _probe(client, TeamDailyActivityParams(end_date=end, page=1))
@@ -207,6 +222,12 @@ class TestTeamDailyActivity:
         )
 
     @pytest.mark.covers("mgmt.team.daily_activity.missing_end_date_rejected")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.SPEND_REPORTING,
+        )
+    )
     def test_missing_end_date_is_rejected(self, client: SpendClient) -> None:
         start = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
         result = _probe(client, TeamDailyActivityParams(start_date=start, page=1))
