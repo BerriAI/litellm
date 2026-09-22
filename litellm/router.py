@@ -12540,20 +12540,30 @@ class Router:
         request_team_id: Final = get_request_team_id(request_kwargs)
         # check if aliases set on litellm model alias map
         if specific_deployment is True:
-            return model, self._filter_reserved_deployments(
-                model=model,
-                healthy_deployments=self._get_deployment_by_litellm_model(model=model),
-                request_team_id=request_team_id,
+            return model, self._drop_strategy_markers(
+                model,
+                self._filter_reserved_deployments(
+                    model=model,
+                    healthy_deployments=self._get_deployment_by_litellm_model(model=model),
+                    request_team_id=request_team_id,
+                ),
             )
         elif model not in self.model_names and self.has_model_id(model):
             deployment: Final = self.get_deployment(model_id=model)
             if deployment is not None:
                 deployment_model: Final = deployment.litellm_params.model
-                return deployment_model, self._filter_reserved_deployments(
-                    model=deployment_model,
-                    healthy_deployments=[deployment.model_dump(exclude_none=True)],
-                    request_team_id=request_team_id,
-                )[0]
+                return deployment_model, cast(  # cast-ok: contract requires a plain dict for a single deployment
+                    dict,
+                    self._filter_reserved_deployments(
+                        model=deployment_model,
+                        healthy_deployments=(
+                            cast(  # cast-ok: model_dump of a router deployment
+                                DeploymentTypedDict, deployment.model_dump(exclude_none=True)
+                            ),
+                        ),
+                        request_team_id=request_team_id,
+                    )[0],
+                )
             raise ValueError(
                 f"LiteLLM Router: Trying to call specific deployment, but Model ID :{model} does not exist in Model ID map"
             )
@@ -12571,15 +12581,25 @@ class Router:
             )
             if early is not None:
                 if not isinstance(early[1], list):
-                    return early[0], self._filter_reserved_deployments(
+                    return early[0], cast(  # cast-ok: contract requires a plain dict for a single deployment
+                        dict,
+                        self._filter_reserved_deployments(
+                            model=early[0],
+                            healthy_deployments=(
+                                cast(  # cast-ok: early resolve returns a router deployment
+                                    DeploymentTypedDict, early[1]
+                                ),
+                            ),
+                            request_team_id=request_team_id,
+                        )[0],
+                    )
+                return early[0], self._drop_strategy_markers(
+                    early[0],
+                    self._filter_reserved_deployments(
                         model=early[0],
-                        healthy_deployments=[early[1]],
+                        healthy_deployments=early[1],
                         request_team_id=request_team_id,
-                    )[0]
-                return early[0], self._filter_reserved_deployments(
-                    model=early[0],
-                    healthy_deployments=self._drop_strategy_markers(early[0], early[1]),
-                    request_team_id=request_team_id,
+                    ),
                 )
 
         ## get healthy deployments
@@ -12590,19 +12610,18 @@ class Router:
             else self._get_all_deployments(model_name=model, team_id=request_team_id)
         )
         _pre_model_access_group_filter_len: Final = len(healthy_deployments)
-        healthy_deployments = self._filter_deployments_by_model_access_groups(
+        healthy_deployments = self._filter_reserved_deployments(
             model=model,
-            healthy_deployments=healthy_deployments,
-            request_kwargs=request_kwargs,
+            healthy_deployments=self._filter_deployments_by_model_access_groups(
+                model=model,
+                healthy_deployments=healthy_deployments,
+                request_kwargs=request_kwargs,
+                request_team_id=request_team_id,
+            ),
             request_team_id=request_team_id,
         )
         _access_group_filter_emptied_candidates = (
             _pre_model_access_group_filter_len > 0 and len(healthy_deployments) == 0
-        )
-        healthy_deployments = self._filter_reserved_deployments(
-            model=model,
-            healthy_deployments=healthy_deployments,
-            request_team_id=request_team_id,
         )
 
         if len(healthy_deployments) == 0:
@@ -12611,15 +12630,14 @@ class Router:
             # _get_deployment_by_litellm_model does not re-apply that filter.
             if _pre_model_access_group_filter_len == 0:
                 _litellm_model_deployments: Final = self._get_deployment_by_litellm_model(model=model)
-                healthy_deployments = self._filter_deployments_by_model_access_groups(
-                    model=model,
-                    healthy_deployments=_litellm_model_deployments,
-                    request_kwargs=request_kwargs,
-                    request_team_id=request_team_id,
-                )
                 healthy_deployments = self._filter_reserved_deployments(
                     model=model,
-                    healthy_deployments=healthy_deployments,
+                    healthy_deployments=self._filter_deployments_by_model_access_groups(
+                        model=model,
+                        healthy_deployments=_litellm_model_deployments,
+                        request_kwargs=request_kwargs,
+                        request_team_id=request_team_id,
+                    ),
                     request_team_id=request_team_id,
                 )
                 # If the litellm-model lookup produced candidates that access-group
@@ -12647,15 +12665,14 @@ class Router:
                     # Re-assign model to the fallback and try to get deployments again
                     model = fallback_model
                     healthy_deployments = self._get_all_deployments(model_name=model, team_id=request_team_id)
-                    healthy_deployments = self._filter_deployments_by_model_access_groups(
-                        model=model,
-                        healthy_deployments=healthy_deployments,
-                        request_kwargs=request_kwargs,
-                        request_team_id=request_team_id,
-                    )
                     healthy_deployments = self._filter_reserved_deployments(
                         model=model,
-                        healthy_deployments=healthy_deployments,
+                        healthy_deployments=self._filter_deployments_by_model_access_groups(
+                            model=model,
+                            healthy_deployments=healthy_deployments,
+                            request_kwargs=request_kwargs,
+                            request_team_id=request_team_id,
+                        ),
                         request_team_id=request_team_id,
                     )
 
@@ -12692,9 +12709,9 @@ class Router:
     def _filter_reserved_deployments(
         self,
         model: str,
-        healthy_deployments: list,
+        healthy_deployments: Sequence[DeploymentTypedDict],
         request_team_id: str | None,
-    ) -> list:
+    ) -> tuple[DeploymentTypedDict, ...]:
         result: Final = filter_reserved_deployments(
             healthy_deployments, request_team_id, now=datetime.now(timezone.utc)
         )
@@ -12705,7 +12722,7 @@ class Router:
                 model=model,
                 llm_provider="",
             )
-        return list(result.deployments)
+        return result.deployments
 
     def _filter_deployments_by_model_access_groups(
         self,
