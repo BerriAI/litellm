@@ -1,5 +1,5 @@
 """Live e2e: a LangSmith batch whose metadata holds non JSON-native Python values
-(datetime, Decimal, UUID) must reach the real LangSmith API instead of dying in
+(datetime, Decimal) must reach the real LangSmith API instead of dying in
 json.dumps and dropping the whole batch. Only the SDK path can put such values
 into the batch (the proxy JSON-decodes request metadata), so this test drives
 litellm.acompletion in-process against the real OpenAI API with a LangsmithLogger
