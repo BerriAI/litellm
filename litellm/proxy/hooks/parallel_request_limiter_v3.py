@@ -4219,6 +4219,90 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return 0, 0, False
 
+    def _collect_project_io_scope_targets(
+        self,
+        standard_logging_metadata: Mapping[str, Any],
+        model_group: str | None,
+    ) -> list[tuple[str, str]]:
+        """Rebuild project ITPM/OTPM scopes from logging metadata.
+
+        Combined TPM already charges ``model_per_project`` from metadata when
+        no reservation owns the call. Summary/compaction subrequests carry a
+        distinct ``litellm_call_id`` and never own the parent stash, so their
+        IO quotas must use the same metadata rebuild.
+        """
+        user_api_key_project_id: Final = standard_logging_metadata.get("user_api_key_project_id")
+        if not user_api_key_project_id or not model_group:
+            return []
+        descriptor_value: Final = f"{user_api_key_project_id}:{model_group}"
+        return [  # mutable-ok: caller may filter ITPM vs OTPM scopes
+            (PROJECT_ITPM_DESCRIPTOR_KEY, descriptor_value),
+            (PROJECT_OTPM_DESCRIPTOR_KEY, descriptor_value),
+        ]
+
+    def _build_unreserved_project_io_token_ops(
+        self,
+        kwargs: dict[str, Any],
+        response_obj: object,
+    ) -> Sequence[RedisPipelineIncrementOperation]:
+        """Charge full actual ITPM/OTPM when no pre-call reservation owns this call.
+
+        Summary subrequests never claim the parent stash (``owner_litellm_call_id``
+        pins it), so without this path their input/output tokens never hit the
+        project IO counters even though combined TPM still charges them.
+        """
+        from litellm.proxy.common_utils.callback_utils import (
+            get_model_group_from_litellm_kwargs,
+        )
+
+        standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
+        if not isinstance(standard_logging_object, dict):
+            return ()
+        standard_logging_metadata: Final = standard_logging_object.get("metadata") or {}
+        if not isinstance(standard_logging_metadata, Mapping):
+            return ()
+
+        model_group: Final = get_model_group_from_litellm_kwargs(kwargs) or (
+            standard_logging_object.get("model_group")
+            if isinstance(standard_logging_object.get("model_group"), str)
+            else None
+        )
+        targets: Final = self._collect_project_io_scope_targets(
+            standard_logging_metadata=standard_logging_metadata,
+            model_group=model_group if isinstance(model_group, str) else None,
+        )
+        if not targets:
+            return ()
+
+        response_usage: Final = self._resolve_io_token_reconcile_usage(response_obj)
+        combined_usage: Final = self._resolve_io_token_reconcile_usage(kwargs.get("combined_usage_object"))
+        aggregate_total: Final = self._aggregate_only_total_tokens(
+            self._response_usage(response_obj)
+        ) or self._aggregate_only_total_tokens(self._response_usage(kwargs.get("combined_usage_object")))
+        if not response_usage[2] and not combined_usage[2] and aggregate_total <= 0:
+            return ()
+        resolved_usage: Final = (
+            response_usage
+            if response_usage[2]
+            else combined_usage
+            if combined_usage[2]
+            else (aggregate_total, aggregate_total, True)
+        )
+        billable_input, completion_tokens, _ = resolved_usage
+        itpm_targets: Final = [t for t in targets if t[0] == PROJECT_ITPM_DESCRIPTOR_KEY]
+        otpm_targets: Final = [t for t in targets if t[0] == PROJECT_OTPM_DESCRIPTOR_KEY]
+        return self._build_reservation_aware_tpm_ops(
+            targets=itpm_targets,
+            reserved_scopes=frozenset(),
+            actual_tokens=billable_input,
+            reserved_tokens=0,
+        ) + self._build_reservation_aware_tpm_ops(
+            targets=otpm_targets,
+            reserved_scopes=frozenset(),
+            actual_tokens=completion_tokens,
+            reserved_tokens=0,
+        )
+
     def _build_io_token_reservation_ops(
         self,
         kwargs: object,
@@ -4231,12 +4315,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         are stored in the same ":tokens" cache bucket as combined TPM, just
         under distinct scope keys, so the reservation-aware increment math is
         identical; only the usage fields being reconciled against differ.
+
+        When this call id does not own the request stash (summary/compaction
+        subrequest), falls through to the unreserved metadata rebuild so
+        project IO quotas still receive the summary's actual usage.
         """
         if not isinstance(kwargs, dict):
             return ()
         stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
         if stash is None:
-            return ()
+            return self._build_unreserved_project_io_token_ops(kwargs, response_obj)
 
         itpm_reserved: Final = stash.itpm_reserved_tokens
         otpm_reserved: Final = stash.otpm_reserved_tokens
