@@ -34,6 +34,7 @@ from e2e_config import (
     PROVIDER_EDGE_HOST_OPT_IN_ENV,
     PROXY_BASE_URL,
     REDIS_CHAOS_OPT_IN_ENV,
+    WEBSEARCH_STACK_OPT_IN_ENV,
     WEEKLY_ANOMALY_OPT_IN_ENV,
     unique_marker,
 )
@@ -61,6 +62,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "cli_determinism": CLI_DETERMINISM_OPT_IN_ENV,
         "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
         "provider_edge_host": PROVIDER_EDGE_HOST_OPT_IN_ENV,
+        "websearch_stack": WEBSEARCH_STACK_OPT_IN_ENV,
     }
 )
 
@@ -150,15 +152,18 @@ def pytest_configure(config: pytest.Config) -> None:
         "provider_edge_host: routes provider traffic through the pytest host's edge in every fixture mode, so the "
         "gateway must reach the pytest host; deselected unless E2E_PROVIDER_EDGE_HOST_REACHABLE is set",
     )
+    config.addinivalue_line(
+        "markers",
+        "websearch_stack: needs a proxy running the websearch_interception callback with a configured search tool; "
+        "deselected unless E2E_WEBSEARCH_STACK is set",
+    )
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
     """Abort before collection when E2E_FIXTURE_MODE can never work: an unknown
     mode value, or replay against a missing, unreadable, or stale bundle (the
     stale message names the bundle's age). Live and record modes pass through."""
-    reason = fixture_mode_collection_error(
-        FIXTURE_MODE_RAW, FIXTURE_DIR, now=datetime.now(timezone.utc)
-    )
+    reason = fixture_mode_collection_error(FIXTURE_MODE_RAW, FIXTURE_DIR, now=datetime.now(timezone.utc))
     if reason is not None:
         raise pytest.UsageError(reason)
 
@@ -284,9 +289,7 @@ def pytest_runtest_teardown(item: pytest.Item) -> Generator[None, None, None]:
     LIVE_PROVIDER_REQUIRED.set(False)
     if not item.stash.get(_CALL_PASSED, False):
         return result
-    reason = replay_leftover_error(
-        mode_raw=FIXTURE_MODE_RAW, bundle_dir=FIXTURE_DIR, test_key=item.nodeid
-    )
+    reason = replay_leftover_error(mode_raw=FIXTURE_MODE_RAW, bundle_dir=FIXTURE_DIR, test_key=item.nodeid)
     if reason is not None:
         pytest.fail(reason)
     return result

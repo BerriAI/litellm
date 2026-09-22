@@ -85,6 +85,7 @@ from models import (
     RerankResponse,
     RouterCurrentValues,
     RouterSettingsResponse,
+    SessionSpendLogsParams,
     SpendLogRow,
     SpendLogs,
     SpendLogsPage,
@@ -312,6 +313,7 @@ def await_everywhere[T](
     """`_last_answer` against every replica in turn, each with the full budget, so a
     write counts as visible only once the last replica reflects it, and stop at the
     first replica that never converges. Clock and sleep are injected."""
+
     def read_replica(
         outcome: EverywhereConverged[T] | NeverConvergedOn[T],
         item: tuple[str, ReplicaRead[T]],
@@ -645,9 +647,7 @@ class ProxyClient:
         ).root
         return any(entry.field_name == field_name and entry.field_value is True for entry in fields)
 
-    def register_model(
-        self, body: ModelNewBody, listed_for: str | None = None, *, provider_live: bool = False
-    ) -> str:
+    def register_model(self, body: ModelNewBody, listed_for: str | None = None, *, provider_live: bool = False) -> str:
         """`create_model` for deployments that carry more than a mode: access groups,
         team scoping, a pinned id. `listed_for` is the virtual key whose /v1/models
         view must list the deployment before it counts as servable, because a
@@ -673,11 +673,16 @@ class ProxyClient:
             self.transport.post(
                 "/model/new",
                 headers=self.management_headers(),
-                json=body.model_copy(update={"litellm_params": route_cache_model(
-                    body.litellm_params, provider_edge_base,
-                    enabled=os.environ.get("E2E_PROVIDER_CACHE", "0") == "1" and not provider_live,
-                    mode=body.model_info.mode,
-                )}),
+                json=body.model_copy(
+                    update={
+                        "litellm_params": route_cache_model(
+                            body.litellm_params,
+                            provider_edge_base,
+                            enabled=os.environ.get("E2E_PROVIDER_CACHE", "0") == "1" and not provider_live,
+                            mode=body.model_info.mode,
+                        )
+                    }
+                ),
                 response_type=ModelNewResponse,
             )
         ).model_id
@@ -978,19 +983,26 @@ class ProxyClient:
             response_type=CountTokensResponse,
         )
 
-    def messages(self, key: str, body: AnthropicMessagesBody) -> Result[AnthropicMessagesResponse]:
+    def messages(
+        self, key: str, body: AnthropicMessagesBody, *, session_id: str | None = None
+    ) -> Result[AnthropicMessagesResponse]:
         """POST /v1/messages (Anthropic-native). The response is either the
         Anthropic-shape passthrough (`content`) or the OpenAI-normalized shape
-        (`choices`); AnthropicMessagesResponse models both."""
+        (`choices`); AnthropicMessagesResponse models both. `session_id` goes out
+        as the `x-litellm-session-id` header, the way Claude Code sends it through
+        ANTHROPIC_CUSTOM_HEADERS, so every spend row the call produces shares it."""
         return self.transport.post(
             "/v1/messages",
-            headers=self._anthropic_headers(key),
+            headers=self._anthropic_headers(key, session_id=session_id),
             json=body,
             response_type=AnthropicMessagesResponse,
         )
 
-    def _anthropic_headers(self, key: str) -> AnthropicHeaders:
-        return AnthropicHeaders(authorization=self.transport.bearer(key).authorization)
+    def _anthropic_headers(self, key: str, *, session_id: str | None = None) -> AnthropicHeaders:
+        return AnthropicHeaders(
+            authorization=self.transport.bearer(key).authorization,
+            x_litellm_session_id=session_id,
+        )
 
     # ---- spend read-back ------------------------------------------------
 
@@ -1046,6 +1058,27 @@ class ProxyClient:
             min_rows,
             predicate,
         )
+
+    def session_spend_logs(self, session_id: str) -> list[SpendLogRow]:
+        """GET /spend/logs/session/ui, the per-session view the Admin UI logs page
+        opens when a session id is clicked."""
+        return unwrap(
+            self.transport.get(
+                "/spend/logs/session/ui",
+                headers=self.transport.master,
+                params=SessionSpendLogsParams(session_id=session_id),
+                response_type=SpendLogsPage,
+            )
+        ).data
+
+    def poll_logs_for_session(
+        self,
+        session_id: str,
+        *,
+        min_rows: int = 1,
+        predicate: RowsPredicate | None = None,
+    ) -> list[SpendLogRow]:
+        return self._poll(lambda: self.session_spend_logs(session_id), min_rows, predicate)
 
     def _poll(
         self,
