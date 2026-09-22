@@ -3,18 +3,16 @@ use std::sync::Arc;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_secrets_azure::AzureKeyVault;
 use litellm_secrets_types::Secret;
+use rstest::rstest;
 
+#[rstest]
 #[tokio::test]
 #[ignore]
 async fn reads_a_real_secret() {
     let environment = Arc::new(ProcessEnvironment);
     let manager = AzureKeyVault::new(environment).unwrap();
     let name = std::env::var("AZURE_KEY_VAULT_LIVE_SECRET_NAME").unwrap();
-    let secret = manager
-        .get_secret_from_azure_key_vault(&name)
-        .await
-        .unwrap()
-        .unwrap();
+    let secret = manager.get_secret(&name).await.unwrap().unwrap();
     assert!(matches!(&secret, Secret::String(_)));
     let host = std::env::var("AZURE_KEY_VAULT_URI")
         .unwrap()

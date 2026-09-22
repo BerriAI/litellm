@@ -1,4 +1,4 @@
-use crate::{Error, SecretValue};
+use crate::{Error, SecretOperationContext, SecretValue, SecretWriteContext};
 
 pub fn validate_secret_name(name: &str) -> Result<(), Error> {
     if name.split('/').any(|segment| segment == "..")
@@ -20,17 +20,22 @@ pub trait BaseSecretManager {
     type WriteResponse;
     type DeleteResponse;
 
-    async fn async_read_secret(&self, name: &str) -> Result<Option<SecretValue>, Self::Error>;
+    async fn async_read_secret(
+        &self,
+        name: &str,
+        context: &SecretOperationContext,
+    ) -> Result<Option<SecretValue>, Self::Error>;
     async fn async_write_secret(
         &self,
         name: &str,
         value: &SecretValue,
-        description: Option<&str>,
+        context: &SecretWriteContext,
     ) -> Result<Self::WriteResponse, Self::Error>;
     async fn async_delete_secret(
         &self,
         name: &str,
-        recovery_window_in_days: i64,
+        recovery_window_in_days: Option<u32>,
+        context: &SecretOperationContext,
     ) -> Result<Self::DeleteResponse, Self::Error>;
 }
 
@@ -39,20 +44,31 @@ pub async fn async_rotate_secret<M: BaseSecretManager>(
     current_name: &str,
     new_name: &str,
     value: &SecretValue,
+    context: &SecretOperationContext,
 ) -> Result<M::WriteResponse, M::Error> {
-    if manager.async_read_secret(current_name).await?.is_none() {
+    if manager
+        .async_read_secret(current_name, context)
+        .await?
+        .is_none()
+    {
         return Err(Error::CurrentSecretMissing.into());
     }
     let response = manager
         .async_write_secret(
             new_name,
             value,
-            Some(&format!("Rotated from {current_name}")),
+            &SecretWriteContext::rotated_from(current_name, context.clone()),
         )
         .await?;
-    if manager.async_read_secret(new_name).await?.is_none() {
+    if manager
+        .async_read_secret(new_name, context)
+        .await?
+        .is_none()
+    {
         return Err(Error::NewSecretMissing.into());
     }
-    manager.async_delete_secret(current_name, 7).await?;
+    manager
+        .async_delete_secret(current_name, Some(7), context)
+        .await?;
     Ok(response)
 }

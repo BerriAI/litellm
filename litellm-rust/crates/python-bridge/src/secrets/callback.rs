@@ -1,45 +1,20 @@
-use std::{fmt, future::Future, pin::Pin};
+use std::{future::Future, pin::Pin};
 
 use litellm_core_utils::settings::Lookup;
 use litellm_secrets::{
     Error, ExternalSecretManager, KeyManagementSettings, KeyManagementSystem, Secret, SecretValue,
 };
-use pyo3::{exceptions::PyBaseException, prelude::*, types::PyDict};
+use pyo3::{prelude::*, types::PyDict};
+
+use super::error::external_error;
 
 const HANDLER_MODULE: &str = "litellm.secret_managers.secret_manager_handler";
-
-struct PythonSecretError(Py<PyBaseException>);
-
-impl fmt::Debug for PythonSecretError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("PythonSecretError")
-    }
-}
-
-impl fmt::Display for PythonSecretError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Python secret manager failed")
-    }
-}
-
-impl std::error::Error for PythonSecretError {}
-
-pub(crate) fn python_error(py: Python<'_>, error: &Error) -> Option<PyErr> {
-    let Error::ExternalManager(source) = error else {
-        return None;
-    };
-    source
-        .downcast_ref::<PythonSecretError>()
-        .map(|error| PyErr::from_value(error.0.clone_ref(py).into_bound(py).into_any()))
-}
 
 /// A secret manager whose reads execute in Python: a custom manager, a legacy compatible
 /// client, or a manually assigned SDK client.
 pub(crate) struct PythonSecretManager {
     client: Py<PyAny>,
     system: Option<KeyManagementSystem>,
-    /// The `key_manager` name Python's handler dispatches on.
-    key_manager: &'static str,
     settings: Option<Py<PyAny>>,
 }
 
@@ -52,7 +27,6 @@ impl PythonSecretManager {
         Self {
             client,
             system,
-            key_manager: system.map_or("local", python_name),
             settings,
         }
     }
@@ -78,14 +52,12 @@ impl PythonSecretManager {
         }
         let kwargs = PyDict::new(py);
         kwargs.set_item("client", client)?;
-        kwargs.set_item("key_manager", self.key_manager)?;
+        kwargs.set_item("key_manager", self.system.map_or("local", python_name))?;
         kwargs.set_item("secret_name", name)?;
-        kwargs.set_item(
-            "key_management_settings",
-            self.settings
-                .as_ref()
-                .map_or_else(|| py.None(), |settings| settings.clone_ref(py)),
-        )?;
+        match &self.settings {
+            Some(settings) => kwargs.set_item("key_management_settings", settings.bind(py))?,
+            None => kwargs.set_item("key_management_settings", py.None())?,
+        }
         py.import(HANDLER_MODULE)?
             .getattr("get_secret_from_manager")?
             .call((), Some(&kwargs))?
@@ -123,9 +95,7 @@ impl ExternalSecretManager for PythonSecretManager {
             Python::attach(|py| {
                 self.read(py, name)
                     .map(|value| value.map(SecretValue::new).map(Secret::String))
-                    .map_err(|error| {
-                        Error::ExternalManager(Box::new(PythonSecretError(error.into_value(py))))
-                    })
+                    .map_err(|error| external_error(py, error))
             })
         })
     }
@@ -140,19 +110,27 @@ mod tests {
         SecretManagerState, SecretResolver,
     };
     use pyo3::{prelude::*, types::PyDict};
+    use rstest::rstest;
 
-    use super::{HANDLER_MODULE, PythonSecretManager, python_error, python_name};
+    use super::{HANDLER_MODULE, PythonSecretManager, python_name};
+    use crate::secrets::python_error;
 
+    #[rstest]
+    #[case::value_error("ValueError", None)]
+    #[case::value_error_with_fallback("ValueError", Some("environment-key"))]
+    #[case::cancelled("asyncio.CancelledError", None)]
+    #[case::cancelled_with_fallback("asyncio.CancelledError", Some("environment-key"))]
     #[tokio::test]
-    async fn callback_failures_preserve_python_exceptions_even_with_environment_fallback() {
+    async fn callback_failures_preserve_python_exceptions_even_with_environment_fallback(
+        #[case] failure_type: &str,
+        #[case] fallback: Option<&'static str>,
+    ) {
         Python::initialize();
-        for failure_type in ["ValueError", "asyncio.CancelledError"] {
-            for fallback in [None, Some("environment-key")] {
-                let (reader, locals) = Python::attach(|py| {
-                    let locals = PyDict::new(py);
-                    locals.set_item("failure_type", failure_type).unwrap();
-                    py.run(
-                        c"
+        let (reader, locals) = Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("failure_type", failure_type).unwrap();
+            py.run(
+                c"
 import asyncio
 failure = eval(failure_type)('secret manager failed')
 cause = RuntimeError('original cause')
@@ -164,48 +142,46 @@ class Manager:
         raise failure
 manager = Manager()
 ",
-                        Some(&locals),
-                        Some(&locals),
-                    )
-                    .unwrap();
-                    let reader = PythonSecretManager::new(
-                        locals.get_item("manager").unwrap().unwrap().unbind(),
-                        None,
-                        None,
-                    );
-                    (reader, locals.unbind())
-                });
-                let resolver = SecretResolver::new(
-                    Arc::new(SecretManagerState::new(
-                        SecretManager::External(Arc::new(reader)),
-                        KeyManagementSettings::default(),
-                    )),
-                    Arc::new(move |_: &str| fallback.map(str::to_owned)),
-                    OidcResolver::default(),
-                )
-                .with_failure_policy(FailurePolicy::EnvironmentFallback);
-                let error = resolver.get_secret("API_KEY", None).await.unwrap_err();
-                Python::attach(|py| {
-                    let original = python_error(py, &error).unwrap();
-                    let locals = locals.bind(py);
-                    assert!(
-                        original
-                            .value(py)
-                            .is(locals.get_item("failure").unwrap().unwrap())
-                    );
-                    for (attribute, name) in [("__cause__", "cause"), ("__context__", "context")] {
-                        assert!(
-                            original
-                                .value(py)
-                                .getattr(attribute)
-                                .unwrap()
-                                .is(locals.get_item(name).unwrap().unwrap())
-                        );
-                    }
-                    assert!(original.traceback(py).is_some());
-                });
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let reader = PythonSecretManager::new(
+                locals.get_item("manager").unwrap().unwrap().unbind(),
+                None,
+                None,
+            );
+            (reader, locals.unbind())
+        });
+        let resolver = SecretResolver::new(
+            Arc::new(SecretManagerState::new(
+                SecretManager::External(Arc::new(reader)),
+                KeyManagementSettings::default(),
+            )),
+            Arc::new(move |_: &str| fallback.map(str::to_owned)),
+            OidcResolver::default(),
+        )
+        .with_failure_policy(FailurePolicy::EnvironmentFallback);
+        let error = resolver.get_secret("API_KEY", None).await.unwrap_err();
+        Python::attach(|py| {
+            let original = python_error(py, &error).unwrap();
+            let locals = locals.bind(py);
+            assert!(
+                original
+                    .value(py)
+                    .is(locals.get_item("failure").unwrap().unwrap())
+            );
+            for (attribute, name) in [("__cause__", "cause"), ("__context__", "context")] {
+                assert!(
+                    original
+                        .value(py)
+                        .getattr(attribute)
+                        .unwrap()
+                        .is(locals.get_item(name).unwrap().unwrap())
+                );
             }
-        }
+            assert!(original.traceback(py).is_some());
+        });
     }
 
     /// Installs a fake `get_secret_from_manager` that records its kwargs, runs `body`, and
@@ -245,47 +221,57 @@ for name in installed:
         .unwrap();
     }
 
-    #[test]
-    fn python_names_round_trip_through_serde() {
-        for system in [
-            KeyManagementSystem::GoogleKms,
-            KeyManagementSystem::AzureKeyVault,
-            KeyManagementSystem::AwsSecretManager,
-            KeyManagementSystem::GoogleSecretManager,
-            KeyManagementSystem::HashicorpVault,
-            KeyManagementSystem::Cyberark,
-            KeyManagementSystem::Local,
-            KeyManagementSystem::AwsKms,
-            KeyManagementSystem::Custom,
-        ] {
-            assert_eq!(
-                serde_json::to_value(system).unwrap(),
-                serde_json::Value::String(python_name(system).to_owned())
-            );
-        }
+    #[rstest]
+    #[case::google_kms(KeyManagementSystem::GoogleKms)]
+    #[case::azure_key_vault(KeyManagementSystem::AzureKeyVault)]
+    #[case::aws_secret_manager(KeyManagementSystem::AwsSecretManager)]
+    #[case::google_secret_manager(KeyManagementSystem::GoogleSecretManager)]
+    #[case::hashicorp_vault(KeyManagementSystem::HashicorpVault)]
+    #[case::cyberark(KeyManagementSystem::Cyberark)]
+    #[case::local(KeyManagementSystem::Local)]
+    #[case::aws_kms(KeyManagementSystem::AwsKms)]
+    #[case::custom(KeyManagementSystem::Custom)]
+    fn python_names_round_trip_through_serde(#[case] system: KeyManagementSystem) {
+        assert_eq!(
+            serde_json::to_value(system).unwrap(),
+            serde_json::Value::String(python_name(system).to_owned())
+        );
     }
 
-    #[test]
-    fn custom_readers_without_a_system_are_called_directly() {
+    #[rstest]
+    #[case::legacy(None, false)]
+    #[case::custom(Some(KeyManagementSystem::Custom), true)]
+    fn direct_readers_receive_compatible_kwargs(
+        #[case] system: Option<KeyManagementSystem>,
+        #[case] expects_optional_params: bool,
+    ) {
         Python::initialize();
         Python::attach(|py| {
             let locals = PyDict::new(py);
             py.run(
                 c"
+class Settings:
+    def model_dump(self):
+        return {'scope': 'custom'}
 class Manager:
     def __init__(self):
         self.names = []
+        self.optional_params = []
     def sync_read_secret(self, secret_name, optional_params=None, timeout=None):
         self.names.append(secret_name)
+        self.optional_params.append(optional_params)
         return 'direct-' + secret_name
 manager = Manager()
+settings = Settings()
 ",
                 Some(&locals),
                 Some(&locals),
             )
             .unwrap();
             let manager = locals.get_item("manager").unwrap().unwrap();
-            let reader = PythonSecretManager::new(manager.clone().unbind(), None, None);
+            let settings = expects_optional_params
+                .then(|| locals.get_item("settings").unwrap().unwrap().unbind());
+            let reader = PythonSecretManager::new(manager.clone().unbind(), system, settings);
             assert_eq!(
                 reader.read(py, "API_KEY").unwrap().as_deref(),
                 Some("direct-API_KEY")
@@ -298,6 +284,23 @@ manager = Manager()
                     .unwrap(),
                 ["API_KEY"]
             );
+            let optional_params = manager
+                .getattr("optional_params")
+                .unwrap()
+                .get_item(0)
+                .unwrap();
+            if expects_optional_params {
+                assert_eq!(
+                    optional_params
+                        .get_item("scope")
+                        .unwrap()
+                        .extract::<String>()
+                        .unwrap(),
+                    "custom"
+                );
+            } else {
+                assert!(optional_params.is_none());
+            }
         });
     }
 

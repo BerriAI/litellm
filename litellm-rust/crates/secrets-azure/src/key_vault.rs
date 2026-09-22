@@ -76,10 +76,7 @@ impl AzureKeyVault {
             .unwrap_or_default()
     }
 
-    pub async fn get_secret_from_azure_key_vault(
-        &self,
-        name: &str,
-    ) -> Result<Option<Secret>, Error> {
+    pub async fn get_secret(&self, name: &str) -> Result<Option<Secret>, Error> {
         let token = self
             .auth
             .get_azure_ad_token(&self.inputs, &|key| self.environment.get(key))
