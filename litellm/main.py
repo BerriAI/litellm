@@ -3595,6 +3595,11 @@ def _complete_edenai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
 
 
 def _complete_fal_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    if ctx.stream:
+        raise litellm.FalAIError(
+            status_code=400,
+            message="fal_ai chat completions do not support streaming",
+        )
     api_base: Final = litellm.FalAIChatConfig.get_api_base(ctx.api_base)
     api_key: Final = litellm.FalAIChatConfig.get_api_key(ctx.api_key or litellm.api_key)
     response: Final = base_llm_http_handler.completion(

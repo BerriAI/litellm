@@ -2148,6 +2148,7 @@ if TYPE_CHECKING:
     )
     from .llms.fal_ai.chat.transformation import (
         FalAIChatConfig as FalAIChatConfig,
+        FalAIError as FalAIError,
     )
     from .llms.ovhcloud.chat.transformation import (
         OVHCloudChatConfig as OVHCloudChatConfig,

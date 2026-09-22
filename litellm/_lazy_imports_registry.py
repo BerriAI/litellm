@@ -336,6 +336,7 @@ LLM_CONFIG_NAMES: Final = (
     "EdenAIImageGenerationConfig",
     "EdenAIVideoConfig",
     "FalAIChatConfig",
+    "FalAIError",
     "OVHCloudChatConfig",
     "OVHCloudEmbeddingConfig",
     "CometAPIEmbeddingConfig",
@@ -1253,6 +1254,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "EdenAIImageGenerationConfig": (".llms.edenai.image_generation.transformation", "EdenAIImageGenerationConfig"),
     "EdenAIVideoConfig": (".llms.edenai.videos.transformation", "EdenAIVideoConfig"),
     "FalAIChatConfig": (".llms.fal_ai.chat.transformation", "FalAIChatConfig"),
+    "FalAIError": (".llms.fal_ai.chat.transformation", "FalAIError"),
     "OVHCloudChatConfig": (".llms.ovhcloud.chat.transformation", "OVHCloudChatConfig"),
     "OVHCloudEmbeddingConfig": (
         ".llms.ovhcloud.embedding.transformation",

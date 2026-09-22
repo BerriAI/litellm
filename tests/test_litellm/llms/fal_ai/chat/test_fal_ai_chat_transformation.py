@@ -221,6 +221,16 @@ def test_transform_request_rejects_streaming():
         )
 
 
+def test_completion_dispatch_rejects_streaming():
+    with pytest.raises(litellm.BadRequestError):
+        litellm.completion(
+            model=MODEL,
+            custom_llm_provider="fal_ai",
+            stream=True,
+            messages=[{"role": "user", "content": "describe"}],
+        )
+
+
 @pytest.mark.parametrize(
     "effort,expected",
     [("none", False), ("minimal", False), ("low", True), ("medium", True), ("high", True)],
