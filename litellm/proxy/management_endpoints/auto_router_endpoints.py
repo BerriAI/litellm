@@ -58,6 +58,8 @@ from litellm.router_utils.auto_router_model_naming import (
 )
 from litellm.types.management_endpoints.auto_router_endpoints import (
     SHADOW_EVAL_TURN_VALVE,
+    AutoRouterAvailabilityRequest,
+    AutoRouterAvailabilityResponse,
     AutoRouterBenchmarkGroup,
     AutoRouterBenchmarksResponse,
     AutoRouterBenchmarkTotals,
@@ -389,6 +391,66 @@ async def validate_complexity_router_config(
             team=member_team,
         )
     return ComplexityRouterConfigValidationResponse(valid=error is None, error=error)
+
+
+@router.post(
+    "/auto_router/availability",
+    tags=["model management"],  # mutable-ok: FastAPI requires a list
+    response_model=AutoRouterAvailabilityResponse,
+)
+async def get_auto_router_availability(
+    data: AutoRouterAvailabilityRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> AutoRouterAvailabilityResponse:
+    from litellm.proxy.management_helpers.auto_router_availability import auto_router_availability
+    from litellm.proxy.proxy_server import (
+        _license_check,  # pyright: ignore[reportPrivateUsage]  # same entitlement owner as the model write gate
+        heuristic_v1_tuning_baselines,
+        llm_router,
+        prisma_client,
+    )
+    from litellm.repositories.model_repository import ModelRepository
+
+    member_team: Final = await _authorize_router_dry_run(user_api_key_dict, data.team_id)
+    if prisma_client is None or llm_router is None:
+        raise HTTPException(status_code=503, detail="Auto-router availability is unavailable")
+    rows: Final = await ModelRepository(prisma_client).find_all()
+    saved: Final = next((row for row in rows if row.model_id == data.saved_model_id), None)
+    if data.saved_model_id is not None:
+        if saved is None:
+            raise HTTPException(status_code=404, detail="Saved auto router is unavailable")
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN and (
+            saved.team_id != data.team_id or (member_team is not None and saved.created_by != user_api_key_dict.user_id)
+        ):
+            raise HTTPException(status_code=403, detail="Cannot check another user's auto router")
+    deployments: Final = tuple(
+        MappingProxyType(
+            {
+                "litellm_params": TypeAdapter(dict[str, object]).validate_python(row.litellm_params),
+                "model_info": MappingProxyType({"id": row.model_id, "db_model": True}),
+            }
+        )
+        for row in rows
+    )
+    existing: Final = next((deployment for row, deployment in zip(rows, deployments) if row is saved), None)
+    others: Final = tuple(deployment for deployment in deployments if deployment is not existing) + tuple(
+        llm_router.config_deployments()
+    )
+    candidate: Final = MappingProxyType(
+        {
+            "litellm_params": MappingProxyType(
+                {"model": "auto_router/complexity_router", "complexity_router_config": data.complexity_router_config}
+            ),
+            "model_info": MappingProxyType({"id": data.saved_model_id or "availability-new-router", "db_model": True}),
+        }
+    )
+    return auto_router_availability(
+        others=others,
+        existing=existing,
+        candidate=candidate,
+        baselines=heuristic_v1_tuning_baselines,
+        limit=_license_check.auto_router_capability_limit(),
+    )
 
 
 async def _resolve_saved_routing_test(

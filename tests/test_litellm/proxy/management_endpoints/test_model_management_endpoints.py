@@ -6092,7 +6092,8 @@ class TestStrategyRouterWriteValidation:
     _TUNED_A = {"classifier_type": "heuristic", "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"}}
     _TUNED_A_EDITED = {**_TUNED_A, "dimension_weights": {"codePresence": 0.9}}
     _TUNED_B = {"classifier_type": "heuristic", "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4.1"}}
-    _TUNED_B_EDITED = {**_TUNED_B, "tiers": {"SIMPLE": "gpt-4o", "MEDIUM": "gpt-4.1"}}
+    _TUNED_B_EDITED = {**_TUNED_B, "code_keywords": ["internal-api"]}
+    _MODELS_ONLY_B = {**_TUNED_B, "tiers": {"SIMPLE": "fast-model", "MEDIUM": "capable-model"}}
 
     @staticmethod
     def _db_router_row(model_id: str, config: Mapping[str, object]) -> dict[str, object]:
@@ -6110,7 +6111,9 @@ class TestStrategyRouterWriteValidation:
             (1, ["a", "b"], {"a": "_TUNED_A", "b": "_TUNED_B"}, "a", "_TUNED_A_EDITED", "allowed"),
             (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "a", "_TUNED_A_EDITED", "allowed"),
             (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "b", "_TUNED_B_EDITED", "refused"),
-            (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "c", "_TUNED_B", "refused"),
+            (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "c", "_TUNED_B_EDITED", "refused"),
+            (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "c", "_TUNED_B", "allowed"),
+            (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "b", "_MODELS_ONLY_B", "allowed"),
             (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "b", "_TUNED_B", "allowed"),
             (None, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "b", "_TUNED_B_EDITED", "allowed"),
             (1, [], {}, "c", "_TUNED_B", "allowed"),
@@ -6138,6 +6141,7 @@ class TestStrategyRouterWriteValidation:
             "_TUNED_A_EDITED": self._TUNED_A_EDITED,
             "_TUNED_B": self._TUNED_B,
             "_TUNED_B_EDITED": self._TUNED_B_EDITED,
+            "_MODELS_ONLY_B": self._MODELS_ONLY_B,
         }
         baselines = snapshot_tuning_baselines(
             [self._db_router_row(row_id, configs["_TUNED_A" if row_id == "a" else "_TUNED_B"]) for row_id in baseline_rows]
@@ -6172,7 +6176,7 @@ class TestStrategyRouterWriteValidation:
                     async with _auto_router_capability_slot(fake, effective_params=effective_params, model_id=candidate_id):
                         pass
                 assert exc_info.value.status_code == 403
-                assert "changed heuristic scorer settings or tier models" in str(exc_info.value.detail)
+                assert "changed heuristic scoring rules" in str(exc_info.value.detail)
                 assert "'auto_router' feature lifts the limit" in str(exc_info.value.detail)
                 return
             async with _auto_router_capability_slot(fake, effective_params=effective_params, model_id=candidate_id) as table:
@@ -6222,13 +6226,13 @@ class TestStrategyRouterWriteValidation:
                     model_params=Deployment(
                         model_name="second-tuned",
                         litellm_params=LiteLLM_Params(
-                            model="auto_router/complexity_router", complexity_router_config=self._TUNED_B
+                            model="auto_router/complexity_router", complexity_router_config=self._TUNED_B_EDITED
                         ),
                     ),
                     user_api_key_dict=admin,
                 )
             assert exc_info.value.code == "403"
-            assert "changed heuristic scorer settings or tier models" in str(exc_info.value.message)
+            assert "changed heuristic scoring rules" in str(exc_info.value.message)
             fake.tx_obj.litellm_proxymodeltable.create.assert_not_awaited()
             fake.litellm_proxymodeltable.create.assert_not_awaited()
 

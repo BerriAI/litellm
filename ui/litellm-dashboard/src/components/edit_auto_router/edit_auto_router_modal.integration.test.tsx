@@ -1,3 +1,4 @@
+import { openAutoRouterAdvanced, selectAutoRouterOption } from "../../../tests/autoRouterSetup";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -25,6 +26,7 @@ const {
 }));
 
 vi.mock("../networking", () => ({
+  apiClient: { post: vi.fn().mockResolvedValue({ allowances: [], error: null }) },
   modelPatchUpdateCall,
   modelAvailableCall,
   getAutoRouterClassifierDefaultPromptCall,
@@ -102,9 +104,9 @@ describe("EditAutoRouterModal keyword matching", () => {
     });
 
     expect(await screen.findByRole("textbox", { name: "Auto Router Name" })).toHaveAttribute("readonly");
-    expect(screen.queryByText("Advanced: Compression")).not.toBeInTheDocument();
+    expect(screen.queryByText("Compression")).not.toBeInTheDocument();
     expect(screen.queryByText("Model Access Groups")).not.toBeInTheDocument();
-    await user.click(screen.getByText("Advanced: Affinity"));
+    openAutoRouterAdvanced("Affinity");
     await user.click(await screen.findByRole("switch", { name: "Pin one model deployment per tier" }));
     await user.click(screen.getByRole("button", { name: /save changes/i }));
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
@@ -128,7 +130,9 @@ describe("EditAutoRouterModal keyword matching", () => {
   it("renders the advanced sections the create form offers", async () => {
     renderModal();
 
-    expect(await screen.findByText(/Escalation Keywords/i)).toBeInTheDocument();
+    await screen.findByRole("combobox", { name: "How often to classify" });
+    openAutoRouterAdvanced("Escalation Keywords");
+    expect(screen.getAllByText(/Escalation Keywords/i)).not.toHaveLength(0);
     expect(await screen.findByText(/Keyword\/Semantic Matching/i)).toBeInTheDocument();
   });
 
@@ -147,7 +151,7 @@ describe("EditAutoRouterModal keyword matching", () => {
         },
       },
     });
-    await user.click(await screen.findByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     const threshold = screen.getByRole("textbox", { name: "Success threshold" });
     expect(threshold).toHaveValue("0.91");
     fireEvent.change(threshold, { target: { value: raw } });
@@ -172,13 +176,13 @@ describe("EditAutoRouterModal keyword matching", () => {
         },
       },
     });
-    await user.click(await screen.findByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "-0.1" } });
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
     expect(modelPatchUpdateCall).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "0.88" } });
-    await user.click(screen.getByRole("radio", { name: /^Heuristic \(default\)/ }));
+    await selectAutoRouterOption("Heuristic", "Rule-based");
     expect(screen.queryByRole("textbox", { name: "Success threshold" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
@@ -188,10 +192,10 @@ describe("EditAutoRouterModal keyword matching", () => {
   it("clears an invalid inactive threshold before saving the router", async () => {
     const user = userEvent.setup();
     renderModal();
-    await user.click(await screen.findByText("Advanced: Classification Method"));
-    await user.click(screen.getByRole("radio", { name: /^Heuristic v2/ }));
+    openAutoRouterAdvanced("Classification Method");
+    await selectAutoRouterOption("Heuristic", "Heuristic v2");
     fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "1.1" } });
-    await user.click(screen.getByRole("radio", { name: /^Heuristic \(default\)/ }));
+    await selectAutoRouterOption("Heuristic", "Rule-based");
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Clear Heuristic v2 threshold" }));
     expect(screen.queryByRole("region", { name: "Inactive Heuristic v2 threshold" })).not.toBeInTheDocument();
@@ -207,7 +211,7 @@ describe("EditAutoRouterModal keyword matching", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await screen.findByText(/Escalation Keywords/i);
+    await screen.findByRole("combobox", { name: "How often to classify" });
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
@@ -230,7 +234,7 @@ describe("EditAutoRouterModal keyword matching", () => {
     });
 
     renderModal();
-    await screen.findByText(/Escalation Keywords/i);
+    await screen.findByRole("combobox", { name: "How often to classify" });
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => expect(validateAutoRouterConfig).toHaveBeenCalled());
@@ -264,7 +268,7 @@ describe("EditAutoRouterModal keyword matching", () => {
       />,
     );
 
-    await screen.findByText(/Escalation Keywords/i);
+    await screen.findByRole("combobox", { name: "How often to classify" });
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => expect(toast.fromError).toHaveBeenCalled());
@@ -297,8 +301,8 @@ describe("EditAutoRouterModal keyword matching", () => {
       />,
     );
 
-    await screen.findByText(/Escalation Keywords/i);
-    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+    await screen.findByRole("combobox", { name: "How often to classify" });
+    openAutoRouterAdvanced("Keyword/Semantic Matching");
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
 
     // The modal renders the same controls as the create form, so it owes the same treatment:
@@ -331,8 +335,8 @@ describe("EditAutoRouterModal keyword matching", () => {
       />,
     );
 
-    await screen.findByText(/Escalation Keywords/i);
-    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+    await screen.findByRole("combobox", { name: "How often to classify" });
+    openAutoRouterAdvanced("Keyword/Semantic Matching");
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
     expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
 
@@ -373,15 +377,15 @@ describe("EditAutoRouterModal advanced field round trips", () => {
     const user = userEvent.setup();
     renderAdvancedModal();
 
-    await user.click(await screen.findByText("Advanced: Housekeeping Routing"));
+    openAutoRouterAdvanced("Housekeeping Routing");
     expect(screen.getByRole("switch", { name: "Route housekeeping calls to the cheapest tier" })).not.toBeChecked();
     expect(screen.getByRole("combobox", { name: "e.g., conversation title" })).toHaveValue("");
 
-    await user.click(screen.getByText("Advanced: Ignore Custom Tags"));
+    openAutoRouterAdvanced("Ignore Custom Tags");
     expect(screen.getByLabelText("Opening tag")).toHaveValue("<a>");
     expect(screen.getByLabelText("Closing tag")).toHaveValue("</a>");
 
-    await user.click(screen.getByText("Advanced: Response Format"));
+    openAutoRouterAdvanced("Response Format");
     const maxTokensSwitch = screen.getByRole("switch", { name: "Cap max_tokens at the tier model's output ceiling" });
     await user.click(maxTokensSwitch);
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -454,7 +458,7 @@ describe("EditAutoRouterModal classifier context window", () => {
     const user = userEvent.setup();
     renderLlmModal();
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     await screen.findByText("Context Window Size");
     expect(screen.getByDisplayValue("5")).toBeInTheDocument();
     expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
@@ -475,7 +479,7 @@ describe("EditAutoRouterModal classifier context window", () => {
     const user = userEvent.setup();
     const { baseElement } = renderLlmModal();
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     await user.click(await screen.findByRole("button", { name: /prompt/i }));
 
     expect(await screen.findByLabelText("Classification instructions")).toBeInTheDocument();
@@ -486,7 +490,7 @@ describe("EditAutoRouterModal classifier context window", () => {
     const user = userEvent.setup();
     renderLlmModal();
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     const input = await screen.findByLabelText("Context Window Size");
     fireEvent.change(input, { target: { value: "8" } });
 
@@ -531,7 +535,7 @@ describe("EditAutoRouterModal assistant turns", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     await screen.findByText("Include Assistant Turns");
     expect(screen.getByRole("switch", { name: "Include Assistant Turns" })).toBeChecked();
 
@@ -545,7 +549,7 @@ describe("EditAutoRouterModal assistant turns", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     await screen.findByText("Include Assistant Turns");
     await user.click(screen.getByRole("switch", { name: "Include Assistant Turns" }));
 
@@ -580,8 +584,8 @@ describe("EditAutoRouterModal classification frequency", () => {
     const user = userEvent.setup();
     renderWithStoredConfig(STORED_CONFIG);
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
-    expect(await screen.findByRole("radio", { name: /Every request/ })).toBeChecked();
+    openAutoRouterAdvanced("Classification Method");
+    expect(await screen.findByRole("combobox", { name: "How often to classify" })).toHaveTextContent("Every request");
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -593,8 +597,10 @@ describe("EditAutoRouterModal classification frequency", () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: true });
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
-    expect(await screen.findByRole("radio", { name: /Once per session/ })).toBeChecked();
+    openAutoRouterAdvanced("Classification Method");
+    expect(await screen.findByRole("combobox", { name: "How often to classify" })).toHaveTextContent(
+      "Once per session",
+    );
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -606,8 +612,8 @@ describe("EditAutoRouterModal classification frequency", () => {
     const user = userEvent.setup();
     renderWithStoredConfig(STORED_CONFIG);
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
-    await user.click(await screen.findByRole("radio", { name: /Once per session/ }));
+    openAutoRouterAdvanced("Classification Method");
+    await selectAutoRouterOption("How often to classify", "Once per session");
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -619,8 +625,8 @@ describe("EditAutoRouterModal classification frequency", () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: true });
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
-    await user.click(await screen.findByRole("radio", { name: /Every request/ }));
+    openAutoRouterAdvanced("Classification Method");
+    await selectAutoRouterOption("How often to classify", "Every request");
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -632,8 +638,8 @@ describe("EditAutoRouterModal classification frequency", () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: true });
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
-    await user.click(await screen.findByRole("radio", { name: /Every new user message/ }));
+    openAutoRouterAdvanced("Classification Method");
+    await selectAutoRouterOption("How often to classify", "Every new user message");
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -646,8 +652,10 @@ describe("EditAutoRouterModal classification frequency", () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, classification_mode: "user_turn" });
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
-    expect(await screen.findByRole("radio", { name: /Every new user message/ })).toBeChecked();
+    openAutoRouterAdvanced("Classification Method");
+    expect(await screen.findByRole("combobox", { name: "How often to classify" })).toHaveTextContent(
+      "Every new user message",
+    );
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -659,8 +667,8 @@ describe("EditAutoRouterModal classification frequency", () => {
     const user = userEvent.setup();
     renderWithStoredConfig(STORED_CONFIG);
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
-    await user.click(await screen.findByRole("radio", { name: /Every new user message/ }));
+    openAutoRouterAdvanced("Classification Method");
+    await selectAutoRouterOption("How often to classify", "Every new user message");
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -672,8 +680,8 @@ describe("EditAutoRouterModal classification frequency", () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, classification_mode: "user_turn" });
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
-    await user.click(await screen.findByRole("radio", { name: /Every request/ }));
+    openAutoRouterAdvanced("Classification Method");
+    await selectAutoRouterOption("How often to classify", "Every request");
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -703,7 +711,7 @@ describe("EditAutoRouterModal deployment affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig(STORED_CONFIG);
 
-    await user.click(await screen.findByText("Advanced: Affinity"));
+    openAutoRouterAdvanced("Affinity");
     expect(await screen.findByRole("switch", { name: "Pin one model deployment per tier" })).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -716,7 +724,7 @@ describe("EditAutoRouterModal deployment affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, deployment_affinity: false });
 
-    await user.click(await screen.findByText("Advanced: Affinity"));
+    openAutoRouterAdvanced("Affinity");
     expect(await screen.findByRole("switch", { name: "Pin one model deployment per tier" })).not.toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -729,7 +737,7 @@ describe("EditAutoRouterModal deployment affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig(STORED_CONFIG);
 
-    await user.click(await screen.findByText("Advanced: Affinity"));
+    openAutoRouterAdvanced("Affinity");
     await user.click(await screen.findByRole("switch", { name: "Pin one model deployment per tier" }));
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -742,7 +750,7 @@ describe("EditAutoRouterModal deployment affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, session_affinity_ttl_seconds: 300 });
 
-    await user.click(await screen.findByText("Advanced: Affinity"));
+    openAutoRouterAdvanced("Affinity");
     expect(await screen.findByLabelText("How long a pin survives idle (seconds)")).toHaveValue("300");
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -755,7 +763,7 @@ describe("EditAutoRouterModal deployment affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig(STORED_CONFIG);
 
-    await user.click(await screen.findByText("Advanced: Affinity"));
+    openAutoRouterAdvanced("Affinity");
     const ttl = await screen.findByLabelText("How long a pin survives idle (seconds)");
     fireEvent.change(ttl, { target: { value: "300" } });
     fireEvent.blur(ttl);
@@ -770,7 +778,7 @@ describe("EditAutoRouterModal deployment affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, session_affinity_ttl_seconds: 300 });
 
-    await user.click(await screen.findByText("Advanced: Affinity"));
+    openAutoRouterAdvanced("Affinity");
     const ttl = await screen.findByLabelText("How long a pin survives idle (seconds)");
     fireEvent.change(ttl, { target: { value: "" } });
     fireEvent.blur(ttl);
@@ -787,7 +795,7 @@ describe("EditAutoRouterModal deployment affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, modality_routing: true, modality_pin_override: true });
 
-    await user.click(await screen.findByText("Advanced: Modality Routing"));
+    openAutoRouterAdvanced("Modality Routing");
     expect(await screen.findByRole("switch", { name: "Override session pin for image requests" })).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -800,7 +808,7 @@ describe("EditAutoRouterModal deployment affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, modality_routing: true });
 
-    await user.click(await screen.findByText("Advanced: Modality Routing"));
+    openAutoRouterAdvanced("Modality Routing");
     await user.click(await screen.findByRole("switch", { name: "Override session pin for image requests" }));
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -813,7 +821,7 @@ describe("EditAutoRouterModal deployment affinity", () => {
     const user = userEvent.setup();
     renderWithStoredConfig(STORED_CONFIG);
 
-    await user.click(await screen.findByText("Advanced: Modality Routing"));
+    openAutoRouterAdvanced("Modality Routing");
     expect(await screen.findByRole("switch", { name: "Override session pin for image requests" })).toHaveAttribute(
       "aria-disabled",
       "true",
@@ -863,7 +871,7 @@ describe("EditAutoRouterModal custom classifier prompt and fallback", () => {
     const user = userEvent.setup();
     renderCustomModal();
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(await screen.findByRole("button", { name: "Edit custom prompt" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Route to the default model/ })).toBeChecked();
 
@@ -879,7 +887,7 @@ describe("EditAutoRouterModal custom classifier prompt and fallback", () => {
     const user = userEvent.setup();
     renderCustomModal();
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     await user.click(await screen.findByRole("radio", { name: /Score with the heuristic/ }));
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -891,7 +899,7 @@ describe("EditAutoRouterModal custom classifier prompt and fallback", () => {
     const user = userEvent.setup();
     renderCustomModal();
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     await user.click(await screen.findByRole("button", { name: "Reset to default" }));
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -1114,7 +1122,7 @@ describe("EditAutoRouterModal plan-mode minimum tier", () => {
     );
 
   const openPlanModePanel = async (user: ReturnType<typeof userEvent.setup>) => {
-    await user.click(await screen.findByText("Advanced: Plan-Mode Override"));
+    openAutoRouterAdvanced("Plan-Mode Override");
   };
 
   it("shows a stored tier as an enabled override, so the saved value is not a hidden one", async () => {
@@ -1252,7 +1260,7 @@ describe("EditAutoRouterModal prompt compression", () => {
       auto_router_model_compression: "model-compressor",
     });
 
-    await user.click(await screen.findByText("Advanced: Compression"));
+    openAutoRouterAdvanced("Compression");
     await user.click(screen.getAllByRole("button", { name: "Clear" })[0]);
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -1276,14 +1284,14 @@ describe("EditAutoRouterModal prompt compression", () => {
     const stored = { auto_router_routing_compression: "none", auto_router_model_compression: "model-compressor" };
     const view = renderWithStoredCompression(stored);
 
-    await user.click(await screen.findByText("Advanced: Compression"));
+    openAutoRouterAdvanced("Compression");
     await user.click(screen.getAllByRole("button", { name: "Clear" })[0]);
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(modelPatchUpdateCall).not.toHaveBeenCalled();
     view.unmount();
 
     renderWithStoredCompression(stored);
-    await user.click(await screen.findByText("Advanced: Compression"));
+    openAutoRouterAdvanced("Compression");
     expect(screen.getByRole("combobox", { name: "Routing decision compression" })).toHaveValue("None (no compression)");
     await user.click(screen.getAllByRole("button", { name: "Clear" })[0]);
     await user.click(screen.getByRole("combobox", { name: "Routing decision compression" }));
@@ -1332,7 +1340,7 @@ describe("EditAutoRouterModal prompt compression", () => {
       auto_router_model_compression: "none",
     });
 
-    await user.click(await screen.findByText("Advanced: Compression"));
+    openAutoRouterAdvanced("Compression");
 
     expect(await screen.findByRole("combobox", { name: "Routing decision compression" })).toHaveValue("headroom-a");
     expect(screen.getByRole("radio", { name: "Use a different compression" })).toBeChecked();
@@ -1388,7 +1396,7 @@ describe("EditAutoRouterModal classifier vision", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByRole("switch", { name: "Use images for classification" })).toBeChecked();
     expect(screen.getByLabelText("Maximum images per request")).toHaveValue("2");
 
@@ -1402,7 +1410,7 @@ describe("EditAutoRouterModal classifier vision", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.click(await screen.findByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     await user.click(screen.getByRole("switch", { name: "Use images for classification" }));
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
