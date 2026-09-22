@@ -161,7 +161,7 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         """
         Get the error class for Vercel AI Gateway errors.
         """
