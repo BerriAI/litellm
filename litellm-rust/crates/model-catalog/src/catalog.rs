@@ -93,9 +93,8 @@ impl Catalog {
                     continue;
                 }
                 "fallback_generalizations" => {
-                    fallback_generalizations = Some(serde_json::from_value::<
-                        FallbackGeneralizations,
-                    >(value)?);
+                    fallback_generalizations =
+                        Some(serde_json::from_value::<FallbackGeneralizations>(value)?);
                     continue;
                 }
                 _ => {}

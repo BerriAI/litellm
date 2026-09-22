@@ -163,7 +163,7 @@ fn integrity_uses_canonical_count_and_strict_shrink_boundary(
     #[case] expected: ValidationOutcome,
 ) {
     let catalog = Catalog::parse(
-        br#"{"sample_spec":{},"fallback_generalizations":{},"a":{"aliases":["b","c"]}}"#,
+        br#"{"sample_spec":{},"fallback_generalizations":{"rules":[]},"a":{"aliases":["b","c"]}}"#,
         Provenance::default(),
     )
     .unwrap();
@@ -191,6 +191,10 @@ enum MalformedOutcome {
 #[case::empty(b"{}", MalformedOutcome::Empty)]
 #[case::invalid_json(b"{", MalformedOutcome::Json)]
 #[case::entry_not_object(br#"{"a":1}"#, MalformedOutcome::EntryNotObject)]
+#[case::fallback_rules_missing(
+    br#"{"fallback_generalizations":{},"a":{}}"#,
+    MalformedOutcome::Json
+)]
 fn malformed_input_and_aliases_have_typed_outcomes(
     #[case] body: &[u8],
     #[case] expected: MalformedOutcome,
