@@ -1,3 +1,5 @@
+mod cache;
+mod coercion;
 mod credentials;
 mod diagnostics;
 mod errors;
@@ -5,10 +7,16 @@ mod http;
 mod marshal;
 mod python_settings;
 mod routes;
-mod token_counter;
+#[allow(
+    dead_code,
+    reason = "secret-manager foundations await rollout activation"
+)]
+mod secrets;
+mod tokenizer;
 
 #[pymodule(gil_used = true)]
 mod _native {
+    use crate::cache::{CacheTestHandle, CacheTestResolver, ResolvedCache};
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -29,9 +37,24 @@ mod _native {
     #[pymodule_export]
     use crate::routes::responses::ResponsesWebSocketConnection;
     #[pymodule_export]
-    use crate::token_counter::TokenCounter;
+    use crate::routes::token_counter::TokenCounter;
+    #[cfg(feature = "huggingface")]
+    #[pymodule_export]
+    use crate::tokenizer::HuggingFaceEncoding;
+    #[pymodule_export]
+    use crate::tokenizer::Tokenizer;
     #[pymodule_export]
     use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
+    use pyo3::{prelude::*, types::PyModule};
+
+    #[pymodule_init]
+    fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        let py = module.py();
+        let dict = module.dict();
+        dict.set_item("_CacheTestHandle", py.get_type::<CacheTestHandle>())?;
+        dict.set_item("_CacheTestResolver", py.get_type::<CacheTestResolver>())?;
+        dict.set_item("_ResponseCacheRuntime", py.get_type::<ResolvedCache>())
+    }
 }
 
 use pyo3::prelude::*;
@@ -65,10 +88,13 @@ mod tests {
                 "achat_completions",
                 "ResponsesWebSocketConnection",
                 "TokenCounter",
+                "Tokenizer",
                 "gil_stats",
                 "process_state_started",
                 "reserve_process_for_forking",
             ];
+            #[cfg(feature = "huggingface")]
+            expected.push("HuggingFaceEncoding");
             expected.sort_unstable();
 
             let mut public_names: Vec<String> = native_module(py)

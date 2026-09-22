@@ -6,7 +6,7 @@ import logging
 from contextlib import ExitStack
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from typing import List, Optional
+from typing import Final, List, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,7 +29,7 @@ from litellm.proxy._types import (
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -835,6 +835,83 @@ class TestListMCPServers:
         mock_user_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
         with (
+            patch(  # test-quality-ok: endpoint test must patch module globals
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(  # test-quality-ok: endpoint test must patch module globals
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=mock_server),
+            ),
+            patch(  # test-quality-ok: endpoint test must patch module globals
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
+                AsyncMock(return_value=mock_health_result),
+            ),
+            patch(  # test-quality-ok: endpoint test must patch module globals
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_mcp_server,
+            )
+
+            result = await fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id="server-mal",
+                user_api_key_dict=mock_user_auth,
+            )
+
+            assert result.credentials == expected
+
+    @pytest.mark.parametrize(
+        "stored_credentials, expected",
+        [
+            (
+                {
+                    "client_id": "cid",
+                    "client_secret": "csecret",
+                    "scopes": ["read", "write"],
+                    "upstream_token_header": "esb-oauth",
+                },
+                {"scopes": ["read", "write"], "upstream_token_header": "esb-oauth"},
+            ),
+            (
+                '{"client_id": "cid", "client_secret": "csecret", "scopes": ["read", "write"], '
+                '"upstream_token_header": "esb-oauth"}',
+                {"scopes": ["read", "write"], "upstream_token_header": "esb-oauth"},
+            ),
+            (
+                {"client_id": "cid", "client_secret": "csecret", "scopes": []},
+                None,
+            ),
+            (
+                '{"client_id": "cid", "client_secret": "csecret", "scopes": []}',
+                None,
+            ),
+            (
+                {"client_id": "cid", "client_secret": "csecret", "scopes": ["read", ""]},
+                None,
+            ),
+            (
+                {"client_id": "cid", "client_secret": "csecret", "scopes": "read"},
+                None,
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_fetch_single_mcp_server_preserves_valid_oauth_scopes(
+        self, stored_credentials: object, expected: object
+    ):
+        mock_server = generate_mock_mcp_server_db_record(server_id="server-scopes", alias="Scopes")
+        mock_server.credentials = cast(MCPCredentials, stored_credentials)
+        mock_health_result = generate_mock_mcp_server_db_record(server_id="server-scopes", alias="Scopes")
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
+        mock_user_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        with (
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
                 return_value=MagicMock(),
@@ -858,11 +935,11 @@ class TestListMCPServers:
 
             result = await fetch_mcp_server(
                 request=_make_mock_request(),
-                server_id="server-mal",
+                server_id="server-scopes",
                 user_api_key_dict=mock_user_auth,
             )
 
-            assert result.credentials == expected
+        assert result.credentials == expected
 
     @pytest.mark.asyncio
     async def test_fetch_single_mcp_server_strips_upstream_resource_for_non_admin(self):
@@ -1537,6 +1614,60 @@ class TestTeamScopedMCPServerAccess:
             result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth, team_id="any-team-id")
             assert len(result) == 1
 
+
+class TestFetchAllMCPServersOrdering:
+    def test_display_order_is_case_insensitive_name_then_id(self) -> None:
+        servers: Final = (
+            LiteLLM_MCPServerTable(server_id="s-2", server_name="GitHub", alias="aaa", transport=MCPTransport.http),
+            LiteLLM_MCPServerTable(server_id="s-1", alias="github", transport=MCPTransport.http),
+            LiteLLM_MCPServerTable(server_id="s-0", server_name="Slack", alias="zzz", transport=MCPTransport.http),
+            LiteLLM_MCPServerTable(server_id="confluence", server_name="", alias="", transport=MCPTransport.http),
+        )
+
+        ordered: Final = sorted(servers, key=mgmt_endpoints._mcp_server_display_order)
+        assert [s.server_id for s in ordered] == ["confluence", "s-1", "s-2", "s-0"]
+
+    @pytest.mark.parametrize("team_id", [None, "team-1"])
+    @pytest.mark.parametrize("reverse", [False, True])
+    @pytest.mark.asyncio
+    async def test_list_is_sorted_by_display_name_regardless_of_resolution_order(
+        self, team_id: str | None, reverse: bool
+    ) -> None:
+        mock_user_auth: Final = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_id="admin_user",
+        )
+        servers: Final = (
+            generate_mock_mcp_server_db_record(server_id="s-zeta", alias="zeta"),
+            generate_mock_mcp_server_db_record(server_id="s-alpha", alias="Alpha"),
+            generate_mock_mcp_server_db_record(server_id="s-mid", alias="mid"),
+        )
+        resolved: Final = list(reversed(servers) if reverse else servers)
+        mock_manager: Final = MagicMock()
+        mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=resolved)
+        with (
+            patch(  # test-quality-ok: the route reads a module-global manager with no injection seam
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(  # test-quality-ok: admin view is derived from module-global proxy settings
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
+            patch(  # test-quality-ok: auth contexts need a live prisma client
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[mock_user_auth]),
+            ),
+            patch(  # test-quality-ok: isolate the route's ordering from team database resolution
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_team_scoped_mcp_server_list",
+                AsyncMock(return_value=resolved),
+            ),
+        ):
+            result: Final = await mgmt_endpoints.fetch_all_mcp_servers(
+                user_api_key_dict=mock_user_auth, team_id=team_id
+            )
+            assert [s.server_id for s in result] == ["s-alpha", "s-mid", "s-zeta"]
+
     @pytest.mark.asyncio
     async def test_restricted_virtual_key_cannot_use_team_id_filter(self):
         """Restricted virtual keys must not bypass access limits via team_id."""
@@ -1635,14 +1766,26 @@ class TestTemporaryMCPSessionEndpoints:
 
             return _inherit_credentials_from_existing_server(payload)
 
-    def test_admin_config_alone_does_not_suppress_credential_inheritance(self):
-        """The edit form round-trips upstream_resource, which is admin config rather than a credential.
-        Treating the blob as "credentials supplied" left the Authorize session with no declared app on
-        the exact path where this knob is configured."""
-        updated = self._inherit_with({"upstream_resource": "api://audience"})
+    @pytest.mark.parametrize(
+        "credentials",
+        [
+            {"upstream_resource": "api://audience"},
+            {"scopes": ["scope:a", "scope:b"]},
+            {"scopes": ["scope:edited"], "upstream_resource": "api://audience"},
+            {"scopes": ["scope:edited"], "upstream_token_header": "esb-oauth"},
+            {"scopes": []},
+            {"scopes": None},
+        ],
+    )
+    def test_admin_config_alone_does_not_suppress_credential_inheritance(self, credentials: MCPCredentials):
+        updated = self._inherit_with(credentials, scopes=["scope:stored"])
 
-        assert updated.credentials["client_id"] == "client-123"
-        assert updated.credentials["client_secret"] == "secret-xyz"
+        assert updated.credentials == {
+            "client_id": "client-123",
+            "client_secret": "secret-xyz",
+            "scopes": ["scope:stored"],
+            **credentials,
+        }
 
     def test_upstream_token_header_is_inherited_like_other_admin_config(self):
         """It is admin config rather than a credential, so a session server derived from an existing
@@ -1661,11 +1804,18 @@ class TestTemporaryMCPSessionEndpoints:
         assert updated.credentials["client_secret"] == "secret-xyz"
         assert updated.credentials["upstream_token_header"] == "esb-oauth"
 
-    def test_supplied_credential_still_wins_over_inheritance(self):
-        """A caller that supplies a real credential keeps it; inheritance must not overwrite it."""
-        updated = self._inherit_with({"auth_value": "caller-token"})
+    @pytest.mark.parametrize(
+        "credentials",
+        [
+            {"auth_value": "caller-token"},
+            {"client_id": "caller-client", "scopes": ["scope:edited"]},
+            {"client_secret": "caller-secret", "scopes": ["scope:edited"]},
+        ],
+    )
+    def test_supplied_credential_still_wins_over_inheritance(self, credentials: MCPCredentials):
+        updated = self._inherit_with(credentials)
 
-        assert updated.credentials == {"auth_value": "caller-token"}
+        assert updated.credentials == credentials
 
     def test_inheritance_carries_upstream_resource_to_the_session_server(self):
         """Without this the temporary server omits the resource indicator and the Authorize leg it
@@ -2339,7 +2489,7 @@ class TestTemporaryMCPSessionEndpoints:
             "client_secret": "client-secret",
             "scopes": ["scope1"],
         }
-        assert response.credentials is None
+        assert response.credentials == {"scopes": ["scope1"]}
 
     @pytest.mark.asyncio
     async def test_add_session_mcp_server_rejects_non_admins(self):
@@ -4494,13 +4644,9 @@ class TestMCPApprovalWorkflow:
         assert result.total == 1
         assert result.pending_review == 1
 
+    @pytest.mark.parametrize("allowed_routes", [None, [], ["llm_api_routes"], ["mcp_routes"]])
     @pytest.mark.asyncio
-    async def test_get_submissions_sanitizes_for_view_only_admin(self):
-        """PROXY_ADMIN_VIEW_ONLY reviewing the submission queue must go through
-        the non-admin sanitizer that fetch/list endpoints use: url,
-        static_headers, env, env_vars, and credentials are all dropped. A
-        mutation swapping the gate back to the old partial-blank pattern (which
-        left url/static_headers/env and env-var names intact) would fail this."""
+    async def test_get_submissions_sanitizes_for_view_only_admin(self, allowed_routes: list[str] | None):
         from litellm.proxy._types import MCPSubmissionsSummary
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             get_mcp_server_submissions,
@@ -4508,6 +4654,7 @@ class TestMCPApprovalWorkflow:
 
         item = _leaky_list_server()
         item.approval_status = "pending_review"
+        item.spec_path = "https://example.com/spec.json?key=private"
         summary = MCPSubmissionsSummary(total=1, pending_review=1, active=0, rejected=0, items=[item])
 
         with (
@@ -4521,11 +4668,15 @@ class TestMCPApprovalWorkflow:
             ),
         ):
             result = await get_mcp_server_submissions(
-                user_api_key_dict=generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, allowed_routes=allowed_routes
+                ),
             )
 
+        assert (result.total, result.pending_review, result.active, result.rejected) == (1, 1, 0, 0)
         assert len(result.items) == 1
         sanitized = result.items[0]
+        assert sanitized.spec_path is None
         assert sanitized.url is None
         assert sanitized.static_headers is None
         assert sanitized.env == {}
@@ -4536,11 +4687,9 @@ class TestMCPApprovalWorkflow:
         assert item.url == "https://leaky.example.com/mcp?api_key=sk-embedded-in-url"
         assert item.static_headers == {"Authorization": "Bearer sk-secret-header"}
 
+    @pytest.mark.parametrize("allowed_routes", [None, [], ["llm_api_routes"], ["mcp_routes"]])
     @pytest.mark.asyncio
-    async def test_get_submissions_full_admin_still_sees_secrets(self):
-        """The view-only redaction must not over-redact for a full PROXY_ADMIN,
-        who needs url/static_headers/env/env_vars to review the pending
-        submission. Only the explicit credentials field is cleared."""
+    async def test_get_submissions_full_admin_preserves_review_fields(self, allowed_routes: list[str] | None):
         from litellm.proxy._types import MCPSubmissionsSummary
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             get_mcp_server_submissions,
@@ -4548,6 +4697,7 @@ class TestMCPApprovalWorkflow:
 
         item = _leaky_list_server()
         item.approval_status = "pending_review"
+        item.spec_path = "https://example.com/spec.json?key=private"
         summary = MCPSubmissionsSummary(total=1, pending_review=1, active=0, rejected=0, items=[item])
 
         with (
@@ -4561,11 +4711,14 @@ class TestMCPApprovalWorkflow:
             ),
         ):
             result = await get_mcp_server_submissions(
-                user_api_key_dict=generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=allowed_routes),
             )
 
+        assert (result.total, result.pending_review, result.active, result.rejected) == (1, 1, 0, 0)
         assert len(result.items) == 1
         raw = result.items[0]
+        assert raw.spec_path == item.spec_path
+        assert raw.approval_status == "pending_review"
         assert raw.url == "https://leaky.example.com/mcp?api_key=sk-embedded-in-url"
         assert raw.static_headers == {"Authorization": "Bearer sk-secret-header"}
         assert raw.env == {"UPSTREAM_TOKEN": "sk-secret-env"}
@@ -7725,3 +7878,25 @@ class TestDeleteMCPGatewaySessions:
         assert result.terminated_sessions == 2
         assert {s.user_id for s in result.sessions} == {"bob"}
         assert "sk-live-bob" not in result.model_dump_json()
+
+
+class TestGetMcpToolsWireShape:
+    @pytest.mark.asyncio
+    async def test_get_mcp_tools_returns_each_tool_in_mcp_wire_spelling(self):
+        from mcp.types import ListToolsResult, Tool
+
+        add_schema = {"type": "object", "properties": {"a": {"type": "integer"}}, "required": ["a"]}
+        listed = ListToolsResult(
+            tools=[Tool(name="add", description="Add", inputSchema=add_schema, outputSchema={"type": "integer"})]
+        )
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
+            AsyncMock(return_value=listed),
+        ):
+            result = await mgmt_endpoints.get_mcp_tools(user_api_key_dict=generate_mock_user_api_key_auth())
+
+        (tool,) = result["tools"]
+        assert tool["inputSchema"] == add_schema
+        assert tool["outputSchema"] == {"type": "integer"}
+        assert "_meta" in tool
+        assert not {"input_schema", "output_schema", "meta"} & tool.keys()

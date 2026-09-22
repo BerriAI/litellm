@@ -3,6 +3,8 @@ import binascii
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Final, NoReturn
 
+import httpx
+
 from litellm.constants import request_timeout
 
 REDUCTO_API_BASE: Final = "https://platform.reducto.ai"
@@ -62,7 +64,7 @@ def extract_file_id_or_bytes(
     return None, raw_bytes, mime
 
 
-def _extract_file_id_from_upload_response(response: Any) -> str:
+def _extract_file_id_from_upload_response(response: httpx.Response) -> str:
     try:
         payload: Final = response.json()
     except ValueError as exc:

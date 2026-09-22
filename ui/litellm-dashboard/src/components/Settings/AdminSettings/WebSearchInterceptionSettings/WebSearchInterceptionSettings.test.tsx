@@ -127,6 +127,32 @@ describe("WebSearchInterceptionSettings", () => {
     expect(mockMutate.mock.calls[0][0]).toEqual(ENABLED_PAYLOAD);
   });
 
+  it("warns when the cluster has it on but the serving pod has not applied it", async () => {
+    vi.mocked(useWebSearchInterceptionSettings).mockReturnValue({
+      data: { ...storedSettings, values: { ...storedSettings.values, enabled: true }, active_on_this_pod: false },
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as any);
+
+    await renderSettings();
+
+    expect(screen.getByText(/has not applied it/i)).toBeInTheDocument();
+  });
+
+  it("stays quiet when the serving pod has applied the cluster setting", async () => {
+    vi.mocked(useWebSearchInterceptionSettings).mockReturnValue({
+      data: { ...storedSettings, values: { ...storedSettings.values, enabled: true }, active_on_this_pod: true },
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as any);
+
+    await renderSettings();
+
+    expect(screen.queryByText(/has not applied it/i)).not.toBeInTheDocument();
+  });
+
   it("ignores stored values whose types do not match the field", async () => {
     vi.mocked(useWebSearchInterceptionSettings).mockReturnValue({
       data: {

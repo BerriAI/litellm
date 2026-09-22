@@ -1342,6 +1342,48 @@ class TestProxySettingEndpoints:
             where={"id": "ui_settings"}
         )
 
+    def test_get_ui_settings_reports_sources(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy import proxy_server
+        from litellm.proxy.config_resolvers import SettingsStore
+
+        mock_prisma = MagicMock()
+        mock_db_record = MagicMock()
+        mock_db_record.ui_settings = {
+            "disable_model_add_for_internal_users": True,
+            "require_auth_for_public_ai_hub": True,
+        }
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(
+            return_value=mock_db_record
+        )
+        monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+
+        store = SettingsStore("general_settings")
+        store.load_yaml(
+            {
+                "disable_model_add_for_internal_users": False,
+                "forward_client_headers_to_llm_api": True,
+            }
+        )
+        store.apply_db_row(
+            "ui_settings",
+            {"disable_model_add_for_internal_users": True},
+        )
+        monkeypatch.setattr(proxy_server.proxy_config, "settings", store)
+        monkeypatch.setattr(proxy_server, "general_settings", store)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["values"]["disable_model_add_for_internal_users"] is False
+        assert data["values"]["forward_client_headers_to_llm_api"] is True
+        assert data["values"]["require_auth_for_public_ai_hub"] is True
+        assert data["source"]["disable_model_add_for_internal_users"] == "config"
+        assert data["source"]["forward_client_headers_to_llm_api"] == "config"
+        assert data["source"]["require_auth_for_public_ai_hub"] == "db"
+
     def test_get_ui_settings_schema_description_preserved_with_extensions(
         self, mock_auth, monkeypatch
     ):
@@ -3324,6 +3366,38 @@ class TestWebSearchInterceptionSettingsEndpoints:
         assert resp.status_code == 200, resp.text
         assert resp.json()["values"]["enabled"] is True
 
+    def test_get_flags_a_pod_that_has_not_applied_the_stored_setting(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import litellm
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        monkeypatch.setattr(litellm, "callbacks", [])
+        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {"enabled": True}
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["values"]["enabled"] is True
+        assert resp.json()["active_on_this_pod"] is False
+
+    def test_get_reports_the_pod_as_active_once_the_callback_is_registered(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import litellm
+        from litellm.integrations.websearch_interception.handler import (
+            WebSearchInterceptionLogger,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(search_tool_name="running")])
+        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {"enabled": True}
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["active_on_this_pod"] is True
+
     def test_get_reports_no_database_instead_of_empty_settings(self, mock_proxy_config, mock_auth, monkeypatch):
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
 
@@ -3445,6 +3519,7 @@ class TestPtuCostAttributionUISetting:
 
         assert response.status_code == 200
         assert response.json()["values"]["enable_ptu_cost_attribution"] is False
+        assert response.json()["source"]["enable_ptu_cost_attribution"] == "default"
 
     def test_reported_true_once_the_env_var_is_set(self, mock_auth, monkeypatch):
         from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
@@ -3456,6 +3531,47 @@ class TestPtuCostAttributionUISetting:
 
         assert response.status_code == 200
         assert response.json()["values"]["enable_ptu_cost_attribution"] is True
+        assert response.json()["source"]["enable_ptu_cost_attribution"] == "config"
+
+    def test_reported_config_when_secret_manager_enables_the_flag(
+        self, mock_auth: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+
+        monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
+        monkeypatch.setattr(
+            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.is_ptu_cost_attribution_enabled",
+            lambda: True,
+        )
+        self._mock_prisma(monkeypatch)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["enable_ptu_cost_attribution"] is True
+        assert response.json()["source"]["enable_ptu_cost_attribution"] == "config"
+
+    def test_reported_config_when_secret_manager_disables_the_flag(
+        self, mock_auth: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+
+        monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
+        monkeypatch.setattr(
+            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.is_ptu_cost_attribution_enabled",
+            lambda: False,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_secret",
+            lambda *_args: False,
+        )
+        self._mock_prisma(monkeypatch)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["enable_ptu_cost_attribution"] is False
+        assert response.json()["source"]["enable_ptu_cost_attribution"] == "config"
 
     def test_a_persisted_true_cannot_forge_the_derived_value(self, mock_auth, monkeypatch):
         """A row written before the allowlist existed must not be able to turn the feature on."""

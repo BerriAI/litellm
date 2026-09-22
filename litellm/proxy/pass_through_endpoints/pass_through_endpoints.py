@@ -47,6 +47,7 @@ from litellm.constants import (
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
+    bind_budget_reservation_to_callbacks,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
@@ -78,11 +79,13 @@ from litellm.proxy.common_request_processing import (
     open_sse_before_first_byte,
     resolve_litellm_call_id,
 )
+from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
+    LITELLM_CALL_ID_HEADER,
     error_status_code,
     litellm_call_id_headers,
     openai_error_param,
@@ -110,6 +113,9 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, Usage
 
+from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
+    is_tinyfish_agent_url,
+)
 from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
 from .upstream_usage_headers import (
@@ -380,6 +386,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             or (parsed_url.hostname and "openai.com" in parsed_url.hostname)
         ):
             return EndpointType.OPENAI
+        elif is_tinyfish_agent_url(url):
+            return EndpointType.TINYFISH
         return EndpointType.GENERIC
 
     @staticmethod
@@ -1127,6 +1135,9 @@ async def pass_through_request(
         from litellm.proxy.proxy_server import (
             general_settings as proxy_general_settings,
         )
+        from litellm.proxy.proxy_server import (
+            general_settings_view,
+        )
 
         _managed_id_provider: Final = resolve_passthrough_managed_id_provider(custom_llm_provider)
 
@@ -1632,6 +1643,7 @@ async def pass_through_request(
                     **kwargs,
                 )
             )
+            bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
         ## CUSTOM HEADERS - `x-litellm-*`
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -1656,11 +1668,24 @@ async def pass_through_request(
             headers=response.headers,
             custom_headers=custom_headers,
         )
+        emitted_call_id: Final = (
+            JSON_OBJECT.validate_python(response_headers).get(LITELLM_CALL_ID_HEADER)
+            if response.status_code >= 400
+            else None
+        )
+        error_call_id: Final = (
+            error_body_call_id(general_settings_view(), emitted_call_id) if isinstance(emitted_call_id, str) else None
+        )
+        relayed_content: Final = (
+            json.dumps(with_call_id(JSON_OBJECT.validate_python(response_body), error_call_id)).encode("utf-8")
+            if error_call_id is not None and isinstance(response_body, dict)
+            else content
+        )
         if _content_modified:
             response_headers.pop("content-length", None)
 
         return Response(
-            content=content,
+            content=relayed_content,
             status_code=response.status_code,
             headers=response_headers,
         )
@@ -2543,6 +2568,7 @@ async def websocket_passthrough_request(
                     **success_kwargs,
                 )
             )
+            bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
             # Call the proxy logging success hook
             if proxy_logging_obj:
@@ -2714,6 +2740,7 @@ async def _relay_passthrough_response_bytes(
                 **success_handler_kwargs,
             )
         )
+        bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
 
 def _extract_model_from_vertex_ai_setup(setup_response: Mapping[str, object]) -> str | None:

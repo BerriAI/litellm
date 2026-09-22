@@ -1,12 +1,21 @@
 mod base_cache;
+mod cache_type;
 mod caching;
+mod capabilities;
+mod codec;
+mod dual;
 mod error;
 
 pub use base_cache::{
-    BaseCache, CacheConnectionResult, CacheConnectionStatus, CacheFuture, CacheKwargs,
+    BaseCache, BatchEntry, CacheConnectionResult, CacheConnectionStatus, CacheContext,
+    ExactCacheContext, SemanticCacheContext,
 };
-pub use caching::{
-    Cache, CacheBackend, CacheControls, CacheEntry, CacheKeyContext, CacheKeyField, CacheKeyInput,
-    CacheMode, cache_key, get_cache, get_cache_key, set_cache, should_use_cache,
+pub use cache_type::CacheType;
+pub use caching::{Cache, CacheBackend, get_cache, set_cache};
+pub use capabilities::{
+    BatchCache, CacheScript, ClaimCache, ClientInfoCache, CounterCache, DeleteCache, FlushCache,
+    IncrementOperation, QueueCache, ScanCache, ScriptCache, SetCache, TtlCache,
 };
+pub use codec::{CacheCodec, JsonCodec};
+pub use dual::{DualCache, ReadPolicy, RemoteFailurePolicy, WritePolicy};
 pub use error::Error;

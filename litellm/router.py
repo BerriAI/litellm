@@ -152,6 +152,7 @@ from litellm.router_utils.auto_router_model_naming import (
 )
 from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
+    is_batch_retrieve_call_type,
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
 )
@@ -179,16 +180,21 @@ from litellm.router_utils.cooldown_handlers import (
     _get_cooldown_deployments,
     _set_cooldown_deployments,
     is_advisor_orchestration_failure,
+    is_background_response_cost_poll_not_found,
     is_caller_timeout_408,
 )
 from litellm.router_utils.fallback_event_handlers import (
+    MID_STREAM_FALLBACK_CONTROLS_KEY,
     AttemptedFallbackTargets,
     _check_non_standard_fallback_format,
+    carry_over_pre_routing_selection,
     clear_pre_routing_selection,
     fallback_lookup_groups,
     fallbacks_disabled_for_request,
     get_fallback_model_group_for_lookup_groups,
-    get_pre_routing_selection,
+    has_unattempted_fallback_target,
+    mid_stream_fallback_hop_kwargs,
+    per_request_fallback_controls,
     record_disable_fallbacks,
     record_pre_routing_selection,
     run_async_fallback,
@@ -3302,12 +3308,7 @@ class Router:
                     content_policy_fallbacks: Final[list | None] = initial_kwargs.get(
                         "content_policy_fallbacks", self.content_policy_fallbacks
                     )
-                    # Re-enter via the per-attempt helper so the fallback chain
-                    # picks deployments through
-                    # _ageneric_api_call_with_fallbacks_helper.
-                    # original_generic_function is preserved by the caller so
-                    # the helper knows what underlying API to invoke per attempt.
-                    initial_kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_helper
+                    initial_kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_responses_attempt
                     if e.is_pre_first_chunk or not e.generated_content:
                         # No content generated before the error — retry with the
                         # original input. Adding a continuation prompt would
@@ -5138,21 +5139,27 @@ class Router:
             request_kwargs=None,
         )
 
-    async def _ageneric_api_call_with_fallbacks(self, model: str, original_function: Callable, **kwargs):
+    async def _ageneric_api_call_with_fallbacks(
+        self, model: str, original_function: Callable, attempt_function: Callable | None = None, **kwargs
+    ):
         """
         Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
+
+        attempt_function runs every attempt of the chain instead of the plain helper, so a streaming
+        endpoint can wrap each attempt's stream with its own mid-stream fallback handling.
         """
         try:
             kwargs["model"] = model
             kwargs["original_generic_function"] = original_function
-            kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_helper
+            kwargs["original_function"] = attempt_function or self._ageneric_api_call_with_fallbacks_helper
+            if attempt_function is not None:
+                controls: Final = per_request_fallback_controls(kwargs)
+                kwargs[MID_STREAM_FALLBACK_CONTROLS_KEY] = controls  # rebind-ok: forwarded to every hop
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs, metadata_variable_name="litellm_metadata")
             verbose_router_logger.debug(
                 "Inside ageneric_api_call_with_fallbacks() - model: %s; kwargs: %s", model, kwargs
             )
             response: Final = await self.async_function_with_fallbacks(**kwargs)
-            return response
-
             return response
         except Exception as e:
             asyncio.create_task(
@@ -5274,61 +5281,42 @@ class Router:
         self, original_function: Callable, **kwargs: Any
     ) -> Union["ResponsesAPIResponse", "BaseResponsesAPIStreamingIterator"]:
         """
-        _ageneric_api_call_with_fallbacks for the Responses API, with the
-        addition of mid-stream fallback handling.
-
-        When stream=True and the underlying call returns a
-        BaseResponsesAPIStreamingIterator, wrap it with
-        _aresponses_streaming_iterator so MidStreamFallbackError raised
-        during iteration triggers the Router's cross-provider fallback chain.
+        _ageneric_api_call_with_fallbacks for the Responses API, with every attempt's stream
+        carrying its own mid-stream fallback handling
+        (see _ageneric_api_call_with_fallbacks_responses_attempt).
         """
-        from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+        return await self._ageneric_api_call_with_fallbacks(
+            original_function=original_function,
+            attempt_function=self._ageneric_api_call_with_fallbacks_responses_attempt,
+            **kwargs,
+        )
+
+    async def _ageneric_api_call_with_fallbacks_responses_attempt(
+        self,
+        model: str,
+        original_generic_function: Callable,
+        **kwargs: object,  # kwargs-ok: forwarded verbatim to the per-attempt helper, shape varies per call site
+    ) -> Union["ResponsesAPIResponse", "BaseResponsesAPIStreamingIterator"]:
+        """
+        One attempt of the Responses API fallback chain. A streaming result is wrapped with
+        _aresponses_streaming_iterator over this attempt's own kwargs, so a fallback hop that
+        fails mid-stream resumes the original group's chain instead of re-raising; the name keeps
+        _get_router_metadata_variable_name resolving to litellm_metadata for every hop.
+        """
         from litellm.responses.streaming_iterator import (
             BaseResponsesAPIStreamingIterator,
         )
 
-        # Snapshot the request kwargs before _ageneric_api_call_with_fallbacks
-        # mutates them. A shallow copy alone is not enough: the primary
-        # attempt mutates nested dicts in place — notably `litellm_metadata`,
-        # which `_update_kwargs_with_deployment` populates with
-        # deployment-specific fields (`deployment`, `model_info`, `api_base`,
-        # tags, etc.). Without an explicit copy of that dict, the shallow
-        # copy would still share its reference, leaking primary-deployment
-        # metadata into the mid-stream fallback request.
-        #
-        # We avoid deep-copying the full kwargs because it can contain
-        # non-deepcopyable objects (logging handles, async clients, etc.);
-        # `safe_deep_copy` deep-copies the metadata dicts key-by-key with a
-        # fallback to the original reference for any non-picklable value.
-        # The original_generic_function is preserved so the per-attempt
-        # helper knows which underlying API to call on fallback.
-        # The pre-routing hook stamps its tier selection into this bucket during the primary
-        # attempt; seeding it before the snapshot gives both the live kwargs and the copy a
-        # bucket, so the post-call carry-over below always has somewhere to read and write.
-        kwargs.setdefault("litellm_metadata", {})  # mutable-ok: shared bucket  # rebind-ok: stamp must be readable here
-
-        fallback_kwargs: Final[dict[str, object]] = kwargs.copy()
-        if isinstance(fallback_kwargs.get("litellm_metadata"), dict):
-            fallback_kwargs["litellm_metadata"] = safe_deep_copy(fallback_kwargs["litellm_metadata"])
-        if isinstance(fallback_kwargs.get("metadata"), dict):
-            fallback_kwargs["metadata"] = safe_deep_copy(fallback_kwargs["metadata"])
-        fallback_kwargs["original_generic_function"] = original_function
-
-        response: Final = await self._ageneric_api_call_with_fallbacks(original_function=original_function, **kwargs)
-
-        # The snapshot predates the pre-routing hook, so the tier it stamped into the live kwargs
-        # is carried over write-or-clear: a stale or caller-supplied selection left in the copy
-        # would key the mid-stream fallback lookup off a tier this attempt never routed to.
-        clear_pre_routing_selection(fallback_kwargs)
-        live_pre_routing_selection: Final = get_pre_routing_selection(kwargs)
-        if live_pre_routing_selection is not None:
-            record_pre_routing_selection(fallback_kwargs, live_pre_routing_selection)
-
+        controls: Final = kwargs.pop(MID_STREAM_FALLBACK_CONTROLS_KEY, None)
+        hop_kwargs: Final = mid_stream_fallback_hop_kwargs(
+            model=model, original_generic_function=original_generic_function, controls=controls, kwargs=kwargs
+        )
+        response: Final = await self._ageneric_api_call_with_fallbacks_helper(
+            model=model, original_generic_function=original_generic_function, **kwargs
+        )
+        carry_over_pre_routing_selection(live_kwargs=kwargs, snapshot=hop_kwargs)
         if kwargs.get("stream") and isinstance(response, BaseResponsesAPIStreamingIterator):
-            return await self._aresponses_streaming_iterator(
-                response=response,
-                initial_kwargs=fallback_kwargs,
-            )
+            return await self._aresponses_streaming_iterator(response=response, initial_kwargs=hop_kwargs)
         return response
 
     async def _aanthropic_messages_streaming_iterator(
@@ -5557,7 +5545,7 @@ class Router:
             content_policy_fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the param below
                 "content_policy_fallbacks", self.content_policy_fallbacks
             )
-            initial_kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_helper
+            initial_kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_anthropic_messages_attempt
             self._update_kwargs_before_fallbacks(
                 model=model_group,
                 kwargs=initial_kwargs,
@@ -5611,46 +5599,41 @@ class Router:
         **kwargs: object,  # kwargs-ok: forwarded verbatim to original_function, shape varies per call site
     ) -> Union["AnthropicMessagesResponse", AsyncIterator[bytes]]:
         """
-        _ageneric_api_call_with_fallbacks for anthropic_messages, with the
-        addition of mid-stream fallback handling (see
-        _aanthropic_messages_streaming_iterator). Parity with
+        _ageneric_api_call_with_fallbacks for anthropic_messages, with every attempt's stream
+        carrying its own mid-stream fallback handling
+        (see _ageneric_api_call_with_fallbacks_anthropic_messages_attempt). Parity with
         _aresponses_with_streaming_fallbacks for the Responses API.
         """
-        from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+        return await self._ageneric_api_call_with_fallbacks(
+            original_function=original_function,
+            attempt_function=self._ageneric_api_call_with_fallbacks_anthropic_messages_attempt,
+            **kwargs,
+        )
 
-        # Snapshot the request kwargs before the primary attempt mutates them
-        # in place: _update_kwargs_with_deployment writes deployment-specific
-        # fields (deployment, model_info, api_base, tags, ...) into the
-        # SAME litellm_metadata/metadata dicts a shallow .copy() would still
-        # share, leaking primary-deployment metadata into the mid-stream
-        # fallback request. safe_deep_copy avoids deep-copying the full
-        # kwargs (which can hold non-deepcopyable logging handles/clients).
-        # The pre-routing hook stamps its tier selection into this bucket during the primary
-        # attempt; seeding it before the snapshot gives both the live kwargs and the copy a
-        # bucket, so the post-call carry-over below always has somewhere to read and write.
-        kwargs.setdefault("litellm_metadata", {})  # mutable-ok: shared bucket  # rebind-ok: stamp must be readable here
-
-        fallback_kwargs: Final[dict[str, object]] = kwargs.copy()  # mutable-ok: mutated below before re-entry
-        if isinstance(fallback_kwargs.get("litellm_metadata"), dict):
-            fallback_kwargs["litellm_metadata"] = safe_deep_copy(fallback_kwargs["litellm_metadata"])
-        if isinstance(fallback_kwargs.get("metadata"), dict):
-            fallback_kwargs["metadata"] = safe_deep_copy(fallback_kwargs["metadata"])
-        fallback_kwargs["original_generic_function"] = original_function
-
-        response: Final = await self._ageneric_api_call_with_fallbacks(original_function=original_function, **kwargs)
-
-        # The snapshot predates the pre-routing hook, so the tier it stamped into the live kwargs
-        # is carried over write-or-clear: a stale or caller-supplied selection left in the copy
-        # would key the mid-stream fallback lookup off a tier this attempt never routed to.
-        clear_pre_routing_selection(fallback_kwargs)
-        live_pre_routing_selection: Final = get_pre_routing_selection(kwargs)
-        if live_pre_routing_selection is not None:
-            record_pre_routing_selection(fallback_kwargs, live_pre_routing_selection)
-
+    async def _ageneric_api_call_with_fallbacks_anthropic_messages_attempt(
+        self,
+        model: str,
+        original_generic_function: Callable,
+        **kwargs: object,  # kwargs-ok: forwarded verbatim to the per-attempt helper, shape varies per call site
+    ) -> Union["AnthropicMessagesResponse", AsyncIterator[bytes]]:
+        """
+        One attempt of the anthropic_messages fallback chain. A streaming result is wrapped with
+        _aanthropic_messages_streaming_iterator over this attempt's own kwargs, so a fallback hop
+        that fails mid-stream resumes the original group's chain instead of re-raising; the name
+        keeps _get_router_metadata_variable_name resolving to litellm_metadata for every hop.
+        """
+        controls: Final = kwargs.pop(MID_STREAM_FALLBACK_CONTROLS_KEY, None)
+        hop_kwargs: Final = mid_stream_fallback_hop_kwargs(
+            model=model, original_generic_function=original_generic_function, controls=controls, kwargs=kwargs
+        )
+        response: Final = await self._ageneric_api_call_with_fallbacks_helper(
+            model=model, original_generic_function=original_generic_function, **kwargs
+        )
+        carry_over_pre_routing_selection(live_kwargs=kwargs, snapshot=hop_kwargs)
         if kwargs.get("stream") and hasattr(response, "__aiter__"):
             return await self._aanthropic_messages_streaming_iterator(
                 response=cast("AsyncIterator[bytes]", response),  # cast-ok: stream=True always returns a byte iterator
-                initial_kwargs=fallback_kwargs,
+                initial_kwargs=hop_kwargs,
             )
         return response
 
@@ -6199,6 +6182,8 @@ class Router:
         """
         try:
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
+            requested_model_group: Final = model
+            metadata_variable_name: Final = _get_router_metadata_variable_name(function_name="aretrieve_batch")
             if model is not None:
                 filtered_model_list: (
                     list[DeploymentTypedDict] | list[dict] | dict | None
@@ -6235,6 +6220,9 @@ class Router:
                         kwargs=new_kwargs,
                         function_name="aretrieve_batch",
                     )
+                    model_group: Final = requested_model_group or model_name["model_name"]
+                    if not new_kwargs[metadata_variable_name].get("model_group"):
+                        new_kwargs[metadata_variable_name]["model_group"] = model_group
                     new_kwargs.pop("custom_llm_provider", None)
                     data.pop("custom_llm_provider", None)
                     return await litellm.aretrieve_batch(
@@ -7943,6 +7931,8 @@ class Router:
             # WS session wrappers fire with result=None; per-turn costs tracked by inner calls.
             if kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime"):
                 return
+            if is_batch_retrieve_call_type(kwargs.get("call_type")):
+                return
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object is None")
@@ -8089,6 +8079,8 @@ class Router:
         - key: str - The key used to increment the cache
         - None: if no key is found
         """
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return None
         id = None
         if kwargs["litellm_params"].get("metadata") is None:
             pass
@@ -8137,11 +8129,18 @@ class Router:
                 )
                 return False
 
-            exception_status: Final = getattr(exception, "status_code", "")
-
             # Cache litellm_params to avoid repeated dict lookups
             litellm_params: Final = kwargs.get("litellm_params", {})
             _model_info: Final = litellm_params.get("model_info", {})
+
+            if is_background_response_cost_poll_not_found(exception, litellm_params):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "Provider 404 came from the background response cost poll, not the deployment's health."
+                )
+                return False
+
+            exception_status: Final = getattr(exception, "status_code", "")
 
             if is_caller_timeout_408(kwargs, exception_status):
                 verbose_router_logger.debug(
@@ -8210,6 +8209,8 @@ class Router:
         """
         Update RPM usage for a deployment
         """
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         deployment_name: Final = kwargs["litellm_params"]["metadata"].get(
             "deployment", None
         )  # handles wildcard routes - by giving the original name sent to `litellm.completion`
@@ -8318,12 +8319,12 @@ class Router:
         """
         content_policy_fallbacks: Final = kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks)
         if content_policy_fallbacks is not None:
-            return (
+            return has_unattempted_fallback_target(
                 self._get_fallback_model_group_for_lookup_groups(
                     fallbacks=content_policy_fallbacks,
                     lookup_groups=fallback_lookup_groups(kwargs, model_group),
-                )
-                is not None
+                ),
+                kwargs,
             )
         if self._has_default_fallbacks():
             return True
@@ -8355,7 +8356,7 @@ class Router:
             fallbacks=fallbacks,
             lookup_groups=fallback_lookup_groups(kwargs, model_group),
         )
-        return resolved is not None
+        return has_unattempted_fallback_target(resolved, kwargs)
 
     def _should_raise_content_policy_error(self, model: str, response: ModelResponse, kwargs: dict) -> bool:
         """

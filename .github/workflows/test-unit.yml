@@ -51,7 +51,7 @@ jobs:
         include:
           - shard: mcp-integration
             artifact-name: mcp-integration
-            test-path: "tests/mcp_tests"
+            test-path: "tests/mcp_tests tests/test_litellm/experimental_mcp_client"
             workers: 2
             reruns: 0
             timeout-minutes: 20
@@ -113,7 +113,6 @@ jobs:
               tests/test_litellm/compression
               tests/test_litellm/containers
               tests/test_litellm/endpoints
-              tests/test_litellm/experimental_mcp_client
               tests/test_litellm/models
               tests/test_litellm/repositories
               tests/test_litellm/images
