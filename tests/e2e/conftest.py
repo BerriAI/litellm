@@ -46,6 +46,7 @@ from fixture_mode import pytest_fixture_setup as pytest_fixture_setup
 from idp import Identity, Keycloak, keycloak_from_env
 from junit_properties import attach_result_properties
 from lifecycle import ProxyClientProvider, ResourceManager
+from memory_readings import RssCapture, read_rss_everywhere
 from models import TeamNewBody, UserNewBody, UserNewResponse
 from provider_cache_routing import LIVE_PROVIDER_REQUIRED
 from provider_edge import replay_leftover_error
@@ -53,6 +54,9 @@ from proxy_client import ProxyClient, build_proxy_client
 
 _E2E_TEST_RAN = pytest.StashKey[bool]()
 _CALL_PASSED = pytest.StashKey[bool]()
+_IDLE_RSS = pytest.StashKey[RssCapture]()
+
+IDLE_RSS_READ_TIMEOUT_SECONDS: Final = 10.0
 
 OPT_IN_MARKERS: Final = MappingProxyType(
     {
@@ -186,6 +190,16 @@ def _needs_unset_opt_in(item: pytest.Item) -> bool:
     )
 
 
+def _reaches_proxy(item: pytest.Item) -> bool:
+    """True for a live test that talks to the shared proxy: `e2e`-marked and not a
+    `migration_startup` test, which boots its own container instead."""
+    return item.get_closest_marker("e2e") is not None and item.get_closest_marker("migration_startup") is None
+
+
+def _uses_idle_rss(item: pytest.Item) -> bool:
+    return isinstance(item, pytest.Function) and "idle_rss" in item.fixturenames
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Deselect every test behind an opt-in marker whose env var is unset (see
     OPT_IN_MARKERS): those tests need a proxy configured differently from the
@@ -213,6 +227,20 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         if deselected:
             deselected[0].config.hook.pytest_deselected(items=deselected)
     items.sort(key=lambda item: item.get_closest_marker("load") is not None)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """When a selected test asks for the `idle_rss` fixture and this is not a
+    `--collect-only` run, read every replica's RSS once, right here at the end of
+    collection and before this process sends any traffic. tryfirst keeps the read
+    ahead of xdist's own collection-finish report, and the controller schedules no
+    test until every worker has reported, so this is the idle footprint of a stack
+    that just passed its readiness gate. The fixture hands the capture to the
+    idle-budget test in router/test_reliability_memory_e2e.py."""
+    if session.config.getoption("collectonly") or not any(_uses_idle_rss(item) for item in session.items):
+        return
+    session.config.stash[_IDLE_RSS] = read_rss_everywhere(build_proxy_client(), timeout=IDLE_RSS_READ_TIMEOUT_SECONDS)
 
 
 def _liveness_reason(label: str, base_url: str) -> str | None:
@@ -246,7 +274,9 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     run even when none is up. Never skip for a missing proxy. Replay mode needs
     the proxy too: only provider-bound traffic replays from the bundle."""
     LIVE_PROVIDER_REQUIRED.set(item.get_closest_marker("provider_live") is not None)
-    if item.get_closest_marker("e2e") is None or item.get_closest_marker("migration_startup") is not None:
+    if _uses_idle_rss(item):
+        item.user_properties.extend(item.config.stash[_IDLE_RSS].junit_properties)
+    if not _reaches_proxy(item):
         return
     if isinstance(item, pytest.Function) and "oauth_gateway" in item.fixturenames:
         return
@@ -261,7 +291,7 @@ def pytest_runtest_call(item: pytest.Item) -> None:
     guard before truncating the spend-log DB. Tests under `tests/e2e/` without the
     `e2e` marker (pure unit coverage for the harness itself) never hit the proxy,
     so they must not arm the destructive DB truncate."""
-    if item.get_closest_marker("e2e") is None or item.get_closest_marker("migration_startup") is not None:
+    if not _reaches_proxy(item):
         return
     item.session.stash[_E2E_TEST_RAN] = True
 
@@ -323,6 +353,13 @@ def proxy() -> ProxyClient:
     """The shared ProxyClient every suite's client is built from. Suite `client`
     fixtures depend on this and inject it, so the proxy wiring lives in one place."""
     return build_proxy_client()
+
+
+@pytest.fixture(scope="session")
+def idle_rss(request: pytest.FixtureRequest) -> RssCapture:
+    """Every replica's RSS as read once at the end of collection, before this process
+    sent any traffic (see pytest_collection_finish)."""
+    return request.config.stash[_IDLE_RSS]
 
 
 @pytest.fixture
