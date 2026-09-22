@@ -32,6 +32,17 @@ impl<C: CacheContext + Default> ResponseCacheRequest<C> {
     }
 }
 
+impl<C: CacheContext> ResponseCacheRequest<C> {
+    pub fn with_context<D: CacheContext>(self, context: D) -> ResponseCacheRequest<D> {
+        ResponseCacheRequest {
+            key: self.key,
+            controls: self.controls,
+            context,
+            max_age: self.max_age,
+        }
+    }
+}
+
 pub struct ResponseCache<B: BaseCache<Value = CacheEntry>>
 where
     B::Context: Default + PartialEq,

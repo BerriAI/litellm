@@ -1,12 +1,15 @@
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
 
-use litellm_cache::{BaseCache, CacheCodec, Error};
+use litellm_cache::{
+    BaseCache, CacheCodec, CacheConnectionResult, CacheConnectionStatus, Error,
+    SemanticCacheContext,
+};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::RedisCache;
 use litellm_cache_response::{
@@ -28,6 +31,82 @@ fn request() -> ResponseCacheRequest {
         preset: Some("tenant:key".into()),
         ..Default::default()
     })
+}
+
+struct SemanticBackend {
+    entries: Mutex<Vec<(String, CacheEntry)>>,
+    contexts: Mutex<Vec<SemanticCacheContext>>,
+}
+
+impl BaseCache for SemanticBackend {
+    type Value = CacheEntry;
+    type Context = SemanticCacheContext;
+
+    fn get_ttl(&self, _: &Self::Context) -> Option<Duration> {
+        None
+    }
+
+    fn set_cache(
+        &self,
+        key: &str,
+        value: Self::Value,
+        context: &Self::Context,
+    ) -> Result<(), Error> {
+        self.contexts.lock().unwrap().push(context.clone());
+        self.entries.lock().unwrap().push((key.to_owned(), value));
+        Ok(())
+    }
+
+    fn get_cache(&self, key: &str, context: &Self::Context) -> Result<Option<Self::Value>, Error> {
+        self.contexts.lock().unwrap().push(context.clone());
+        Ok(self
+            .entries
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(entry_key, _)| entry_key == key)
+            .map(|(_, entry)| entry.clone()))
+    }
+
+    async fn disconnect(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
+        Ok(CacheConnectionResult {
+            status: CacheConnectionStatus::Success,
+            message: "ok".into(),
+            error: None,
+        })
+    }
+}
+
+#[test]
+fn semantic_context_reaches_backend_for_store_and_lookup() {
+    let backend = Arc::new(SemanticBackend {
+        entries: Mutex::new(Vec::new()),
+        contexts: Mutex::new(Vec::new()),
+    });
+    let cache = ResponseCache::new(backend.clone());
+    let context = SemanticCacheContext {
+        messages: Some(json!([{"role": "user", "content": "hello"}])),
+        ..Default::default()
+    };
+    let request = request().with_context(context.clone());
+    let response = json!({"answer": 42});
+
+    cache
+        .store(&request, response.clone(), Duration::from_secs(100))
+        .unwrap();
+
+    assert_eq!(
+        cache.lookup(&request, Duration::from_secs(100)).unwrap(),
+        Some(response)
+    );
+    assert_eq!(
+        backend.contexts.lock().unwrap().as_slice(),
+        &[context.clone(), context]
+    );
 }
 
 #[tokio::test]

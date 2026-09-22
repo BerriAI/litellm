@@ -578,6 +578,7 @@ def test_qdrant_semantic_cache_set_cache():
             assert (
                 upsert_payload[QdrantSemanticCache.CACHE_KEY_FIELD_NAME] == "test_key"
             )
+            assert qdrant_cache.sync_client.put.call_args.kwargs["params"] == {"wait": "true"}
 
 
 @pytest.mark.asyncio
@@ -650,6 +651,7 @@ async def test_qdrant_semantic_cache_async_set_cache():
             assert (
                 upsert_payload[QdrantSemanticCache.CACHE_KEY_FIELD_NAME] == "test_key"
             )
+            assert qdrant_cache.async_client.put.call_args.kwargs["params"] == {"wait": "true"}
 
 
 def test_qdrant_semantic_cache_custom_vector_size():
