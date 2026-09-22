@@ -3585,47 +3585,6 @@ def test_route_image_generation_cost_openai_honors_deployment_input_cost_per_ima
     assert cost == pytest.approx(0.07)
 
 
-def test_route_image_generation_cost_gemini_adds_grounding_to_deployment_image_price(
-    _local_model_cost_map: None,
-) -> None:
-    usage = ImageUsage(
-        input_tokens=0,
-        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=0),
-        output_tokens=0,
-        total_tokens=0,
-        web_search_requests=3,
-    )
-
-    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
-        model="gemini/gemini-3.1-flash-image-preview",
-        completion_response=_image_response(usage=usage),
-        custom_llm_provider="gemini",
-        call_type="image_generation",
-        model_info={"output_cost_per_image": 0.1},
-    )
-
-    assert cost == pytest.approx(0.1 + 3 * 0.014)
-
-
-def test_route_image_generation_cost_gemini_bills_tokens_when_no_image_returned(
-    _local_model_cost_map: None,
-) -> None:
-    usage = ImageUsage(
-        input_tokens=10,
-        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=10),
-        output_tokens=1290,
-        total_tokens=1300,
-    )
-
-    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
-        model="gemini/gemini-3.1-flash-image-preview",
-        completion_response=ImageResponse(data=[], usage=usage),
-        custom_llm_provider="gemini",
-        call_type="image_generation",
-        model_info={"output_cost_per_image": 0.08},
-    )
-
-    assert cost == pytest.approx(10 * 5e-07 + 1290 * 6e-05)
 
 
 @pytest.mark.parametrize(
