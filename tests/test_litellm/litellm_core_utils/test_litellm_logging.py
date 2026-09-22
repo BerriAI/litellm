@@ -423,6 +423,33 @@ class TestZeroCostDiagnostic:
             return
         self._assert_flagged(logging_obj, caplog)
 
+    def test_terminal_responses_stream_event_is_judged_by_its_inner_response(
+        self, deployment_pricing: Mapping[str, float], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        logging_obj: Final = self._logging_obj(deployment_pricing, stream=True, call_type="aresponses")
+        event: Final = ResponseCompletedEvent(
+            type="response.completed",
+            response=ResponsesAPIResponse(
+                id="resp-lit7898",
+                created_at=1,
+                object="response",
+                status="completed",
+                model="gpt-5.4-nano",
+                output=[],
+                usage=ResponseAPIUsage(input_tokens=10, output_tokens=20, total_tokens=30),
+            ),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            cost: Final = logging_obj._response_cost_calculator(result=event)
+
+        assert cost == 0.0
+        if deployment_pricing is self.FREE_PRICING:
+            assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
+            assert self._zero_cost_warnings(caplog) == []
+            return
+        self._assert_flagged(logging_obj, caplog)
+
     def test_precomputed_zero_hidden_cost_is_flagged_and_lands_in_the_payload(
         self, deployment_pricing: Mapping[str, float], caplog: pytest.LogCaptureFixture
     ) -> None:
