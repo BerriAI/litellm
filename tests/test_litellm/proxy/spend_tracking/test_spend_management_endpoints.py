@@ -7923,4 +7923,6 @@ async def test_calculate_spend_unpriced_model_returns_400():
             )
 
     assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.param == "model"
     assert model in exc_info.value.message

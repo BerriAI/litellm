@@ -518,6 +518,7 @@ def test_spend_calculate_rejects_unpriced_model_with_4xx(client: SpendClient) ->
     match result:
         case UnknownApiError(status_code=status_code, body=body):
             assert 400 <= status_code < 500, f"expected 4xx for unpriced model, got {status_code}: {body[:300]}"
+            assert "invalid_request_error" in body, f"error is not classified as invalid_request_error: {body[:300]}"
             assert model in body, f"error body does not name the unpriced model: {body[:300]}"
         case _:
             pytest.fail(f"expected a 4xx rejection for unpriced model {model}, got {result}")
