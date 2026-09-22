@@ -173,8 +173,6 @@ def test_streamed_web_search_turn_capped_by_max_agentic_loops_ends_turn_with_sni
 
 import threading
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Final
 from urllib.parse import parse_qs, urlsplit
 
@@ -216,31 +214,12 @@ def _anthropic_reply(identity: str, content: list[dict[str, object]], stop_reaso
     )
 
 
-@contextmanager
-def _intercepting_search_tool(gateway: Gateway, search_api_base: str) -> Iterator[None]:
-    name: Final = "integration-searxng-" + uuid.uuid4().hex
-    created: Final = gateway.post(
-        "/search_tools",
-        {
-            "search_tool": {
-                "search_tool_name": name,
-                "litellm_params": {"search_provider": "searxng", "api_base": search_api_base},
-            }
-        },
-    )
-    settings: Final = {"enabled": True, "enabled_providers": ["anthropic"], "search_tool_name": name}
-    gateway.post("/config/update", {"litellm_settings": {"websearch_interception_params": settings}})
-    try:
-        yield
-    finally:
-        gateway.post("/config/update", {"litellm_settings": {"websearch_interception_params": {"enabled": False}}})
-        gateway.request("DELETE", f"/search_tools/{created['search_tool_id']}")
-
-
 @pytest.mark.covers(
     "other.provider_wire.anthropic.websearch_interception_capped_loop_ends_turn_without_internal_tool_use"
 )
-def test_capped_websearch_interception_loop_ends_turn_instead_of_exposing_internal_tool_use(gateway: Gateway) -> None:
+def test_capped_websearch_interception_loop_ends_turn_instead_of_exposing_internal_tool_use(
+    gateway: Gateway, tmp_path: Path
+) -> None:
     identity: Final = "websearch-wire-" + uuid.uuid4().hex
     searched: Final = threading.Event()
 
@@ -265,8 +244,8 @@ def test_capped_websearch_interception_loop_ends_turn_instead_of_exposing_intern
         assert [tool["name"] for tool in body["tools"]] == ["litellm_web_search"], body["tools"]
         return _anthropic_reply(identity, [_TEXT_BLOCK, _search_tool_use(identity)], "tool_use")
 
-    def send(model: str) -> httpx.Response:
-        return gateway.request(
+    def send(candidate: Gateway, model: str) -> httpx.Response:
+        return candidate.request(
             "POST",
             "/v1/messages",
             {
@@ -280,11 +259,31 @@ def test_capped_websearch_interception_loop_ends_turn_instead_of_exposing_intern
     def searched_through_proxy(response: httpx.Response) -> bool:
         return searched.is_set() and _NOT_INTERCEPTED not in response.text
 
-    with wire_server(respond) as wire, gateway.scenario() as scenario, _intercepting_search_tool(gateway, wire.url):
-        model: Final = scenario.model(
-            model="anthropic/claude-sonnet-4-5-20250929", api_base=wire.url, api_key="synthetic-anthropic-key"
+    with wire_server(respond) as wire:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["search_tools"] = [
+            {
+                "search_tool_name": "integration-searxng",
+                "litellm_params": {"search_provider": "searxng", "api_base": wire.url},
+            }
+        ]
+        config["litellm_settings"].update(
+            {
+                "callbacks": ["websearch_interception"],
+                "websearch_interception_params": {
+                    "enabled": True,
+                    "enabled_providers": ["anthropic"],
+                    "search_tool_name": "integration-searxng",
+                },
+            }
         )
-        response: Final = eventually(lambda: send(model), searched_through_proxy, seconds=40)
+        path: Final = tmp_path / "websearch.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(
+                model="anthropic/claude-sonnet-4-5-20250929", api_base=wire.url, api_key="synthetic-anthropic-key"
+            )
+            response: Final = eventually(lambda: send(candidate, model), searched_through_proxy, seconds=40)
         assert response.status_code == 200, response.text
         body: Final = response.json()
         assert body["stop_reason"] == "end_turn", response.text

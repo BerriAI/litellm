@@ -2,13 +2,16 @@ import asyncio
 import json
 import threading
 import uuid
+from pathlib import Path
 from typing import Final
 
 import pytest
+import yaml
 from hypothesis import Phase, example, given, settings
 from hypothesis import strategies as st
-from integration._support.client import Gateway, eventually, object_value
+from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
+from integration._support.process import owned_proxy
 from integration._support.wire import Reply, wire_server
 from openai import OpenAI
 
@@ -417,6 +420,7 @@ def test_perplexity_stream_with_cost_breakdown_object_completes_and_bills_total_
 )
 def test_primary_stream_with_empty_first_chunk_then_disconnect_falls_back_and_bills_the_fallback(
     gateway: Gateway,
+    tmp_path: Path,
 ) -> None:
     identity: Final = "stream-empty-fallback-" + uuid.uuid4().hex
     empty_first: Final = (
@@ -433,38 +437,48 @@ def test_primary_stream_with_empty_first_chunk_then_disconnect_falls_back_and_bi
         ).encode()
         + b"\n\n"
     )
-    with gateway.scenario() as scenario:
-        with (
-            wire_server(
-                lambda request: Reply(
-                    content_type="text/event-stream",
-                    chunks=(empty_first, b":" + b"x" * 4_000_000 + b"\n\n", empty_first),
-                    abort_after=2,
-                )
-            ) as primary,
-            wire_server(
-                lambda request: Reply(content_type="text/event-stream", chunks=text_stream(identity))
-            ) as fallback,
-        ):
-            primary_model: Final = scenario.model(
-                api_base=primary.url + "/v1", input_cost_per_token=0.001, output_cost_per_token=0.002
+    with (
+        wire_server(
+            lambda request: Reply(
+                content_type="text/event-stream",
+                chunks=(empty_first, b":" + b"x" * 4_000_000 + b"\n\n", empty_first),
+                abort_after=2,
             )
-            fallback_model: Final = scenario.model(
-                api_base=fallback.url + "/v1", input_cost_per_token=0.001, output_cost_per_token=0.002
-            )
-            original_fallbacks: Final = object_value(gateway.get("/router/settings")["current_values"]).get("fallbacks")
-            gateway.post("/config/update", {"router_settings": {"fallbacks": [{primary_model: [fallback_model]}]}})
-            scenario.cleanups.callback(
-                gateway.post, "/config/update", {"router_settings": {"fallbacks": original_fallbacks}}
-            )
+        ) as primary,
+        wire_server(
+            lambda request: Reply(content_type="text/event-stream", chunks=text_stream(identity))
+        ) as fallback,
+    ):
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["model_list"] = [
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "synthetic-fallback-key",
+                    "api_base": server.url + "/v1",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+            }
+            for name, server in (("primary", primary), ("fallback", fallback))
+        ]
+        config["router_settings"] = {
+            "num_retries": 0,
+            "disable_cooldowns": True,
+            "fallbacks": [{"primary": ["fallback"]}],
+        }
+        path: Final = tmp_path / "fallbacks.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate:
             body: Final = {
-                "model": primary_model,
+                "model": "primary",
                 "messages": [{"role": "user", "content": identity}],
                 "stream": True,
                 "stream_options": {"include_usage": True},
             }
-            with gateway.client.stream(
-                "POST", "/v1/chat/completions", json=body, headers={"Authorization": f"Bearer {gateway.key}"}
+            with candidate.client.stream(
+                "POST", "/v1/chat/completions", json=body, headers={"Authorization": f"Bearer {candidate.key}"}
             ) as response:
                 lines: Final = tuple(line for line in response.iter_lines() if line.startswith("data:"))
             assert response.status_code == 200, lines
@@ -477,8 +491,16 @@ def test_primary_stream_with_empty_first_chunk_then_disconnect_falls_back_and_bi
             ), lines
             usages: Final = tuple(event["usage"] for event in events if event.get("usage") is not None)
             assert (usages[-1]["prompt_tokens"], usages[-1]["completion_tokens"]) == (11, 4), lines
-            assert tuple(json.loads(request.body)["messages"] for request in primary.drain()) == (body["messages"],)
-            assert tuple(json.loads(request.body)["messages"] for request in fallback.drain()) == (body["messages"],)
+            assert tuple(
+                json.loads(request.body)["messages"]
+                for request in primary.drain()
+                if request.target.endswith("/chat/completions")
+            ) == (body["messages"],)
+            assert tuple(
+                json.loads(request.body)["messages"]
+                for request in fallback.drain()
+                if request.target.endswith("/chat/completions")
+            ) == (body["messages"],)
             rows: Final = eventually(
                 lambda: read_rows(
                     'SELECT spend, prompt_tokens, completion_tokens, status FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
