@@ -1618,7 +1618,6 @@ async def pass_through_request(
         passthrough_logging_payload["response_body"] = response_body
         end_time: Final = datetime.now()
         if response.status_code < 400:
-            bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
                 async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
                     httpx_response=response,
@@ -1634,6 +1633,7 @@ async def pass_through_request(
                     **kwargs,
                 )
             )
+            bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
         ## CUSTOM HEADERS - `x-litellm-*`
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -2531,7 +2531,6 @@ async def websocket_passthrough_request(
             mock_response: Final = MockWebSocketResponse(target)
 
             # Use the same success handler as HTTP passthrough endpoints
-            bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
                 async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
                     httpx_response=mock_response,
@@ -2546,6 +2545,7 @@ async def websocket_passthrough_request(
                     **success_kwargs,
                 )
             )
+            bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
             # Call the proxy logging success hook
             if proxy_logging_obj:
@@ -2702,7 +2702,6 @@ async def _relay_passthrough_response_bytes(
                 bytes_relayed,
             )
         await response.aclose()
-        bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
             async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
                 httpx_response=response,
@@ -2718,6 +2717,7 @@ async def _relay_passthrough_response_bytes(
                 **success_handler_kwargs,
             )
         )
+        bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
 
 def _extract_model_from_vertex_ai_setup(setup_response: Mapping[str, object]) -> str | None:

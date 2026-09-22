@@ -248,11 +248,12 @@ class PassThroughStreamingHandler:
             # a success would double-log the same request.
             if not logging_scheduled and raw_bytes and response.status_code < 400:
                 logging_scheduled = True
-                bind_budget_reservation_to_callbacks(litellm_logging_obj.litellm_params)
                 try:
                     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=_build_logging_coroutine())
                 except Exception as e:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
+                else:
+                    bind_budget_reservation_to_callbacks(litellm_logging_obj.litellm_params)
 
     @staticmethod
     async def _route_streaming_logging_to_handler(
