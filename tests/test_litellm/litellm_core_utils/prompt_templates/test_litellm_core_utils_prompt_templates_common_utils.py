@@ -4,7 +4,6 @@ import json
 import os
 import sys
 from typing import Final
-from unittest.mock import MagicMock, patch
 
 import pytest
 
