@@ -14774,6 +14774,49 @@ async def test_catalog_reload_retains_routes_discovered_for_a_late_server(change
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("retain_operation", [False, True])
+async def test_catalog_openapi_refresh_does_not_restore_removed_operations(tmp_path, monkeypatch, respx_mock, retain_operation):
+    from litellm.proxy._experimental.mcp_server import tool_registry
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager: Final = MCPServerManager()
+    registry: Final = tool_registry.MCPToolRegistry()
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    spec_path: Final = tmp_path / "openapi.json"
+    paths: Final = {"/removed": {"get": {"operationId": "removed"}}, "/retained": {"get": {"operationId": "retained"}}}
+    spec: Final = {"openapi": "3.0.0", "info": {"title": "Refresh", "version": "1"}, "paths": paths}
+    spec_path.write_text(json.dumps(spec))
+    row: Final = LiteLLM_MCPServerTable(server_id="spec-refresh", alias="spec_refresh",
+        url="https://upstream.example", transport=MCPTransport.http, spec_path=str(spec_path))
+    prisma: Final = MagicMock()
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
+    upstream: Final = respx_mock.get("https://upstream.example/retained").respond(200, json={"value": "retained"})
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        await manager.reload_servers_from_database()
+        assert manager.server_exposes_tool(manager.registry[row.server_id], "spec_refresh-removed")
+        assert registry.get_tool("spec_refresh-removed") is not None
+        paths.pop("/removed")
+        if not retain_operation:
+            paths.clear()
+        spec_path.write_text(json.dumps(spec))
+        for _ in range(2):
+            await manager.reload_servers_from_database()
+            for name in ("removed", "spec_refresh-removed"):
+                assert name not in manager.published_tool_routes
+                assert not manager.server_exposes_tool(manager.registry[row.server_id], name)
+            assert registry.get_tool("spec_refresh-removed") is None
+            retained = registry.get_tool("spec_refresh-retained")
+            if retain_operation:
+                assert manager.server_exposes_tool(manager.registry[row.server_id], "spec_refresh-retained")
+                assert retained is not None
+                assert json.loads(await retained.handler()) == {"value": "retained"}
+            else:
+                assert retained is None
+                assert manager.published_tool_routes == {}
+    assert upstream.call_count == (2 if retain_operation else 0)
+
+
+@pytest.mark.asyncio
 async def test_catalog_lookup_uses_one_snapshot_until_operation_finishes():
     from datetime import timedelta
 

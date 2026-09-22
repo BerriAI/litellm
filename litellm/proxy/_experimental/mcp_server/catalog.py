@@ -204,6 +204,7 @@ class TargetCatalog:
 
     async def reload(self) -> None:
         from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+        from litellm.proxy._experimental.mcp_server.utils import normalize_server_name
 
         async with self._refresh_lock:
             previous_config: Final = MappingProxyType(
@@ -228,7 +229,22 @@ class TargetCatalog:
             try:
                 with global_mcp_tool_registry.catalog_scope(initial_tools) as staged_tools:
                     await self._reload()
-                    live_routes: Final = self._unchanged_routing(previous_servers, self.manager.published_tool_routes)
+                    refreshed_openapi_owners: Final = frozenset(
+                        owner
+                        for server in self.manager.registry.values()
+                        if server.spec_path and server is not live_registry.get(server.server_id)
+                        for owner in self.manager.owned_mapping_values(server)
+                    )
+                    live_routes: Final = self._unchanged_routing(
+                        previous_servers,
+                        MappingProxyType(
+                            {
+                                name: owner
+                                for name, owner in self.manager.published_tool_routes.items()
+                                if normalize_server_name(owner) not in refreshed_openapi_owners
+                            }
+                        ),
+                    )
                     concurrent_routes: Final = self._unchanged_routing(
                         self.manager.config_mcp_servers | live_registry,
                         MappingProxyType(
