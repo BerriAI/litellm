@@ -3,9 +3,10 @@ use std::{
     time::Duration,
 };
 
-use litellm_cache::Error;
-use litellm_cache_qdrant_semantic::{Embedder, OpenAiEmbedder, OpenAiEmbedderConfig};
-use serde_json::Value;
+use litellm_cache::{Error, semantic::Embedder};
+use litellm_cache_qdrant_semantic::{OpenAiEmbedder, OpenAiEmbedderConfig};
+use rstest::rstest;
+use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -98,6 +99,7 @@ fn config(base: String, timeout: Option<Duration>) -> OpenAiEmbedderConfig {
     }
 }
 
+#[rstest]
 #[tokio::test]
 async fn posts_embeddings_request_and_parses_vector() {
     let server = TestHttpServer::response("200 OK", r#"{"data":[{"embedding":[0.1,0.2]}]}"#).await;
@@ -108,7 +110,14 @@ async fn posts_embeddings_request_and_parses_vector() {
             Some(Duration::from_secs(1)),
         ),
     );
-    assert_eq!(embedder.embed("hello").await.unwrap(), vec![0.1, 0.2]);
+    assert_eq!(embedder.model(), "test-model");
+    assert_eq!(
+        embedder
+            .async_embed("hello", Some(&json!({"ignored": true})))
+            .await
+            .unwrap(),
+        vec![0.1, 0.2]
+    );
     let request = server.request.lock().unwrap().clone().unwrap();
     let request_text = String::from_utf8(request).unwrap();
     assert!(request_text.starts_with("POST /embeddings HTTP/1.1\r\n"));
@@ -120,37 +129,50 @@ async fn posts_embeddings_request_and_parses_vector() {
     assert_eq!(body["encoding_format"], "float");
 }
 
+#[rstest]
+#[case::error_status("500 Internal Server Error", "{}", 0, None, Err(Error::Unavailable))]
+#[case::timed_out(
+    "200 OK",
+    r#"{"data":[{"embedding":[0.1,0.2]}]}"#,
+    500,
+    Some(Duration::from_millis(200)),
+    Err(Error::Unavailable)
+)]
+#[case::within_timeout(
+    "200 OK",
+    r#"{"data":[{"embedding":[0.1,0.2]}]}"#,
+    100,
+    Some(Duration::from_secs(1)),
+    Ok(vec![0.1, 0.2])
+)]
+#[case::missing_embedding("200 OK", r#"{"data":[]}"#, 0, None, Err(Error::Unavailable))]
 #[tokio::test]
-async fn status_and_timeout_errors_are_unavailable() {
-    let server = TestHttpServer::response("500 Internal Server Error", "{}").await;
-    let embedder = OpenAiEmbedder::new(reqwest::Client::new(), config(server.base_url(), None));
-    assert_eq!(embedder.embed("hello").await, Err(Error::Unavailable));
-
-    let server = TestHttpServer::response_after(
-        "200 OK",
-        r#"{"data":[{"embedding":[0.1,0.2]}]}"#,
-        Duration::from_millis(500),
-    )
-    .await;
-    let embedder = OpenAiEmbedder::new(
-        reqwest::Client::new(),
-        config(server.base_url(), Some(Duration::from_millis(200))),
-    );
-    assert_eq!(embedder.embed("hello").await, Err(Error::Unavailable));
-
-    let server = TestHttpServer::response_after(
-        "200 OK",
-        r#"{"data":[{"embedding":[0.1,0.2]}]}"#,
-        Duration::from_millis(100),
-    )
-    .await;
-    let embedder = OpenAiEmbedder::new(
-        reqwest::Client::new(),
-        config(server.base_url(), Some(Duration::from_secs(1))),
-    );
-    assert_eq!(embedder.embed("hello").await.unwrap(), vec![0.1, 0.2]);
+async fn status_timeout_and_body_errors_are_unavailable(
+    #[case] status: &str,
+    #[case] body: &str,
+    #[case] delay_ms: u64,
+    #[case] timeout: Option<Duration>,
+    #[case] expected: Result<Vec<f32>, Error>,
+) {
+    let server =
+        TestHttpServer::response_after(status, body, Duration::from_millis(delay_ms)).await;
+    let embedder = OpenAiEmbedder::new(reqwest::Client::new(), config(server.base_url(), timeout));
+    assert_eq!(embedder.async_embed("hello", None).await, expected);
 }
 
+#[rstest]
+fn sync_embedding_is_unsupported() {
+    let embedder = OpenAiEmbedder::new(
+        reqwest::Client::new(),
+        config("http://127.0.0.1:9".to_owned(), None),
+    );
+    assert_eq!(
+        embedder.embed("hello", None),
+        Err(Error::UnsupportedOperation)
+    );
+}
+
+#[rstest]
 #[tokio::test]
 async fn uses_the_injected_client() {
     let server = TestHttpServer::response("200 OK", r#"{"data":[{"embedding":[0.1,0.2]}]}"#).await;
@@ -159,7 +181,10 @@ async fn uses_the_injected_client() {
         .build()
         .unwrap();
     let embedder = OpenAiEmbedder::new(client, config(server.base_url(), None));
-    assert_eq!(embedder.embed("hello").await.unwrap(), vec![0.1, 0.2]);
+    assert_eq!(
+        embedder.async_embed("hello", None).await.unwrap(),
+        vec![0.1, 0.2]
+    );
     let request = server.request.lock().unwrap().clone().unwrap();
     let request_text = String::from_utf8(request).unwrap();
     assert!(request_text.contains("\r\nuser-agent: litellm-embedder-test\r\n"));

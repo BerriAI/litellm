@@ -1,15 +1,16 @@
 use std::{sync::Arc, time::Duration};
 
-use litellm_cache::{CacheCodec, CacheConnectionResult, Error};
+use litellm_cache::{CacheCodec, CacheConnectionResult, Error, semantic::SemanticLookup};
 use litellm_cache_azure_blob::AzureBlobCache;
 use litellm_cache_disk::DiskCache;
 use litellm_cache_gcs::{GcsCache, GcsConfig, StaticTokenSource};
 use litellm_cache_memory::InMemoryCache;
-use litellm_cache_qdrant_semantic::{Embedder, OpenAiEmbedder, QdrantSemanticCache};
+use litellm_cache_qdrant_semantic::{OpenAiEmbedder, QdrantSemanticCache};
 use litellm_cache_redis::{RedisCache, RedisTopology};
 use litellm_cache_redis_semantic::{RedisSemanticCache, RedisSemanticConfig};
 use litellm_cache_response::{
-    ExactResponseCache, PartialHits, ResponseCache, ResponseCacheCodec, WriteBuffer,
+    ConnectionProbe, ExactResponseCache, PartialHits, ResponseCache, ResponseCacheCodec,
+    WriteBuffer,
 };
 use litellm_cache_s3::{S3Cache, S3CacheConfig};
 use litellm_cache_valkey_semantic::{ValkeySemanticCache, ValkeySemanticConfig};
@@ -33,18 +34,9 @@ pub(super) struct EmbeddingInput {
 /// An exact-match backend behind one pointer, with the identity its facade must reproduce.
 pub(super) struct ExactService {
     cache: Arc<dyn ExactResponseCache>,
+    probe: Option<Arc<dyn ConnectionProbe>>,
     buffer: Option<WriteBuffer>,
     identity: BackendIdentity,
-}
-
-impl ExactService {
-    fn new(cache: Arc<dyn ExactResponseCache>, identity: BackendIdentity) -> Arc<Self> {
-        Arc::new(Self {
-            cache,
-            buffer: None,
-            identity,
-        })
-    }
 }
 
 #[derive(Clone)]
@@ -56,7 +48,7 @@ pub(super) enum NativeResponseCache {
         scope: String,
     },
     RedisSemantic {
-        cache: Arc<ResponseCache<RedisSemanticCache<PythonEmbedder>>>,
+        cache: Arc<ResponseCache<RedisSemanticCache<PythonEmbedder, ResponseCacheCodec>>>,
         embedder: PythonEmbedder,
     },
     QdrantSemantic(Arc<ResponseCache<QdrantSemanticCache<OpenAiEmbedder, ResponseCacheCodec>>>),
@@ -94,12 +86,15 @@ impl NativeResponseCache {
             namespace: backend.namespace().map(str::to_owned),
             default_ttl: None,
         };
-        Ok(Self::exact(ResponseCache::new(Arc::new(backend)), identity))
+        Ok(Self::exact_probed(
+            ResponseCache::new(Arc::new(backend)),
+            identity,
+        ))
     }
 
-    pub async fn s3(config: S3CacheConfig) -> Self {
+    pub async fn s3(config: S3CacheConfig, http: reqwest::Client) -> Self {
         let runtime = tokio::runtime::Handle::current();
-        let backend = S3Cache::new(config, ResponseCacheCodec, runtime);
+        let backend = S3Cache::new(config, http, ResponseCacheCodec, runtime);
         let identity = BackendIdentity::S3 {
             bucket: backend.bucket().to_owned(),
             key_prefix: backend.key_prefix().to_owned(),
@@ -109,7 +104,7 @@ impl NativeResponseCache {
         Self::exact(ResponseCache::new(Arc::new(backend)), identity)
     }
 
-    pub fn disk(directory: &str) -> Result<Self, Error> {
+    pub fn disk(directory: impl AsRef<std::path::Path>) -> Result<Self, Error> {
         let backend = DiskCache::open(directory, ResponseCacheCodec)?;
         let identity = BackendIdentity::Disk {
             directory: backend.directory().to_path_buf(),
@@ -117,27 +112,33 @@ impl NativeResponseCache {
         Ok(Self::exact(ResponseCache::new(Arc::new(backend)), identity))
     }
 
-    pub fn gcs(config: GcsConfig, token: Option<String>) -> Result<Self, Error> {
+    pub fn gcs(config: GcsConfig, client: reqwest::Client, token: Option<String>) -> Self {
         let backend = match token {
             Some(token) => GcsCache::with_token_source(
                 config,
+                client,
                 ResponseCacheCodec,
                 Arc::new(StaticTokenSource(token)),
-            )?,
-            None => GcsCache::new(config, ResponseCacheCodec)?,
+            ),
+            None => GcsCache::new(config, client, ResponseCacheCodec),
         };
         let identity = BackendIdentity::Gcs {
             bucket_name: backend.bucket_name().to_owned(),
             key_prefix: backend.key_prefix().to_owned(),
             path_service_account: backend.path_service_account().map(str::to_owned),
         };
-        Ok(Self::exact(ResponseCache::new(Arc::new(backend)), identity))
+        Self::exact(ResponseCache::new(Arc::new(backend)), identity)
     }
 
-    pub async fn azure_blob(account_url: &str, container: &str) -> Result<Self, Error> {
+    pub async fn azure_blob(
+        account_url: &str,
+        container: &str,
+        http: reqwest::Client,
+    ) -> Result<Self, Error> {
         let backend = AzureBlobCache::connect(
             account_url,
             container,
+            http,
             ResponseCacheCodec,
             tokio::runtime::Handle::current(),
         )
@@ -156,7 +157,25 @@ impl NativeResponseCache {
         B: litellm_cache::BaseCache<Value = litellm_cache_response::CacheEntry>,
         B::Context: Default + PartialEq,
     {
-        let cache: Arc<dyn ExactResponseCache> = Arc::new(cache);
+        Self::exact_service(Arc::new(cache), None, identity)
+    }
+
+    /// Wraps an exact backend whose Python class defines `test_connection`.
+    fn exact_probed<B>(cache: ResponseCache<B>, identity: BackendIdentity) -> Self
+    where
+        ResponseCache<B>: ExactResponseCache + ConnectionProbe + 'static,
+        B: litellm_cache::BaseCache<Value = litellm_cache_response::CacheEntry>,
+        B::Context: Default + PartialEq,
+    {
+        let cache = Arc::new(cache);
+        Self::exact_service(cache.clone(), Some(cache), identity)
+    }
+
+    fn exact_service(
+        cache: Arc<dyn ExactResponseCache>,
+        probe: Option<Arc<dyn ConnectionProbe>>,
+        identity: BackendIdentity,
+    ) -> Self {
         let default_ttl = cache.default_ttl();
         let identity = match identity {
             BackendIdentity::Memory {
@@ -179,7 +198,12 @@ impl NativeResponseCache {
             },
             other => other,
         };
-        Self::Exact(ExactService::new(cache, identity))
+        Self::Exact(Arc::new(ExactService {
+            cache,
+            probe,
+            buffer: None,
+            identity,
+        }))
     }
 
     pub fn valkey_semantic(
@@ -209,7 +233,7 @@ impl NativeResponseCache {
         embedder: PythonEmbedder,
         config: RedisSemanticConfig,
     ) -> Result<Self, Error> {
-        let backend = RedisSemanticCache::new(url, embedder.clone(), config)?;
+        let backend = RedisSemanticCache::new(url, embedder.clone(), ResponseCacheCodec, config)?;
         Ok(Self::RedisSemantic {
             cache: Arc::new(ResponseCache::new(Arc::new(backend))),
             embedder,
@@ -270,6 +294,7 @@ impl NativeResponseCache {
             Self::Exact(service) if matches!(service.identity, BackendIdentity::Redis { .. }) => {
                 Self::Exact(Arc::new(ExactService {
                     cache: Arc::clone(&service.cache),
+                    probe: service.probe.clone(),
                     buffer: flush_size.map(WriteBuffer::new),
                     identity: service.identity.clone(),
                 }))
@@ -305,7 +330,7 @@ impl NativeResponseCache {
             Self::RedisSemantic { .. } => request.semantic().context,
             Self::Exact(_) | Self::QdrantSemantic(_) => return None,
         };
-        let prompt = litellm_cache_redis_semantic::prompt_from_context(&context)?;
+        let prompt = litellm_cache::semantic::prompt_from_context(&context)?;
         Some(EmbeddingInput {
             prompt,
             metadata: context.metadata,
@@ -341,6 +366,28 @@ impl NativeResponseCache {
             }
             Self::RedisSemantic { cache, .. } => cache.lookup(&request.semantic(), now),
             Self::QdrantSemantic(cache) => cache.lookup(&request.semantic(), now),
+        }
+    }
+
+    /// `lookup` plus the similarity Python's semantic backend writes to the request metadata.
+    /// Exact backends report none.
+    pub fn lookup_semantic(
+        &self,
+        request: &NativeRequest,
+        now: Duration,
+    ) -> Result<SemanticLookup<Value>, Error> {
+        match self {
+            Self::Exact(service) => service
+                .cache
+                .lookup(&request.exact(), now)
+                .map(exact_lookup),
+            Self::ValkeySemantic { cache, scope, .. } => {
+                redis_family(cache.lookup_semantic(&request.scoped_semantic(scope), now))
+            }
+            Self::RedisSemantic { cache, .. } => {
+                redis_family(cache.lookup_semantic(&request.semantic(), now))
+            }
+            Self::QdrantSemantic(cache) => cache.lookup_semantic(&request.semantic(), now),
         }
     }
 
@@ -387,6 +434,56 @@ impl NativeResponseCache {
             }
             Self::RedisSemantic { cache, .. } => cache.async_lookup(&request.semantic(), now).await,
             Self::QdrantSemantic(cache) => cache.async_lookup(&request.semantic(), now).await,
+        }
+    }
+
+    pub async fn async_lookup_semantic(
+        &self,
+        request: &NativeRequest,
+        now: Duration,
+    ) -> Result<SemanticLookup<Value>, Error> {
+        match self {
+            Self::Exact(service) => service
+                .cache
+                .async_lookup(&request.exact(), now)
+                .await
+                .map(exact_lookup),
+            Self::ValkeySemantic { cache, scope, .. } => redis_family(
+                cache
+                    .async_lookup_semantic(&request.scoped_semantic(scope), now)
+                    .await,
+            ),
+            Self::RedisSemantic { cache, .. } => {
+                redis_family(cache.async_lookup_semantic(&request.semantic(), now).await)
+            }
+            Self::QdrantSemantic(cache) => {
+                cache.async_lookup_semantic(&request.semantic(), now).await
+            }
+        }
+    }
+
+    pub(super) fn async_lookup_semantic_py<'py>(
+        &self,
+        py: Python<'py>,
+        request: NativeRequest,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        match self {
+            Self::Exact(_) | Self::QdrantSemantic(_) => {
+                let service = self.clone();
+                litellm_host_python::run_async(
+                    py,
+                    async move {
+                        service
+                            .async_lookup_semantic(&request, now())
+                            .await
+                            .map(SemanticReply::from)
+                    },
+                    super::cache_error,
+                )
+            }
+            Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } => {
+                self.python_semantic(py, SemanticOperation::LookupSemantic(request))
+            }
         }
     }
 
@@ -550,9 +647,11 @@ impl NativeResponseCache {
 
     pub async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
         match self {
-            Self::Exact(service) => service.cache.test_connection().await,
-            Self::ValkeySemantic { cache, .. } => cache.test_connection().await,
-            Self::RedisSemantic { .. } | Self::QdrantSemantic(_) => {
+            Self::Exact(service) => match &service.probe {
+                Some(probe) => probe.test_connection().await,
+                None => Err(Error::UnsupportedOperation),
+            },
+            Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } | Self::QdrantSemantic(_) => {
                 Err(Error::UnsupportedOperation)
             }
         }
@@ -570,4 +669,28 @@ impl NativeResponseCache {
 
 fn exact_requests(requests: &[NativeRequest]) -> Vec<litellm_cache_response::ResponseCacheRequest> {
     requests.iter().map(NativeRequest::exact).collect()
+}
+
+/// What `lookup_semantic` hands Python: the response and the similarity to stamp, if any.
+#[derive(serde::Serialize)]
+pub(super) struct SemanticReply(pub(super) Option<Value>, pub(super) Option<f64>);
+
+impl From<SemanticLookup<Value>> for SemanticReply {
+    fn from(lookup: SemanticLookup<Value>) -> Self {
+        Self(lookup.value, lookup.similarity)
+    }
+}
+
+fn exact_lookup(value: Option<Value>) -> SemanticLookup<Value> {
+    SemanticLookup {
+        value,
+        similarity: None,
+    }
+}
+
+/// Python's Redis and Valkey semantic caches catch every lookup failure and stamp `0.0`.
+fn redis_family(
+    lookup: Result<SemanticLookup<Value>, Error>,
+) -> Result<SemanticLookup<Value>, Error> {
+    Ok(lookup.unwrap_or_else(|_| SemanticLookup::miss(Some(0.0))))
 }

@@ -2727,9 +2727,13 @@ dependencies = [
  "litellm-auth-types",
  "litellm-cache",
  "litellm-cache-response",
+ "litellm-cache-testing",
+ "reqwest 0.12.28",
+ "rstest",
  "serde_json",
  "tokio",
  "url",
+ "wiremock",
 ]
 
 [[package]]
@@ -2737,6 +2741,7 @@ name = "litellm-cache-disk"
 version = "0.1.0"
 dependencies = [
  "litellm-cache",
+ "litellm-cache-testing",
  "py_literal",
  "rand 0.8.7",
  "rstest",
@@ -2755,8 +2760,10 @@ dependencies = [
  "litellm-auth-gcp",
  "litellm-auth-types",
  "litellm-cache",
+ "litellm-cache-testing",
  "percent-encoding",
  "reqwest 0.12.28",
+ "rstest",
  "serde_json",
  "tokio",
  "wiremock",
@@ -2767,8 +2774,8 @@ name = "litellm-cache-memory"
 version = "0.1.0"
 dependencies = [
  "litellm-cache",
+ "litellm-cache-testing",
  "rstest",
- "serde_json",
  "tokio",
 ]
 
@@ -2776,9 +2783,10 @@ dependencies = [
 name = "litellm-cache-qdrant-semantic"
 version = "0.1.0"
 dependencies = [
+ "futures-executor",
  "futures-util",
  "litellm-cache",
- "litellm-cache-response",
+ "litellm-cache-testing",
  "qdrant-client",
  "reqwest 0.12.28",
  "rstest",
@@ -2797,9 +2805,11 @@ name = "litellm-cache-redis"
 version = "0.1.0"
 dependencies = [
  "litellm-cache",
+ "litellm-cache-testing",
  "r2d2",
  "redis",
  "redis-test",
+ "rstest",
  "serde_json",
  "tokio",
 ]
@@ -2810,10 +2820,10 @@ version = "0.1.0"
 dependencies = [
  "litellm-cache",
  "litellm-cache-redis",
- "litellm-cache-response",
- "r2d2",
+ "litellm-cache-testing",
  "redis",
  "redis-test",
+ "rstest",
  "serde_json",
  "sha2 0.10.9",
  "tokio",
@@ -2829,6 +2839,7 @@ dependencies = [
  "py_literal",
  "redis",
  "redis-test",
+ "rstest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2841,13 +2852,26 @@ version = "0.1.0"
 dependencies = [
  "aws-credential-types",
  "aws-sdk-s3",
+ "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
+ "futures-util",
+ "http 1.4.2",
  "litellm-auth-aws",
  "litellm-cache",
+ "litellm-cache-testing",
+ "reqwest 0.12.28",
+ "rstest",
  "serde_json",
  "tokio",
  "wiremock",
+]
+
+[[package]]
+name = "litellm-cache-testing"
+version = "0.1.0"
+dependencies = [
+ "litellm-cache",
 ]
 
 [[package]]
@@ -2856,7 +2880,7 @@ version = "0.1.0"
 dependencies = [
  "litellm-cache",
  "litellm-cache-redis",
- "litellm-cache-response",
+ "litellm-cache-testing",
  "redis",
  "redis-test",
  "rstest",

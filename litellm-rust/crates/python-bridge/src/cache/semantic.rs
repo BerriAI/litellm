@@ -12,12 +12,14 @@ use serde_json::Value;
 use super::{
     cache_error,
     embedder::{PythonEmbedder, with_prepared_embedding},
-    native::NativeResponseCache,
+    native::{NativeResponseCache, SemanticReply},
     request::{NativeRequest, now},
 };
 
 pub(super) enum SemanticOperation {
     Lookup(NativeRequest),
+    /// A lookup that also reports the similarity, as `SemanticReply`.
+    LookupSemantic(NativeRequest),
     Store(NativeRequest, Value),
     StoreBatch(VecDeque<(NativeRequest, Value)>),
 }
@@ -71,7 +73,9 @@ impl SemanticExecution {
     /// Takes the next entry of the operation; `None` once a batch is exhausted.
     fn next_pending(&mut self) -> Option<(NativeRequest, Option<Value>)> {
         match &mut self.operation {
-            SemanticOperation::Lookup(request) => Some((request.clone(), None)),
+            SemanticOperation::Lookup(request) | SemanticOperation::LookupSemantic(request) => {
+                Some((request.clone(), None))
+            }
             SemanticOperation::Store(request, response) => {
                 Some((request.clone(), Some(std::mem::take(response))))
             }
@@ -109,7 +113,7 @@ impl SemanticExecution {
             Ok(vector) => {
                 PythonEmbedder::extract(vector.into_bound(py)).map_err(|_| Error::Unavailable)
             }
-            Err(error) => match self.failure {
+            Err(error) => match self.embedding_failure() {
                 EmbeddingFailure::Propagate => return Err(error),
                 EmbeddingFailure::Unavailable if error.is_instance_of::<PyException>(py) => {
                     Err(Error::Unavailable)
@@ -118,6 +122,14 @@ impl SemanticExecution {
             },
         };
         self.backend_step(py, seed)
+    }
+
+    /// Python's semantic lookups catch embedding errors and stamp a similarity of `0.0`.
+    fn embedding_failure(&self) -> EmbeddingFailure {
+        match self.operation {
+            SemanticOperation::LookupSemantic(_) => EmbeddingFailure::Unavailable,
+            _ => self.failure,
+        }
     }
 
     fn backend_step(
@@ -131,13 +143,18 @@ impl SemanticExecution {
         })?;
         let service = self.service.clone();
         let now = self.now;
+        let with_similarity = matches!(self.operation, SemanticOperation::LookupSemantic(_));
         let future = async move {
             match response {
-                None => service.async_lookup(&request, now).await,
+                None if with_similarity => service
+                    .async_lookup_semantic(&request, now)
+                    .await
+                    .map(|lookup| Reply::Semantic(lookup.into())),
+                None => service.async_lookup(&request, now).await.map(Reply::Plain),
                 Some(response) => service
                     .async_store(&request, response, now)
                     .await
-                    .map(|_| None),
+                    .map(|_| Reply::Plain(None)),
             }
         };
         let awaitable = run_async(py, with_prepared_embedding(seed, future), cache_error)?;
@@ -169,6 +186,13 @@ impl SemanticExecution {
             )),
         }
     }
+}
+
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum Reply {
+    Plain(Option<Value>),
+    Semantic(SemanticReply),
 }
 
 impl ExecutionBody for SemanticExecution {

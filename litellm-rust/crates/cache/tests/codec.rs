@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use litellm_cache::{CacheCodec, Error, JsonCodec};
+use rstest::rstest;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -10,7 +11,7 @@ struct RoutingState {
     cooldown_seconds: u64,
 }
 
-#[test]
+#[rstest]
 fn json_codec_round_trips_typed_domain_values() {
     let codec = JsonCodec::<RoutingState>::new();
     let value = RoutingState {
@@ -25,15 +26,15 @@ fn json_codec_round_trips_typed_domain_values() {
     );
 }
 
-#[test]
-fn json_codec_rejects_malformed_and_wrongly_typed_entries() {
+#[rstest]
+#[case::malformed(b"not json")]
+#[case::wrongly_typed(br#"{"deployment":12}"#)]
+fn json_codec_rejects_malformed_and_wrongly_typed_entries(#[case] bytes: &[u8]) {
     let codec = JsonCodec::<RoutingState>::new();
-    for bytes in [b"not json".as_slice(), br#"{"deployment":12}"#.as_slice()] {
-        assert_eq!(codec.decode(bytes).unwrap_err(), Error::InvalidEntry);
-    }
+    assert_eq!(codec.decode(bytes).unwrap_err(), Error::InvalidEntry);
 }
 
-#[test]
+#[rstest]
 fn json_codec_propagates_encoding_errors() {
     let codec = JsonCodec::<BTreeMap<(u8, u8), String>>::new();
     let value = BTreeMap::from([((1, 2), "invalid JSON object key".into())]);

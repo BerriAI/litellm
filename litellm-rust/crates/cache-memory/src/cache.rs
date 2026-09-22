@@ -7,8 +7,8 @@ use std::{
 };
 
 use litellm_cache::{
-    BaseCache, BatchCache, CacheConnectionResult, CacheConnectionStatus, ClaimCache, CounterCache,
-    DeleteCache, Error, ExactCacheContext, FlushCache, IncrementOperation, SetCache, TtlCache,
+    BaseCache, BatchCache, ClaimCache, CounterCache, DeleteCache, DisconnectCache, Error,
+    ExactCacheContext, FlushCache, SetCache, TtlCache,
 };
 
 const DEFAULT_MAX_SIZE_IN_MEMORY: usize = 200;
@@ -75,7 +75,9 @@ impl<V: Clone> InMemoryCache<V> {
                 expiration_heap: BinaryHeap::new(),
             }),
             max_size_in_memory: max_size_in_memory.unwrap_or(DEFAULT_MAX_SIZE_IN_MEMORY),
-            default_ttl: default_ttl.unwrap_or(DEFAULT_TTL),
+            default_ttl: default_ttl
+                .filter(|ttl| !ttl.is_zero())
+                .unwrap_or(DEFAULT_TTL),
             max_entry_bytes,
             measure_value,
             now: Arc::new(now),
@@ -91,21 +93,9 @@ impl<V: Clone> InMemoryCache<V> {
         if self.max_size_in_memory == 0 {
             return Ok(CacheWrite::Disabled);
         }
-        if let (Some(limit), Some(measure)) = (self.max_entry_bytes, &self.measure_value)
-            && measure(&value)? > limit
-        {
-            return Ok(CacheWrite::TooLarge);
-        }
         let now = (self.now)();
         let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
-        let key = key.into();
-        Self::evict(&mut state, self.max_size_in_memory, now, &key);
-        let expiration = state.expirations.get(&key).copied();
-        if expiration.is_none_or(|expiration| expiration < now) {
-            Self::set_expiration(&mut state, &key, now + ttl.unwrap_or(self.default_ttl));
-        }
-        state.values.insert(key, value);
-        Ok(CacheWrite::Stored)
+        self.store(&mut state, key.into(), value, ttl, now)
     }
 
     pub fn get_cache(&self, key: &str) -> Result<Option<V>, Error> {
@@ -119,6 +109,70 @@ impl<V: Clone> InMemoryCache<V> {
             Self::remove(&mut state, key);
         }
         Ok(state.values.get(key).cloned())
+    }
+
+    /// `check_value_size`: whether `value` fits `max_entry_bytes`. Always `true` without a
+    /// limit and a measure, since typed values have no generic size.
+    pub fn check_value_size(&self, value: &V) -> Result<bool, Error> {
+        match (self.max_entry_bytes, &self.measure_value) {
+            (Some(limit), Some(measure)) => Ok(measure(value)? <= limit),
+            _ => Ok(true),
+        }
+    }
+
+    /// `evict_cache`: drops expired entries, then the earliest-expiring ones until a new key
+    /// fits.
+    pub fn evict_cache(&self) -> Result<(), Error> {
+        let now = (self.now)();
+        let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
+        Self::evict(&mut state, self.max_size_in_memory, now, None);
+        Ok(())
+    }
+
+    /// `evict_element_if_expired`: `true` when `key` had expired and was removed.
+    pub fn evict_element_if_expired(&self, key: &str) -> Result<bool, Error> {
+        let now = (self.now)();
+        let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
+        let expired = state
+            .expirations
+            .get(key)
+            .is_some_and(|expiration| *expiration < now);
+        if expired {
+            Self::remove(&mut state, key);
+        }
+        Ok(expired)
+    }
+
+    /// `allow_ttl_override`: a write may set the TTL when the key has none or it has passed.
+    pub fn allow_ttl_override(&self, key: &str) -> Result<bool, Error> {
+        let now = (self.now)();
+        Ok(self
+            .expires_at(key)?
+            .is_none_or(|expiration| expiration < now))
+    }
+
+    /// The number of stored entries, expired ones included until they are evicted.
+    pub fn len(&self) -> Result<usize, Error> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| Error::Unavailable)?
+            .values
+            .len())
+    }
+
+    pub fn is_empty(&self) -> Result<bool, Error> {
+        Ok(self.len()? == 0)
+    }
+
+    /// Entries in the expiration heap, stale ones included; bounded by eviction.
+    pub fn expiration_heap_len(&self) -> Result<usize, Error> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| Error::Unavailable)?
+            .expiration_heap
+            .len())
     }
 
     pub fn max_size_in_memory(&self) -> usize {
@@ -172,7 +226,9 @@ impl<V: Clone> InMemoryCache<V> {
         Ok(())
     }
 
-    fn evict(state: &mut CacheState<V>, capacity: usize, now: Duration, key: &str) {
+    /// Writing an existing `key` never evicts another entry, unlike Python, which pops the
+    /// earliest-expiring entry whenever the cache is full.
+    fn evict(state: &mut CacheState<V>, capacity: usize, now: Duration, key: Option<&str>) {
         while let Some(Reverse((expiration, key))) = state.expiration_heap.peek().cloned() {
             if state.expirations.get(&key).copied() != Some(expiration) {
                 state.expiration_heap.pop();
@@ -183,7 +239,7 @@ impl<V: Clone> InMemoryCache<V> {
                 break;
             }
         }
-        if state.values.contains_key(key) {
+        if key.is_some_and(|key| state.values.contains_key(key)) {
             return;
         }
         while state.values.len() >= capacity {
@@ -209,6 +265,40 @@ impl<V: Clone> InMemoryCache<V> {
         state.values.remove(key);
         state.expirations.remove(key);
     }
+
+    /// `get_cache` under the held lock: an expired entry is removed and reads as missing.
+    fn live(state: &mut CacheState<V>, key: &str, now: Duration) -> Option<V> {
+        if state
+            .expirations
+            .get(key)
+            .is_some_and(|expiration| *expiration < now)
+        {
+            Self::remove(state, key);
+        }
+        state.values.get(key).cloned()
+    }
+
+    /// Python `set_cache` under the held lock: evict first (even when `key` already exists),
+    /// then skip oversized values, then write, keeping a live key's expiry.
+    fn store(
+        &self,
+        state: &mut CacheState<V>,
+        key: String,
+        value: V,
+        ttl: Option<Duration>,
+        now: Duration,
+    ) -> Result<CacheWrite, Error> {
+        Self::evict(state, self.max_size_in_memory, now, None);
+        if !self.check_value_size(&value)? {
+            return Ok(CacheWrite::TooLarge);
+        }
+        let expiration = state.expirations.get(&key).copied();
+        if expiration.is_none_or(|expiration| expiration < now) {
+            Self::set_expiration(state, &key, now + ttl.unwrap_or(self.default_ttl));
+        }
+        state.values.insert(key, value);
+        Ok(CacheWrite::Stored)
+    }
 }
 
 impl<V> ClaimCache for InMemoryCache<V>
@@ -227,7 +317,7 @@ where
         }
         let now = (self.now)();
         let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
-        Self::evict(&mut state, self.max_size_in_memory, now, key);
+        Self::evict(&mut state, self.max_size_in_memory, now, Some(key));
         let existing = state
             .values
             .get(key)
@@ -262,35 +352,9 @@ impl CounterCache for InMemoryCache<f64> {
         }
         let now = (self.now)();
         let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
-        Self::evict(&mut state, self.max_size_in_memory, now, key);
-        let value = state.values.get(key).copied().unwrap_or_default() + amount;
-        if !state.expirations.contains_key(key) {
-            Self::set_expiration(
-                &mut state,
-                key,
-                now + self.get_ttl(&context).unwrap_or(self.default_ttl),
-            );
-        }
-        state.values.insert(key.into(), value);
+        let value = Self::live(&mut state, key, now).unwrap_or_default() + amount;
+        self.store(&mut state, key.into(), value, self.get_ttl(&context), now)?;
         Ok(value)
-    }
-}
-
-impl InMemoryCache<f64> {
-    pub async fn async_increment_pipeline(
-        &self,
-        operations: Vec<IncrementOperation>,
-    ) -> Result<Vec<f64>, Error> {
-        operations
-            .into_iter()
-            .map(|operation| {
-                self.increment_cache(
-                    &operation.key,
-                    operation.amount,
-                    ExactCacheContext { ttl: operation.ttl },
-                )
-            })
-            .collect()
     }
 }
 
@@ -315,17 +379,11 @@ impl<V: Clone + Send + Sync + 'static> BaseCache for InMemoryCache<V> {
     fn get_cache(&self, key: &str, _: &ExactCacheContext) -> Result<Option<Self::Value>, Error> {
         self.get_cache(key)
     }
+}
 
+impl<V: Clone + Send + Sync + 'static> DisconnectCache for InMemoryCache<V> {
     async fn disconnect(&self) -> Result<(), Error> {
         Ok(())
-    }
-
-    async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
-        Ok(CacheConnectionResult {
-            status: CacheConnectionStatus::Success,
-            message: "In-memory cache connection test successful".into(),
-            error: None,
-        })
     }
 }
 
@@ -367,34 +425,9 @@ where
         }
         let now = (self.now)();
         let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
-        Self::evict(&mut state, self.max_size_in_memory, now, key);
-        let mut stored = state.values.get(key).cloned().unwrap_or_default();
+        let mut stored = Self::live(&mut state, key, now).unwrap_or_default();
         stored.extend(values.iter().cloned());
-        if let (Some(limit), Some(measure)) = (self.max_entry_bytes, &self.measure_value)
-            && measure(&stored)? > limit
-        {
-            return Ok(values);
-        }
-        if !state.expirations.contains_key(key) {
-            Self::set_expiration(&mut state, key, now + ttl.unwrap_or(self.default_ttl));
-        }
-        state.values.insert(key.into(), stored);
+        self.store(&mut state, key.into(), stored, ttl, now)?;
         Ok(values)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn repeated_increments_keep_one_heap_entry_per_expiration() {
-        let cache = InMemoryCache::<f64>::new(Some(4), None);
-        for _ in 0..100 {
-            cache
-                .increment_cache("counter", 1.0, ExactCacheContext::default())
-                .unwrap();
-        }
-        assert_eq!(cache.state.lock().unwrap().expiration_heap.len(), 1);
     }
 }

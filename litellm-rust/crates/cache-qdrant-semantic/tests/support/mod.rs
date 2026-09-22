@@ -1,15 +1,16 @@
+#![allow(dead_code)]
+
 use std::{
     collections::{HashMap, HashSet},
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
 
-use qdrant_client::qdrant::collections_server::CollectionsServer;
 use qdrant_client::qdrant::{
     self, CollectionExists, CollectionExistsRequest, CollectionExistsResponse,
     CollectionOperationResponse, CreateCollection, CreateFieldIndexCollection, Filter, PointId,
     PointsOperationResponse, ScoredPoint, SearchPoints, SearchResponse, Value, Vector, Vectors,
-    collections_server::Collections,
+    collections_server::{Collections, CollectionsServer},
     points_server::{Points, PointsServer},
 };
 use tokio::sync::oneshot;

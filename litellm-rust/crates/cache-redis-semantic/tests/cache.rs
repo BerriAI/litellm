@@ -1,60 +1,41 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+mod support;
 
-use litellm_cache::{BaseCache, CacheCodec, Error, SemanticCacheContext};
-use litellm_cache_redis_semantic::{Embedder, RedisSemanticCache, RedisSemanticConfig};
-use litellm_cache_response::{CacheEntry, ResponseCacheCodec};
+use std::time::Duration;
+
+use litellm_cache::{
+    BaseCache, Error, JsonCodec, SemanticCacheContext,
+    semantic::{SemanticCache, SemanticLookup},
+};
+use litellm_cache_redis_semantic::{DEFAULT_INDEX_NAME, RedisSemanticCache, RedisSemanticConfig};
 use redis_test::{MockCmd, MockRedisConnection};
+use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use support::FakeEmbedder;
 
-const INDEX: &str = "litellm_semantic_cache_index";
+const INDEX: &str = DEFAULT_INDEX_NAME;
+const PROMPT: &str = "hello prompt";
+const CLOCK: fn() -> f64 = || 1700000000.5;
+const VECTOR: [f32; 3] = [0.1, 0.2, 0.3];
 
-struct FakeEmbedder {
-    vectors: HashMap<String, Vec<f32>>,
-    calls: Arc<Mutex<Vec<String>>>,
-}
+type MockCache = RedisSemanticCache<FakeEmbedder, JsonCodec<Value>, MockRedisConnection>;
 
-impl FakeEmbedder {
-    fn new(vectors: &[(&str, &[f32])]) -> (Self, Arc<Mutex<Vec<String>>>) {
-        let calls = Arc::new(Mutex::new(Vec::new()));
-        (
-            Self {
-                vectors: vectors
-                    .iter()
-                    .map(|(prompt, vector)| (prompt.to_string(), vector.to_vec()))
-                    .collect(),
-                calls: Arc::clone(&calls),
-            },
-            calls,
-        )
-    }
-}
-
-impl Embedder for FakeEmbedder {
-    fn embed(&self, prompt: &str, _: Option<&Value>) -> Result<Vec<f32>, Error> {
-        self.calls.lock().unwrap().push(prompt.to_string());
-
-        Ok(self
-            .vectors
-            .get(prompt)
-            .cloned()
-            .unwrap_or_else(|| vec![0.1, 0.2, 0.3]))
-    }
-
-    async fn async_embed(&self, prompt: &str, metadata: Option<&Value>) -> Result<Vec<f32>, Error> {
-        self.embed(prompt, metadata)
-    }
-}
-
+#[fixture]
 fn config() -> RedisSemanticConfig {
     RedisSemanticConfig {
         index_name: INDEX.into(),
         similarity_threshold: 0.9,
     }
+}
+
+#[fixture]
+fn entry() -> Value {
+    json!({"timestamp": 1.0, "response": {"answer": "yes"}})
+}
+
+#[fixture]
+fn context() -> SemanticCacheContext {
+    messages_context(vec![json!({"role": "user", "content": PROMPT})])
 }
 
 fn messages_context(messages: Vec<Value>) -> SemanticCacheContext {
@@ -64,15 +45,18 @@ fn messages_context(messages: Vec<Value>) -> SemanticCacheContext {
     }
 }
 
-fn entry() -> CacheEntry {
-    CacheEntry {
-        timestamp: Some(1.0),
-        response: json!({"answer": "yes"}),
-    }
+fn cache(commands: Vec<MockCmd>, embedder: FakeEmbedder) -> MockCache {
+    RedisSemanticCache::with_connection(
+        MockRedisConnection::new(commands).assert_all_commands_consumed(),
+        embedder,
+        JsonCodec::new(),
+        config(),
+    )
+    .with_clock(CLOCK)
 }
 
-fn encoded(entry: &CacheEntry) -> Vec<u8> {
-    ResponseCacheCodec.encode(entry).unwrap()
+fn encoded(value: &Value) -> Vec<u8> {
+    serde_json::to_vec(value).unwrap()
 }
 
 fn vector_bytes(vector: &[f32]) -> Vec<u8> {
@@ -96,6 +80,17 @@ fn s(value: &str) -> redis::Value {
 
 fn unknown_index_error() -> redis::RedisError {
     redis::RedisError::from((redis::ErrorKind::Extension, "Unknown index name"))
+}
+
+fn info_missing(index: &str) -> MockCmd {
+    MockCmd::new(
+        redis::cmd("FT.INFO").arg(index),
+        Err::<redis::Value, _>(unknown_index_error()),
+    )
+}
+
+fn info(index: &str, value: redis::Value) -> MockCmd {
+    MockCmd::new(redis::cmd("FT.INFO").arg(index), Ok(value))
 }
 
 fn attribute(name: &str, field_type: &str, extra: Vec<redis::Value>) -> redis::Value {
@@ -137,10 +132,6 @@ fn vector_attribute_with(dims: i64, data_type: &str, distance_metric: &str) -> r
     )
 }
 
-fn vector_attribute(dims: i64) -> redis::Value {
-    vector_attribute_with(dims, "FLOAT32", "COSINE")
-}
-
 fn info_with_vector(vector: redis::Value) -> redis::Value {
     index_info(vec![
         attribute("prompt", "TEXT", vec![]),
@@ -153,7 +144,7 @@ fn info_with_vector(vector: redis::Value) -> redis::Value {
 }
 
 fn compatible_info(dims: i64) -> redis::Value {
-    info_with_vector(vector_attribute(dims))
+    info_with_vector(vector_attribute_with(dims, "FLOAT32", "COSINE"))
 }
 
 fn unscoped_info(dims: i64) -> redis::Value {
@@ -162,8 +153,12 @@ fn unscoped_info(dims: i64) -> redis::Value {
         attribute("response", "TEXT", vec![]),
         attribute("inserted_at", "NUMERIC", vec![]),
         attribute("updated_at", "NUMERIC", vec![]),
-        vector_attribute(dims),
+        vector_attribute_with(dims, "FLOAT32", "COSINE"),
     ])
+}
+
+fn create_index(name: &str, dims: usize) -> MockCmd {
+    MockCmd::new(create_index_command(name, dims), Ok("OK"))
 }
 
 fn create_index_command(name: &str, dims: usize) -> redis::Cmd {
@@ -207,7 +202,34 @@ fn create_index_command(name: &str, dims: usize) -> redis::Cmd {
     command
 }
 
-fn search_command(index: &str, tag: &str, vector: &[f32]) -> redis::Cmd {
+fn hset(index: &str, prompt: &str, tag: &str, vector: &[f32], value: &Value) -> MockCmd {
+    MockCmd::new(
+        redis::cmd("HSET")
+            .arg(format!("{index}:{}", entry_id(prompt, tag)))
+            .arg("entry_id")
+            .arg(entry_id(prompt, tag))
+            .arg("prompt")
+            .arg(prompt)
+            .arg("response")
+            .arg(encoded(value))
+            .arg("prompt_vector")
+            .arg(vector_bytes(vector))
+            .arg("inserted_at")
+            .arg("1700000000.5")
+            .arg("updated_at")
+            .arg("1700000000.5")
+            .arg("litellm_cache_key")
+            .arg(tag),
+        Ok(7),
+    )
+}
+
+fn search(
+    index: &str,
+    tag: &str,
+    vector: &[f32],
+    reply: redis::RedisResult<redis::Value>,
+) -> MockCmd {
     let mut command = redis::cmd("FT.SEARCH");
     command
         .arg(index)
@@ -236,33 +258,29 @@ fn search_command(index: &str, tag: &str, vector: &[f32]) -> redis::Cmd {
         .arg(2)
         .arg("vector")
         .arg(vector_bytes(vector));
-    command
+    MockCmd::new(command, reply)
 }
 
-fn hit_fields(tag: &str, distance: &str, response: Vec<u8>) -> redis::Value {
-    redis::Value::Array(vec![
-        s("entry_id"),
-        s("stored-id"),
-        s("prompt"),
-        s("hello prompt"),
-        s("response"),
-        redis::Value::BulkString(response),
-        s("inserted_at"),
-        s("1700000000.5"),
-        s("updated_at"),
-        s("1700000000.5"),
-        s("litellm_cache_key"),
-        s(tag),
-        s("vector_distance"),
-        s(distance),
-    ])
-}
-
-fn search_result(fields: redis::Value) -> redis::Value {
+fn hit(tag: &str, distance: &str, response: Vec<u8>) -> redis::Value {
     redis::Value::Array(vec![
         redis::Value::Int(1),
         s("litellm_semantic_cache_index:stored-id"),
-        fields,
+        redis::Value::Array(vec![
+            s("entry_id"),
+            s("stored-id"),
+            s("prompt"),
+            s(PROMPT),
+            s("response"),
+            redis::Value::BulkString(response),
+            s("inserted_at"),
+            s("1700000000.5"),
+            s("updated_at"),
+            s("1700000000.5"),
+            s("litellm_cache_key"),
+            s(tag),
+            s("vector_distance"),
+            s(distance),
+        ]),
     ])
 }
 
@@ -270,685 +288,452 @@ fn empty_result() -> redis::Value {
     redis::Value::Array(vec![redis::Value::Int(0)])
 }
 
-#[test]
-fn store_creates_index_and_writes_hash_with_expire() {
-    let vector = vec![0.1f32, 0.2, 0.3];
-    let prompt = "hello prompt";
-    let tag = "key1";
-    let hash_key = format!("{INDEX}:{}", entry_id(prompt, tag));
-    let value = entry();
-    let connection = MockRedisConnection::new([
-        MockCmd::new(
-            redis::cmd("FT.INFO").arg(INDEX),
-            Err::<redis::Value, _>(unknown_index_error()),
-        ),
-        MockCmd::new(create_index_command(INDEX, 3), Ok("OK")),
-        MockCmd::new(
-            redis::cmd("HSET")
-                .arg(&hash_key)
-                .arg("entry_id")
-                .arg(entry_id(prompt, tag))
-                .arg("prompt")
-                .arg(prompt)
-                .arg("response")
-                .arg(encoded(&value))
-                .arg("prompt_vector")
-                .arg(vector_bytes(&vector))
-                .arg("inserted_at")
-                .arg("1700000000.5")
-                .arg("updated_at")
-                .arg("1700000000.5")
-                .arg("litellm_cache_key")
-                .arg(tag),
-            Ok(7),
-        ),
-        MockCmd::new(redis::cmd("EXPIRE").arg(&hash_key).arg(5), Ok(1)),
-    ])
-    .assert_all_commands_consumed();
-    let (embedder, _) = FakeEmbedder::new(&[(prompt, &vector)]);
-    let cache = RedisSemanticCache::with_connection(connection, embedder, config())
-        .with_clock(|| 1700000000.5);
-
-    let context = SemanticCacheContext {
-        ttl: Some(Duration::from_secs(5)),
-        ..messages_context(vec![json!({"role": "user", "content": prompt})])
+#[rstest]
+#[case::creates_index_and_expires(false, Some(Duration::from_secs(5)), Some(5))]
+#[case::existing_index_without_ttl(true, None, None)]
+#[case::fractional_ttl_rounds_up(true, Some(Duration::from_millis(1500)), Some(2))]
+fn store_writes_the_redisvl_hash(
+    #[case] index_exists: bool,
+    #[case] ttl: Option<Duration>,
+    #[case] expire: Option<u64>,
+    entry: Value,
+    context: SemanticCacheContext,
+) {
+    let hash_key = format!("{INDEX}:{}", entry_id(PROMPT, "key1"));
+    let mut commands = if index_exists {
+        vec![info(INDEX, compatible_info(3))]
+    } else {
+        vec![info_missing(INDEX), create_index(INDEX, 3)]
     };
-    cache.set_cache(tag, value, &context).unwrap();
-}
-
-#[test]
-fn store_without_ttl_skips_expire() {
-    let prompt = "hello prompt";
-    let connection = MockRedisConnection::new([
-        MockCmd::new(redis::cmd("FT.INFO").arg(INDEX), Ok(compatible_info(3))),
-        MockCmd::new(
-            redis::cmd("HSET")
-                .arg(format!("{INDEX}:{}", entry_id(prompt, "key1")))
-                .arg("entry_id")
-                .arg(entry_id(prompt, "key1"))
-                .arg("prompt")
-                .arg(prompt)
-                .arg("response")
-                .arg(encoded(&entry()))
-                .arg("prompt_vector")
-                .arg(vector_bytes(&[0.1f32, 0.2, 0.3]))
-                .arg("inserted_at")
-                .arg("1700000000.5")
-                .arg("updated_at")
-                .arg("1700000000.5")
-                .arg("litellm_cache_key")
-                .arg("key1"),
-            Ok(7),
-        ),
-    ])
-    .assert_all_commands_consumed();
-    let (embedder, _) = FakeEmbedder::new(&[]);
-    let cache = RedisSemanticCache::with_connection(connection, embedder, config())
-        .with_clock(|| 1700000000.5);
+    commands.push(hset(INDEX, PROMPT, "key1", &VECTOR, &entry));
+    commands.extend(
+        expire.map(|seconds| MockCmd::new(redis::cmd("EXPIRE").arg(&hash_key).arg(seconds), Ok(1))),
+    );
+    let cache = cache(commands, FakeEmbedder::new(&[]));
 
     cache
-        .set_cache(
-            "key1",
-            entry(),
-            &messages_context(vec![json!({"role": "user", "content": prompt})]),
-        )
+        .set_cache("key1", entry, &SemanticCacheContext { ttl, ..context })
         .unwrap();
 }
 
-#[test]
-fn lookup_returns_hit_below_distance_threshold() {
-    let vector = vec![0.1f32, 0.2, 0.3];
-    let value = entry();
-    let connection = MockRedisConnection::new([
-        MockCmd::new(redis::cmd("FT.INFO").arg(INDEX), Ok(compatible_info(3))),
-        MockCmd::new(
-            search_command(INDEX, "key1", &vector),
-            Ok(search_result(hit_fields("key1", "0.05", encoded(&value)))),
-        ),
-    ])
-    .assert_all_commands_consumed();
-    let (embedder, _) = FakeEmbedder::new(&[]);
-    let cache = RedisSemanticCache::with_connection(connection, embedder, config());
-
-    let hit = cache
-        .get_cache(
-            "key1",
-            &messages_context(vec![json!({"role": "user", "content": "hello prompt"})]),
-        )
-        .unwrap();
-    assert_eq!(hit, Some(value));
-}
-
-#[test]
-fn lookup_misses_above_distance_threshold_and_on_tag_mismatch() {
-    let vector = vec![0.1f32, 0.2, 0.3];
-    let connection = MockRedisConnection::new([
-        MockCmd::new(redis::cmd("FT.INFO").arg(INDEX), Ok(compatible_info(3))),
-        MockCmd::new(
-            search_command(INDEX, "key1", &vector),
-            Ok(search_result(hit_fields("key1", "0.5", encoded(&entry())))),
-        ),
-        MockCmd::new(
-            search_command(INDEX, "key1", &vector),
-            Ok(search_result(hit_fields(
-                "other",
-                "0.05",
-                encoded(&entry()),
-            ))),
-        ),
-    ])
-    .assert_all_commands_consumed();
-    let (embedder, _) = FakeEmbedder::new(&[]);
-    let cache = RedisSemanticCache::with_connection(connection, embedder, config());
-    let context = messages_context(vec![json!({"role": "user", "content": "hello prompt"})]);
-
-    assert_eq!(cache.get_cache("key1", &context).unwrap(), None);
-    assert_eq!(cache.get_cache("key1", &context).unwrap(), None);
-}
-
-#[test]
-fn lookup_returns_invalid_entry_on_malformed_response() {
-    let vector = vec![0.1f32, 0.2, 0.3];
-    let connection = MockRedisConnection::new([
-        MockCmd::new(redis::cmd("FT.INFO").arg(INDEX), Ok(compatible_info(3))),
-        MockCmd::new(
-            search_command(INDEX, "key1", &vector),
-            Ok(search_result(hit_fields(
+#[rstest]
+#[case::below_distance_threshold("key1", "0.05", None, Ok(Some(entry())))]
+#[case::above_distance_threshold("key1", "0.5", None, Ok(None))]
+#[case::other_cache_key("other", "0.05", None, Ok(None))]
+#[case::malformed_response("key1", "0.05", Some(b"not json!".as_slice()), Err(Error::InvalidEntry))]
+fn lookup_applies_threshold_scope_and_codec(
+    #[case] stored_tag: &str,
+    #[case] distance: &str,
+    #[case] response: Option<&[u8]>,
+    #[case] expected: Result<Option<Value>, Error>,
+    entry: Value,
+    context: SemanticCacheContext,
+) {
+    let response = response.map_or_else(|| encoded(&entry), <[u8]>::to_vec);
+    let cache = cache(
+        vec![
+            info(INDEX, compatible_info(3)),
+            search(
+                INDEX,
                 "key1",
-                "0.05",
-                b"not json!".to_vec(),
-            ))),
-        ),
-    ])
-    .assert_all_commands_consumed();
-    let (embedder, _) = FakeEmbedder::new(&[]);
-    let cache = RedisSemanticCache::with_connection(connection, embedder, config());
-
-    assert_eq!(
-        cache
-            .get_cache(
-                "key1",
-                &messages_context(vec![json!({"role": "user", "content": "hello prompt"})])
-            )
-            .unwrap_err(),
-        Error::InvalidEntry
+                &VECTOR,
+                Ok(hit(stored_tag, distance, response)),
+            ),
+        ],
+        FakeEmbedder::new(&[]),
     );
+
+    assert_eq!(cache.get_cache("key1", &context), expected);
 }
 
-#[test]
-fn missing_prompt_is_noop_and_never_embeds() {
-    let connection = MockRedisConnection::new(Vec::<MockCmd>::new()).assert_all_commands_consumed();
-    let (embedder, calls) = FakeEmbedder::new(&[]);
-    let cache = RedisSemanticCache::with_connection(connection, embedder, config());
+#[rstest]
+#[case::hit(context(), Some(hit("key1", "0.05", encoded(&entry()))), Some(entry()), Some(1.0 - 0.05))]
+#[case::beyond_distance_threshold(context(), Some(hit("key1", "0.5", encoded(&entry()))), None, Some(0.0))]
+#[case::no_results(context(), Some(empty_result()), None, Some(0.0))]
+#[case::other_cache_key(context(), Some(hit("other", "0.05", encoded(&entry()))), None, Some(0.0))]
+#[case::no_prompt(SemanticCacheContext::default(), None, None, Some(0.0))]
+#[tokio::test]
+async fn lookup_reports_python_semantic_similarity(
+    #[case] context: SemanticCacheContext,
+    #[case] reply: Option<redis::Value>,
+    #[case] value: Option<Value>,
+    #[case] similarity: Option<f64>,
+    #[values(false, true)] use_async: bool,
+) {
+    let commands = reply.map_or_else(Vec::new, |reply| {
+        vec![
+            info(INDEX, compatible_info(3)),
+            search(INDEX, "key1", &VECTOR, Ok(reply)),
+        ]
+    });
+    let cache = cache(commands, FakeEmbedder::new(&[]));
 
+    let lookup = if use_async {
+        cache
+            .async_get_cache_with_similarity("key1", &context)
+            .await
+    } else {
+        cache.get_cache_with_similarity("key1", &context)
+    };
+
+    assert_eq!(lookup, Ok(SemanticLookup { value, similarity }));
+}
+
+#[rstest]
+#[tokio::test]
+async fn missing_prompt_is_a_noop_that_never_embeds(entry: Value) {
+    let embedder = FakeEmbedder::new(&[]);
+    let calls = embedder.calls.clone();
+    let cache = cache(Vec::new(), embedder);
     let context = SemanticCacheContext::default();
-    cache.set_cache("key1", entry(), &context).unwrap();
+
+    cache.set_cache("key1", entry.clone(), &context).unwrap();
     assert_eq!(cache.get_cache("key1", &context).unwrap(), None);
+    cache
+        .async_set_cache("key1", entry, context.clone())
+        .await
+        .unwrap();
+    assert_eq!(cache.async_get_cache("key1", &context).await.unwrap(), None);
     assert!(calls.lock().unwrap().is_empty());
 }
 
-#[test]
-fn scope_overrides_key_as_filter_tag() {
-    let vector = vec![0.1f32, 0.2, 0.3];
-    let prompt = "hello prompt";
-    let value = entry();
-    let connection = MockRedisConnection::new([
-        MockCmd::new(redis::cmd("FT.INFO").arg(INDEX), Ok(compatible_info(3))),
-        MockCmd::new(
-            redis::cmd("HSET")
-                .arg(format!("{INDEX}:{}", entry_id(prompt, "scope-a")))
-                .arg("entry_id")
-                .arg(entry_id(prompt, "scope-a"))
-                .arg("prompt")
-                .arg(prompt)
-                .arg("response")
-                .arg(encoded(&value))
-                .arg("prompt_vector")
-                .arg(vector_bytes(&vector))
-                .arg("inserted_at")
-                .arg("1700000000.5")
-                .arg("updated_at")
-                .arg("1700000000.5")
-                .arg("litellm_cache_key")
-                .arg("scope-a"),
-            Ok(7),
-        ),
-        MockCmd::new(
-            search_command(INDEX, "scope\\-a", &vector),
-            Ok(search_result(hit_fields(
-                "scope-a",
-                "0.05",
-                encoded(&value),
-            ))),
-        ),
-    ])
-    .assert_all_commands_consumed();
-    let (embedder, _) = FakeEmbedder::new(&[]);
-    let cache = RedisSemanticCache::with_connection(connection, embedder, config())
-        .with_clock(|| 1700000000.5);
+#[rstest]
+fn scope_overrides_key_as_filter_tag(entry: Value, context: SemanticCacheContext) {
+    let cache = cache(
+        vec![
+            info(INDEX, compatible_info(3)),
+            hset(INDEX, PROMPT, "scope-a", &VECTOR, &entry),
+            search(
+                INDEX,
+                "scope\\-a",
+                &VECTOR,
+                Ok(hit("scope-a", "0.05", encoded(&entry))),
+            ),
+        ],
+        FakeEmbedder::new(&[]),
+    );
     let context = SemanticCacheContext {
         scope: Some("scope-a".into()),
-        ..messages_context(vec![json!({"role": "user", "content": prompt})])
+        ..context
     };
 
-    cache.set_cache("key1", value.clone(), &context).unwrap();
-    assert_eq!(cache.get_cache("key1", &context).unwrap(), Some(value));
+    cache.set_cache("key1", entry.clone(), &context).unwrap();
+    assert_eq!(cache.get_cache("key1", &context).unwrap(), Some(entry));
 }
 
-#[test]
-fn incompatible_schema_falls_back_to_isolated_index() {
-    let prompt = "hello prompt";
-    let tag = "key1";
+#[rstest]
+#[case::unscoped_schema(unscoped_info(3))]
+#[case::wrong_distance_metric(info_with_vector(vector_attribute_with(3, "FLOAT32", "L2")))]
+#[case::wrong_data_type(info_with_vector(vector_attribute_with(3, "FLOAT64", "COSINE")))]
+fn incompatible_schema_falls_back_to_isolated_index(
+    #[case] base_info: redis::Value,
+    entry: Value,
+    context: SemanticCacheContext,
+) {
     let isolated = format!("{INDEX}_isolated");
-    let connection = MockRedisConnection::new([
-        MockCmd::new(redis::cmd("FT.INFO").arg(INDEX), Ok(unscoped_info(3))),
-        MockCmd::new(
-            redis::cmd("FT.INFO").arg(&isolated),
-            Err::<redis::Value, _>(unknown_index_error()),
-        ),
-        MockCmd::new(create_index_command(&isolated, 3), Ok("OK")),
-        MockCmd::new(
-            redis::cmd("HSET")
-                .arg(format!("{isolated}:{}", entry_id(prompt, tag)))
-                .arg("entry_id")
-                .arg(entry_id(prompt, tag))
-                .arg("prompt")
-                .arg(prompt)
-                .arg("response")
-                .arg(encoded(&entry()))
-                .arg("prompt_vector")
-                .arg(vector_bytes(&[0.1f32, 0.2, 0.3]))
-                .arg("inserted_at")
-                .arg("1700000000.5")
-                .arg("updated_at")
-                .arg("1700000000.5")
-                .arg("litellm_cache_key")
-                .arg(tag),
-            Ok(7),
-        ),
-    ])
-    .assert_all_commands_consumed();
-    let (embedder, _) = FakeEmbedder::new(&[]);
-    let cache = RedisSemanticCache::with_connection(connection, embedder, config())
-        .with_clock(|| 1700000000.5);
-
-    cache
-        .set_cache(
-            tag,
-            entry(),
-            &messages_context(vec![json!({"role": "user", "content": prompt})]),
-        )
-        .unwrap();
-}
-
-#[test]
-fn create_index_race_rechecks_schema_and_stores() {
-    let prompt = "hello prompt";
-    let tag = "key1";
-    let connection = MockRedisConnection::new([
-        MockCmd::new(
-            redis::cmd("FT.INFO").arg(INDEX),
-            Err::<redis::Value, _>(unknown_index_error()),
-        ),
-        MockCmd::new(
-            create_index_command(INDEX, 3),
-            Err::<&str, _>(redis::RedisError::from((
-                redis::ErrorKind::Extension,
-                "Index already exists",
-            ))),
-        ),
-        MockCmd::new(redis::cmd("FT.INFO").arg(INDEX), Ok(compatible_info(3))),
-        MockCmd::new(
-            redis::cmd("HSET")
-                .arg(format!("{INDEX}:{}", entry_id(prompt, tag)))
-                .arg("entry_id")
-                .arg(entry_id(prompt, tag))
-                .arg("prompt")
-                .arg(prompt)
-                .arg("response")
-                .arg(encoded(&entry()))
-                .arg("prompt_vector")
-                .arg(vector_bytes(&[0.1f32, 0.2, 0.3]))
-                .arg("inserted_at")
-                .arg("1700000000.5")
-                .arg("updated_at")
-                .arg("1700000000.5")
-                .arg("litellm_cache_key")
-                .arg(tag),
-            Ok(7),
-        ),
-    ])
-    .assert_all_commands_consumed();
-    let (embedder, _) = FakeEmbedder::new(&[]);
-    let cache = RedisSemanticCache::with_connection(connection, embedder, config())
-        .with_clock(|| 1700000000.5);
-
-    cache
-        .set_cache(
-            tag,
-            entry(),
-            &messages_context(vec![json!({"role": "user", "content": prompt})]),
-        )
-        .unwrap();
-}
-
-#[test]
-fn wrong_distance_metric_falls_back_to_isolated_index() {
-    let prompt = "hello prompt";
-    let tag = "key1";
-    let isolated = format!("{INDEX}_isolated");
-    let connection = MockRedisConnection::new([
-        MockCmd::new(
-            redis::cmd("FT.INFO").arg(INDEX),
-            Ok(info_with_vector(vector_attribute_with(3, "FLOAT32", "L2"))),
-        ),
-        MockCmd::new(
-            redis::cmd("FT.INFO").arg(&isolated),
-            Err::<redis::Value, _>(unknown_index_error()),
-        ),
-        MockCmd::new(create_index_command(&isolated, 3), Ok("OK")),
-        MockCmd::new(
-            redis::cmd("HSET")
-                .arg(format!("{isolated}:{}", entry_id(prompt, tag)))
-                .arg("entry_id")
-                .arg(entry_id(prompt, tag))
-                .arg("prompt")
-                .arg(prompt)
-                .arg("response")
-                .arg(encoded(&entry()))
-                .arg("prompt_vector")
-                .arg(vector_bytes(&[0.1f32, 0.2, 0.3]))
-                .arg("inserted_at")
-                .arg("1700000000.5")
-                .arg("updated_at")
-                .arg("1700000000.5")
-                .arg("litellm_cache_key")
-                .arg(tag),
-            Ok(7),
-        ),
-    ])
-    .assert_all_commands_consumed();
-    let (embedder, _) = FakeEmbedder::new(&[]);
-    let cache = RedisSemanticCache::with_connection(connection, embedder, config())
-        .with_clock(|| 1700000000.5);
-
-    cache
-        .set_cache(
-            tag,
-            entry(),
-            &messages_context(vec![json!({"role": "user", "content": prompt})]),
-        )
-        .unwrap();
-}
-
-#[test]
-fn tag_special_characters_are_escaped_in_search_filter() {
-    let vector = vec![0.1f32, 0.2, 0.3];
-    let tag = "a:b, c|d";
-    let connection = MockRedisConnection::new([
-        MockCmd::new(redis::cmd("FT.INFO").arg(INDEX), Ok(compatible_info(3))),
-        MockCmd::new(
-            search_command(INDEX, "a\\:b\\,\\ c\\|d", &vector),
-            Ok(empty_result()),
-        ),
-    ])
-    .assert_all_commands_consumed();
-    let (embedder, _) = FakeEmbedder::new(&[]);
-    let cache = RedisSemanticCache::with_connection(connection, embedder, config());
-
-    assert_eq!(
-        cache
-            .get_cache(
-                tag,
-                &messages_context(vec![json!({"role": "user", "content": "hello prompt"})])
-            )
-            .unwrap(),
-        None
-    );
-}
-
-#[test]
-fn prompt_extraction_matches_python_message_and_input_shapes() {
-    let vector = vec![0.1f32, 0.2, 0.3];
-    let lookups = 5;
-    let mut commands = vec![MockCmd::new(
-        redis::cmd("FT.INFO").arg(INDEX),
-        Ok(compatible_info(3)),
-    )];
-    for _ in 0..lookups {
-        commands.push(MockCmd::new(
-            search_command(INDEX, "key1", &vector),
-            Ok(empty_result()),
-        ));
-    }
-    let connection = MockRedisConnection::new(commands).assert_all_commands_consumed();
-    let (embedder, calls) = FakeEmbedder::new(&[]);
-    let cache = RedisSemanticCache::with_connection(connection, embedder, config());
-
-    cache
-        .get_cache(
-            "key1",
-            &messages_context(vec![
-                json!({"role": "user", "content": [{"type": "text", "text": "first"}, {"type": "text", "text": "second"}]}),
-                json!({"role": "assistant", "content": "reply"}),
-            ]),
-        )
-        .unwrap();
-    cache
-        .get_cache(
-            "key1",
-            &SemanticCacheContext {
-                input: Some(json!("  plain input  ")),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    cache
-        .get_cache(
-            "key1",
-            &SemanticCacheContext {
-                input: Some(
-                    json!([{"content": [{"type": "input_text", "text": "nested"}]}, "tail"]),
-                ),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    cache
-        .get_cache(
-            "key1",
-            &SemanticCacheContext {
-                input: Some(json!({"output_text": "  result text  "})),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    cache
-        .get_cache(
-            "key1",
-            &messages_context(vec![json!({
-                "role": "user",
-                "content": "question",
-                "search_results": [{"source": "src", "title": "t", "content": [{"text": "found"}], "citations": {"a": 1}}],
-            })]),
-        )
-        .unwrap();
-
-    assert_eq!(
-        *calls.lock().unwrap(),
+    let cache = cache(
         vec![
-            "firstsecondreply",
-            "plain input",
-            "nested\ntail",
-            "result text",
-            "questionsrctfound{\"a\":1}",
-        ]
+            info(INDEX, base_info),
+            info_missing(&isolated),
+            create_index(&isolated, 3),
+            hset(&isolated, PROMPT, "key1", &VECTOR, &entry),
+        ],
+        FakeEmbedder::new(&[]),
     );
+
+    cache.set_cache("key1", entry, &context).unwrap();
 }
 
-#[test]
-fn ttl_passes_through_context_only() {
-    let (embedder, _) = FakeEmbedder::new(&[]);
-    let cache = RedisSemanticCache::with_connection(
-        MockRedisConnection::new(Vec::<MockCmd>::new()),
-        embedder,
-        config(),
+#[rstest]
+fn create_index_race_rechecks_schema_and_stores(entry: Value, context: SemanticCacheContext) {
+    let cache = cache(
+        vec![
+            info_missing(INDEX),
+            MockCmd::new(
+                create_index_command(INDEX, 3),
+                Err::<&str, _>(redis::RedisError::from((
+                    redis::ErrorKind::Extension,
+                    "Index already exists",
+                ))),
+            ),
+            info(INDEX, compatible_info(3)),
+            hset(INDEX, PROMPT, "key1", &VECTOR, &entry),
+        ],
+        FakeEmbedder::new(&[]),
     );
-    assert_eq!(cache.get_ttl(&SemanticCacheContext::default()), None);
+
+    cache.set_cache("key1", entry, &context).unwrap();
+}
+
+#[rstest]
+#[case::punctuation_and_spaces("a:b, c|d", "a\\:b\\,\\ c\\|d")]
+#[case::braces_and_dots("{x}.y", "\\{x\\}\\.y")]
+#[case::plain("key1", "key1")]
+fn tag_special_characters_are_escaped_in_search_filter(
+    #[case] tag: &str,
+    #[case] escaped: &str,
+    context: SemanticCacheContext,
+) {
+    let cache = cache(
+        vec![
+            info(INDEX, compatible_info(3)),
+            search(INDEX, escaped, &VECTOR, Ok(empty_result())),
+        ],
+        FakeEmbedder::new(&[]),
+    );
+
+    assert_eq!(cache.get_cache(tag, &context).unwrap(), None);
+}
+
+#[rstest]
+#[case::content_parts(
+    SemanticCacheContext {
+        messages: Some(json!([
+            {"role": "user", "content": [{"type": "text", "text": "first"}, {"type": "text", "text": "second"}]},
+            {"role": "assistant", "content": "reply"},
+        ])),
+        ..Default::default()
+    },
+    "firstsecondreply"
+)]
+#[case::responses_string_input(
+    SemanticCacheContext { input: Some(json!("  plain input  ")), ..Default::default() },
+    "plain input"
+)]
+#[case::responses_nested_input(
+    SemanticCacheContext {
+        input: Some(json!([{"content": [{"type": "input_text", "text": "nested"}]}, "tail"])),
+        ..Default::default()
+    },
+    "nested\ntail"
+)]
+#[case::responses_output_text(
+    SemanticCacheContext { input: Some(json!({"output_text": "  result text  "})), ..Default::default() },
+    "result text"
+)]
+#[case::search_results(
+    messages_context(vec![json!({
+        "role": "user",
+        "content": "question",
+        "search_results": [{"source": "src", "title": "t", "content": [{"text": "found"}], "citations": {"a": 1}}],
+    })]),
+    "questionsrctfound{\"a\":1}"
+)]
+#[case::empty_messages_fall_back_to_input(
+    SemanticCacheContext { messages: Some(json!([])), input: Some(json!("fallback")), ..Default::default() },
+    "fallback"
+)]
+fn prompt_extraction_matches_python_message_and_input_shapes(
+    #[case] context: SemanticCacheContext,
+    #[case] prompt: &str,
+) {
+    let embedder = FakeEmbedder::new(&[]);
+    let calls = embedder.calls.clone();
+    let cache = cache(
+        vec![
+            info(INDEX, compatible_info(3)),
+            search(INDEX, "key1", &VECTOR, Ok(empty_result())),
+        ],
+        embedder,
+    );
+
+    cache.get_cache("key1", &context).unwrap();
+
+    assert_eq!(*calls.lock().unwrap(), vec![(prompt.to_owned(), None)]);
+}
+
+#[rstest]
+#[case(None)]
+#[case(Some(Duration::from_secs(9)))]
+fn ttl_passes_through_context_only(#[case] ttl: Option<Duration>) {
+    let cache = cache(Vec::new(), FakeEmbedder::new(&[]));
+
     assert_eq!(
         cache.get_ttl(&SemanticCacheContext {
-            ttl: Some(Duration::from_secs(9)),
+            ttl,
             ..Default::default()
         }),
-        Some(Duration::from_secs(9))
+        ttl
     );
 }
 
+#[rstest]
 #[tokio::test]
-async fn async_paths_embed_then_run_blocking_redis_work() {
-    let vector = vec![0.1f32, 0.2, 0.3];
-    let prompt = "hello prompt";
-    let tag = "key1";
-    let hash_key = format!("{INDEX}:{}", entry_id(prompt, tag));
-    let value = entry();
-    let connection = MockRedisConnection::new([
-        MockCmd::new(redis::cmd("FT.INFO").arg(INDEX), Ok(compatible_info(3))),
-        MockCmd::new(
-            redis::cmd("HSET")
-                .arg(&hash_key)
-                .arg("entry_id")
-                .arg(entry_id(prompt, tag))
-                .arg("prompt")
-                .arg(prompt)
-                .arg("response")
-                .arg(encoded(&value))
-                .arg("prompt_vector")
-                .arg(vector_bytes(&vector))
-                .arg("inserted_at")
-                .arg("1700000000.5")
-                .arg("updated_at")
-                .arg("1700000000.5")
-                .arg("litellm_cache_key")
-                .arg(tag),
-            Ok(7),
-        ),
-        MockCmd::new(
-            search_command(INDEX, tag, &vector),
-            Ok(search_result(hit_fields(tag, "0.05", encoded(&value)))),
-        ),
-    ])
-    .assert_all_commands_consumed();
-    let (embedder, _) = FakeEmbedder::new(&[]);
-    let cache = RedisSemanticCache::with_connection(connection, embedder, config())
-        .with_clock(|| 1700000000.5);
-    let context = messages_context(vec![json!({"role": "user", "content": prompt})]);
+async fn async_paths_embed_with_metadata_then_run_blocking_redis_work(
+    entry: Value,
+    context: SemanticCacheContext,
+) {
+    let embedder = FakeEmbedder::new(&[]);
+    let calls = embedder.calls.clone();
+    let cache = cache(
+        vec![
+            info(INDEX, compatible_info(3)),
+            hset(INDEX, PROMPT, "key1", &VECTOR, &entry),
+            search(
+                INDEX,
+                "key1",
+                &VECTOR,
+                Ok(hit("key1", "0.05", encoded(&entry))),
+            ),
+        ],
+        embedder,
+    );
+    let context = SemanticCacheContext {
+        metadata: Some(json!({"tenant": "team"})),
+        ..context
+    };
 
     cache
-        .async_set_cache(tag, value.clone(), context.clone())
+        .async_set_cache("key1", entry.clone(), context.clone())
         .await
         .unwrap();
     assert_eq!(
-        cache.async_get_cache(tag, &context).await.unwrap(),
-        Some(value)
+        cache.async_get_cache("key1", &context).await.unwrap(),
+        Some(entry)
+    );
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec![(PROMPT.to_owned(), context.metadata.clone()); 2]
     );
 }
 
-#[test]
-fn shared_base_index_across_dimensions_replaces_the_isolated_index() {
+#[rstest]
+fn accessors_report_the_config(config: RedisSemanticConfig) {
+    let cache = cache(Vec::new(), FakeEmbedder::new(&[]));
+
+    assert_eq!(cache.index_name(), config.index_name);
+    assert!((cache.similarity_threshold() - config.similarity_threshold).abs() < 1e-6);
+}
+
+#[rstest]
+fn shared_base_index_across_dimensions_replaces_the_isolated_index(entry: Value) {
     // Pins parity with Python's `_isolated` + overwrite=True flow.
     let prompt = "shared prompt";
-    let tag = "key1";
     let isolated = format!("{INDEX}_isolated");
-    let value = entry();
     let context = || messages_context(vec![json!({"role": "user", "content": prompt})]);
-    let store_hash = |index: &str, vector: &[f32]| {
-        MockCmd::new(
-            redis::cmd("HSET")
-                .arg(format!("{index}:{}", entry_id(prompt, tag)))
-                .arg("entry_id")
-                .arg(entry_id(prompt, tag))
-                .arg("prompt")
-                .arg(prompt)
-                .arg("response")
-                .arg(encoded(&value))
-                .arg("prompt_vector")
-                .arg(vector_bytes(vector))
-                .arg("inserted_at")
-                .arg("1700000000.5")
-                .arg("updated_at")
-                .arg("1700000000.5")
-                .arg("litellm_cache_key")
-                .arg(tag),
-            Ok(7),
-        )
-    };
 
     let vector_a = vec![0.1f32; 8];
-    let connection_a = MockRedisConnection::new([
-        MockCmd::new(
-            redis::cmd("FT.INFO").arg(INDEX),
-            Err::<redis::Value, _>(unknown_index_error()),
-        ),
-        MockCmd::new(create_index_command(INDEX, 8), Ok("OK")),
-        store_hash(INDEX, &vector_a),
-    ])
-    .assert_all_commands_consumed();
-    let (embedder_a, _) = FakeEmbedder::new(&[(prompt, &vector_a)]);
-    let worker_a = RedisSemanticCache::with_connection(connection_a, embedder_a, config())
-        .with_clock(|| 1700000000.5);
-    worker_a.set_cache(tag, value.clone(), &context()).unwrap();
+    let worker_a = cache(
+        vec![
+            info_missing(INDEX),
+            create_index(INDEX, 8),
+            hset(INDEX, prompt, "key1", &vector_a, &entry),
+        ],
+        FakeEmbedder::new(&[(prompt, &vector_a)]),
+    );
+    worker_a
+        .set_cache("key1", entry.clone(), &context())
+        .unwrap();
 
     let vector_b = vec![0.2f32; 4];
-    let connection_b = MockRedisConnection::new([
-        MockCmd::new(redis::cmd("FT.INFO").arg(INDEX), Ok(compatible_info(8))),
-        MockCmd::new(
-            redis::cmd("FT.INFO").arg(&isolated),
-            Err::<redis::Value, _>(unknown_index_error()),
-        ),
-        MockCmd::new(create_index_command(&isolated, 4), Ok("OK")),
-        store_hash(&isolated, &vector_b),
-        MockCmd::new(
-            search_command(&isolated, tag, &vector_b),
-            Ok(search_result(hit_fields(tag, "0.0", encoded(&value)))),
-        ),
-        MockCmd::new(
-            search_command(&isolated, tag, &vector_b),
-            Err::<redis::Value, _>(redis::RedisError::from((
-                redis::ErrorKind::Extension,
-                "Vector dimension mismatch",
-            ))),
-        ),
-    ])
-    .assert_all_commands_consumed();
-    let (embedder_b, _) = FakeEmbedder::new(&[(prompt, &vector_b)]);
-    let worker_b = RedisSemanticCache::with_connection(connection_b, embedder_b, config())
-        .with_clock(|| 1700000000.5);
-    worker_b.set_cache(tag, value.clone(), &context()).unwrap();
+    let worker_b = cache(
+        vec![
+            info(INDEX, compatible_info(8)),
+            info_missing(&isolated),
+            create_index(&isolated, 4),
+            hset(&isolated, prompt, "key1", &vector_b, &entry),
+            search(
+                &isolated,
+                "key1",
+                &vector_b,
+                Ok(hit("key1", "0.0", encoded(&entry))),
+            ),
+            search(
+                &isolated,
+                "key1",
+                &vector_b,
+                Err(redis::RedisError::from((
+                    redis::ErrorKind::Extension,
+                    "Vector dimension mismatch",
+                ))),
+            ),
+        ],
+        FakeEmbedder::new(&[(prompt, &vector_b)]),
+    );
+    worker_b
+        .set_cache("key1", entry.clone(), &context())
+        .unwrap();
     assert_eq!(
-        worker_b.get_cache(tag, &context()).unwrap(),
-        Some(value.clone())
+        worker_b.get_cache("key1", &context()).unwrap(),
+        Some(entry.clone())
     );
 
     let vector_c = vec![0.3f32; 16];
-    let connection_c = MockRedisConnection::new([
-        MockCmd::new(redis::cmd("FT.INFO").arg(INDEX), Ok(compatible_info(8))),
-        MockCmd::new(redis::cmd("FT.INFO").arg(&isolated), Ok(compatible_info(4))),
-        MockCmd::new(redis::cmd("FT.DROPINDEX").arg(&isolated), Ok("OK")),
-        MockCmd::new(create_index_command(&isolated, 16), Ok("OK")),
-        store_hash(&isolated, &vector_c),
-    ])
-    .assert_all_commands_consumed();
-    let (embedder_c, _) = FakeEmbedder::new(&[(prompt, &vector_c)]);
-    let worker_c = RedisSemanticCache::with_connection(connection_c, embedder_c, config())
-        .with_clock(|| 1700000000.5);
-    worker_c.set_cache(tag, value.clone(), &context()).unwrap();
+    let worker_c = cache(
+        vec![
+            info(INDEX, compatible_info(8)),
+            info(&isolated, compatible_info(4)),
+            MockCmd::new(redis::cmd("FT.DROPINDEX").arg(&isolated), Ok("OK")),
+            create_index(&isolated, 16),
+            hset(&isolated, prompt, "key1", &vector_c, &entry),
+        ],
+        FakeEmbedder::new(&[(prompt, &vector_c)]),
+    );
+    worker_c
+        .set_cache("key1", entry.clone(), &context())
+        .unwrap();
 
     assert_eq!(
-        worker_b.get_cache(tag, &context()).unwrap_err(),
+        worker_b.get_cache("key1", &context()).unwrap_err(),
         Error::Unavailable
     );
 }
 
-#[test]
-fn live_shared_index_is_replaced_across_dimensions() {
-    let Ok(url) = std::env::var("LITELLM_REDIS_STACK_URL") else {
+#[fixture]
+fn redis_stack_url() -> Option<String> {
+    std::env::var("LITELLM_REDIS_STACK_URL").ok()
+}
+
+fn live_cache(
+    url: &str,
+    index_name: &str,
+    prompt: &str,
+    vector: Vec<f32>,
+) -> RedisSemanticCache<FakeEmbedder, JsonCodec<Value>> {
+    RedisSemanticCache::new(
+        url,
+        FakeEmbedder::new(&[(prompt, vector.as_slice())]),
+        JsonCodec::<Value>::new(),
+        RedisSemanticConfig {
+            index_name: index_name.to_owned(),
+            similarity_threshold: 0.9,
+        },
+    )
+    .unwrap()
+}
+
+#[rstest]
+fn live_shared_index_is_replaced_across_dimensions(redis_stack_url: Option<String>, entry: Value) {
+    let Some(url) = redis_stack_url else {
         return;
     };
     // Pins parity with Python's `_isolated` + overwrite=True flow.
     let base = format!("rust_semantic_shared_{}", std::process::id());
     let isolated = format!("{base}_isolated");
     let prompt = "shared live prompt";
-    let tag = "key1";
     let context = || messages_context(vec![json!({"role": "user", "content": prompt})]);
-    let value = entry();
-    let worker = |vector: Vec<f32>| {
-        let (embedder, _) = FakeEmbedder::new(&[(prompt, vector.as_slice())]);
-        RedisSemanticCache::new(
-            &url,
-            embedder,
-            RedisSemanticConfig {
-                index_name: base.clone(),
-                similarity_threshold: 0.9,
-            },
-        )
-        .unwrap()
-    };
 
-    let worker_a = worker(vec![0.1f32; 8]);
-    worker_a.set_cache(tag, value.clone(), &context()).unwrap();
+    let worker_a = live_cache(&url, &base, prompt, vec![0.1f32; 8]);
+    worker_a
+        .set_cache("key1", entry.clone(), &context())
+        .unwrap();
 
-    let worker_b = worker(vec![0.2f32; 4]);
-    worker_b.set_cache(tag, value.clone(), &context()).unwrap();
+    let worker_b = live_cache(&url, &base, prompt, vec![0.2f32; 4]);
+    worker_b
+        .set_cache("key1", entry.clone(), &context())
+        .unwrap();
     assert_eq!(
-        worker_b.get_cache(tag, &context()).unwrap(),
-        Some(value.clone())
+        worker_b.get_cache("key1", &context()).unwrap(),
+        Some(entry.clone())
     );
 
-    let worker_c = worker(vec![0.3f32; 16]);
-    worker_c.set_cache(tag, value.clone(), &context()).unwrap();
+    let worker_c = live_cache(&url, &base, prompt, vec![0.3f32; 16]);
+    worker_c
+        .set_cache("key1", entry.clone(), &context())
+        .unwrap();
 
     assert_eq!(
-        worker_b.get_cache(tag, &context()).unwrap_err(),
+        worker_b.get_cache("key1", &context()).unwrap_err(),
         Error::Unavailable
     );
 
@@ -961,39 +746,29 @@ fn live_shared_index_is_replaced_across_dimensions() {
     }
 }
 
-#[test]
-fn live_store_lookup_and_ttl_against_redis_stack() {
-    let Ok(url) = std::env::var("LITELLM_REDIS_STACK_URL") else {
+#[rstest]
+fn live_store_lookup_and_ttl_against_redis_stack(redis_stack_url: Option<String>, entry: Value) {
+    let Some(url) = redis_stack_url else {
         return;
     };
-    let vector = vec![0.1f32, 0.2, 0.3, 0.4];
     let prompt = "rust semantic cache live prompt";
-    let tag = "live-key";
     let index_name = format!("rust_semantic_test_{}", std::process::id());
-    let (embedder, _) = FakeEmbedder::new(&[(prompt, &vector)]);
-    let cache = RedisSemanticCache::new(
-        &url,
-        embedder,
-        RedisSemanticConfig {
-            index_name: index_name.clone(),
-            similarity_threshold: 0.9,
-        },
-    )
-    .unwrap();
+    let cache = live_cache(&url, &index_name, prompt, vec![0.1, 0.2, 0.3, 0.4]);
     let context = SemanticCacheContext {
         ttl: Some(Duration::from_secs(120)),
         ..messages_context(vec![json!({"role": "user", "content": prompt})])
     };
-    let value = entry();
 
-    cache.set_cache(tag, value.clone(), &context).unwrap();
-    assert_eq!(cache.get_cache(tag, &context).unwrap(), Some(value));
+    cache
+        .set_cache("live-key", entry.clone(), &context)
+        .unwrap();
+    assert_eq!(cache.get_cache("live-key", &context).unwrap(), Some(entry));
     assert_eq!(cache.get_cache("other-key", &context).unwrap(), None);
 
     let mut connection = redis::Client::open(url).unwrap().get_connection().unwrap();
     let ttl: i64 = redis::Commands::ttl(
         &mut connection,
-        format!("{index_name}:{}", entry_id(prompt, tag)),
+        format!("{index_name}:{}", entry_id(prompt, "live-key")),
     )
     .unwrap();
     assert!(

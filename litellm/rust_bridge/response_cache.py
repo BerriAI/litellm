@@ -46,9 +46,11 @@ class NativeResponseCacheRuntime(Protocol):
     def kind(self) -> str: ...
 
     def lookup(self, request: NativeCacheRequest) -> object: ...
+    def lookup_semantic(self, request: NativeCacheRequest) -> tuple[object, float | None]: ...
     def store(self, request: NativeCacheRequest, response: object) -> None: ...
     def lookup_batch(self, requests: Sequence[NativeCacheRequest]) -> object: ...
     def async_lookup(self, request: NativeCacheRequest) -> Awaitable[object]: ...
+    def async_lookup_semantic(self, request: NativeCacheRequest) -> Awaitable[tuple[object, float | None]]: ...
     def async_store(self, request: NativeCacheRequest, response: object) -> Awaitable[None]: ...
     def async_lookup_batch(self, requests: Sequence[NativeCacheRequest]) -> Awaitable[object]: ...
     def async_store_batch(
@@ -108,6 +110,11 @@ class ResponseCacheRuntime:
     def lookup(self, request: NativeCacheRequest) -> object:
         return self.native.lookup(request)
 
+    def lookup_semantic(self, request: NativeCacheRequest) -> tuple[object, float | None]:
+        """The cached response and the similarity a semantic backend reports, if any."""
+        response, similarity = self.native.lookup_semantic(request)
+        return response, similarity
+
     def store(self, request: NativeCacheRequest, response: object) -> None:
         self.native.store(request, response)
 
@@ -116,6 +123,10 @@ class ResponseCacheRuntime:
 
     async def async_lookup(self, request: NativeCacheRequest) -> object:
         return await self.native.async_lookup(request)
+
+    async def async_lookup_semantic(self, request: NativeCacheRequest) -> tuple[object, float | None]:
+        response, similarity = await self.native.async_lookup_semantic(request)
+        return response, similarity
 
     async def async_store(self, request: NativeCacheRequest, response: object) -> None:
         await self.native.async_store(request, response)

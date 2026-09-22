@@ -1,10 +1,8 @@
 use std::time::Duration;
 
-use litellm_cache::Error;
+use litellm_cache::{Error, semantic::Embedder};
 use reqwest::Client;
 use serde_json::Value;
-
-use crate::Embedder;
 
 pub struct OpenAiEmbedder {
     client: Client,
@@ -31,14 +29,16 @@ impl OpenAiEmbedder {
             timeout: config.timeout,
         }
     }
-}
 
-impl Embedder for OpenAiEmbedder {
-    fn model(&self) -> &str {
+    pub fn model(&self) -> &str {
         &self.model
     }
+}
 
-    async fn embed(&self, input: &str) -> Result<Vec<f32>, Error> {
+/// An OpenAI-compatible `/embeddings` call. It has no router to route on, so `metadata` is
+/// unused, and it only embeds asynchronously: sync cache calls block on the cache's runtime.
+impl Embedder for OpenAiEmbedder {
+    async fn async_embed(&self, input: &str, _metadata: Option<&Value>) -> Result<Vec<f32>, Error> {
         let request = self
             .client
             .post(format!("{}/embeddings", self.api_base))

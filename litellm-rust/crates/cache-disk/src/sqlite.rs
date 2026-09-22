@@ -544,18 +544,6 @@ impl DiskStore for DiskcacheSqliteStore {
             }
         }
     }
-
-    fn probe(&self) -> Result<(), Error> {
-        let connection = self.connection.lock().map_err(|_| Error::Unavailable)?;
-        connection
-            .query_row(
-                "SELECT value FROM Settings WHERE key = 'count'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|_| ())
-            .map_err(|_| Error::Unavailable)
-    }
 }
 
 fn default_settings() -> HashMap<String, Value> {

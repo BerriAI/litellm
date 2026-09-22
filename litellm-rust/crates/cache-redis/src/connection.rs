@@ -1,29 +1,126 @@
-use std::collections::HashMap;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use litellm_cache::Error;
 use redis::{
-    ConnectionAddr, ConnectionInfo, ConnectionLike, IntoConnectionInfo,
-    cluster::{ClusterClient, ClusterClientBuilder, ClusterConnection, NodeAddress},
+    ConnectionAddr, ConnectionInfo, IntoConnectionInfo,
+    cluster::{
+        ClusterClient, ClusterClientBuilder, ClusterConnection, ClusterPipeline, NodeAddress,
+    },
     cluster_routing::{
-        MultipleNodeRoutingInfo, ResponsePolicy, RoutingInfo, SingleNodeRoutingInfo, Slot,
+        MultipleNodeRoutingInfo, ResponsePolicy, RoutingInfo, SingleNodeRoutingInfo,
     },
 };
 
-use super::REDIS_TIMEOUT;
-use crate::topology::RedisNode;
+use crate::topology::{RedisNode, RedisTopology};
 
-pub struct PooledConnection<C> {
-    pub(super) connection: C,
-    pub(super) failed: bool,
+pub(crate) const REDIS_TIMEOUT: Duration = Duration::from_secs(5);
+const REDIS_POOL_SIZE: u32 = 16;
+
+#[allow(private_interfaces)]
+pub enum Connections<C> {
+    Pool(r2d2::Pool<ConnectionManager>),
+    Cluster(r2d2::Pool<ClusterConnectionManager>),
+    Fixed(Mutex<C>),
+}
+
+impl<C> Connections<C>
+where
+    C: redis::ConnectionLike + Send + 'static,
+{
+    pub fn execute<T>(
+        &self,
+        operation: impl FnOnce(&mut ConnectionRef<'_>) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        match self {
+            Self::Pool(pool) => {
+                let mut pooled = pool.get().map_err(|_| Error::Unavailable)?;
+                let result = operation(&mut ConnectionRef::Node(&mut pooled.connection));
+                pooled.failed = matches!(result, Err(Error::Unavailable));
+                result
+            }
+            Self::Cluster(pool) => {
+                let mut pooled = pool.get().map_err(|_| Error::Unavailable)?;
+                let result = operation(&mut ConnectionRef::Cluster(&mut pooled.connection));
+                pooled.failed = matches!(result, Err(Error::Unavailable));
+                result
+            }
+            Self::Fixed(connection) => {
+                let mut connection = connection.lock().map_err(|_| Error::Unavailable)?;
+                operation(&mut ConnectionRef::Node(&mut *connection))
+            }
+        }
+    }
+
+    pub async fn run_blocking<T, F>(connections: Arc<Self>, operation: F) -> Result<T, Error>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut ConnectionRef<'_>) -> Result<T, Error> + Send + 'static,
+    {
+        tokio::task::spawn_blocking(move || connections.execute(operation))
+            .await
+            .map_err(|_| Error::Unavailable)?
+    }
+
+    pub fn fixed(connection: C) -> Self {
+        Self::Fixed(Mutex::new(connection))
+    }
+
+    pub fn open(url: &str, topology: &RedisTopology) -> Result<Self, Error> {
+        match topology {
+            RedisTopology::Standalone => Ok(Self::Pool(pool(ConnectionManager::open(url)?)?)),
+            RedisTopology::Cluster { startup_nodes } => Ok(Self::Cluster(pool(
+                ClusterConnectionManager::open(url, startup_nodes)?,
+            )?)),
+        }
+    }
+
+    /// Closes every idle pooled connection; the next operation opens a fresh one. Connections
+    /// checked out right now return to the pool, and a caller-owned connection stays open.
+    pub fn disconnect(&self) {
+        match self {
+            Self::Pool(pool) => close_idle(pool),
+            Self::Cluster(pool) => close_idle(pool),
+            Self::Fixed(_) => {}
+        }
+    }
+}
+
+fn pool<M: r2d2::ManageConnection>(manager: M) -> Result<r2d2::Pool<M>, Error> {
+    r2d2::Pool::builder()
+        .max_size(REDIS_POOL_SIZE)
+        .min_idle(Some(0))
+        .connection_timeout(REDIS_TIMEOUT)
+        .test_on_check_out(false)
+        .build(manager)
+        .map_err(|_| Error::Unavailable)
+}
+
+fn close_idle<M, T>(pool: &r2d2::Pool<M>)
+where
+    M: r2d2::ManageConnection<Connection = PooledConnection<T>>,
+{
+    let mut idle = Vec::new();
+    while let Some(mut connection) = pool.try_get() {
+        connection.failed = true;
+        idle.push(connection);
+    }
+}
+
+pub(crate) struct PooledConnection<C> {
+    connection: C,
+    failed: bool,
 }
 
 /// Pools connections without a checkout PING, which would double every operation's round trips.
 /// A timed-out command leaves its reply on the socket while redis still reports the connection
 /// open, so any connection whose operation failed is discarded instead of being reused.
-pub struct ConnectionManager(redis::Client);
+pub(crate) struct ConnectionManager(redis::Client);
 
 impl ConnectionManager {
-    pub(super) fn open(url: &str) -> Result<Self, Error> {
+    fn open(url: &str) -> Result<Self, Error> {
         redis::Client::open(url)
             .map(Self)
             .map_err(|_| Error::Unavailable)
@@ -54,10 +151,10 @@ impl r2d2::ManageConnection for ConnectionManager {
     }
 }
 
-pub struct ClusterConnectionManager(ClusterClient);
+pub(crate) struct ClusterConnectionManager(ClusterClient);
 
 impl ClusterConnectionManager {
-    pub(super) fn open(url: &str, startup_nodes: &[RedisNode]) -> Result<Self, Error> {
+    fn open(url: &str, startup_nodes: &[RedisNode]) -> Result<Self, Error> {
         if startup_nodes.is_empty() {
             return Err(Error::Unavailable);
         }
@@ -172,43 +269,36 @@ impl redis::ConnectionLike for ConnectionRef<'_> {
 }
 
 impl ConnectionRef<'_> {
-    pub(crate) fn pipeline(
+    /// Runs `pipeline` and decodes its non-ignored replies as `T`. A cluster connection refuses
+    /// `Pipeline::query`, so there a transaction goes to its keys' slot as one MULTI/EXEC and
+    /// anything else is split per node by `ClusterPipeline`; either way the raw replies are
+    /// handed back to `pipeline` to decode.
+    pub(crate) fn query_pipeline<T: redis::FromRedisValue>(
         &mut self,
-        commands: Vec<redis::Cmd>,
-    ) -> Result<Vec<redis::Value>, Error> {
+        pipeline: &redis::Pipeline,
+    ) -> Result<T, Error> {
         match self {
-            Self::Node(connection) => {
-                let mut pipeline = redis::pipe();
-                for command in &commands {
-                    pipeline.add_command(command.clone());
-                }
-                pipeline
-                    .query::<Vec<redis::Value>>(*connection)
-                    .map_err(|_| Error::Unavailable)
+            Self::Node(connection) => pipeline.query(*connection),
+            Self::Cluster(connection) if pipeline.is_transaction() => {
+                redis::ConnectionLike::req_packed_commands(
+                    *connection,
+                    &pipeline.get_packed_pipeline(),
+                    pipeline.len() + 1,
+                    1,
+                )
+                .and_then(|replies| pipeline.query(&mut Replies(Some(replies))))
             }
             Self::Cluster(connection) => {
-                let mut replies: Vec<Option<redis::Value>> = vec![None; commands.len()];
-                for indices in slot_groups(&commands).into_values() {
-                    let mut pipeline = redis::pipe();
-                    for index in &indices {
-                        pipeline.add_command(commands[*index].clone());
-                    }
-                    let values = connection
-                        .req_packed_commands(&pipeline.get_packed_pipeline(), 0, indices.len())
-                        .map_err(|_| Error::Unavailable)?;
-                    if values.len() != indices.len() {
-                        return Err(Error::Unavailable);
-                    }
-                    for (index, value) in indices.into_iter().zip(values) {
-                        replies[index] = Some(value);
-                    }
+                let mut cluster = ClusterPipeline::with_capacity(pipeline.len());
+                for command in pipeline.cmd_iter() {
+                    cluster.add_command(command.clone());
                 }
-                replies
-                    .into_iter()
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or(Error::Unavailable)
+                cluster
+                    .query(connection)
+                    .and_then(|replies| pipeline.query(&mut Replies(Some(replies))))
             }
         }
+        .map_err(|_| Error::Unavailable)
     }
 
     pub(crate) fn scan(
@@ -379,14 +469,35 @@ fn scan_command(cursor: u64, pattern: &str, count: usize) -> redis::Cmd {
     command
 }
 
-fn slot_groups(commands: &[redis::Cmd]) -> HashMap<Slot, Vec<usize>> {
-    let mut groups: HashMap<Slot, Vec<usize>> = HashMap::new();
-    for (index, command) in commands.iter().enumerate() {
-        let key = match command.args_iter().nth(1) {
-            Some(redis::Arg::Simple(key)) => key,
-            _ => b"",
-        };
-        groups.entry(Slot::for_key(key)).or_default().push(index);
+/// Hands already received pipeline replies to `Pipeline::query`, so it applies its own
+/// ignore and error handling to replies a cluster pipeline gathered from several nodes.
+struct Replies(Option<Vec<redis::Value>>);
+
+impl redis::ConnectionLike for Replies {
+    fn req_packed_command(&mut self, _: &[u8]) -> redis::RedisResult<redis::Value> {
+        Err((redis::ErrorKind::Client, "replies hold a pipeline only").into())
     }
-    groups
+
+    fn req_packed_commands(
+        &mut self,
+        _: &[u8],
+        _: usize,
+        _: usize,
+    ) -> redis::RedisResult<Vec<redis::Value>> {
+        self.0
+            .take()
+            .ok_or_else(|| (redis::ErrorKind::Client, "replies were already read").into())
+    }
+
+    fn get_db(&self) -> i64 {
+        0
+    }
+
+    fn check_connection(&mut self) -> bool {
+        true
+    }
+
+    fn is_open(&self) -> bool {
+        true
+    }
 }

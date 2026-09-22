@@ -10,7 +10,6 @@ use pyo3::{
     PyTraverseError, PyVisit,
     exceptions::{PyRuntimeError, PyTypeError},
     prelude::*,
-    types::PyDict,
 };
 use url::Url;
 
@@ -19,6 +18,7 @@ use super::{
     config::{QdrantSemanticCacheConfig, project_redis_semantic},
     embedder::PythonEmbedder,
     facade::FacadeGuard,
+    host_client,
     native::NativeResponseCache,
     request::duration,
 };
@@ -109,7 +109,10 @@ impl CacheTestHandle {
                 ..Default::default()
             },
         };
-        let service = run_sync_value(py, async move { Ok(NativeResponseCache::s3(config).await) })?;
+        let http = host_client(py, ClientVariant::NoRedirect)?;
+        let service = run_sync_value(py, async move {
+            Ok(NativeResponseCache::s3(config, http).await)
+        })?;
         Ok(Self {
             service,
             guard: None,
@@ -133,8 +136,8 @@ impl CacheTestHandle {
             path_service_account,
             endpoint: endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
         };
-        let service = release_gil(py, move || NativeResponseCache::gcs(config, token))
-            .map_err(cache_error)?;
+        let client = host_client(py, ClientVariant::NoRedirect)?;
+        let service = NativeResponseCache::gcs(config, client, token);
         Ok(Self {
             service,
             guard: None,
@@ -236,10 +239,7 @@ impl CacheTestHandle {
             },
             quantization,
         };
-        let http_config = crate::http::call_config(py, &PyDict::new(py), true)?;
-        let client = crate::http::pool()
-            .client(&http_config, ClientVariant::Provider)
-            .map_err(crate::http::client_error)?;
+        let client = host_client(py, ClientVariant::Provider)?;
         let service = run_sync_value(py, async move {
             let handle = tokio::runtime::Handle::current();
             NativeResponseCache::qdrant_semantic(config, client, handle)
@@ -279,8 +279,9 @@ impl CacheTestHandle {
     #[staticmethod]
     #[pyo3(signature = (account_url, container))]
     fn azure_blob(py: Python<'_>, account_url: String, container: String) -> PyResult<Self> {
+        let http = host_client(py, ClientVariant::NoRedirect)?;
         let service = run_sync_value(py, async move {
-            NativeResponseCache::azure_blob(&account_url, &container)
+            NativeResponseCache::azure_blob(&account_url, &container, http)
                 .await
                 .map_err(cache_error)
         })?;
