@@ -15,7 +15,7 @@ DEFAULT_FUSION_PANEL_MODELS: Final = (
     "anthropic/claude-sonnet-5",
 )
 DEFAULT_FUSION_JUDGE_MODEL: Final = "openai/gpt-5.6-sol"
-FUSION_SDK_MODEL: Final = "litellm/fusion"
+FUSION_SDK_MODEL: Final = "litellm/fusion-1"
 
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
 
@@ -43,7 +43,7 @@ class FusionSDKConfig(BaseModel):
         if any(not model.strip() for model in configured_models):
             raise ValueError("Fusion model names must not be empty")
         if any(model == FUSION_SDK_MODEL for model in configured_models):
-            raise ValueError("litellm/fusion cannot be a panel or judge model")
+            raise ValueError(f"{FUSION_SDK_MODEL} cannot be a panel or judge model")
         return self
 
     def router_config(self) -> Mapping[str, object]:
@@ -69,15 +69,15 @@ async def _call_completion(
 ) -> ModelResponse | CustomStreamWrapper:
     import litellm
 
-    kwargs.pop("_fusion_depth", None)
     completion: Final = cast(  # cast-ok: public acompletion matches FusionCompletionCaller
         FusionCompletionCaller, litellm.acompletion
     )
+    forwarded_kwargs: Final = {key: value for key, value in kwargs.items() if key != "_fusion_depth"}
     return await completion(
         model=model,
         messages=messages,
         stream=stream,
-        **kwargs,
+        **forwarded_kwargs,
     )
 
 
@@ -93,7 +93,7 @@ class FusionLiteLLMModel:
         request_kwargs: Mapping[str, object],
     ) -> ModelResponse | CustomStreamWrapper:
         if request_kwargs.get("_fusion_depth"):
-            raise ValueError("litellm/fusion cannot recursively invoke itself")
+            raise ValueError(f"{FUSION_SDK_MODEL} cannot recursively invoke itself")
         config: Final = FusionSDKConfig.model_validate(
             request_kwargs.get("fusion") or {}  # mutable-ok: pydantic validates and freezes this input
         )

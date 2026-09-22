@@ -101,7 +101,14 @@ class StaticLiteLLMModel:
     ) -> ModelResponse | CustomStreamWrapper:
         assert stream is False
         self.requests.append((messages, request_kwargs))
-        return _response("shared answer")
+        response: Final = _response("shared answer")
+        response._hidden_params["fusion"] = {
+            "invoked": True,
+            "panel_successes": 2,
+            "panel_failures": 0,
+            "analysis_available": True,
+        }
+        return response
 
 
 @pytest.mark.asyncio
@@ -151,16 +158,26 @@ async def test_fusion_sdk_model_always_deliberates_with_configured_panel_and_jud
 
 def test_fusion_sdk_config_rejects_recursion_and_more_than_eight_models() -> None:
     with pytest.raises(ValueError, match="cannot be a panel or judge model"):
-        FusionSDKConfig.model_validate({"models": ["litellm/fusion"]})
+        FusionSDKConfig.model_validate({"models": ["litellm/fusion-1"]})
     with pytest.raises(ValueError, match="at most 8"):
         FusionSDKConfig.model_validate({"models": [f"model-{index}" for index in range(9)]})
+
+
+def test_fusion_1_is_registered_as_a_litellm_model() -> None:
+    assert litellm.LlmProviders.LITELLM.value == "litellm"
+    assert "litellm/fusion-1" in litellm.models_by_provider["litellm"]
+    assert litellm.model_cost["litellm/fusion-1"] == {
+        "litellm_provider": "litellm",
+        "mode": "chat",
+        "supported_endpoints": ["/v1/chat/completions", "/v1/messages", "/v1/responses"],
+    }
 
 
 @pytest.mark.asyncio
 async def test_shared_model_adapts_to_chat_responses_and_anthropic_messages() -> None:
     chat_model = StaticLiteLLMModel()
     chat_response = await adispatch_completion(
-        model="litellm/fusion",
+        model="litellm/fusion-1",
         messages=[{"role": "user", "content": "chat question"}],
         stream=False,
         request_kwargs={},
@@ -168,11 +185,12 @@ async def test_shared_model_adapts_to_chat_responses_and_anthropic_messages() ->
     )
     assert isinstance(chat_response, ModelResponse)
     assert chat_response.model == "concrete-model"
-    assert chat_response._hidden_params["router"] == "litellm/fusion"
+    assert chat_response._hidden_params["router"] == "litellm/fusion-1"
+    assert chat_response._hidden_params["fusion"]["panel_successes"] == 2
 
     responses_model = StaticLiteLLMModel()
     responses_response = await adispatch_responses(
-        model="litellm/fusion",
+        model="litellm/fusion-1",
         input="responses question",
         stream=False,
         request_kwargs={},
@@ -180,12 +198,13 @@ async def test_shared_model_adapts_to_chat_responses_and_anthropic_messages() ->
     )
     assert responses_response.model == "concrete-model"
     assert responses_response.output_text == "shared answer"
-    assert responses_response._hidden_params["router"] == "litellm/fusion"
+    assert responses_response._hidden_params["router"] == "litellm/fusion-1"
+    assert responses_response._hidden_params["fusion"]["panel_successes"] == 2
     assert responses_model.requests[0][0][-1]["content"] == "responses question"
 
     messages_model = StaticLiteLLMModel()
     messages_response = await adispatch_anthropic_messages(
-        model="litellm/fusion",
+        model="litellm/fusion-1",
         messages=[{"role": "user", "content": "messages question"}],
         max_tokens=128,
         metadata=None,
@@ -203,7 +222,8 @@ async def test_shared_model_adapts_to_chat_responses_and_anthropic_messages() ->
     )
     assert messages_response["model"] == "concrete-model"
     assert messages_response["content"][0]["text"] == "shared answer"
-    assert messages_response["_hidden_params"]["router"] == "litellm/fusion"
+    assert messages_response["_hidden_params"]["router"] == "litellm/fusion-1"
+    assert messages_response["_hidden_params"]["fusion"]["panel_successes"] == 2
     assert messages_model.requests[0][0][0]["role"] == "system"
 
 
@@ -211,15 +231,15 @@ def test_public_sdk_surfaces_dispatch_through_the_shared_model() -> None:
     shared_model = StaticLiteLLMModel()
     with patch("litellm.llms.litellm.adapters.get_litellm_model", return_value=shared_model):
         chat_response = litellm.completion(
-            model="litellm/fusion",
+            model="litellm/fusion-1",
             messages=[{"role": "user", "content": "chat question"}],
         )
         responses_response = litellm.responses(
-            model="litellm/fusion",
+            model="litellm/fusion-1",
             input="responses question",
         )
         messages_response = litellm.anthropic.messages.create(
-            model="litellm/fusion",
+            model="litellm/fusion-1",
             messages=[{"role": "user", "content": "messages question"}],
             max_tokens=128,
         )

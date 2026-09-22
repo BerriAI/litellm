@@ -29,9 +29,9 @@ class LiteLLMModelFactory(Protocol):
 
 @lru_cache(maxsize=1)
 def _model_factories() -> Mapping[str, LiteLLMModelFactory]:
-    from litellm.llms.litellm.fusion import FusionLiteLLMModel
+    from litellm.llms.litellm.fusion import FUSION_SDK_MODEL, FusionLiteLLMModel
 
-    return MappingProxyType({"litellm/fusion": FusionLiteLLMModel})
+    return MappingProxyType({FUSION_SDK_MODEL: FusionLiteLLMModel})
 
 
 def is_litellm_model(model: str) -> bool:
@@ -48,7 +48,10 @@ def get_litellm_model(model: str) -> BaseLiteLLMModel:
 def stamp_litellm_model_response(
     response: ResponseT,
     model: str,
+    *,
+    source_response: object | None = None,
 ) -> ResponseT:
+    source_hidden_params: Final = getattr(source_response, "_hidden_params", None)
     if isinstance(response, dict):
         response_mapping: Final = cast(  # cast-ok: guarded by the dict check above
             dict[str, object], response
@@ -58,9 +61,19 @@ def stamp_litellm_model_response(
             {},  # mutable-ok: hidden SDK metadata is attached in place
         )
         if isinstance(raw_hidden_params, dict):
-            raw_hidden_params["router"] = model
+            mapping_hidden_params: Final = cast(dict[str, object], raw_hidden_params)
+            if isinstance(source_hidden_params, Mapping):
+                mapping_hidden_params.update(
+                    cast(Mapping[str, object], source_hidden_params)  # cast-ok: hidden metadata uses string keys
+                )
+            mapping_hidden_params["router"] = model
         return cast(ResponseT, response)  # cast-ok: the same generic response instance is returned
-    hidden_params: Final = getattr(response, "_hidden_params", None)
-    if isinstance(hidden_params, dict):
-        hidden_params["router"] = model
+    raw_object_hidden_params: Final = getattr(response, "_hidden_params", None)
+    if isinstance(raw_object_hidden_params, dict):
+        object_hidden_params: Final = cast(dict[str, object], raw_object_hidden_params)
+        if isinstance(source_hidden_params, Mapping):
+            object_hidden_params.update(
+                cast(Mapping[str, object], source_hidden_params)  # cast-ok: hidden metadata uses string keys
+            )
+        object_hidden_params["router"] = model
     return response

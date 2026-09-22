@@ -246,7 +246,11 @@ async def adispatch_anthropic_messages(
         )
         if transformed_stream is None:
             raise ValueError("Failed to transform LiteLLM model stream to Anthropic format")
-        return stamp_litellm_model_response(transformed_stream, model)
+        return stamp_litellm_model_response(
+            transformed_stream,
+            model,
+            source_response=completion_response,
+        )
 
     anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
         cast(ModelResponse, completion_response),  # cast-ok: non-stream branch guarantees ModelResponse
@@ -255,7 +259,11 @@ async def adispatch_anthropic_messages(
     )
     if anthropic_response is None:
         raise ValueError("Failed to transform LiteLLM model response to Anthropic format")
-    return stamp_litellm_model_response(anthropic_response, model)
+    return stamp_litellm_model_response(
+        anthropic_response,
+        model,
+        source_response=completion_response,
+    )
 
 
 def dispatch_anthropic_messages(

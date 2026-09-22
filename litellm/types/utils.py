@@ -4216,6 +4216,7 @@ class LlmProviders(str, Enum):
     COMPACTIFAI = "compactifai"
     DOCKER_MODEL_RUNNER = "docker_model_runner"
     CUSTOM = "custom"
+    LITELLM = "litellm"
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
     TENCENT = "tencent"
