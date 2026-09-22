@@ -39,18 +39,23 @@ from litellm.litellm_core_utils.thread_pool_executor import executor as logging_
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
     CallTypes,
     Choices,
     Delta,
+    EmbeddingResponse,
+    ImageResponse,
     LlmProviders,
     LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
+    RerankResponse,
     StreamingChoices,
+    TranscriptionResponse,
     Usage,
     all_litellm_params,
     bedrock_batch_litellm_params,
@@ -4415,22 +4420,76 @@ class _ChatShapedSuccessDeploymentHook(CustomLogger):
         raise AttributeError(f"{type(response).__name__!r} object has no attribute 'choices'")
 
 
+class _RecordingSuccessDeploymentHook(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_responses: tuple[object, ...] = ()
+
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: object, call_type: CallTypes | None
+    ) -> None:
+        self.seen_responses = (*self.seen_responses, response)
+
+
+_SUCCESS_RESPONSES_BY_CALL_TYPE: Final = (
+    pytest.param(
+        VideoObject(id="video_abc", object="video", status="queued", model="sora-2", seconds="4", size="720x1280"),
+        CallTypes.avideo_generation,
+        id="video",
+    ),
+    pytest.param(EmbeddingResponse(model="text-embedding-3-small"), CallTypes.aembedding, id="embedding"),
+    pytest.param(
+        ResponsesAPIResponse(
+            id="resp_abc", created_at=1, output=[], parallel_tool_calls=False, tool_choice="auto", tools=[], model="gpt-5.6"
+        ),
+        CallTypes.aresponses,
+        id="responses",
+    ),
+    pytest.param(ImageResponse(), CallTypes.aimage_generation, id="image"),
+    pytest.param(RerankResponse(id="rerank_abc"), CallTypes.arerank, id="rerank"),
+    pytest.param(TranscriptionResponse(text="hi"), CallTypes.atranscription, id="transcription"),
+    pytest.param(ModelResponse(model="gpt-5.6"), CallTypes.acompletion, id="chat"),
+    pytest.param(ModelResponse(model="claude-sonnet-4-5"), CallTypes.aanthropic_messages, id="anthropic_messages"),
+)
+
+
 @pytest.mark.asyncio
-async def test_success_deployment_hook_raising_keeps_video_response_and_runs_later_hooks(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(("response", "call_type"), _SUCCESS_RESPONSES_BY_CALL_TYPE)
+async def test_success_deployment_hook_raising_keeps_response_and_runs_later_hooks(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, response: object, call_type: CallTypes
 ) -> None:
-    second_hook: Final = _RewritingSuccessDeploymentHook()
+    second_hook: Final = _RecordingSuccessDeploymentHook()
     monkeypatch.setattr(litellm, "callbacks", [_ChatShapedSuccessDeploymentHook(), second_hook])
-    video: Final = VideoObject(
-        id="video_abc", object="video", status="queued", model="sora-2", seconds="4", size="720x1280"
-    )
+
+    with caplog.at_level(logging.ERROR, logger=verbose_logger.name):
+        result: Final = await async_post_call_success_deployment_hook(
+            request_data={"model": "m"}, response=response, call_type=call_type
+        )
+
+    assert result is response
+    assert second_hook.seen_responses == (response,)
+    failure_logs: Final = tuple(r for r in caplog.records if "async_post_call_success_deployment_hook error" in r.message)
+    assert len(failure_logs) == 1
+    assert "_ChatShapedSuccessDeploymentHook" in failure_logs[0].message
+    assert str(call_type) in failure_logs[0].message
+    assert failure_logs[0].exc_info is not None
+
+
+@pytest.mark.asyncio
+async def test_success_deployment_hook_raising_keeps_earlier_hook_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    rewriter: Final = _RewritingSuccessDeploymentHook()
+    trailing_hook: Final = _RecordingSuccessDeploymentHook()
+    monkeypatch.setattr(litellm, "callbacks", [rewriter, _ChatShapedSuccessDeploymentHook(), trailing_hook])
+    original: Final = ModelResponse(model="gpt-5.6")
 
     result: Final = await async_post_call_success_deployment_hook(
-        request_data={"model": "sora-2"}, response=video, call_type=CallTypes.avideo_generation
+        request_data={"model": "gpt-5.6"}, response=original, call_type=CallTypes.acompletion
     )
 
-    assert result is video
-    assert second_hook.seen_responses == (video,)
+    assert isinstance(result, ModelResponse)
+    assert result is not original
+    assert result.choices[0].message.content == "rewritten by deployment hook"
+    assert trailing_hook.seen_responses == (result,)
 
 
 class _GuardrailBlocked(Exception):
