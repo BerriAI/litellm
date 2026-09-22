@@ -149,6 +149,6 @@ def loaded_proxy_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 def test_build_proxy_bug_report_reads_the_loaded_proxy_config():
     report = build_proxy_bug_report(RuntimeError("boom"), stream=False)
 
-    assert report.surface == "proxy"
+    assert report.environment.surface == "proxy"
     assert report.stream is False
-    assert report.config_lines == safe_config_lines(CUSTOMER_CONFIG, CUSTOMER_GENERAL_SETTINGS)
+    assert report.environment.config_lines == safe_config_lines(CUSTOMER_CONFIG, CUSTOMER_GENERAL_SETTINGS)
