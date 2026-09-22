@@ -2957,6 +2957,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-cost"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "proptest",
+]
+
+[[package]]
 name = "litellm-framing"
 version = "0.1.0"
 dependencies = [

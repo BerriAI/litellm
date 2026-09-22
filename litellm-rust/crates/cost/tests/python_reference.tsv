@@ -1,0 +1,9 @@
+# Python reference commit: dc4be2fd987c993aefcf16444e34f960c12c8627
+ordinary	100	20	0	0	2.0	4.0						200.0	80.0
+cache_fallback	100	20	25	10	2.0	4.0						200.0	80.0
+cache_specific	100	20	25	10	2.0	4.0	0.5	3.0				172.5	80.0
+free_cache	100	20	25	10	2.0	4.0	0.0	0.0				130.0	80.0
+threshold_below	99	20	0	0	2.0	4.0			100	5.0	8.0	198.0	80.0
+threshold_at	100	20	0	0	2.0	4.0			100	5.0	8.0	200.0	80.0
+threshold_above	101	20	0	0	2.0	4.0			100	5.0	8.0	505.0	160.0
+cache_threshold_above	101	20	25	10	2.0	4.0			100	5.0	8.0	505.0	160.0
