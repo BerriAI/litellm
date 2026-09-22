@@ -2294,3 +2294,20 @@ def test_create_anthropic_model_list_response_lists_ids_as_told():
     assert (gpt["id"], gpt["display_name"], gpt["max_input_tokens"]) == ("claude-router-gpt-4o[1m]", "GPT 4o", 1000000)
     assert (haiku["id"], haiku["display_name"]) == ("claude-haiku-4-5", "claude-haiku-4-5")
     assert (response["first_id"], response["last_id"]) == ("claude-router-gpt-4o[1m]", "claude-haiku-4-5")
+
+def test_optionally_handle_anthropic_oauth_invalid_url():
+    """Test that invalid URLs don't break OAuth validation and default to non-Anthropic."""
+    from litellm.llms.anthropic.common_utils import optionally_handle_anthropic_oauth
+    
+    headers = {"Authorization": "Bearer sk-ant-oat01-token"}
+    api_key = "sk-ant-oat01-token"
+    
+    # Test with a URL that will trigger ValueError in urllib.parse.urlparse
+    # In Python 3.12, urlparse(']') raises ValueError: Invalid IPv6 URL
+    updated_headers, updated_api_key = optionally_handle_anthropic_oauth(headers, api_key, api_base="]")
+    
+    # Since it raises ValueError, _is_anthropic_host returns False.
+    # Thus, it strips OAuth headers and sets api_key to None.
+    assert "Authorization" not in {k.lower(): v for k, v in updated_headers.items()}
+    assert updated_api_key is None
+
