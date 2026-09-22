@@ -295,6 +295,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "chat",
             "audio_transcription",
             "responses",
+            "evaluation",
             "ocr",
             "realtime",
         ]
