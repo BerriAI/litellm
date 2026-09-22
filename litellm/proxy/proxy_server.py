@@ -50,6 +50,7 @@ import anyio
 import websockets
 import websockets.exceptions
 from pydantic import BaseModel, Json, JsonValue, TypeAdapter, ValidationError
+from pydantic.fields import FieldInfo, PydanticUndefined
 from typing_extensions import NotRequired, ReadOnly, assert_never
 
 from litellm._uuid import uuid
@@ -456,7 +457,13 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     project_spend_counter_key,
     tag_cache_key,
 )
-from litellm.proxy.config_resolvers import SettingsStore, config_ownership_message, resolve_fields
+from litellm.proxy.config_resolvers import (
+    FieldSource,
+    SettingsStore,
+    config_ownership_message,
+    resolve_fields,
+    source_for,
+)
 from litellm.proxy.config_resolvers.alerting import (
     EMAIL_DESCRIPTORS,
     MS_TEAMS_DESCRIPTORS,
@@ -718,6 +725,11 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.route_priority import hot_routes_first
 from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.proxy.shutdown.scheduled_jobs import (
+    AwaitableAsyncIOExecutor,
+    pause_scheduled_jobs,
+    stop_in_flight_scheduler_jobs,
+)
 from litellm.proxy.spend_tracking.budget_reservation import (
     get_budget_window_start,
     release_unbound_budget_reservation,
@@ -1494,6 +1506,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         if model_info_scheduler is not scheduler:
             model_info_scheduler.shutdown(wait=False)
 
+    # Shutdown event - stop starting scheduled jobs; the ones already running keep the drain window
+    if scheduler is not None:
+        pause_scheduled_jobs(scheduler)
+
     # Shutdown event - drain in-flight requests before tearing down dependencies
     # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
     GracefulShutdownManager.start_shutdown()
@@ -1532,6 +1548,13 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
 
     await _drain_spend_event_producer_on_shutdown()
+
+    # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
+    if scheduler is not None and scheduler_executor is not None:
+        try:
+            await stop_in_flight_scheduler_jobs(scheduler, scheduler_executor)
+        except Exception as e:
+            verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
     await flush_spend_counters_on_shutdown()
 
@@ -2536,6 +2559,7 @@ celery_app_conn: Final = None
 celery_fn: Final = None  # Redis Queue for handling requests
 
 scheduler = None
+scheduler_executor: AwaitableAsyncIOExecutor | None = None  # rebind-ok: bound once the scheduler is built at startup
 
 # Global variable for anthropic beta headers reload scheduling
 last_anthropic_beta_headers_reload = None
@@ -4956,6 +4980,12 @@ def _as_settings_mapping(value: object) -> Mapping[str, SettingsJsonValue]:
     if not isinstance(value, Mapping):
         return _EMPTY_SETTINGS_MAPPING
     return _SETTINGS_MAPPING.validate_python(value)
+
+
+def _get_field_default(field_info: FieldInfo) -> JsonValue:
+    if field_info.default is PydanticUndefined:
+        return None
+    return cast(JsonValue, field_info.default)  # cast-ok: Pydantic field defaults are JSON values at runtime
 
 
 def _bind_general_settings_store(settings: SettingsStore) -> None:
@@ -10088,7 +10118,7 @@ class ProxyStartupEvent:
         proxy_logging_obj: ProxyLogging,
     ) -> ProxyWorkerHeartbeat:
         """Initializes scheduled background jobs"""
-        global heuristic_v1_tuning_baselines, store_model_in_db, scheduler  # rebind-ok: startup publishes the one read-only baseline snapshot
+        global heuristic_v1_tuning_baselines, store_model_in_db, scheduler, scheduler_executor  # rebind-ok: startup publishes the one read-only baseline snapshot
 
         # MEMORY LEAK FIX: Configure scheduler with optimized settings
         # Memray analysis showed APScheduler's normalize() and _apply_jitter() causing
@@ -10097,9 +10127,9 @@ class ProxyStartupEvent:
         # 1. Remove/minimize jitter to avoid normalize() memory explosion
         # 2. Use larger misfire_grace_time to prevent backlog calculations
         # 3. Set replace_existing=True to avoid duplicate jobs
-        from apscheduler.executors.asyncio import AsyncIOExecutor
         from apscheduler.jobstores.memory import MemoryJobStore
 
+        scheduler_executor = AwaitableAsyncIOExecutor()  # rebind-ok: shutdown awaits the jobs this executor runs
         scheduler = AsyncIOScheduler(
             job_defaults={
                 "coalesce": APSCHEDULER_COALESCE,
@@ -10112,7 +10142,7 @@ class ProxyStartupEvent:
             jobstores={"default": MemoryJobStore()},  # explicitly use memory job store
             # Use simple executor to minimize overhead
             executors={
-                "default": AsyncIOExecutor(),
+                "default": scheduler_executor,
             },
             # Disable timezone awareness to reduce computation
             timezone=None,
@@ -16013,6 +16043,22 @@ async def model_settings():
 #### ALERTING MANAGEMENT ENDPOINTS ####
 
 
+def _nested_setting_source(
+    settings: SettingsStore,
+    db_values: Mapping[str, JsonValue],
+    parent_key: str,
+    field_name: str,
+    field_default: JsonValue,
+) -> FieldSource:
+    unset_source: Final[FieldSource] = "default" if field_default is not None else "unset"
+    parent_value: Final = settings.config_value(parent_key)
+    if isinstance(parent_value, Mapping) and field_name in parent_value:
+        return "config"
+    if settings.owned_by_config(parent_key):
+        return unset_source
+    return "db" if field_name in db_values else unset_source
+
+
 @router.get(
     "/alerting/settings",
     description="Return the configurable alerting param, description, and current value",
@@ -16050,17 +16096,20 @@ async def alerting_settings(
         where={"param_name": "general_settings"}
     )
 
-    if db_general_settings is not None and db_general_settings.param_value is not None:
-        db_general_settings_dict: Final = dict(db_general_settings.param_value)
-        alerting_args_dict: dict = cast(  # cast-ok: ConfigGeneralSettings validates alerting_args as a dict on write
-            dict[str, JsonValue], db_general_settings_dict.get("alerting_args", {})
-        )
-        alerting_values: list | None = cast(  # cast-ok: ConfigGeneralSettings validates alerting as a list on write
-            list[JsonValue] | None, db_general_settings_dict.get("alerting")
-        )
-    else:
-        alerting_args_dict = {}
-        alerting_values = None
+    db_general_settings_dict: Final[Mapping[str, JsonValue]] = MappingProxyType(
+        dict(db_general_settings.param_value)  # mutable-ok: Prisma returns the JSON column as a plain dict
+        if db_general_settings is not None and db_general_settings.param_value is not None
+        else {}
+    )
+    alerting_args_value: Final = db_general_settings_dict.get("alerting_args")
+    alerting_args_dict: Final[Mapping[str, JsonValue]] = MappingProxyType(
+        alerting_args_value if isinstance(alerting_args_value, dict) else {}
+    )
+    alerting_values: Final = cast(  # cast-ok: alerting is stored as a JSON list when present
+        list[JsonValue] | None, db_general_settings_dict.get("alerting")
+    )
+
+    settings: Final = proxy_config.settings
 
     allowed_args: Final = MappingProxyType(
         {
@@ -16089,9 +16138,9 @@ async def alerting_settings(
 
     is_slack_enabled = False
 
-    if general_settings.get("alerting") and isinstance(general_settings["alerting"], list):
-        if "slack" in general_settings["alerting"]:
-            is_slack_enabled = True
+    alerting: Final = settings.get("alerting")
+    if isinstance(alerting, list) and "slack" in alerting:
+        is_slack_enabled = True
 
     _response_obj = ConfigList(
         field_name="slack_alerting",
@@ -16099,6 +16148,7 @@ async def alerting_settings(
         field_description="Enable slack alerting for monitoring proxy in production: llm outages, budgets, spend tracking failures.",
         field_value=is_slack_enabled,
         stored_in_db=True if alerting_values is not None else False,
+        source=source_for(settings, "alerting"),
         field_default_value=None,
         premium_field=False,
     )
@@ -16106,6 +16156,7 @@ async def alerting_settings(
 
     for field_name, field_info in SlackAlertingArgs.model_fields.items():
         if field_name in allowed_args:
+            field_default: JsonValue = _get_field_default(field_info)
             _stored_in_db: bool | None = None
             if field_name in alerting_args_dict:
                 _stored_in_db = True
@@ -16116,9 +16167,16 @@ async def alerting_settings(
                 field_name=field_name,
                 field_type=allowed_args[field_name],
                 field_description=field_info.description or "",
-                field_value=_slack_alerting_args_dict.get(field_name, None),
+                field_value=_slack_alerting_args_dict.get(field_name, field_default),
                 stored_in_db=_stored_in_db,
-                field_default_value=field_info.default,
+                source=_nested_setting_source(
+                    settings,
+                    alerting_args_dict,
+                    "alerting_args",
+                    field_name,
+                    field_default,
+                ),
+                field_default_value=field_default,
                 premium_field=(True if field_name == "region_outage_alert_ttl" else False),
             )
             return_val.append(_response_obj)

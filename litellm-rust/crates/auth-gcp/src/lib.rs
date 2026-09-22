@@ -128,6 +128,14 @@ impl VertexAuth {
         }
     }
 
+    pub async fn access_token(
+        &self,
+        config: &VertexConfig,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<String, Error> {
+        self.load_provider(config, env_lookup).await?.token().await
+    }
+
     pub async fn validate_environment(
         &self,
         headers: Vec<(String, String)>,
