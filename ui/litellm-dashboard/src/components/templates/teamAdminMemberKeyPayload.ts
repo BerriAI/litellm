@@ -32,6 +32,7 @@ export const teamAdminMemberKeyPayload = (
   }
   const payload: Record<string, unknown> = { key: formValues.key };
   for (const field of KEY_BUDGET_FIELDS) {
+    if (!dirtyFields.includes(field)) continue;
     if (formValues[field] === undefined) continue;
     if (field === "budget_duration" && formValues[field] === "") continue;
     payload[field] = formValues[field];

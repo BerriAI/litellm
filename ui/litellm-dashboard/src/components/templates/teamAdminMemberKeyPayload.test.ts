@@ -38,7 +38,7 @@ describe("isTeamAdminEditingMemberKey", () => {
 });
 
 describe("teamAdminMemberKeyPayload", () => {
-  it("keeps only budget fields present in the form values plus the key", () => {
+  it("keeps only dirty budget fields from the form values plus the key", () => {
     const formValues = {
       key: "sk-1",
       max_budget: 25,
@@ -52,6 +52,17 @@ describe("teamAdminMemberKeyPayload", () => {
       kind: "ok",
       payload: { key: "sk-1", max_budget: 25, soft_budget: 10 },
     });
+  });
+
+  it("drops budget fields present in the form but not dirty", () => {
+    const formValues = {
+      key: "sk-1",
+      max_budget: 25,
+      budget_duration: "30d",
+      budget_limits: [{ budget_duration: "1d", max_budget: 5 }],
+    };
+    const result = teamAdminMemberKeyPayload(formValues, ["max_budget"]);
+    expect(result).toEqual({ kind: "ok", payload: { key: "sk-1", max_budget: 25 } });
   });
 
   it("drops budget_duration when it is an empty string but keeps null", () => {
