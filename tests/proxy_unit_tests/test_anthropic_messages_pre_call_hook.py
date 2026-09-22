@@ -28,7 +28,7 @@ EXAMPLE_ANTHROPIC_MESSAGES_RESULT = {
 
 
 def mock_patch_anthropic_messages():
-    return mock.patch(
+    return mock.patch(  # test-quality-ok: hook metadata is only observable on the router call this route forwards
         "litellm.proxy.proxy_server.llm_router.anthropic_messages",
         return_value=EXAMPLE_ANTHROPIC_MESSAGES_RESULT,
     )
@@ -107,10 +107,12 @@ async def test_experimental_anthropic_messages_runs_proxy_async_pre_call_hook(
     monkeypatch.setattr(litellm, "callbacks", [AnthropicMessagesPreCallHook()])
     monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
 
-    with mock.patch(
-        "litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages_handler",
-        return_value=EXAMPLE_ANTHROPIC_MESSAGES_RESULT,
-    ) as mock_handler:
+    with (
+        mock.patch(  # test-quality-ok: pre_call and pre_request mutations are only observable on the downstream handler kwargs
+            "litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages_handler",
+            return_value=EXAMPLE_ANTHROPIC_MESSAGES_RESULT,
+        ) as mock_handler
+    ):
         response = await anthropic_messages(
             model="openai/gpt-4o-mini",
             max_tokens=100,
