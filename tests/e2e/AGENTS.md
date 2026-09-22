@@ -210,14 +210,15 @@ quota_management.<behavior>.<variant>.<assertion>
               <spend_tracking> chat_completions | stream | messages_bridge | embeddings
                                | cache_hit | key_rollup | concurrent_burst | tags | end_user
                                | per_model | failure | spend_calculate | pagination | key_attribution
+                               | websearch_interception
   assertion : blocks_over_limit | resets_after_window | headers_report_remaining | picks_under_tpm
               | blocks_then_resets | resets_windows_independently | alerts_without_blocking
               | isolates_per_model | isolates_per_member | isolates_per_group | enforced_across_keys
               | routes_to_fallback | reseed_matches_db | reports_spend | logs_cost | zero_cost
               | matches_sum_of_logs | loses_no_spend | attributes_spend | writes_own_rows
-              | writes_failure_row | returns_cost | keeps_total | joins_key | reports_alias_and_email
+              | writes_failure_row | attributes_provider | returns_cost | keeps_total | joins_key | reports_alias_and_email
               | health_rows_keep_service_account | retrieve_batch_cost_joins_retrieving_key
-              | poller_batch_cost_joins_creating_key
+              | poller_batch_cost_joins_creating_key | bills_under_request_session
   e.g.  quota_management.ratelimit.rpm.blocks_over_limit           exercised_on=[chat_completions, messages]
         quota_management.budget.key.blocks_over_limit              exercised_on=[chat_completions]
 ```

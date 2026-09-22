@@ -39,6 +39,7 @@ litellm-cache-disk = { path = "crates/cache-disk" }
 litellm-cache-redis-semantic = { path = "crates/cache-redis-semantic" }
 litellm-cache-response = { path = "crates/cache-response" }
 litellm-cache-qdrant-semantic = { path = "crates/cache-qdrant-semantic" }
+litellm-cache-testing = { path = "crates/cache-testing" }
 litellm-token-counter = { path = "crates/token-counter" }
 litellm-token-counter-fast = { path = "crates/token-counter-fast" }
 litellm-token-counter-huggingface = { path = "crates/token-counter-huggingface" }

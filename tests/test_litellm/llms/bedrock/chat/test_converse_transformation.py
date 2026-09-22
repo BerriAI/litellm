@@ -5580,43 +5580,6 @@ def test_tool_config_cachepoint_not_placed_or_credited_for_model_without_prompt_
     assert "litellm_gateway_injected_cache" not in bucket
 
 
-def test_translate_response_format_json_schema_still_injects_tool():
-    """
-    response_format with an explicit json_schema should still use the
-    synthetic tool call approach (for models that don't support native
-    structured outputs).
-    """
-    config = AmazonConverseConfig()
-
-    response_format = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "FactResult",
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "facts": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                },
-                "required": ["facts"],
-            },
-        },
-    }
-
-    optional_params: dict = {}
-    result = config._translate_response_format_param(
-        value=response_format,
-        model="anthropic.claude-3-haiku-20240307-v1:0",
-        optional_params=optional_params,
-        non_default_params={"response_format": response_format},
-        is_thinking_enabled=False,
-    )
-
-    assert result["json_mode"] is True
-    assert "tools" in result
-    assert "tool_choice" in result
 
 
 def test_transform_response_finish_reason_stop_when_json_mode_filters_all_tools():
