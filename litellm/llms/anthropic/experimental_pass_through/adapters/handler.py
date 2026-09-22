@@ -398,12 +398,18 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if not isinstance(effort, str) or not isinstance(model, str) or not model:
             return
         custom_llm_provider: Final = completion_kwargs.get("custom_llm_provider")
+        api_base: Final = completion_kwargs.get("api_base")
+        api_key: Final = completion_kwargs.get("api_key")
         try:
-            local_model, resolved_provider, _, _ = litellm.utils.get_llm_provider(
+            local_model, resolved_provider, _, resolved_api_base = litellm.utils.get_llm_provider(
                 model=model,
                 custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+                api_base=api_base if isinstance(api_base, str) else None,
+                api_key=api_key if isinstance(api_key, str) else None,
             )
         except Exception:
+            return
+        if resolved_provider == "litellm_proxy":
             return
         from litellm.main import responses_api_bridge_check
 
@@ -417,6 +423,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             ),
             tools=cast("list[dict[str, object]]", tools) if isinstance(tools, list) else None,
             reasoning_effort=reasoning_effort,
+            api_base=resolved_api_base,
         )
         if model_info.get("mode") == "responses":
             return
