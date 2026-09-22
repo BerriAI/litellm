@@ -30,7 +30,7 @@ from litellm.types.utils import ModelResponse, ProviderField
 from litellm.utils import _add_path_to_api_base, supports_tool_choice
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class AzureFoundryErrorStrings(str, enum.Enum):

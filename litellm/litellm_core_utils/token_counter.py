@@ -4,12 +4,12 @@ import base64
 import io
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from functools import lru_cache
 from typing import Final, Literal, cast
 
 import anyio
 import anyio.lowlevel
 import httpx
+import tiktoken
 from typing_extensions import ParamSpec, TypeVar
 
 import litellm
@@ -29,12 +29,10 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer as Tokenizer
-from litellm.litellm_core_utils.tokenizer import OpenAIEncoding
+from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, HuggingFaceTokenizer, OpenAIEncoding
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
-from litellm.rust_bridge._native import Tokenizer as NativeTokenizer
-from litellm.rust_bridge._native import tiktoken_encoding_for_model
+from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
     AnthropicContentParamSource,
     AnthropicContentParamSourceFileId,
@@ -625,12 +623,11 @@ def _get_exact_count_function(
     if model is not None or custom_tokenizer is not None:
         tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)
         if tokenizer_json["type"] == "huggingface_tokenizer":
-            tokenizer: Final[Tokenizer | NativeTokenizer] = tokenizer_json["tokenizer"]
+            tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
 
             def count_tokens(text: str) -> int:
-                count: Final = getattr(tokenizer, "count", None)
-                if callable(count):
-                    return count(text)
+                if isinstance(tokenizer, HuggingFaceTokenizer):
+                    return tokenizer.count(text)
                 return len(tokenizer.encode_batch_fast([text])[0])
 
             return count_tokens
@@ -638,36 +635,39 @@ def _get_exact_count_function(
             encoding: Final = openai_tokenizer_encoding(model)
 
             def encode_length(text: str) -> int:
-                return encoding.count(text)
+                return _encoding_count(encoding, text)
 
             return _get_tiktoken_count_function(encode_length)
         else:
             raise ValueError("Unsupported tokenizer type")
     else:
+        default_encoding: Final = _get_default_encoding()
 
         def encode_length(text: str) -> int:
-            return _get_default_encoding().count(text)
+            return _encoding_count(default_encoding, text)
 
         return _get_tiktoken_count_function(encode_length)
 
 
-@lru_cache(maxsize=8)
-def _native_tokenizer_for_encoding(name: str) -> OpenAIEncoding:
-    return OpenAIEncoding.from_tiktoken(name)
+def _encoding_count(encoding: Encoding, text: str) -> int:
+    if isinstance(encoding, OpenAIEncoding):
+        return encoding.count(text)
+    return len(encoding.encode(text, disallowed_special=()))
 
 
-def openai_tokenizer_encoding(model: str) -> OpenAIEncoding:
-    """The native encoding `token_counter` uses for a model on the `openai_tokenizer` path."""
+def openai_tokenizer_encoding(model: str) -> Encoding:
+    """The encoding `token_counter` uses for a model on the `openai_tokenizer` path."""
     from litellm.utils import print_verbose
 
     model_to_use: Final = _fix_model_name(model)
     if "gpt-4o" in model_to_use:
-        return _native_tokenizer_for_encoding("o200k_base")
-    name: Final = tiktoken_encoding_for_model(model_to_use)
-    if name is None:
+        return get_encoding("o200k_base")
+    try:
+        name: Final = tiktoken.encoding_name_for_model(model_to_use)
+    except KeyError:
         print_verbose("Warning: model not found. Using cl100k_base encoding.")
-        return _native_tokenizer_for_encoding("cl100k_base")
-    return _native_tokenizer_for_encoding(name)
+        return get_encoding("cl100k_base")
+    return get_encoding(name)
 
 
 def uses_legacy_message_accounting(model: str) -> bool:

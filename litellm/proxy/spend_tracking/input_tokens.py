@@ -93,6 +93,10 @@ async def _count_group(
             python=python,
         )
     except (RuntimeError, ValueError) as error:
+        from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
+
+        if isinstance(error, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
+            raise
         verbose_proxy_logger.debug("Rust token counter (%s) failed, counting in Python: %s", tokenizer, error)
         return await python()
 

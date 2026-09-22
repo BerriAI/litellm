@@ -12,7 +12,7 @@ from litellm.utils import convert_to_model_response_object
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
 
-    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class GPTImageGenerationConfig(BaseImageGenerationConfig):

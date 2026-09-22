@@ -23,6 +23,7 @@ class Route(str, Enum):
     TRANSCRIPTION = "transcription"
     OCR = "ocr"
     TOKEN_COUNTER = "token_counter"
+    TOKENIZER = "tokenizer"
 
 
 class Delivery(Enum):
@@ -63,6 +64,7 @@ RULES: Final[Rules] = (
     Rule(Route.OCR, Rollout.RUST_OPT_OUT),
     Rule(Route.MESSAGES, Rollout.RUST_OPT_IN),
     Rule(Route.TOKEN_COUNTER, Rollout.RUST_OPT_IN),
+    Rule(Route.TOKENIZER, Rollout.RUST_OPT_IN),
     Rule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
 )
 

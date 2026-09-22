@@ -27,7 +27,7 @@ from litellm.types.utils import ModelResponse, ModelResponseStream, ServerToolUs
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 GROQ_COMPOUND_MODELS: Final = frozenset({"compound", "compound-mini"})
 

@@ -22,7 +22,7 @@ from litellm.types.utils import Choices
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
-    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.types.utils import ModelResponse
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj

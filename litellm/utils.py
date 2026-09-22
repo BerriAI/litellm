@@ -84,8 +84,10 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_fill_missing_generalizations,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
-from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer as Tokenizer
-from litellm.litellm_core_utils.tokenizer import OpenAIEncoding, strip_special_tokens
+from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, strip_special_tokens
+from litellm.rust_bridge import tokenizer as tokenizer_dispatch
+from litellm.rust_bridge.catalog import Context, Route, decision
+from litellm.rust_bridge.configuration import Decision
 
 _CachingHandlerResponse = None
 _LLMCachingHandler = None
@@ -2246,18 +2248,21 @@ def _select_tokenizer(model: str, custom_tokenizer: CustomHuggingfaceTokenizer |
             identifier=custom_tokenizer["identifier"],
             revision=custom_tokenizer["revision"],
             auth_token=custom_tokenizer["auth_token"],
+            backend=decision(Context(Route.TOKENIZER, provider="huggingface")),
         )
-    return _select_tokenizer_helper(model=model)
+    return _select_tokenizer_helper(model=model, backend=decision(Context(Route.TOKENIZER, provider="huggingface")))
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
-def _select_custom_tokenizer_helper(identifier: str, revision: str, auth_token: str | None) -> SelectTokenizerResponse:
+def _select_custom_tokenizer_helper(
+    identifier: str, revision: str, auth_token: str | None, backend: Decision = Decision.PYTHON
+) -> SelectTokenizerResponse:
     verbose_logger.debug("Loading custom HuggingFace tokenizer %s (revision %s)", identifier, revision)
     return create_pretrained_tokenizer(identifier=identifier, revision=revision, auth_token=auth_token)
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
-def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
+def _select_tokenizer_helper(model: str, backend: Decision = Decision.PYTHON) -> SelectTokenizerResponse:
     if litellm.disable_hf_tokenizer_download is True:
         return _return_openai_tokenizer(model)
 
@@ -2266,6 +2271,10 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
         if result is not None:
             return result
     except Exception as e:
+        from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
+
+        if isinstance(e, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
+            raise
         verbose_logger.debug("Error selecting tokenizer: %s", e)
 
     # default - tiktoken
@@ -2303,16 +2312,16 @@ def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
     return {"type": "huggingface_tokenizer", "tokenizer": _load_huggingface_tokenizer(kind)}
 
 
-def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> Tokenizer:
+def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> HuggingFace:
     match kind:
         case "cohere":
-            return Tokenizer.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
+            return tokenizer_dispatch.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
         case "anthropic":
-            return Tokenizer.from_json(claude_json_str)
+            return tokenizer_dispatch.from_str(claude_json_str)
         case "llama2":
-            return Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
+            return tokenizer_dispatch.from_pretrained("hf-internal-testing/llama-tokenizer")
         case "llama3":
-            return Tokenizer.from_pretrained("Xenova/llama-3-tokenizer")
+            return tokenizer_dispatch.from_pretrained("Xenova/llama-3-tokenizer")
 
 
 def encode(model="", text="", custom_tokenizer: dict | None = None):
@@ -2330,7 +2339,7 @@ def encode(model="", text="", custom_tokenizer: dict | None = None):
     tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model=model)
     if tokenizer_json["type"] == "openai_tokenizer":
         openai_tokenizer: Final = cast(  # cast-ok: [LIT006] caller's explicit type tag selects this interface
-            OpenAIEncoding, tokenizer_json["tokenizer"]
+            Encoding, tokenizer_json["tokenizer"]
         )
         return openai_tokenizer.encode(text, disallowed_special=())
     encoded: Final = tokenizer_json["tokenizer"].encode(text)
@@ -2355,7 +2364,7 @@ def decode(
     if tokenizer_json["type"] == "huggingface_tokenizer":
         ids: Final = strip_special_tokens(tokenizer_json["tokenizer"], tokens) if skip_special_tokens else tokens
         hf_tokenizer: Final = cast(  # cast-ok: [LIT006] caller's explicit type tag selects this interface
-            Tokenizer, tokenizer_json["tokenizer"]
+            HuggingFace, tokenizer_json["tokenizer"]
         )
         return hf_tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
     return tokenizer_json["tokenizer"].decode(tokens)
@@ -2374,7 +2383,7 @@ def create_pretrained_tokenizer(identifier: str, revision="main", auth_token: st
     dict: A dictionary with the tokenizer and its type.
     """
 
-    tokenizer: Final = Tokenizer.from_pretrained(identifier, revision=revision, token=auth_token)
+    tokenizer: Final = tokenizer_dispatch.from_pretrained(identifier, revision=revision, token=auth_token)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 
@@ -2389,7 +2398,7 @@ def create_tokenizer(json: str):
     dict: A dictionary with the tokenizer and its type.
     """
 
-    tokenizer: Final = Tokenizer.from_json(json)
+    tokenizer: Final = tokenizer_dispatch.from_str(json)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 

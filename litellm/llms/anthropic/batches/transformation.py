@@ -15,7 +15,7 @@ from litellm.types.utils import LiteLLMBatch, LlmProviders, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:

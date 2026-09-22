@@ -99,7 +99,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
-from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
+from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
     foundry_chat_rejects_function_tools_while_reasoning,
@@ -7456,7 +7456,9 @@ def text_completion(
         if isinstance(prompt, list):
             import concurrent.futures
 
-            tokenizer: Final = Tokenizer.from_tiktoken("p50k_base")
+            from litellm.rust_bridge.tokenizer import get_encoding
+
+            tokenizer: Final = get_encoding("p50k_base")
             ## if it's a 2d list - each element in the list is a text_completion() request
             if len(prompt) > 0 and isinstance(prompt[0], list):
                 responses: Final = [None for x in prompt]  # init responses

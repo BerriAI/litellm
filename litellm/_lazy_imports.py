@@ -59,7 +59,7 @@ from ._lazy_imports_registry import (
 if TYPE_CHECKING:
     import httpx
 
-    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 def get_litellm_globals() -> dict[str, object]:
@@ -90,26 +90,11 @@ def _get_module_level_client_timeout(litellm_globals: Mapping[str, Any]) -> "flo
 # These are special lazy loaders for things that are used internally
 # They're separate from the main lazy import system because they have specific use cases
 
-# Lazy loader for default encoding - avoids importing the native extension at startup
-_default_encoding: "Tokenizer | None" = None
-
 
 def _get_default_encoding() -> "Tokenizer":
-    """
-    Lazily load and cache the default OpenAI encoding.
+    from litellm.rust_bridge.tokenizer import get_encoding
 
-    This avoids importing `litellm.litellm_core_utils.default_encoding`
-    at `litellm` import time. The encoding is cached after the first import.
-
-    This is used internally by utils.py functions that need the encoding but shouldn't
-    trigger its import during module load.
-    """
-    global _default_encoding
-    if _default_encoding is None:
-        from litellm.litellm_core_utils.default_encoding import encoding
-
-        _default_encoding = encoding
-    return _default_encoding
+    return get_encoding("cl100k_base")
 
 
 # Lazy loader for get_modified_max_tokens to avoid importing token_counter at module import time

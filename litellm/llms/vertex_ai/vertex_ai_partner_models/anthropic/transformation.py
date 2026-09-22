@@ -14,7 +14,7 @@ from ....anthropic.chat.transformation import AnthropicConfig
 from .output_params_utils import sanitize_vertex_anthropic_output_params
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class VertexAIError(Exception):

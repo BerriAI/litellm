@@ -240,7 +240,8 @@ print("compatible")
     assert result.stdout.strip() == "compatible"
 
 
-def test_installed_tokenization_does_not_import_python_tokenizer_packages(tmp_path: Path) -> None:
+@pytest.mark.parametrize("rust", (None, "0", "1"))
+def test_tokenization_without_native_extension_stays_offline(tmp_path: Path, rust: str | None) -> None:
     script: Final = """
 import importlib.abc
 import sys
@@ -251,19 +252,24 @@ def reject_network(event, args):
 sys.addaudithook(reject_network)
 class Block(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split(".")[0] in {"tiktoken", "tokenizers"}:
-            raise AssertionError("unexpected runtime dependency: " + fullname)
+        if fullname == "litellm.rust_bridge._native":
+            raise ImportError("native extension is unavailable")
 sys.meta_path.insert(0, Block())
 import litellm
-from litellm.litellm_core_utils.tokenizer import OpenAIEncoding
-for name in ("cl100k_base", "o200k_base", "o200k_harmony", "p50k_base", "p50k_edit", "r50k_base", "gpt2"):
-    encoding = OpenAIEncoding.from_tiktoken(name)
+from litellm.rust_bridge.tokenizer import get_encoding
+import tiktoken
+from tokenizers import Tokenizer
+assert isinstance(litellm.encoding, tiktoken.Encoding)
+for name in ("cl100k_base", "o200k_base", "o200k_harmony", "p50k_base", "p50k_edit"):
+    encoding = get_encoding(name)
     text = "offline café 漢字 🙂" + " " * 64
     assert encoding.decode(encoding.encode(text)) == text
 ids = litellm.encode(text="hello world")
 assert litellm.decode(tokens=ids) == "hello world"
 assert litellm.token_counter(model=None, text="hello world") == len(ids)
 custom = litellm.create_tokenizer(sys.argv[2])
+assert isinstance(custom["tokenizer"], Tokenizer)
+custom["tokenizer"].enable_padding(pad_id=0, pad_token="[UNK]")
 assert litellm.decode(tokens=litellm.encode(text="Hello World", custom_tokenizer=custom), custom_tokenizer=custom) == "Hello World"
 print("compatible")
 """
@@ -274,8 +280,8 @@ print("compatible")
         timeout=30,
         cwd=tmp_path,
         env={
-            **os.environ,
-            "LITELLM_RUST": "0",
+            **{key: value for key, value in os.environ.items() if key != "LITELLM_RUST"},
+            **({"LITELLM_RUST": rust} if rust is not None else {}),
             "LITELLM_LOCAL_MODEL_COST_MAP": "True",
             "TIKTOKEN_CACHE_DIR": str(tmp_path / "unused-tokenizer-cache"),
         },

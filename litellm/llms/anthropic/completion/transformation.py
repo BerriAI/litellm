@@ -33,7 +33,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class AnthropicTextError(BaseLLMException):

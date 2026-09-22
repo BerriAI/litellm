@@ -5,10 +5,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Final, Literal, Protocol, TypeAlias, runtime_checkable
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
-from litellm.rust_bridge._native import HuggingFaceEncoding
-from litellm.rust_bridge._native import Tokenizer as NativeTokenizer
+import tiktoken
+from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
+
+if TYPE_CHECKING:
+    from litellm.rust_bridge._native import HuggingFaceEncoding
+    from litellm.rust_bridge._native import Tokenizer as NativeTokenizer
 
 SpecialTokens: TypeAlias = Literal["all"] | Collection[str]
 HuggingFaceInput: TypeAlias = str | list[str] | tuple[str, ...]
@@ -23,6 +27,8 @@ class OpenAIEncoding:
 
     @staticmethod
     def from_tiktoken(encoding: str) -> OpenAIEncoding:
+        from litellm.rust_bridge._native import Tokenizer as NativeTokenizer
+
         native: Final = NativeTokenizer.from_tiktoken(encoding)
         return OpenAIEncoding(encoding, native, frozenset(native.special_tokens()))
 
@@ -122,6 +128,8 @@ class HuggingFaceTokenizer:
 
     @staticmethod
     def from_str(json: str) -> HuggingFaceTokenizer:
+        from litellm.rust_bridge._native import Tokenizer as NativeTokenizer
+
         return HuggingFaceTokenizer(NativeTokenizer.from_json(json))
 
     from_json = from_str
@@ -132,6 +140,8 @@ class HuggingFaceTokenizer:
 
     @staticmethod
     def from_pretrained(identifier: str, revision: str = "main", token: str | None = None) -> HuggingFaceTokenizer:
+        from litellm.rust_bridge._native import Tokenizer as NativeTokenizer
+
         return HuggingFaceTokenizer(NativeTokenizer.from_pretrained(identifier, revision=revision, token=token))
 
     def to_str(self, pretty: bool = False) -> str:
@@ -204,7 +214,9 @@ def _batch_input(
     return (item[0], item[1])
 
 
-Tokenizer: TypeAlias = OpenAIEncoding | HuggingFaceTokenizer
+Encoding: TypeAlias = tiktoken.Encoding | OpenAIEncoding
+HuggingFace: TypeAlias = PythonHuggingFaceTokenizer | HuggingFaceTokenizer
+Tokenizer: TypeAlias = Encoding | HuggingFace
 
 
 class _AddedToken(Protocol):

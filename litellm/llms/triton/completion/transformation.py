@@ -29,7 +29,7 @@ from litellm.types.utils import (
 from ..common_utils import TritonError
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class TritonConfig(BaseConfig):

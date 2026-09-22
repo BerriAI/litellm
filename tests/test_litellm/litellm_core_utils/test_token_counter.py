@@ -8,15 +8,18 @@ import time
 import traceback
 from concurrent.futures import Future, wait
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import anyio.to_thread
 import pytest
+import tiktoken
+
+from unittest.mock import AsyncMock, patch
 
 import litellm
-import litellm.constants
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
+import litellm.constants
 from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
@@ -28,7 +31,6 @@ from litellm.litellm_core_utils.token_counter import (
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
-from litellm.rust_bridge._native import Tokenizer
 from tests.large_text import text
 from tests.test_litellm.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
@@ -90,23 +92,23 @@ def test_token_counter_large_repeated_text_is_fast():
     ],
 )
 def test_token_counter_short_text_matches_tiktoken(text):
-    encoding = Tokenizer.from_tiktoken("cl100k_base")
-    expected = encoding.count(text)
+    encoding = tiktoken.get_encoding("cl100k_base")
+    expected = len(encoding.encode(text, disallowed_special=()))
 
     assert token_counter_new(model="us.anthropic.claude-sonnet-4-6", text=text) == expected
 
 
 def test_token_counter_default_encoding_matches_cl100k():
-    encoding: Final = Tokenizer.from_tiktoken("cl100k_base")
-    expected: Final = encoding.count("hello world")
+    encoding: Final = tiktoken.get_encoding("cl100k_base")
+    expected: Final = len(encoding.encode("hello world", disallowed_special=()))
 
     assert token_counter_new(model=None, text="hello world") == expected
 
 
 def test_token_counter_text_over_chunk_boundary_stays_close_to_tiktoken():
     text = ("The quick brown fox jumps over the lazy dog. " * 30)[:1025]
-    encoding = Tokenizer.from_tiktoken("cl100k_base")
-    expected = encoding.count(text)
+    encoding = tiktoken.get_encoding("cl100k_base")
+    expected = len(encoding.encode(text, disallowed_special=()))
 
     actual = token_counter_new(model="us.anthropic.claude-sonnet-4-6", text=text)
 
@@ -125,9 +127,9 @@ def test_invalid_chunk_size_config_stays_usable(monkeypatch, configured):
         chunk_size = reloaded.TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS
         assert 1 <= chunk_size <= reloaded.TIKTOKEN_ENCODE_MAX_CHUNK_SIZE_CHARS
 
-        encoding = Tokenizer.from_tiktoken("cl100k_base")
+        encoding = tiktoken.get_encoding("cl100k_base")
         count_tokens = _get_tiktoken_count_function(
-            encoding.count,
+            lambda text: len(encoding.encode(text, disallowed_special=())),
             chunk_size=chunk_size,
         )
         assert count_tokens("The quick brown fox jumps over the lazy dog. " * 40) > 0
@@ -570,6 +572,8 @@ def test_load_test_token_counter(model):
 
     Assert time taken is < 1.5s.
     """
+    import tiktoken
+
     messages = [{"role": "user", "content": text}] * 10
 
     start_time = time.time()
@@ -716,7 +720,6 @@ def test_img_url_token_counter(img_url, monkeypatch):
     third-party image URL goes away.
     """
     import base64
-
     from litellm.litellm_core_utils.token_counter import get_image_dimensions
 
     # Minimal valid 1x1 PNG, served by the mocked safe_get for the URL case.
@@ -799,7 +802,7 @@ class TestTokenizerSelection(unittest.TestCase):
         """
         _select_tokenizer_helper.cache_clear()
 
-    @patch("litellm.utils.Tokenizer.from_pretrained")
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
     def test_llama3_tokenizer_api_failure(self, mock_from_pretrained):
         # Setup mock to raise an error
         mock_from_pretrained.side_effect = Exception("Failed to load tokenizer")
@@ -814,7 +817,7 @@ class TestTokenizerSelection(unittest.TestCase):
         self.assertEqual(result["type"], "openai_tokenizer")
         self.assertEqual(result["tokenizer"], encoding)
 
-    @patch("litellm.utils.Tokenizer.from_pretrained")
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
     def test_cohere_tokenizer_api_failure(self, mock_from_pretrained):
         # Setup mock to raise an error
         mock_from_pretrained.side_effect = Exception("Failed to load tokenizer")
@@ -834,10 +837,10 @@ class TestTokenizerSelection(unittest.TestCase):
         self.assertEqual(result["type"], "openai_tokenizer")
         self.assertEqual(result["tokenizer"], encoding)
 
-    @patch("litellm.utils.Tokenizer.from_json")
-    def test_claude_tokenizer_api_failure(self, mock_from_json):
+    @patch("litellm.utils.tokenizer_dispatch.from_str")
+    def test_claude_tokenizer_api_failure(self, mock_from_str):
         # Setup mock to raise an error
-        mock_from_json.side_effect = Exception("Failed to load tokenizer")
+        mock_from_str.side_effect = Exception("Failed to load tokenizer")
 
         # Add Claude model to the list for testing
         litellm.anthropic_models = ["claude-2"]
@@ -846,13 +849,13 @@ class TestTokenizerSelection(unittest.TestCase):
         result = _select_tokenizer_helper("claude-2")
 
         # Verify the attempt to load Claude tokenizer
-        mock_from_json.assert_called_once_with(claude_json_str)
+        mock_from_str.assert_called_once_with(claude_json_str)
 
         # Verify fallback to OpenAI tokenizer
         self.assertEqual(result["type"], "openai_tokenizer")
         self.assertEqual(result["tokenizer"], encoding)
 
-    @patch("litellm.utils.Tokenizer.from_pretrained")
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
     def test_llama2_tokenizer_api_failure(self, mock_from_pretrained):
         # Setup mock to raise an error
         mock_from_pretrained.side_effect = Exception("Failed to load tokenizer")
