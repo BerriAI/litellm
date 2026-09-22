@@ -11,4 +11,4 @@ Core files:
 - `duration_parser.py`: code for parsing durations - e.g. "1d", "1mo", "10s"
 - `api_route_to_call_types.py`: mapping of API routes to their corresponding CallTypes (e.g., `/chat/completions` -> [acompletion, completion])
 
-Tokenizer factories return Python tokenizer objects by default. Set `LITELLM_RUST=1` or call `litellm.rust(True)` before constructing tokenizers to select the Rust backend through `Route.TOKENIZER` in the Rust catalog. Missing native bindings or unsupported native features fall back to Python. Existing tokenizer objects keep their selected backend
+Tokenizer factories return Python tokenizer objects by default. Set `LITELLM_RUST=1` or call `litellm.rust(True)` before constructing tokenizers to select the Rust backend through `Route.TOKENIZER` in the Rust catalog. Missing native bindings or unsupported native features fall back to Python. Existing tokenizer objects keep their selected backend. Rust-backed tokenizer objects carry the read-only `tiktoken.Encoding` / `tokenizers.Tokenizer` surface and are immutable: `enable_padding`, `enable_truncation` and `add_tokens` stay on the Python tokenizer.

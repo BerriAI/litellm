@@ -1,6 +1,7 @@
 use litellm_token_counter_huggingface::Error as BackendError;
 pub use litellm_token_counter_huggingface::{
-    EncodeInput, Encoding, HuggingFaceTokenizer, InputSequence, encoding_from_json,
+    AddedToken, EncodeInput, Encoding, HuggingFaceTokenizer, InputSequence, PaddingDirection,
+    PaddingParams, PaddingStrategy, TruncationDirection, TruncationParams, encoding_from_json,
     encoding_to_json,
 };
 
@@ -38,7 +39,6 @@ impl From<BackendError> for Error {
     fn from(error: BackendError) -> Self {
         match error {
             BackendError::Load(source) => Self::Load(source),
-            BackendError::Download(source) => Self::Download(source.to_string()),
             BackendError::Encode(source) => Self::Encode(source),
             BackendError::Decode(source) => Self::Decode(source.to_string()),
         }

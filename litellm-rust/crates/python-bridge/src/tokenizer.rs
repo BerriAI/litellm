@@ -1,6 +1,9 @@
+//! The Python face of the text codecs: one `Tokenizer` class over the tiktoken and Hugging
+//! Face backends, carrying the read-only surface of `tiktoken.Encoding` and
+//! `tokenizers.Tokenizer` that `litellm/litellm_core_utils/tokenizer.py` wraps.
 use std::borrow::Cow;
-#[cfg(feature = "tiktoken")]
-use std::collections::HashSet;
+#[cfg(any(feature = "tiktoken", feature = "huggingface"))]
+use std::collections::HashMap;
 
 use litellm_host_python::{enter_native, release_gil};
 #[cfg(feature = "huggingface")]
@@ -24,11 +27,11 @@ use crate::routes::token_counter::token_count_error_to_pyerr;
 
 #[cfg(feature = "huggingface")]
 use litellm_token_counter::huggingface::{
-    EncodeInput, Encoding, HuggingFaceTokenizer, InputSequence, encoding_from_json,
-    encoding_to_json,
+    EncodeInput, Encoding, HuggingFaceTokenizer, InputSequence, PaddingDirection, PaddingStrategy,
+    TruncationDirection, encoding_from_json, encoding_to_json,
 };
 #[cfg(feature = "tiktoken")]
-use litellm_token_counter::tiktoken::TiktokenTokenizer;
+use litellm_token_counter::tiktoken::{TiktokenTokenizer, Vocabulary};
 
 #[cfg(feature = "tiktoken")]
 pub(crate) fn load_tiktoken(py: Python<'_>, encoding: &str) -> PyResult<TiktokenTokenizer> {
@@ -90,9 +93,9 @@ impl Tokenizer {
 
     #[staticmethod]
     fn from_json(py: Python<'_>, tokenizer_json: &str) -> PyResult<Self> {
-        enter_native()?;
         #[cfg(feature = "huggingface")]
         {
+            enter_native()?;
             let tokenizer = release_gil(py, || HuggingFaceTokenizer::from_json(tokenizer_json))
                 .map_err(|error| token_count_error_to_pyerr(error.into()))?;
             Ok(Self {
@@ -116,9 +119,9 @@ impl Tokenizer {
         revision: &str,
         token: Option<&str>,
     ) -> PyResult<Self> {
-        enter_native()?;
         #[cfg(feature = "huggingface")]
         {
+            enter_native()?;
             let kwargs = PyDict::new(py);
             kwargs.set_item("repo_id", identifier)?;
             kwargs.set_item("filename", "tokenizer.json")?;
@@ -166,6 +169,8 @@ impl Tokenizer {
         self.inner.codec().name()
     }
 
+    // ---- tiktoken: the `tiktoken.Encoding` surface ------------------------------------------
+
     #[cfg(feature = "tiktoken")]
     fn encode_special(
         &self,
@@ -174,43 +179,74 @@ impl Tokenizer {
         allowed: Vec<String>,
     ) -> PyResult<Vec<u32>> {
         enter_native()?;
+        let tokenizer = self.tiktoken()?;
         let text = self.text(text)?;
-        match self.inner {
-            #[cfg(feature = "tiktoken")]
-            Codec::Tiktoken(ref tokenizer) => {
-                release_gil(py, || tokenizer.encode_special(&text, &allowed))
-                    .map_err(PyRuntimeError::new_err)
-            }
-            #[cfg(feature = "huggingface")]
-            Codec::HuggingFace(_) => Err(PyValueError::new_err("requires a tiktoken encoding")),
-        }
+        release_gil(py, || tokenizer.encode_special(&text, &allowed))
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    /// tiktoken's `encode_with_unstable`: `(stable_tokens, completions)`.
+    #[cfg(feature = "tiktoken")]
+    fn encode_with_unstable(
+        &self,
+        py: Python<'_>,
+        text: &Bound<'_, PyString>,
+        allowed: Vec<String>,
+    ) -> PyResult<(Vec<u32>, Vec<Vec<u32>>)> {
+        enter_native()?;
+        let tokenizer = self.tiktoken()?;
+        let text = self.text(text)?;
+        Ok(release_gil(py, || {
+            tokenizer.encode_with_unstable(&text, &allowed)
+        }))
+    }
+
+    /// The special tokens by text: tiktoken's `_special_tokens`.
+    #[cfg(feature = "tiktoken")]
+    fn special_tokens(&self) -> PyResult<HashMap<String, u32>> {
+        Ok(self
+            .vocabulary()?
+            .special_tokens()
+            .map(|(token, rank)| (token.to_owned(), rank))
+            .collect())
     }
 
     #[cfg(feature = "tiktoken")]
-    fn special_tokens(&self, py: Python<'_>) -> PyResult<HashSet<String>> {
-        enter_native()?;
-        match self.inner {
-            #[cfg(feature = "tiktoken")]
-            Codec::Tiktoken(ref tokenizer) => Ok(release_gil(py, || tokenizer.special_tokens())),
-            #[cfg(feature = "huggingface")]
-            Codec::HuggingFace(_) => Err(PyValueError::new_err("requires a tiktoken encoding")),
-        }
+    fn max_token_value(&self) -> PyResult<u32> {
+        Ok(self.vocabulary()?.max_token_value())
+    }
+
+    #[cfg(feature = "tiktoken")]
+    fn is_special_token(&self, token: u32) -> PyResult<bool> {
+        Ok(self.vocabulary()?.is_special_token(token))
+    }
+
+    /// Every mergeable token's bytes, sorted bytewise like tiktoken's `token_byte_values`.
+    #[cfg(feature = "tiktoken")]
+    fn token_byte_values<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyBytes>>> {
+        let vocabulary = self.vocabulary()?;
+        let values = release_gil(py, || vocabulary.token_byte_values());
+        Ok(values.iter().map(|value| PyBytes::new(py, value)).collect())
+    }
+
+    /// The token of one whole piece; `KeyError` when it is not in the vocabulary.
+    #[cfg(feature = "tiktoken")]
+    fn encode_single_token(&self, py: Python<'_>, piece: Vec<u8>) -> PyResult<u32> {
+        self.vocabulary()?
+            .encode_single_token(&piece)
+            .ok_or_else(|| PyKeyError::new_err(PyBytes::new(py, &piece).unbind()))
     }
 
     #[cfg(feature = "tiktoken")]
     fn decode_bytes<'py>(&self, py: Python<'py>, ids: Vec<u32>) -> PyResult<Bound<'py, PyBytes>> {
         enter_native()?;
-        match self.inner {
-            #[cfg(feature = "tiktoken")]
-            Codec::Tiktoken(ref tokenizer) => {
-                let bytes = release_gil(py, || tokenizer.decode_bytes(&ids))
-                    .map_err(PyKeyError::new_err)?;
-                Ok(PyBytes::new(py, &bytes))
-            }
-            #[cfg(feature = "huggingface")]
-            Codec::HuggingFace(_) => Err(PyValueError::new_err("requires a tiktoken encoding")),
-        }
+        let tokenizer = self.tiktoken()?;
+        let bytes =
+            release_gil(py, || tokenizer.decode_bytes(&ids)).map_err(PyKeyError::new_err)?;
+        Ok(PyBytes::new(py, &bytes))
     }
+
+    // ---- Hugging Face: the `tokenizers.Tokenizer` surface -----------------------------------
 
     #[cfg(feature = "huggingface")]
     #[pyo3(signature = (sequence, pair = None, is_pretokenized = false, add_special_tokens = true, fast = false))]
@@ -224,21 +260,19 @@ impl Tokenizer {
         fast: bool,
     ) -> PyResult<HuggingFaceEncoding> {
         enter_native()?;
+        let tokenizer = self.huggingface()?;
         let sequence = sequence.input(is_pretokenized)?;
         let input = match pair {
             Some(pair) => EncodeInput::Dual(sequence, pair.input(is_pretokenized)?),
             None => EncodeInput::Single(sequence),
         };
-        match self.inner {
-            Codec::HuggingFace(ref tokenizer) => release_gil(py, || {
-                tokenizer.encode_result(input, add_special_tokens, fast)
-            })
-            .map(|inner| HuggingFaceEncoding { inner })
-            .map_err(|error| token_count_error_to_pyerr(Error::from(error))),
-            #[cfg(feature = "tiktoken")]
-            Codec::Tiktoken(_) => Err(PyValueError::new_err("requires a Hugging Face tokenizer")),
-        }
+        release_gil(py, || {
+            tokenizer.encode_result(input, add_special_tokens, fast)
+        })
+        .map(|inner| HuggingFaceEncoding { inner })
+        .map_err(|error| token_count_error_to_pyerr(Error::from(error)))
     }
+
     #[cfg(feature = "huggingface")]
     #[pyo3(signature = (inputs, is_pretokenized = false, add_special_tokens = true, fast = false))]
     fn encode_batch_huggingface(
@@ -250,6 +284,7 @@ impl Tokenizer {
         fast: bool,
     ) -> PyResult<Vec<HuggingFaceEncoding>> {
         enter_native()?;
+        let tokenizer = self.huggingface()?;
         let inputs = inputs
             .into_iter()
             .map(|(sequence, pair)| {
@@ -260,51 +295,165 @@ impl Tokenizer {
                 }
             })
             .collect::<PyResult<Vec<_>>>()?;
-        match self.inner {
-            Codec::HuggingFace(ref tokenizer) => release_gil(py, || {
-                tokenizer.encode_batch_result(inputs, add_special_tokens, fast)
-            })
-            .map(|encodings| {
-                encodings
-                    .into_iter()
-                    .map(|inner| HuggingFaceEncoding { inner })
-                    .collect()
-            })
-            .map_err(|error| token_count_error_to_pyerr(Error::from(error))),
-            #[cfg(feature = "tiktoken")]
-            Codec::Tiktoken(_) => Err(PyValueError::new_err("requires a Hugging Face tokenizer")),
-        }
+        release_gil(py, || {
+            tokenizer.encode_batch_result(inputs, add_special_tokens, fast)
+        })
+        .map(|encodings| {
+            encodings
+                .into_iter()
+                .map(|inner| HuggingFaceEncoding { inner })
+                .collect()
+        })
+        .map_err(|error| token_count_error_to_pyerr(Error::from(error)))
     }
 
     #[cfg(feature = "huggingface")]
     #[pyo3(signature = (pretty = false))]
     fn to_json(&self, py: Python<'_>, pretty: bool) -> PyResult<String> {
         enter_native()?;
-        match self.inner {
-            #[cfg(feature = "huggingface")]
-            Codec::HuggingFace(ref tokenizer) => release_gil(py, || tokenizer.to_json(pretty))
-                .map_err(|error| token_count_error_to_pyerr(Error::from(error))),
-            #[cfg(feature = "tiktoken")]
-            Codec::Tiktoken(_) => Err(PyValueError::new_err("requires a Hugging Face tokenizer")),
-        }
+        let tokenizer = self.huggingface()?;
+        release_gil(py, || tokenizer.to_json(pretty))
+            .map_err(|error| token_count_error_to_pyerr(Error::from(error)))
+    }
+
+    #[cfg(feature = "huggingface")]
+    fn token_to_id(&self, token: &str) -> PyResult<Option<u32>> {
+        Ok(self.huggingface()?.token_to_id(token))
+    }
+
+    #[cfg(feature = "huggingface")]
+    fn id_to_token(&self, id: u32) -> PyResult<Option<String>> {
+        Ok(self.huggingface()?.id_to_token(id))
+    }
+
+    #[cfg(feature = "huggingface")]
+    #[pyo3(signature = (with_added_tokens = true))]
+    fn get_vocab(&self, py: Python<'_>, with_added_tokens: bool) -> PyResult<HashMap<String, u32>> {
+        let tokenizer = self.huggingface()?;
+        Ok(release_gil(py, || tokenizer.vocab(with_added_tokens)))
+    }
+
+    #[cfg(feature = "huggingface")]
+    #[pyo3(signature = (with_added_tokens = true))]
+    fn get_vocab_size(&self, with_added_tokens: bool) -> PyResult<usize> {
+        Ok(self.huggingface()?.vocab_size(with_added_tokens))
+    }
+
+    /// The added tokens by id as `(id, (content, single_word, lstrip, rstrip, normalized,
+    /// special))`, for Python to rebuild as `tokenizers.AddedToken`.
+    #[cfg(feature = "huggingface")]
+    fn added_tokens_decoder(&self) -> PyResult<Vec<(u32, AddedTokenFields)>> {
+        Ok(self
+            .huggingface()?
+            .added_tokens_decoder()
+            .into_iter()
+            .map(|(id, token)| {
+                (
+                    id,
+                    (
+                        token.content,
+                        token.single_word,
+                        token.lstrip,
+                        token.rstrip,
+                        token.normalized,
+                        token.special,
+                    ),
+                )
+            })
+            .collect())
+    }
+
+    /// The padding parameters as `tokenizers.Tokenizer.padding` reports them.
+    #[cfg(feature = "huggingface")]
+    fn padding<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let Some(params) = self.huggingface()?.padding() else {
+            return Ok(None);
+        };
+        let padding = PyDict::new(py);
+        padding.set_item(
+            "length",
+            match params.strategy {
+                PaddingStrategy::BatchLongest => None,
+                PaddingStrategy::Fixed(length) => Some(length),
+            },
+        )?;
+        padding.set_item("pad_to_multiple_of", params.pad_to_multiple_of)?;
+        padding.set_item("pad_id", params.pad_id)?;
+        padding.set_item("pad_type_id", params.pad_type_id)?;
+        padding.set_item("pad_token", &params.pad_token)?;
+        padding.set_item("direction", params.direction.as_ref())?;
+        Ok(Some(padding))
+    }
+
+    /// The truncation parameters as `tokenizers.Tokenizer.truncation` reports them.
+    #[cfg(feature = "huggingface")]
+    fn truncation<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let Some(params) = self.huggingface()?.truncation() else {
+            return Ok(None);
+        };
+        let truncation = PyDict::new(py);
+        truncation.set_item("max_length", params.max_length)?;
+        truncation.set_item("stride", params.stride)?;
+        truncation.set_item("strategy", params.strategy.as_ref())?;
+        truncation.set_item("direction", params.direction.as_ref())?;
+        Ok(Some(truncation))
+    }
+
+    #[cfg(feature = "huggingface")]
+    fn num_special_tokens_to_add(&self, is_pair: bool) -> PyResult<usize> {
+        Ok(self.huggingface()?.num_special_tokens_to_add(is_pair))
+    }
+
+    #[cfg(feature = "huggingface")]
+    fn encode_special_tokens(&self) -> PyResult<bool> {
+        Ok(self.huggingface()?.encode_special_tokens())
     }
 }
 
+#[cfg(feature = "huggingface")]
+type AddedTokenFields = (String, bool, bool, bool, bool, bool);
+
 impl Tokenizer {
+    /// A Python `str` as UTF-8. tiktoken replaces lone surrogates the way its Python `encode`
+    /// does; `tokenizers` rejects them, so that backend keeps the encode error.
     fn text<'a>(&self, text: &'a Bound<'_, PyString>) -> PyResult<Cow<'a, str>> {
         match text.to_cow() {
             Ok(text) => Ok(text),
-            Err(error)
-                if self.inner.codec().name() == "huggingface"
-                    || !error.is_instance_of::<PyUnicodeEncodeError>(text.py()) =>
-            {
-                Err(error)
-            }
-            Err(_) => text
-                .call_method1("encode", ("utf-16", "surrogatepass"))?
-                .call_method1("decode", ("utf-16", "replace"))?
-                .extract::<String>()
-                .map(Cow::Owned),
+            Err(error) => match self.inner {
+                #[cfg(feature = "tiktoken")]
+                Codec::Tiktoken(_) if error.is_instance_of::<PyUnicodeEncodeError>(text.py()) => {
+                    text.call_method1("encode", ("utf-16", "surrogatepass"))?
+                        .call_method1("decode", ("utf-16", "replace"))?
+                        .extract::<String>()
+                        .map(Cow::Owned)
+                }
+                _ => Err(error),
+            },
+        }
+    }
+
+    #[cfg(feature = "tiktoken")]
+    fn tiktoken(&self) -> PyResult<&TiktokenTokenizer> {
+        match self.inner {
+            Codec::Tiktoken(ref tokenizer) => Ok(tokenizer),
+            #[cfg(feature = "huggingface")]
+            Codec::HuggingFace(_) => Err(PyValueError::new_err("requires a tiktoken encoding")),
+        }
+    }
+
+    #[cfg(feature = "tiktoken")]
+    fn vocabulary(&self) -> PyResult<&Vocabulary> {
+        self.tiktoken()?.vocabulary().ok_or_else(|| {
+            PyRuntimeError::new_err("this encoding was built without its vocabulary")
+        })
+    }
+
+    #[cfg(feature = "huggingface")]
+    fn huggingface(&self) -> PyResult<&HuggingFaceTokenizer> {
+        match self.inner {
+            Codec::HuggingFace(ref tokenizer) => Ok(tokenizer),
+            #[cfg(feature = "tiktoken")]
+            Codec::Tiktoken(_) => Err(PyValueError::new_err("requires a Hugging Face tokenizer")),
         }
     }
 }
@@ -330,7 +479,20 @@ impl Sequence {
 }
 
 #[cfg(feature = "huggingface")]
-#[pyclass(frozen, module = "litellm.rust_bridge._native")]
+fn direction<T>(value: &str, left: T, right: T, what: &str) -> PyResult<T> {
+    match value {
+        "left" => Ok(left),
+        "right" => Ok(right),
+        other => Err(PyValueError::new_err(format!(
+            "invalid {what} direction {other:?}: expected 'left' or 'right'"
+        ))),
+    }
+}
+
+/// `tokenizers.Encoding`, mutable like the original: `pad`, `truncate` and `set_sequence_id`
+/// change it in place.
+#[cfg(feature = "huggingface")]
+#[pyclass(module = "litellm.rust_bridge._native")]
 pub(crate) struct HuggingFaceEncoding {
     inner: Encoding,
 }
@@ -349,6 +511,17 @@ impl HuggingFaceEncoding {
         Ok(Self { inner })
     }
 
+    #[staticmethod]
+    #[pyo3(signature = (encodings, growing_offsets = true))]
+    fn merge(encodings: Vec<PyRef<'_, Self>>, growing_offsets: bool) -> Self {
+        Self {
+            inner: Encoding::merge(
+                encodings.iter().map(|encoding| encoding.inner.clone()),
+                growing_offsets,
+            ),
+        }
+    }
+
     fn __reduce__<'py>(
         &self,
         py: Python<'py>,
@@ -356,6 +529,14 @@ impl HuggingFaceEncoding {
         let json = encoding_to_json(&self.inner)
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
         Ok((py.get_type::<Self>(), (json,)))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Encoding(num_tokens={}, attributes=[ids, type_ids, tokens, offsets, \
+             attention_mask, special_tokens_mask, overflowing])",
+            self.inner.len()
+        )
     }
 
     fn __len__(&self) -> usize {
@@ -406,17 +587,68 @@ impl HuggingFaceEncoding {
     fn n_sequences(&self) -> usize {
         self.inner.n_sequences()
     }
-}
 
-#[pyfunction]
-pub(crate) fn tiktoken_encoding_for_model(model: &str) -> Option<String> {
-    #[cfg(feature = "tiktoken")]
-    {
-        litellm_token_counter::tiktoken::encoding_for_model(model).map(str::to_owned)
+    #[pyo3(signature = (word_index, sequence_index = 0))]
+    fn word_to_tokens(&self, word_index: u32, sequence_index: usize) -> Option<(usize, usize)> {
+        self.inner.word_to_tokens(word_index, sequence_index)
     }
-    #[cfg(not(feature = "tiktoken"))]
-    {
-        let _ = model;
-        None
+    #[pyo3(signature = (word_index, sequence_index = 0))]
+    fn word_to_chars(&self, word_index: u32, sequence_index: usize) -> Option<(usize, usize)> {
+        self.inner.word_to_chars(word_index, sequence_index)
+    }
+    fn token_to_sequence(&self, token_index: usize) -> Option<usize> {
+        self.inner.token_to_sequence(token_index)
+    }
+    fn token_to_chars(&self, token_index: usize) -> Option<(usize, usize)> {
+        self.inner
+            .token_to_chars(token_index)
+            .map(|(_, offsets)| offsets)
+    }
+    fn token_to_word(&self, token_index: usize) -> Option<u32> {
+        self.inner.token_to_word(token_index).map(|(_, word)| word)
+    }
+    #[pyo3(signature = (char_pos, sequence_index = 0))]
+    fn char_to_token(&self, char_pos: usize, sequence_index: usize) -> Option<usize> {
+        self.inner.char_to_token(char_pos, sequence_index)
+    }
+    #[pyo3(signature = (char_pos, sequence_index = 0))]
+    fn char_to_word(&self, char_pos: usize, sequence_index: usize) -> Option<u32> {
+        self.inner.char_to_word(char_pos, sequence_index)
+    }
+
+    fn set_sequence_id(&mut self, sequence_id: usize) {
+        self.inner.set_sequence_id(sequence_id);
+    }
+
+    #[pyo3(signature = (length, direction = "right", pad_id = 0, pad_type_id = 0, pad_token = "[PAD]"))]
+    fn pad(
+        &mut self,
+        length: usize,
+        direction: &str,
+        pad_id: u32,
+        pad_type_id: u32,
+        pad_token: &str,
+    ) -> PyResult<()> {
+        let direction = self::direction(
+            direction,
+            PaddingDirection::Left,
+            PaddingDirection::Right,
+            "padding",
+        )?;
+        self.inner
+            .pad(length, pad_id, pad_type_id, pad_token, direction);
+        Ok(())
+    }
+
+    #[pyo3(signature = (max_length, stride = 0, direction = "right"))]
+    fn truncate(&mut self, max_length: usize, stride: usize, direction: &str) -> PyResult<()> {
+        let direction = self::direction(
+            direction,
+            TruncationDirection::Left,
+            TruncationDirection::Right,
+            "truncation",
+        )?;
+        self.inner.truncate(max_length, stride, direction);
+        Ok(())
     }
 }

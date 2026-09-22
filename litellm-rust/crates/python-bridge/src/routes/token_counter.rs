@@ -144,7 +144,6 @@ pub(crate) fn token_count_error_to_pyerr(error: Error) -> PyErr {
     let message = error.to_string();
     match error {
         Error::Load(_)
-        | Error::Download(_)
         | Error::Ranks(_)
         | Error::UnicodeClasses
         | Error::UnsupportedTokenizer(_) => PyValueError::new_err(message),

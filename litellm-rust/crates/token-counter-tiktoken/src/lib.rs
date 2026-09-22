@@ -6,37 +6,52 @@ mod ranks;
 use std::collections::HashSet;
 
 pub use error::UnsupportedTokenizer;
-pub use ranks::LoadError;
+pub use ranks::{LoadError, Vocabulary};
 
 pub struct TiktokenTokenizer {
     encoder: &'static tiktoken_rs::CoreBPE,
+    /// Present for encodings built from a rank file; the embedded tiktoken-rs singletons
+    /// behind [`from_name`](Self::from_name) keep their ranks private.
+    vocabulary: Option<&'static Vocabulary>,
     name: &'static str,
 }
 
 impl TiktokenTokenizer {
+    /// Builds `name` from its packaged rank file (read through `load`), once per process.
+    /// The tokenizer reports the requested name, so `gpt2` stays `gpt2` like tiktoken does.
     pub fn from_cached_ranks(
         name: &str,
         load: impl FnOnce(&str) -> std::io::Result<String>,
     ) -> Result<Self, LoadError> {
-        let (encoder, name) = ranks::load(name, load)?;
-        Ok(Self { encoder, name })
+        let (loaded, name) = ranks::load(name, load)?;
+        Ok(Self {
+            encoder: &loaded.bpe,
+            vocabulary: Some(&loaded.vocabulary),
+            name,
+        })
     }
 
+    /// The encodings tiktoken-rs embeds, for hosts without the packaged rank files.
     pub fn from_name(name: &str) -> Result<Self, UnsupportedTokenizer> {
-        let (encoder, canonical_name) = match name {
+        let (encoder, name) = match name {
             "cl100k_base" => (tiktoken_rs::cl100k_base_singleton(), "cl100k_base"),
             "o200k_base" => (tiktoken_rs::o200k_base_singleton(), "o200k_base"),
             "o200k_harmony" => (tiktoken_rs::o200k_harmony_singleton(), "o200k_harmony"),
             "p50k_base" => (tiktoken_rs::p50k_base_singleton(), "p50k_base"),
             "p50k_edit" => (tiktoken_rs::p50k_edit_singleton(), "p50k_edit"),
             "r50k_base" => (tiktoken_rs::r50k_base_singleton(), "r50k_base"),
-            "gpt2" => (tiktoken_rs::r50k_base_singleton(), "r50k_base"),
+            "gpt2" => (tiktoken_rs::r50k_base_singleton(), "gpt2"),
             _ => return Err(UnsupportedTokenizer(name.to_owned())),
         };
         Ok(Self {
             encoder,
-            name: canonical_name,
+            vocabulary: None,
+            name,
         })
+    }
+
+    pub fn vocabulary(&self) -> Option<&Vocabulary> {
+        self.vocabulary
     }
 
     pub fn count_tokens(&self, text: &str) -> usize {
@@ -61,6 +76,20 @@ impl TiktokenTokenizer {
             .into_iter()
             .map(str::to_owned)
             .collect()
+    }
+
+    /// tiktoken's `encode_with_unstable`: the stable prefix of `text`'s tokens and every
+    /// token sequence the unstable tail could still become, sorted for a stable order.
+    pub fn encode_with_unstable(
+        &self,
+        text: &str,
+        allowed: &[String],
+    ) -> (Vec<u32>, Vec<Vec<u32>>) {
+        let allowed = allowed.iter().map(String::as_str).collect();
+        let (stable, completions) = self.encoder._encode_unstable_native(text, &allowed);
+        let mut completions: Vec<Vec<u32>> = completions.into_iter().collect();
+        completions.sort_unstable();
+        (stable, completions)
     }
 
     pub fn decode_bytes(&self, ids: &[u32]) -> Result<Vec<u8>, String> {
@@ -135,10 +164,7 @@ mod tests {
             panic!("unknown encoding must be rejected");
         };
         assert_eq!(name, "unknown-encoding");
-        assert_eq!(
-            TiktokenTokenizer::from_name("gpt2").unwrap().name(),
-            "r50k_base"
-        );
+        assert_eq!(TiktokenTokenizer::from_name("gpt2").unwrap().name(), "gpt2");
     }
 
     #[test]
@@ -178,6 +204,29 @@ mod tests {
             );
         }
         assert!(tokenizer.decode(&[u32::MAX]).is_err());
+    }
+
+    #[test]
+    fn unstable_encoding_prefixes_stay_consistent_with_full_encoding() {
+        let tokenizer = TiktokenTokenizer::from_name("cl100k_base").unwrap();
+        let text = "hello fanta";
+        let (stable, completions) = tokenizer.encode_with_unstable(text, &[]);
+        assert!(
+            text.as_bytes()
+                .starts_with(&tokenizer.decode_bytes(&stable).unwrap())
+        );
+        assert!(!completions.is_empty());
+        for completion in &completions {
+            let mut ids = stable.clone();
+            ids.extend(completion);
+            assert!(
+                tokenizer
+                    .decode_bytes(&ids)
+                    .unwrap()
+                    .starts_with(text.as_bytes())
+            );
+        }
+        assert!(completions.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]

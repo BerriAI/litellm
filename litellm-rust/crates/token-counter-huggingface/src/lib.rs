@@ -2,10 +2,14 @@
 
 mod error;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub use error::Error;
-pub use tokenizers::{EncodeInput, Encoding, InputSequence};
+use tokenizers::PostProcessor;
+pub use tokenizers::{
+    AddedToken, EncodeInput, Encoding, InputSequence, PaddingDirection, PaddingParams,
+    PaddingStrategy, TruncationDirection, TruncationParams,
+};
 
 pub fn encoding_from_json(json: &str) -> Result<Encoding, Error> {
     serde_json::from_str(json).map_err(|error| Error::Load(error.into()))
@@ -91,6 +95,52 @@ impl HuggingFaceTokenizer {
         self.tokenizer.to_string(pretty).map_err(Error::Load)
     }
 
+    pub fn token_to_id(&self, token: &str) -> Option<u32> {
+        self.tokenizer.token_to_id(token)
+    }
+
+    pub fn id_to_token(&self, id: u32) -> Option<String> {
+        self.tokenizer.id_to_token(id)
+    }
+
+    pub fn vocab(&self, with_added_tokens: bool) -> HashMap<String, u32> {
+        self.tokenizer.get_vocab(with_added_tokens)
+    }
+
+    pub fn vocab_size(&self, with_added_tokens: bool) -> usize {
+        self.tokenizer.get_vocab_size(with_added_tokens)
+    }
+
+    /// The added tokens by id, in id order.
+    pub fn added_tokens_decoder(&self) -> Vec<(u32, AddedToken)> {
+        let mut added: Vec<(u32, AddedToken)> = self
+            .tokenizer
+            .get_added_tokens_decoder()
+            .into_iter()
+            .collect();
+        added.sort_unstable_by_key(|(id, _)| *id);
+        added
+    }
+
+    pub fn padding(&self) -> Option<&PaddingParams> {
+        self.tokenizer.get_padding()
+    }
+
+    pub fn truncation(&self) -> Option<&TruncationParams> {
+        self.tokenizer.get_truncation()
+    }
+
+    /// How many special tokens the post-processor adds to a single sequence or a pair.
+    pub fn num_special_tokens_to_add(&self, is_pair: bool) -> usize {
+        self.tokenizer
+            .get_post_processor()
+            .map_or(0, |processor| processor.added_tokens(is_pair))
+    }
+
+    pub fn encode_special_tokens(&self) -> bool {
+        self.tokenizer.get_encode_special_tokens()
+    }
+
     pub fn decode(&self, ids: &[u32], skip_special_tokens: bool) -> Result<String, Error> {
         if !skip_special_tokens {
             return self.tokenizer.decode(ids, false).map_err(Error::Decode);
@@ -158,5 +208,31 @@ mod tests {
 
         assert!(!tokenizer.decode(&[1, 2], true).unwrap().contains("<s>"));
         assert!(tokenizer.decode(&[1, 2], false).unwrap().contains("<s>"));
+    }
+
+    #[test]
+    fn vocabulary_lookups_mirror_the_tokenizers_api() {
+        let json = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../litellm/litellm_core_utils/tokenizers/anthropic_tokenizer.json"
+        ));
+        let tokenizer = HuggingFaceTokenizer::from_json(json).unwrap();
+        let ids = tokenizer.encode("hello").unwrap();
+
+        let token = tokenizer.id_to_token(ids[0]).unwrap();
+        assert_eq!(tokenizer.token_to_id(&token), Some(ids[0]));
+        assert_eq!(tokenizer.id_to_token(u32::MAX), None);
+        assert_eq!(tokenizer.vocab(true).len(), tokenizer.vocab_size(true));
+        assert!(tokenizer.vocab_size(true) >= tokenizer.vocab_size(false));
+        let added = tokenizer.added_tokens_decoder();
+        assert!(added.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        assert!(added.iter().any(|(_, token)| token.special));
+        assert!(tokenizer.padding().is_none());
+        assert!(tokenizer.truncation().is_none());
+        assert!(!tokenizer.encode_special_tokens());
+        assert_eq!(
+            tokenizer.num_special_tokens_to_add(false),
+            tokenizer.encode("").unwrap().len()
+        );
     }
 }

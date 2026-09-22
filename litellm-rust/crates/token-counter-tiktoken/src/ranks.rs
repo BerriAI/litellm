@@ -13,12 +13,61 @@ const LEGACY_PATTERN: &str =
     r"'(?:[sdmt]|ll|ve|re)| ?\p{L}++| ?\p{N}++| ?[^\s\p{L}\p{N}]++|\s++$|\s+(?!\S)|\s";
 const CL100K_PATTERN: &str = r"'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+| ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s";
 
-static CL100K_ENCODER: OnceCell<CoreBPE> = OnceCell::new();
-static O200K_ENCODER: OnceCell<CoreBPE> = OnceCell::new();
-static HARMONY_ENCODER: OnceCell<CoreBPE> = OnceCell::new();
-static P50K_ENCODER: OnceCell<CoreBPE> = OnceCell::new();
-static EDIT_ENCODER: OnceCell<CoreBPE> = OnceCell::new();
-static R50K_ENCODER: OnceCell<CoreBPE> = OnceCell::new();
+static CL100K_ENCODER: OnceCell<Loaded> = OnceCell::new();
+static O200K_ENCODER: OnceCell<Loaded> = OnceCell::new();
+static HARMONY_ENCODER: OnceCell<Loaded> = OnceCell::new();
+static P50K_ENCODER: OnceCell<Loaded> = OnceCell::new();
+static EDIT_ENCODER: OnceCell<Loaded> = OnceCell::new();
+static R50K_ENCODER: OnceCell<Loaded> = OnceCell::new();
+
+/// One encoding built from a rank file: the BPE engine plus the vocabulary it was built
+/// from, kept because `CoreBPE` does not expose its ranks and tiktoken's Python API does
+/// (`token_byte_values`, `encode_single_token`, `max_token_value`, `_special_tokens`).
+pub(super) struct Loaded {
+    pub(super) bpe: CoreBPE,
+    pub(super) vocabulary: Vocabulary,
+}
+
+/// The byte-level vocabulary of a tiktoken encoding.
+pub struct Vocabulary {
+    ranks: FxHashMap<Vec<u8>, Rank>,
+    special_tokens: FxHashMap<String, Rank>,
+    max_token_value: Rank,
+}
+
+impl Vocabulary {
+    /// Every mergeable token's bytes, sorted bytewise like tiktoken's `token_byte_values`.
+    pub fn token_byte_values(&self) -> Vec<Vec<u8>> {
+        let mut values: Vec<Vec<u8>> = self.ranks.keys().cloned().collect();
+        values.sort_unstable();
+        values
+    }
+
+    /// The rank of one whole token: a mergeable piece first, then a special token's text.
+    pub fn encode_single_token(&self, piece: &[u8]) -> Option<Rank> {
+        if let Some(rank) = self.ranks.get(piece) {
+            return Some(*rank);
+        }
+        std::str::from_utf8(piece)
+            .ok()
+            .and_then(|text| self.special_tokens.get(text).copied())
+    }
+
+    pub fn max_token_value(&self) -> Rank {
+        self.max_token_value
+    }
+
+    /// The special tokens with their ranks, tiktoken's `_special_tokens`.
+    pub fn special_tokens(&self) -> impl Iterator<Item = (&str, Rank)> + '_ {
+        self.special_tokens
+            .iter()
+            .map(|(token, rank)| (token.as_str(), *rank))
+    }
+
+    pub fn is_special_token(&self, rank: Rank) -> bool {
+        self.special_tokens.values().any(|special| *special == rank)
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum LoadError {
@@ -28,27 +77,31 @@ pub enum LoadError {
     Ranks(String),
 }
 
+/// Loads `name` once per process. The returned name is the one requested (`gpt2` stays
+/// `gpt2`, as `tiktoken.get_encoding("gpt2").name` does), while `gpt2` and `r50k_base` share
+/// one cached encoder.
 pub(super) fn load(
     name: &str,
     load_file: impl FnOnce(&str) -> std::io::Result<String>,
-) -> Result<(&'static CoreBPE, &'static str), LoadError> {
-    let (name, file, cache) = match name {
-        "cl100k_base" => ("cl100k_base", CL100K, &CL100K_ENCODER),
-        "o200k_base" => ("o200k_base", O200K, &O200K_ENCODER),
-        "o200k_harmony" => ("o200k_harmony", O200K, &HARMONY_ENCODER),
-        "p50k_base" => ("p50k_base", P50K, &P50K_ENCODER),
-        "p50k_edit" => ("p50k_edit", P50K, &EDIT_ENCODER),
-        "r50k_base" | "gpt2" => ("r50k_base", P50K, &R50K_ENCODER),
+) -> Result<(&'static Loaded, &'static str), LoadError> {
+    let (requested, canonical, file, cache) = match name {
+        "cl100k_base" => ("cl100k_base", "cl100k_base", CL100K, &CL100K_ENCODER),
+        "o200k_base" => ("o200k_base", "o200k_base", O200K, &O200K_ENCODER),
+        "o200k_harmony" => ("o200k_harmony", "o200k_harmony", O200K, &HARMONY_ENCODER),
+        "p50k_base" => ("p50k_base", "p50k_base", P50K, &P50K_ENCODER),
+        "p50k_edit" => ("p50k_edit", "p50k_edit", P50K, &EDIT_ENCODER),
+        "r50k_base" => ("r50k_base", "r50k_base", P50K, &R50K_ENCODER),
+        "gpt2" => ("gpt2", "r50k_base", P50K, &R50K_ENCODER),
         _ => return Err(UnsupportedTokenizer(name.to_owned()).into()),
     };
-    let encoder = cache.get_or_try_init(|| {
+    let loaded = cache.get_or_try_init(|| {
         let ranks = load_file(file).map_err(|error| LoadError::Ranks(error.to_string()))?;
-        build(name, &ranks)
+        build(canonical, &ranks)
     })?;
-    Ok((encoder, name))
+    Ok((loaded, requested))
 }
 
-fn build(name: &str, ranks: &str) -> Result<CoreBPE, LoadError> {
+fn build(name: &str, ranks: &str) -> Result<Loaded, LoadError> {
     let parsed = ranks
         .lines()
         .map(parse_rank)
@@ -115,13 +168,27 @@ fn build(name: &str, ranks: &str) -> Result<CoreBPE, LoadError> {
     let reserved = (200013..=201087)
         .filter(|_| name == "o200k_harmony")
         .map(|rank| (format!("<|reserved_{rank}|>"), rank));
-    let special_tokens = specials
+    let special_tokens: FxHashMap<String, Rank> = specials
         .iter()
         .map(|(token, rank)| ((*token).to_owned(), *rank))
         .chain(reserved)
         .collect();
-    CoreBPE::new(encoder, special_tokens, pattern)
-        .map_err(|error| LoadError::Ranks(error.to_string()))
+    let max_token_value = encoder
+        .values()
+        .chain(special_tokens.values())
+        .copied()
+        .max()
+        .ok_or_else(|| LoadError::Ranks("empty vocabulary".into()))?;
+    let bpe = CoreBPE::new(encoder.clone(), special_tokens.clone(), pattern)
+        .map_err(|error| LoadError::Ranks(error.to_string()))?;
+    Ok(Loaded {
+        bpe,
+        vocabulary: Vocabulary {
+            ranks: encoder,
+            special_tokens,
+            max_token_value,
+        },
+    })
 }
 
 fn parse_rank(line: &str) -> Result<(Vec<u8>, Rank), LoadError> {
@@ -219,7 +286,38 @@ mod tests {
             })
             .unwrap();
             assert_eq!(cached.encode("cached"), expected.encode("cached"));
+            assert_eq!(cached.name(), name);
+            assert!(expected.vocabulary().is_none());
+            assert_vocabulary_lookups(name, actual);
         }
+    }
+
+    /// The token-level lookups tiktoken's Python `Encoding` exposes, checked against the
+    /// encoder itself and against the known vocabulary sizes.
+    fn assert_vocabulary_lookups(name: &str, tokenizer: &TiktokenTokenizer) {
+        let max_token_value = match name {
+            "cl100k_base" => 100_276,
+            "o200k_base" => 200_018,
+            "o200k_harmony" => 201_087,
+            "p50k_base" => 50_280,
+            "p50k_edit" => 50_283,
+            "r50k_base" | "gpt2" => 50_256,
+            _ => unreachable!("{name}"),
+        };
+        let vocabulary = tokenizer.vocabulary().unwrap();
+        assert_eq!(vocabulary.max_token_value(), max_token_value, "{name}");
+        let values = vocabulary.token_byte_values();
+        assert!(values.windows(2).all(|pair| pair[0] < pair[1]), "{name}");
+        for piece in values.iter().step_by(997) {
+            let rank = vocabulary.encode_single_token(piece).unwrap();
+            assert_eq!(tokenizer.decode_bytes(&[rank]).unwrap(), *piece, "{name}");
+            assert!(!vocabulary.is_special_token(rank), "{name}");
+        }
+        for (token, rank) in vocabulary.special_tokens() {
+            assert_eq!(vocabulary.encode_single_token(token.as_bytes()), Some(rank));
+            assert!(vocabulary.is_special_token(rank), "{name}: {token}");
+        }
+        assert_eq!(vocabulary.encode_single_token(b"<|not-a-token|>"), None);
     }
 
     #[test]

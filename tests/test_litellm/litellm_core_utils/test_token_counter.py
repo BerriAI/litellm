@@ -786,21 +786,21 @@ def test_token_counter():
 
 import unittest
 
-from litellm.utils import _select_tokenizer_helper, claude_json_str, encoding
+from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer_helper, claude_json_str, encoding
 
 # Clear the cache at module load to ensure clean state
-_select_tokenizer_helper.cache_clear()
+_load_huggingface_tokenizer.cache_clear()
 
 
 class TestTokenizerSelection(unittest.TestCase):
     def setUp(self):
         """Clear the LRU cache before each test method.
 
-        The _select_tokenizer_helper function is decorated with @lru_cache,
-        which can cause cache hits from previous tests when running with
+        The HuggingFace tokenizers behind _select_tokenizer_helper are cached with
+        @lru_cache, which can cause cache hits from previous tests when running with
         --dist=loadscope (tests from same file run on same worker).
         """
-        _select_tokenizer_helper.cache_clear()
+        _load_huggingface_tokenizer.cache_clear()
 
     @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
     def test_llama3_tokenizer_api_failure(self, mock_from_pretrained):

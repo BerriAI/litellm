@@ -83,3 +83,52 @@ def test_declined_native_factory_falls_back_before_tokenizing() -> None:
         litellm.decode(tokens=litellm.encode(text="Hello World", custom_tokenizer=custom), custom_tokenizer=custom)
         == "Hello World"
     )
+
+
+@pytest.mark.parametrize(
+    ("model", "text"),
+    (
+        ("gpt-4o", "hello <|endoftext|> world"),
+        ("gpt-3.5-turbo", "café 漢字 🙂"),
+        ("text-davinci-003", "  def f():\n    return 1\n"),
+        ("tokenizer-parity-fixture", "<SOS>hello<EOT> again"),
+    ),
+)
+def test_public_token_api_is_identical_across_backends(monkeypatch: pytest.MonkeyPatch, model: str, text: str) -> None:
+    """`litellm.token_counter`, `encode` and `decode` return the same values whichever backend
+    the catalog picks; only the object types differ."""
+    monkeypatch.setattr(litellm, "anthropic_models", {*litellm.anthropic_models, "tokenizer-parity-fixture"})
+    messages: Final = [{"role": "user", "content": text}, {"role": "assistant", "content": "ok"}]
+
+    def observe() -> tuple[int, int, list[int], str]:
+        ids: Final = litellm.encode(model=model, text=text)
+        return (
+            litellm.token_counter(model=model, text=text),
+            litellm.token_counter(model=model, messages=messages),
+            ids,
+            litellm.decode(model=model, tokens=ids),
+        )
+
+    configuration.rust(False)
+    python: Final = observe()
+    configuration.rust(True)
+    rust: Final = observe()
+
+    assert rust == python
+
+
+def test_cached_huggingface_tokenizers_follow_backend_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer as RustHuggingFaceTokenizer
+    from litellm.utils import _load_huggingface_tokenizer
+
+    monkeypatch.setattr(litellm, "anthropic_models", {*litellm.anthropic_models, "tokenizer-cache-fixture"})
+    _load_huggingface_tokenizer.cache_clear()
+    configuration.rust(True)
+    native: Final = _select_tokenizer("tokenizer-cache-fixture")["tokenizer"]
+    configuration.rust(False)
+    python: Final = _select_tokenizer("tokenizer-cache-fixture")["tokenizer"]
+    configuration.rust(True)
+
+    assert isinstance(native, RustHuggingFaceTokenizer)
+    assert isinstance(python, Tokenizer)
+    assert _select_tokenizer("tokenizer-cache-fixture")["tokenizer"] is native

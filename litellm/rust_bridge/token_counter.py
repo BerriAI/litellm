@@ -11,7 +11,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.default_encoding import cl100k_base_rank_file, o200k_base_rank_file
-from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding, uses_legacy_message_accounting
+from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding_name, uses_legacy_message_accounting
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.utils import claude_json_str, huggingface_tokenizer_kind
 
@@ -70,7 +70,7 @@ def rust_tokenizer(model: str) -> RustTokenizer | None:
         return "anthropic"
     if kind is not None or uses_legacy_message_accounting(model):
         return None
-    match openai_tokenizer_encoding(model).name:
+    match openai_tokenizer_encoding_name(model):
         case "cl100k_base":
             return "cl100k_base"
         case "o200k_base":

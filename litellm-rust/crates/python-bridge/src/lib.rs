@@ -37,7 +37,7 @@ mod _native {
     #[pymodule_export]
     use crate::tokenizer::HuggingFaceEncoding;
     #[pymodule_export]
-    use crate::tokenizer::{Tokenizer, tiktoken_encoding_for_model};
+    use crate::tokenizer::Tokenizer;
     #[pymodule_export]
     use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
     use pyo3::{prelude::*, types::PyModule};
@@ -84,7 +84,6 @@ mod tests {
                 "ResponsesWebSocketConnection",
                 "TokenCounter",
                 "Tokenizer",
-                "tiktoken_encoding_for_model",
                 "gil_stats",
                 "process_state_started",
                 "reserve_process_for_forking",

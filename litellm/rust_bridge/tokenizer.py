@@ -25,11 +25,15 @@ def _as_factory(value: object) -> type[NativeTokenizer] | None:
 
 TOKENIZER: Final = NativeBinding("Tokenizer", validate=_as_factory)
 
+# The catalog contexts the tokenizer factories dispatch on. Callers that cache a tokenizer per
+# backend key their cache on `decision(...)` of the same context, so key and dispatch agree.
+TIKTOKEN_CONTEXT: Final = Context(Route.TOKENIZER, provider="tiktoken")
+HUGGINGFACE_CONTEXT: Final = Context(Route.TOKENIZER, provider="huggingface")
+
 
 @lru_cache(maxsize=8)
 def _native_encoding(factory: type[NativeTokenizer], name: str) -> OpenAIEncoding:
-    native: Final = factory.from_tiktoken(name)
-    return OpenAIEncoding(name, native, frozenset(native.special_tokens()))
+    return OpenAIEncoding.wrap(factory.from_tiktoken(name))
 
 
 def _python_encoding(name: str) -> tiktoken.Encoding:
@@ -40,7 +44,7 @@ def _python_encoding(name: str) -> tiktoken.Encoding:
 
 def get_encoding(name: str) -> Encoding:
     return runtime.run(
-        Context(Route.TOKENIZER, provider="tiktoken"),
+        TIKTOKEN_CONTEXT,
         binding=TOKENIZER,
         native=lambda factory: _native_encoding(factory, name),
         python=lambda: _python_encoding(name),
@@ -49,7 +53,7 @@ def get_encoding(name: str) -> Encoding:
 
 def from_str(json: str) -> HuggingFace:
     return runtime.run(
-        Context(Route.TOKENIZER, provider="huggingface"),
+        HUGGINGFACE_CONTEXT,
         binding=TOKENIZER,
         native=lambda factory: HuggingFaceTokenizer(factory.from_json(json)),
         python=lambda: PythonHuggingFaceTokenizer.from_str(json),
@@ -58,7 +62,7 @@ def from_str(json: str) -> HuggingFace:
 
 def from_pretrained(identifier: str, revision: str = "main", token: str | None = None) -> HuggingFace:
     return runtime.run(
-        Context(Route.TOKENIZER, provider="huggingface"),
+        HUGGINGFACE_CONTEXT,
         binding=TOKENIZER,
         native=lambda factory: HuggingFaceTokenizer(
             factory.from_pretrained(identifier, revision=revision, token=token)

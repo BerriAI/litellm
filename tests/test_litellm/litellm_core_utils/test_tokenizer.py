@@ -301,3 +301,103 @@ def test_huggingface_batch_sequence_containers_match_python(is_pretokenized: boo
     assert [(item.ids, item.type_ids, item.sequence_ids) for item in actual] == [
         (item.ids, item.type_ids, item.sequence_ids) for item in expected
     ]
+
+
+@pytest.mark.parametrize("name", ("cl100k_base", "o200k_base", "p50k_edit", "gpt2"))
+def test_openai_encoding_exposes_the_tiktoken_vocabulary_surface(name: str) -> None:
+    reference: Final = tiktoken.get_encoding(name)
+    encoding: Final = OpenAIEncoding.from_tiktoken(name)
+    text: Final = "hello fanta"
+
+    assert repr(encoding) == repr(reference) == f"<Encoding {name!r}>"
+    assert (encoding.name, encoding.n_vocab, encoding.max_token_value) == (
+        reference.name,
+        reference.n_vocab,
+        reference.max_token_value,
+    )
+    assert encoding.token_byte_values() == reference.token_byte_values()
+    assert encoding.encode_single_token("hello") == reference.encode_single_token("hello")
+    assert encoding.encode_single_token(b"<|endoftext|>") == reference.eot_token
+    assert [encoding.is_special_token(token) for token in (0, reference.eot_token)] == [False, True]
+    assert encoding.decode_with_offsets(reference.encode(text)) == reference.decode_with_offsets(reference.encode(text))
+    assert encoding.encode_to_numpy(text).tolist() == reference.encode_to_numpy(text).tolist()
+    stable, completions = encoding.encode_with_unstable(text)
+    expected_stable, expected_completions = reference.encode_with_unstable(text)
+    assert (stable, sorted(completions)) == (expected_stable, sorted(expected_completions))
+    with pytest.raises(KeyError):
+        encoding.encode_single_token("<|not-a-token|>")
+
+
+def test_huggingface_tokenizer_exposes_the_tokenizers_vocabulary_surface() -> None:
+    reference: Final = ReferenceTokenizer.from_str(TOKENIZER_JSON)
+    reference.enable_padding(pad_id=0, pad_token="[UNK]", length=4)
+    reference.enable_truncation(max_length=3, stride=1, strategy="only_first", direction="left")
+    tokenizer: Final = HuggingFaceTokenizer.from_str(reference.to_str())
+
+    assert tokenizer.token_to_id("Hello") == reference.token_to_id("Hello") == 1
+    assert tokenizer.id_to_token(3) == reference.id_to_token(3) == "[BOS]"
+    assert tokenizer.id_to_token(99) is None
+    assert tokenizer.get_vocab() == reference.get_vocab()
+    assert tokenizer.get_vocab(with_added_tokens=False) == reference.get_vocab(with_added_tokens=False)
+    assert tokenizer.get_vocab_size() == reference.get_vocab_size() == 4
+    assert tokenizer.get_vocab_size(with_added_tokens=False) == reference.get_vocab_size(with_added_tokens=False)
+    added: Final = tokenizer.get_added_tokens_decoder()
+    expected_added: Final = reference.get_added_tokens_decoder()
+    assert {token_id: str(token) for token_id, token in added.items()} == {
+        token_id: str(token) for token_id, token in expected_added.items()
+    }
+    assert added[3].special == expected_added[3].special
+    assert tokenizer.num_special_tokens_to_add(False) == reference.num_special_tokens_to_add(False) == 1
+    assert tokenizer.num_special_tokens_to_add(True) == reference.num_special_tokens_to_add(True) == 0
+    assert tokenizer.padding == reference.padding
+    assert tokenizer.truncation == reference.truncation
+    assert tokenizer.encode_special_tokens == reference.encode_special_tokens is False
+    assert HuggingFaceTokenizer.from_buffer(TOKENIZER_JSON.encode()).encode("Hello").ids == [3, 1]
+    assert HuggingFaceTokenizer.from_str(TOKENIZER_JSON).padding is None
+    assert HuggingFaceTokenizer.from_str(TOKENIZER_JSON).truncation is None
+
+
+def test_huggingface_encoding_exposes_the_tokenizers_lookup_and_mutation_surface() -> None:
+    reference: Final = ReferenceTokenizer.from_str(claude_json_str)
+    tokenizer: Final = HuggingFaceTokenizer.from_str(claude_json_str)
+    text: Final = "hello wide world"
+    actual: Final = tokenizer.encode(text, "again")
+    expected: Final = reference.encode(text, "again")
+
+    lookups: Final = (
+        lambda encoding: [encoding.token_to_chars(index) for index in range(len(encoding))],
+        lambda encoding: [encoding.token_to_word(index) for index in range(len(encoding))],
+        lambda encoding: [encoding.token_to_sequence(index) for index in range(len(encoding))],
+        lambda encoding: [encoding.char_to_token(position) for position in range(len(text))],
+        lambda encoding: [encoding.char_to_word(position) for position in range(len(text))],
+        lambda encoding: [encoding.char_to_token(position, 1) for position in range(5)],
+        lambda encoding: [encoding.word_to_tokens(word) for word in range(3)],
+        lambda encoding: [encoding.word_to_chars(word) for word in range(3)],
+        lambda encoding: [encoding.word_to_tokens(0, 1), encoding.word_to_chars(0, 1)],
+    )
+    for lookup in lookups:
+        assert lookup(actual) == lookup(expected)
+    assert repr(actual) == repr(expected)
+
+    actual.truncate(4, stride=1, direction="left")
+    expected.truncate(4, stride=1, direction="left")
+    assert (actual.ids, [item.ids for item in actual.overflowing]) == (
+        expected.ids,
+        [item.ids for item in expected.overflowing],
+    )
+    actual.pad(6, direction="left", pad_id=7, pad_type_id=1, pad_token="<pad>")
+    expected.pad(6, direction="left", pad_id=7, pad_type_id=1, pad_token="<pad>")
+    assert (actual.ids, actual.attention_mask, actual.type_ids, actual.tokens) == (
+        expected.ids,
+        expected.attention_mask,
+        expected.type_ids,
+        expected.tokens,
+    )
+    actual.set_sequence_id(3)
+    expected.set_sequence_id(3)
+    assert actual.sequence_ids == expected.sequence_ids
+    merged: Final = type(actual).merge([actual, tokenizer.encode("more")])
+    assert merged.ids == type(expected).merge([expected, reference.encode("more")]).ids
+    assert merged.offsets == type(expected).merge([expected, reference.encode("more")]).offsets
+    with pytest.raises(ValueError, match="direction"):
+        actual.pad(8, direction="sideways")

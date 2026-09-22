@@ -86,7 +86,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, strip_special_tokens
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
-from litellm.rust_bridge.catalog import Context, Route, decision
+from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision
 
 _CachingHandlerResponse = None
@@ -2248,21 +2248,28 @@ def _select_tokenizer(model: str, custom_tokenizer: CustomHuggingfaceTokenizer |
             identifier=custom_tokenizer["identifier"],
             revision=custom_tokenizer["revision"],
             auth_token=custom_tokenizer["auth_token"],
-            backend=decision(Context(Route.TOKENIZER, provider="huggingface")),
+            backend=_huggingface_tokenizer_backend(),
         )
-    return _select_tokenizer_helper(model=model, backend=decision(Context(Route.TOKENIZER, provider="huggingface")))
+    return _select_tokenizer_helper(model=model)
+
+
+def _huggingface_tokenizer_backend() -> Decision:
+    """The backend `tokenizer_dispatch.from_str` / `from_pretrained` will select right now.
+
+    Cached HuggingFace tokenizers are keyed on it, so flipping `LITELLM_RUST` or
+    `litellm.rust(...)` reaches a fresh object instead of the other backend's."""
+    return decision(tokenizer_dispatch.HUGGINGFACE_CONTEXT)
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _select_custom_tokenizer_helper(
-    identifier: str, revision: str, auth_token: str | None, backend: Decision = Decision.PYTHON
+    identifier: str, revision: str, auth_token: str | None, backend: Decision
 ) -> SelectTokenizerResponse:
     verbose_logger.debug("Loading custom HuggingFace tokenizer %s (revision %s)", identifier, revision)
     return create_pretrained_tokenizer(identifier=identifier, revision=revision, auth_token=auth_token)
 
 
-@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
-def _select_tokenizer_helper(model: str, backend: Decision = Decision.PYTHON) -> SelectTokenizerResponse:
+def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
     if litellm.disable_hf_tokenizer_download is True:
         return _return_openai_tokenizer(model)
 
@@ -2309,10 +2316,15 @@ def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
     kind: Final = huggingface_tokenizer_kind(model)
     if kind is None:
         return None
-    return {"type": "huggingface_tokenizer", "tokenizer": _load_huggingface_tokenizer(kind)}
+    return {
+        "type": "huggingface_tokenizer",
+        "tokenizer": _load_huggingface_tokenizer(kind, _huggingface_tokenizer_backend()),
+    }
 
 
-def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> HuggingFace:
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind, backend: Decision) -> HuggingFace:
+    """One tokenizer per kind and backend; `backend` is the cache key, the dispatch re-derives it."""
     match kind:
         case "cohere":
             return tokenizer_dispatch.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")

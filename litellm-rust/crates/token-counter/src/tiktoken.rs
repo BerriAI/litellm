@@ -1,5 +1,5 @@
 use litellm_token_counter_tiktoken::{LoadError, UnsupportedTokenizer};
-pub use litellm_token_counter_tiktoken::{TiktokenTokenizer, encoding_for_model};
+pub use litellm_token_counter_tiktoken::{TiktokenTokenizer, Vocabulary, encoding_for_model};
 
 use crate::{Error, TextCodec, TokenCounter, Tokenizer};
 
