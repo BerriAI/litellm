@@ -1,6 +1,5 @@
 import os
 import socket
-from typing import Optional
 from unittest.mock import patch
 
 import pytest
@@ -22,10 +21,10 @@ from litellm.proxy.client.cli.commands.autoroute.process import (
 
 
 class FakeProcess:
-    def __init__(self, returncode: Optional[int] = None):
+    def __init__(self, returncode: int | None = None):
         self.returncode = returncode
 
-    def poll(self) -> Optional[int]:
+    def poll(self) -> int | None:
         return self.returncode
 
 
@@ -147,6 +146,37 @@ class TestPollLiveliness:
 
         assert "exited early" in str(exc_info.value)
         assert "crash log line" in str(exc_info.value)
+
+
+class TestLogReading:
+    def test_tail_decodes_utf8_content(self, tmp_path):
+        """The proxy writes its log as UTF-8; reading it must not depend on the locale
+        default (e.g. cp936 on Windows mojibakes or crashes on these bytes)."""
+        log_path = tmp_path / "proxy.log"
+        log_path.write_bytes("启动 模型 🤗 ready\n".encode())
+
+        assert process_module._tail(log_path) == "启动 模型 🤗 ready"
+
+    def test_stream_log_echoes_utf8_and_survives_stray_bytes(self, tmp_path, monkeypatch):
+        """`lite autoroute logs` must not crash on UTF-8 model output nor on undecodable
+        bytes in the log."""
+        log_path = tmp_path / "proxy.log"
+        log_path.write_bytes("response 汉 模型 🤗\n".encode() + b"stray \xff\xfe bytes\n")
+        echoed = []
+        stop_event = process_module.threading.Event()
+
+        def fake_echo(text, nl=True):
+            echoed.append(text)
+            if len(echoed) >= 2:
+                stop_event.set()
+
+        monkeypatch.setattr(process_module.click, "echo", fake_echo)
+        monkeypatch.setattr(process_module.time, "sleep", lambda seconds: None)
+
+        process_module.stream_log(log_path, stop_event)
+
+        assert echoed[0] == "response 汉 模型 🤗\n"
+        assert "stray" in echoed[1]  # invalid bytes replaced, not raised
 
 
 class TestMissingProxyRuntimeModules:
