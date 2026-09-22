@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from typing import Final
@@ -23,6 +24,43 @@ CONVERSE_REPLY: Final = json.dumps(
 
 def converse_peer(request: Request) -> Reply:
     return Reply(body=CONVERSE_REPLY)
+
+
+EMBEDDING_REPLY: Final = json.dumps(
+    {
+        "object": "list",
+        "data": [{"object": "embedding", "index": 0, "embedding": [0.25, 0.5]}],
+        "model": "synthetic-embedding",
+        "usage": {"prompt_tokens": 3, "total_tokens": 3},
+    }
+).encode()
+RESPONSES_REPLY: Final = json.dumps(
+    {
+        "id": "resp_synthetic",
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "synthetic-responses",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_synthetic",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "responses guard control", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 3, "output_tokens": 3, "total_tokens": 6},
+    }
+).encode()
+
+
+def embedding_peer(request: Request) -> Reply:
+    return Reply(body=EMBEDDING_REPLY)
+
+
+def responses_peer(request: Request) -> Reply:
+    return Reply(body=RESPONSES_REPLY)
 
 
 @pytest.mark.covers("other.provider_wire.internal_parameters_filtered")
@@ -115,6 +153,81 @@ def test_internal_key_forced_into_converse_body_is_observed_at_emission(
         "LiteLLM internal keys reached the bedrock provider request body: "
         "additionalModelRequestFields.extra_body.litellm_call_id"
     ]
+
+
+@pytest.mark.covers("other.provider_wire.internal_key_emission_observed_embedding")
+def test_internal_key_forced_into_embedding_body_is_observed_at_emission(caplog: pytest.LogCaptureFixture) -> None:
+    before: Final = internal_key_leak_counter.value
+    with wire_server(embedding_peer) as wire, caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = litellm.embedding(
+            model="hosted_vllm/synthetic-embedding",
+            api_base=f"{wire.url}/v1",
+            api_key="sk-synthetic",
+            input=["embedding emission guard"],
+            extra_body={"litellm_call_id": "forced-through-extra-body"},
+            timeout=5,
+            num_retries=0,
+        )
+        received: Final = wire.drain()
+    assert isinstance(result, litellm.EmbeddingResponse)
+    assert len(received) == 1
+    assert received[0].target == "/v1/embeddings"
+    assert JSON_OBJECT.validate_json(received[0].body)["litellm_call_id"] == "forced-through-extra-body"
+    assert internal_key_leak_counter.value == before + 1
+    assert [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING] == [
+        "LiteLLM internal keys reached the hosted_vllm provider request body: litellm_call_id"
+    ]
+
+
+def assert_responses_body_observed(
+    response: object, received: tuple[Request, ...], before: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    assert isinstance(response, litellm.ResponsesAPIResponse)
+    assert len(received) == 1
+    assert received[0].target == "/v1/responses"
+    assert JSON_OBJECT.validate_json(received[0].body)["litellm_call_id"] == "forced-through-extra-body"
+    assert internal_key_leak_counter.value == before + 1
+    assert [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING] == [
+        "LiteLLM internal keys reached the openai provider request body: litellm_call_id"
+    ]
+
+
+@pytest.mark.covers("other.provider_wire.internal_key_emission_observed_responses")
+def test_internal_key_forced_into_responses_body_is_observed_at_emission(caplog: pytest.LogCaptureFixture) -> None:
+    before: Final = internal_key_leak_counter.value
+    with wire_server(responses_peer) as wire, caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        response: Final = litellm.responses(
+            model="openai/synthetic-responses",
+            api_base=f"{wire.url}/v1",
+            api_key="sk-synthetic",
+            input="responses emission guard",
+            extra_body={"litellm_call_id": "forced-through-extra-body"},
+            timeout=5,
+            num_retries=0,
+        )
+        received: Final = wire.drain()
+    assert_responses_body_observed(response, received, before, caplog)
+
+
+@pytest.mark.covers("other.provider_wire.internal_key_emission_observed_responses_async")
+def test_internal_key_forced_into_async_responses_body_is_observed_at_emission(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    before: Final = internal_key_leak_counter.value
+    with wire_server(responses_peer) as wire, caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        response: Final = asyncio.run(
+            litellm.aresponses(
+                model="openai/synthetic-responses",
+                api_base=f"{wire.url}/v1",
+                api_key="sk-synthetic",
+                input="responses emission guard",
+                extra_body={"litellm_call_id": "forced-through-extra-body"},
+                timeout=5,
+                num_retries=0,
+            )
+        )
+        received: Final = wire.drain()
+    assert_responses_body_observed(response, received, before, caplog)
 
 
 @pytest.mark.covers("other.provider_wire.validator_rejects_corruption")

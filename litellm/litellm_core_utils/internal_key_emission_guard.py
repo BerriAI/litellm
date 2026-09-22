@@ -1,5 +1,5 @@
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Final, cast
 
 from litellm._logging import verbose_logger
@@ -10,6 +10,7 @@ OWNED_KEYS: Final = frozenset(key for key in ("litellm_params", *all_litellm_par
 OWNED_KEY_SCOPES: Final = frozenset(
     ("", "metadata", "additionalModelRequestFields", "additionalModelRequestFields.extra_body")
 )
+_CONTAINER_TYPES: Final[tuple[type[object], ...]] = (dict, list, tuple)
 
 
 class LeakCounter:
@@ -34,37 +35,32 @@ def is_litellm_owned_key(key: str, scope: str) -> bool:
     return key.startswith(OWNED_KEY_PREFIX) or (scope in OWNED_KEY_SCOPES and key in OWNED_KEYS)
 
 
-def _as_mapping(value: object) -> Mapping[object, object] | None:
-    if not isinstance(value, Mapping):
-        return None
-    return cast("Mapping[object, object]", value)  # cast-ok: isinstance narrows only to Mapping[Unknown, Unknown]
+def _walk_mapping(value: Mapping[object, object], prefix: str, found: list[str]) -> None:
+    scoped: Final = prefix in OWNED_KEY_SCOPES
+    for key, child in value.items():
+        if not isinstance(key, str):
+            continue
+        if key.startswith(OWNED_KEY_PREFIX) or (scoped and key in OWNED_KEYS):
+            found.append(f"{prefix}.{key}" if prefix else key)
+        if isinstance(child, _CONTAINER_TYPES):
+            _walk(cast(object, child), f"{prefix}.{key}" if prefix else key, found)  # cast-ok: undo Unknown narrowing
 
 
-def _as_sequence(value: object) -> Sequence[object] | None:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
-        return None
-    return cast("Sequence[object]", value)  # cast-ok: isinstance narrows only to Sequence[Unknown]
-
-
-def _child_paths(value: object, prefix: str) -> tuple[str, ...]:
-    mapping: Final = _as_mapping(value)
-    if mapping is not None:
-        return tuple(path for key, child in mapping.items() for path in _entry_paths(key, child, prefix))
-    sequence: Final = _as_sequence(value)
-    if sequence is not None:
-        return tuple(path for index, child in enumerate(sequence) for path in _child_paths(child, f"{prefix}[{index}]"))
-    return ()
-
-
-def _entry_paths(key: object, child: object, prefix: str) -> tuple[str, ...]:
-    name: Final = str(key)
-    path: Final = f"{prefix}.{name}" if prefix else name
-    own: Final = (path,) if is_litellm_owned_key(name, prefix) else ()
-    return (*own, *_child_paths(child, path))
+def _walk(value: object, prefix: str, found: list[str]) -> None:
+    if isinstance(value, dict):
+        _walk_mapping(cast("dict[object, object]", value), prefix, found)  # cast-ok: isinstance leaves Unknown params
+        return
+    if not isinstance(value, (list, tuple)):
+        return
+    for index, child in enumerate(cast("list[object] | tuple[object, ...]", value)):  # cast-ok: same as above
+        if isinstance(child, _CONTAINER_TYPES):
+            _walk(cast(object, child), f"{prefix}[{index}]", found)  # cast-ok: undo Unknown narrowing
 
 
 def litellm_owned_key_paths(body: Mapping[str, object]) -> tuple[str, ...]:
-    return _child_paths(body, "")
+    found: Final[list[str]] = []  # mutable-ok: single accumulator for the hot-path walk, sealed into a tuple below
+    _walk_mapping(cast("Mapping[object, object]", body), "", found)  # cast-ok: widen invariant key type
+    return tuple(found)
 
 
 def observe_internal_keys(body: Mapping[str, object], provider: str) -> tuple[str, ...]:

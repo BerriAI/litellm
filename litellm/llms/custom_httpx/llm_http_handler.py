@@ -1076,7 +1076,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
         )
 
-        data: Final = provider_config.transform_embedding_request(
+        data: Final[dict[str, object]] = provider_config.transform_embedding_request(
             model=model,
             input=input,
             optional_params=optional_params,
@@ -1084,6 +1084,7 @@ class BaseLLMHTTPHandler:
         )
         if embedding_extra_body:
             data.update(embedding_extra_body)
+        observe_internal_keys(data, custom_llm_provider)
 
         # Some providers (e.g. OCI) require request signing after the body is built.
         # The default BaseConfig.sign_request returns (headers, None) — a no-op for
@@ -2702,6 +2703,7 @@ class BaseLLMHTTPHandler:
 
         if extra_body:
             data.update(extra_body)
+        observe_internal_keys(data, custom_llm_provider)
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
@@ -2890,6 +2892,7 @@ class BaseLLMHTTPHandler:
 
         if extra_body:
             data.update(extra_body)
+        observe_internal_keys(data, custom_llm_provider)
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
