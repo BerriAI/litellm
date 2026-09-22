@@ -417,6 +417,23 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             raise ValueError(f"Failed to parse Anthropic batch response: {e}")
         return transform_anthropic_message_batch(response_data)
 
+    def transform_stored_batch_input(
+        self,
+        model: str,
+        endpoint: str,
+        lines: Sequence[Mapping[str, object]],
+        extra_body: Mapping[str, str] | None,
+    ) -> Mapping[str, object]:
+        """Build the ``extra_body`` for ``create_batch`` from parsed OpenAI batch input lines."""
+        if endpoint != "/v1/chat/completions":
+            raise ValueError("Anthropic message batches only support the /v1/chat/completions endpoint")
+        return MappingProxyType(
+            {
+                **(extra_body or EMPTY_MAPPING),
+                "requests": list(transform_openai_batch_lines_to_anthropic_requests(lines=lines, model=model)),
+            }
+        )
+
     def get_list_batches_url(
         self,
         api_base: str | None,

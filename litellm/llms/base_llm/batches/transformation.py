@@ -1,5 +1,6 @@
 import types
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -192,6 +193,26 @@ class BaseBatchesConfig(ABC):
         Returns:
             LiteLLM batch object
         """
+
+    def transform_stored_batch_input(
+        self,
+        model: str,
+        endpoint: str,
+        lines: Sequence[Mapping[str, object]],
+        extra_body: Mapping[str, str] | None,
+    ) -> Mapping[str, object]:
+        """Turn parsed OpenAI batch input JSONL lines into the ``extra_body`` for ``create_batch`` for providers that take batch requests inline instead of an input file.
+
+        Args:
+            model: Model name
+            endpoint: Batch endpoint the input file targets
+            lines: Parsed input lines, each a decoded JSONL object
+            extra_body: Existing ``extra_body`` keys from the create request to preserve
+
+        Returns:
+            The ``extra_body`` payload to send with the create batch request
+        """
+        raise NotImplementedError("Provider does not support stored batch input")
 
     def get_list_batches_url(
         self,

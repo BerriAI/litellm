@@ -165,6 +165,43 @@ def test_openai_line_missing_messages_raises_with_custom_id():
         )
 
 
+def test_transform_stored_batch_input_builds_requests_and_keeps_extra_body(config):
+    result = config.transform_stored_batch_input(
+        model="claude-sonnet-4-5",
+        endpoint="/v1/chat/completions",
+        lines=(
+            {
+                "custom_id": "req-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "ignored",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 8,
+                },
+            },
+        ),
+        extra_body={"tag": "nightly"},
+    )
+
+    assert result["tag"] == "nightly"
+    requests = result["requests"]
+    assert isinstance(requests, list)
+    assert [request["custom_id"] for request in requests] == ["req-1"]
+    assert requests[0]["params"]["model"] == "claude-sonnet-4-5"
+    assert requests[0]["params"]["max_tokens"] == 8
+
+
+def test_transform_stored_batch_input_rejects_non_chat_endpoint(config):
+    with pytest.raises(ValueError, match="/v1/chat/completions"):
+        config.transform_stored_batch_input(
+            model="claude-sonnet-4-5",
+            endpoint="/v1/embeddings",
+            lines=(),
+            extra_body=None,
+        )
+
+
 # =========================================================================== #
 # transform_create_batch_response
 # =========================================================================== #
