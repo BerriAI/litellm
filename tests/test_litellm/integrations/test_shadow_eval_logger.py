@@ -2,6 +2,7 @@
 the detached pipeline's single attempt-row write, and the cache-first job lookup."""
 
 import asyncio
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -420,6 +421,183 @@ class TestSurfaceNormalization:
         assert "max_output_tokens" not in shadow_call
         assert "previous_response_id" not in shadow_call
         assert "instructions" not in shadow_call
+
+    @pytest.mark.parametrize(
+        "call_type,search_params,model",
+        [
+            ("completion", {"web_search_options": {}}, "anthropic/claude-fable-5"),
+            (
+                "acompletion",
+                {"web_search_options": {"search_context_size": "high"}},
+                "anthropic/claude-fable-5",
+            ),
+            (
+                "acompletion",
+                {"tools": [{"type": "web_search_20260209", "name": "web_search"}]},
+                "anthropic/claude-fable-5",
+            ),
+            (
+                "anthropic_messages",
+                {"tools": [{"type": "web_search_20250305", "name": "web_search"}]},
+                "anthropic/claude-fable-5",
+            ),
+            (
+                "anthropic_messages",
+                {"tools": [{"type": "web_search_20260209", "name": "web_search"}]},
+                "anthropic/claude-fable-5",
+            ),
+            (
+                "anthropic_messages",
+                {"tools": [{"name": "web_search"}]},
+                "anthropic/claude-fable-5",
+            ),
+            ("aresponses", {"tools": [{"type": "web_search"}]}, "anthropic/claude-fable-5"),
+            ("responses", {"tools": [{"type": "web_search_preview"}]}, "anthropic/claude-fable-5"),
+            ("aresponses", {"tools": [{"type": "web_search_2025_08_26"}]}, "anthropic/claude-fable-5"),
+            (
+                "responses",
+                {"tools": [{"type": "web_search_preview_2025_03_11"}]},
+                "anthropic/claude-fable-5",
+            ),
+            ("aresponses", {"tools": [{"type": "web_search"}]}, "bedrock/us.anthropic.claude-fable-5"),
+            (
+                "responses",
+                {"tools": [{"type": "web_search_preview"}]},
+                "bedrock/us.anthropic.claude-fable-5",
+            ),
+            (
+                "acompletion",
+                {
+                    "tools": [
+                        {"type": "function", "function": {"name": "WebSearch", "parameters": {"type": "object"}}},
+                        {"type": "web_search_20260209", "name": "web_search"},
+                    ]
+                },
+                "anthropic/claude-fable-5",
+            ),
+        ],
+        ids=[
+            "chat-empty-options",
+            "chat-configured-options",
+            "chat-provider-transformed-tools",
+            "messages-native-search",
+            "messages-dated-search",
+            "messages-legacy-search-normalized",
+            "responses-search",
+            "responses-preview",
+            "responses-dated-search",
+            "responses-dated-preview",
+            "responses-bedrock-erases-search",
+            "responses-bedrock-erases-preview",
+            "chat-mixed-client-and-hosted-tools",
+        ],
+    )
+    async def test_hosted_web_search_skips_shadow_calls_and_spend(
+        self, call_type: str, search_params: Mapping[str, object], model: str
+    ) -> None:
+        base_kwargs: Final = _success_kwargs(call_type=call_type, model=model)
+        is_chat: Final = call_type in ("completion", "acompletion")
+        is_responses: Final = call_type in ("responses", "aresponses")
+        hook_kwargs: Final = {
+            **base_kwargs,
+            "model": model,
+            "messages": "what is new" if is_responses else base_kwargs["messages"],
+            "standard_logging_object": {
+                **base_kwargs["standard_logging_object"],
+                "model_parameters": search_params if is_chat else {},
+            },
+            "litellm_params": {
+                **base_kwargs["litellm_params"],
+                "proxy_server_request": {"body": {} if is_chat else search_params},
+            },
+        }
+        prisma: Final = _prisma()
+        router: Final = _router()
+        counter: Final = {"spend:shadow_eval:job-1": 0.1, "spend:shadow_eval:job-2": 0.1}
+        logger: Final = _logger(
+            router=router,
+            prisma=prisma,
+            jobs=(_job(max_budget=0.2), _job(id="job-2", max_budget=0.2)),
+            counter_store=counter,
+        )
+
+        await logger.async_log_success_event(
+            hook_kwargs, RESPONSES_API_RESPONSE if is_responses else RESPONSE, None, None
+        )
+        await _drain(logger)
+
+        router.acompletion.assert_not_called()
+        prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+        assert logger._test_funnel == [("job-1", "unjudgeable"), ("job-2", "unjudgeable")]
+        assert logger._job_starts == {}
+        assert logger._test_counter == {"spend:shadow_eval:job-1": 0.1, "spend:shadow_eval:job-2": 0.1}
+
+    @pytest.mark.parametrize(
+        "call_type,tool_name",
+        [
+            (call_type, tool_name)
+            for call_type in ("completion", "acompletion", "anthropic_messages", "responses", "aresponses")
+            for tool_name in ("WebSearch", "litellm_web_search", "web_search")
+        ],
+    )
+    async def test_client_web_search_tools_remain_sampled(self, call_type: str, tool_name: str) -> None:
+        is_chat: Final = call_type in ("completion", "acompletion")
+        is_responses: Final = call_type in ("responses", "aresponses")
+        tool: Final = (
+            {"type": "function", "function": {"name": tool_name, "parameters": {"type": "object"}}}
+            if is_chat
+            else {"type": "function", "name": tool_name, "parameters": {"type": "object"}}
+            if is_responses
+            else {"name": tool_name, "input_schema": {"type": "object", "properties": {}}}
+        )
+        source: Final = {"tools": [tool], "web_search_options": None}
+        base_kwargs: Final = _success_kwargs(call_type=call_type)
+        hook_kwargs: Final = {
+            **base_kwargs,
+            "messages": "search for current news" if is_responses else base_kwargs["messages"],
+            "standard_logging_object": {
+                **base_kwargs["standard_logging_object"],
+                "model_parameters": source if is_chat else {},
+            },
+            "litellm_params": {
+                **base_kwargs["litellm_params"],
+                "proxy_server_request": {"body": {} if is_chat else source},
+            },
+        }
+
+        prisma, router = await self._drive(hook_kwargs, RESPONSES_API_RESPONSE if is_responses else RESPONSE)
+
+        assert router.acompletion.call_count == 2
+        shadow_call: Final = router.acompletion.call_args_list[0].kwargs
+        assert shadow_call["tools"][0]["function"]["name"] == tool_name
+        assert "web_search_options" not in shadow_call
+        prisma.db.litellm_shadowevalattempt.create.assert_called_once()
+
+    @pytest.mark.parametrize("call_type", ["completion", "acompletion"])
+    async def test_chat_search_removed_by_guardrail_still_samples(self, call_type: str) -> None:
+        base_kwargs: Final = _success_kwargs(
+            call_type=call_type,
+            request_metadata={
+                "standard_logging_guardrail_information": [{"guardrail_name": "g", "guardrail_mode": "pre_call"}]
+            },
+        )
+        hook_kwargs: Final = {
+            **base_kwargs,
+            "litellm_params": {
+                **base_kwargs["litellm_params"],
+                "proxy_server_request": {
+                    "body": {"web_search_options": {}, "tools": [{"type": "web_search_20260209"}]}
+                },
+            },
+        }
+
+        prisma, router = await self._drive(hook_kwargs, RESPONSE)
+
+        shadow_call: Final = router.acompletion.call_args_list[0].kwargs
+        assert "web_search_options" not in shadow_call
+        assert "tools" not in shadow_call
+        assert router.acompletion.call_count == 2
+        prisma.db.litellm_shadowevalattempt.create.assert_called_once()
 
     @pytest.mark.parametrize("payload_shape", ["typed", "dict"])
     @pytest.mark.parametrize("call_type", ["aresponses", "responses"])

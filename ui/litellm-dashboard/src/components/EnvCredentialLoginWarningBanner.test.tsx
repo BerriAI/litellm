@@ -1,4 +1,4 @@
-import { renderWithProviders, screen } from "../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen } from "../../tests/test-utils";
 import { vi } from "vitest";
 import { EnvCredentialLoginWarningBanner } from "./EnvCredentialLoginWarningBanner";
 import type { HealthReadinessDetailsResponse } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
@@ -23,6 +23,22 @@ const mockRole = (userRole: string) => {
 };
 
 describe("EnvCredentialLoginWarningBanner", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("should hide the banner when dismissed and stay hidden on remount", () => {
+    mockRole("Admin");
+    mockDetails({ status: "healthy", show_env_credential_login_warning: true });
+    const first = renderWithProviders(<EnvCredentialLoginWarningBanner accessToken="token" />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss banner" }));
+    expect(first.container).toBeEmptyDOMElement();
+
+    first.unmount();
+    const second = renderWithProviders(<EnvCredentialLoginWarningBanner accessToken="token" />);
+    expect(second.container).toBeEmptyDOMElement();
+  });
+
   it("should warn an admin when env-credential login is enabled", () => {
     mockRole("Admin");
     mockDetails({ status: "healthy", show_env_credential_login_warning: true });

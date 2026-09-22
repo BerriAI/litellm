@@ -3,7 +3,7 @@ Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completion
 """
 
 import os
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _extract_reasoning_content,  # pyright: ignore[reportPrivateUsage]  # same import as the OpenAI transformation
+    merge_consecutive_system_messages,
     strip_litellm_internal_message_fields,
     strip_name_from_message,
 )
@@ -67,7 +68,7 @@ def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
     )
 
 
-def _sanitize_empty_content(message_dict: dict[str, Any]) -> None:
+def _sanitize_empty_content(message_dict: dict[str, object]) -> None:
     """
     Remove or filter content so empty text blocks are not sent.
     Databricks Model Serving uses Anthropic Messages API spec and rejects empty text blocks.
@@ -148,9 +149,8 @@ def _split_parallel_tool_calls(messages: list[AllMessageValues]) -> list[AllMess
 
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -188,7 +188,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         return "databricks"
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls, *, model: str | None = None):
         return super().get_config()
 
     def get_required_params(self) -> list[ProviderField]:
@@ -271,6 +271,15 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             "reasoning_effort",
             "thinking",
         ]
+
+    @staticmethod
+    def _uses_anthropic_thinking_param(model: str) -> bool:
+        from litellm.utils import supports_anthropic_thinking_payload
+
+        normalized: Final = model.lower().replace(".", "-")
+        return "claude" in normalized or supports_anthropic_thinking_payload(
+            model=normalized, custom_llm_provider="databricks"
+        )
 
     def convert_anthropic_tool_to_databricks_tool(self, tool: AllAnthropicToolsValues | None) -> DatabricksTool | None:
         if tool is None:
@@ -377,7 +386,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 "response_format", None
             )  # unsupported for claude models - if json_schema -> convert to tool call
 
-        if "reasoning_effort" in non_default_params and "claude" in model:
+        if "reasoning_effort" in non_default_params and self._uses_anthropic_thinking_param(model):
             reasoning_effort_value: Final = non_default_params.get("reasoning_effort")
             mapped_thinking: Final = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort_value,
@@ -421,7 +430,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -433,7 +442,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         Databricks does not support:
         - 'name' in user message.
@@ -456,7 +465,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             new_messages.append(_message)
 
         if "claude" not in model:
-            new_messages = _split_parallel_tool_calls(cast(list[AllMessageValues], new_messages))
+            new_messages = _split_parallel_tool_calls(
+                merge_consecutive_system_messages(cast(list[AllMessageValues], new_messages))
+            )
 
         if is_async:
             return super()._transform_messages(messages=new_messages, model=model, is_async=cast(Literal[True], True))
@@ -555,7 +566,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     @staticmethod
     def extract_citations(
         content: AllDatabricksContentValues | None,
-    ) -> list[Any] | None:
+    ) -> Sequence[Sequence[Mapping[str, object]]] | None:
         if content is None:
             return None
         citations: Final = []
@@ -639,7 +650,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

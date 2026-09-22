@@ -259,6 +259,13 @@
         "ui_name": "Tracing Environment",
         "description": "Langfuse tracing environment (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)",
         "required": false
+      },
+      "langfuse_span_scope": {
+        "type": "select",
+        "ui_name": "Span Scope",
+        "description": "full sends the whole request trace, llm_only sends just the model-call spans",
+        "options": ["full", "llm_only"],
+        "required": false
       }
     },
     "description": "Langfuse v3 OTEL Logging Integration"
@@ -445,6 +452,12 @@
         "type": "text",
         "ui_name": "S3 Path Prefix",
         "description": "Path prefix within the bucket for organizing logs",
+        "required": false
+      },
+      "s3_log_prompts_only": {
+        "type": "boolean",
+        "ui_name": "Log Prompts Only",
+        "description": "Log request messages to S3 but drop the model response from each logged object",
         "required": false
       }
     },

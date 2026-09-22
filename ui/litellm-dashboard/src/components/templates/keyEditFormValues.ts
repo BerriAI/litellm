@@ -28,6 +28,7 @@ export interface KeyEditFormValues {
   tpm_limit_type?: string | null;
   rpm_limit?: number | string | null;
   rpm_limit_type?: string | null;
+  tpd_limit?: number | string | null;
   throttle_on_budget_exceeded?: boolean;
   enable_prompt_caching?: boolean;
   max_parallel_requests?: number | string | null;
@@ -49,6 +50,7 @@ export interface KeyEditFormValues {
   skills?: string[];
   organization_id?: string | null;
   team_id?: string | null;
+  project_id?: string | null;
   logging_settings?: unknown[];
   metadata?: string;
   duration?: string | null;
@@ -76,6 +78,7 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
   tpm_limit_type: (keyData as { tpm_limit_type?: string | null }).tpm_limit_type ?? null,
   rpm_limit: keyData.rpm_limit,
   rpm_limit_type: (keyData as { rpm_limit_type?: string | null }).rpm_limit_type ?? null,
+  tpd_limit: keyData.tpd_limit,
   throttle_on_budget_exceeded: Boolean(readMetadata(keyData, "throttle_on_budget_exceeded")),
   enable_prompt_caching: Boolean(readMetadata(keyData, "enable_prompt_caching")),
   max_parallel_requests: keyData.max_parallel_requests,
@@ -106,6 +109,7 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
   skills: keyData.object_permission?.skills || [],
   organization_id: keyData.organization_id,
   team_id: keyData.team_id,
+  project_id: keyData.project_id,
   logging_settings: extractLoggingSettings(keyData.metadata),
   metadata: formatMetadataForDisplay(stripTagsFromMetadata(keyData.metadata)),
   duration: (keyData as { duration?: string }).duration ?? "",
@@ -128,6 +132,7 @@ export const keyEditFormSchema = z.object({
   tpm_limit_type: z.custom<string | null | undefined>(),
   rpm_limit: z.custom<number | string | null | undefined>(),
   rpm_limit_type: z.custom<string | null | undefined>(),
+  tpd_limit: z.custom<number | string | null | undefined>(),
   throttle_on_budget_exceeded: z.custom<boolean | undefined>(),
   enable_prompt_caching: z.custom<boolean | undefined>(),
   max_parallel_requests: z.custom<number | string | null | undefined>(),
@@ -153,6 +158,7 @@ export const keyEditFormSchema = z.object({
   skills: z.custom<string[] | undefined>(),
   organization_id: z.custom<string | null | undefined>(),
   team_id: z.custom<string | null | undefined>(),
+  project_id: z.string().nullable().optional(),
   logging_settings: z.custom<unknown[] | undefined>(),
   metadata: z.custom<string | undefined>(),
   duration: z.custom<string | null | undefined>(),
@@ -181,6 +187,7 @@ export const toSubmittedValues = (
   tpm_limit_type: values.tpm_limit_type,
   rpm_limit: values.rpm_limit,
   rpm_limit_type: values.rpm_limit_type,
+  tpd_limit: values.tpd_limit,
   throttle_on_budget_exceeded: values.throttle_on_budget_exceeded,
   enable_prompt_caching: values.enable_prompt_caching,
   max_parallel_requests: values.max_parallel_requests,

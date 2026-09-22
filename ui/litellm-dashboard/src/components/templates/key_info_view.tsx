@@ -1,6 +1,7 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -45,7 +46,7 @@ import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
-import { InheritedBudgetHint, inheritedBudgetGates } from "../shared/InheritedBudgetHint";
+import { InheritedBudgetHint, inheritedBudgetGates, keyOwnerBudgetSource } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
 
 interface KeyInfoViewProps {
@@ -95,6 +96,7 @@ export default function KeyInfoView({
   const { data: organizations } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
+  const applyUserBudgetToTeamKeys = useApplyUserBudgetToTeamKeys();
   const { data: allMcpServers } = useMCPServers();
   const { data: allMcpToolsets } = useMCPToolsets();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
@@ -288,6 +290,7 @@ export default function KeyInfoView({
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
       formValues.tpm_limit = mapEmptyStringToNull(formValues.tpm_limit);
       formValues.rpm_limit = mapEmptyStringToNull(formValues.rpm_limit);
+      formValues.tpd_limit = mapEmptyStringToNull(formValues.tpd_limit);
       formValues.max_parallel_requests = mapEmptyStringToNull(formValues.max_parallel_requests);
 
       // Convert metadata back to an object if it exists and is a string
@@ -506,7 +509,8 @@ export default function KeyInfoView({
 
   const hasOwnBudget = currentKeyData.max_budget !== null;
   const budgetDisplay = hasOwnBudget ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}` : "Unlimited";
-  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg);
+  const ownerUser = keyOwnerBudgetSource(currentKeyData, applyUserBudgetToTeamKeys);
+  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg, ownerUser);
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">
@@ -676,6 +680,9 @@ export default function KeyInfoView({
                   {currentKeyData.budget_reset_at && (
                     <p className="text-sm">Resets {formatTimestamp(currentKeyData.budget_reset_at)}</p>
                   )}
+                  <p className="text-sm mt-2" data-testid="key-lifetime-spend">
+                    Lifetime spend: ${formatNumberWithCommas(currentKeyData.total_spend ?? 0, 4)}
+                  </p>
                 </div>
               </Card>
 
@@ -688,6 +695,7 @@ export default function KeyInfoView({
                   <p className="text-sm">
                     RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}
                   </p>
+                  <p className="text-sm">TPD (batch): {currentKeyData.tpd_limit ?? "Unlimited"}</p>
                   {Boolean(currentKeyData.metadata?.throttle_on_budget_exceeded) && (
                     <p className="text-sm">Throttle on budget exceeded: Yes</p>
                   )}
@@ -934,6 +942,11 @@ export default function KeyInfoView({
                   </div>
 
                   <div>
+                    <p className="text-sm font-medium">Lifetime Spend</p>
+                    <p className="text-sm">${formatNumberWithCommas(currentKeyData.total_spend ?? 0, 4)} USD</p>
+                  </div>
+
+                  <div>
                     <p className="text-sm font-medium">Budget</p>
                     <p className="text-sm">
                       {currentKeyData.max_budget !== null
@@ -1064,6 +1077,7 @@ export default function KeyInfoView({
                     <p className="text-sm">
                       RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}
                     </p>
+                    <p className="text-sm">TPD (batch): {currentKeyData.tpd_limit ?? "Unlimited"}</p>
                     <p className="text-sm">
                       Max Parallel Requests:{" "}
                       {currentKeyData.max_parallel_requests !== null

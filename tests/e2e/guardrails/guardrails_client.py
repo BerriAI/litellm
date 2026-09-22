@@ -20,6 +20,7 @@ from models import (
     ChatResponse,
     ChatTool,
     KeyGenerateBody,
+    KeyMetadata,
     LiteLLMParamsBody,
     TeamDeleteBody,
     TeamInfoParams,
@@ -27,6 +28,8 @@ from models import (
     TeamMetadata,
     TeamNewBody,
     TeamNewResponse,
+    VideoCreateBody,
+    VideoCreateResponse,
 )
 from proxy_client import ProxyClient
 from pydantic import BaseModel
@@ -43,7 +46,7 @@ class BlockedWordBody(BaseModel):
 
 
 class GuardrailParamsBase(BaseModel):
-    mode: GuardrailMode
+    mode: GuardrailMode | list[GuardrailMode]
     default_on: bool
 
 
@@ -151,12 +154,12 @@ class _ResponsesGuardrailBody(BaseModel):
 class GuardrailsClient:
     proxy: ProxyClient
 
-    def create_content_filter_guardrail(self, name: str, blocked_keyword: str) -> str:
+    def create_content_filter_guardrail(self, name: str, blocked_keyword: str, *, default_on: bool = True) -> str:
         return self.register(
             name,
             ContentFilterParamsBody(
                 mode="pre_call",
-                default_on=True,
+                default_on=default_on,
                 blocked_words=[BlockedWordBody(keyword=blocked_keyword, action="BLOCK")],
             ),
         )
@@ -266,6 +269,21 @@ class GuardrailsClient:
     def create_key_in_team(self, team_id: str) -> str:
         return self.proxy.generate_key(KeyGenerateBody(team_id=team_id, user_id="e2e-guardrails-user"))
 
+    def create_key_with_guardrails(self, resources: ResourceManager, guardrails: list[str]) -> str:
+        key = self.proxy.generate_key(
+            KeyGenerateBody(user_id="e2e-guardrails-user", metadata=KeyMetadata(guardrails=guardrails))
+        )
+        resources.defer(lambda: self.proxy.delete_key(key))
+        return key
+
+    def create_video(self, key: str, model: str, prompt: str) -> Result[VideoCreateResponse]:
+        return self.proxy.transport.post(
+            "/v1/videos",
+            headers=self.proxy.transport.bearer(key),
+            json=VideoCreateBody(model=model, prompt=prompt, seconds="4"),
+            response_type=VideoCreateResponse,
+        )
+
     def chat(
         self,
         key: str,
@@ -359,6 +377,46 @@ class GuardrailsClient:
                 model=model,
                 messages=[ChatMessage(role="user", content=text)],
                 max_tokens=max_tokens,
+                guardrails=guardrails,
+            ),
+        )
+
+    def messages_raw(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+        max_tokens: int = 64,
+    ) -> StreamingResponse:
+        return self.proxy.transport.send(
+            "/v1/messages",
+            headers=self.proxy.transport.bearer(key),
+            json=AnthropicMessagesBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=text)],
+                max_tokens=max_tokens,
+                guardrails=guardrails,
+            ),
+        )
+
+    def messages_stream_raw(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+        max_tokens: int = 64,
+    ) -> StreamingResponse:
+        return self.proxy.messages_stream(
+            key,
+            AnthropicMessagesBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=text)],
+                max_tokens=max_tokens,
+                stream=True,
                 guardrails=guardrails,
             ),
         )

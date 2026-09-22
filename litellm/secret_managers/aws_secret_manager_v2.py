@@ -16,7 +16,7 @@ Requires:
 
 import json
 import os
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -35,6 +35,9 @@ from litellm.types.secret_managers.main import KeyManagementSettings
 
 from .base_secret_manager import BaseSecretManager
 
+if TYPE_CHECKING:
+    from botocore.awsrequest import HTTPHeaders
+
 
 class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
     def __init__(
@@ -47,6 +50,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         aws_web_identity_token: str | None = None,
         aws_sts_endpoint: str | None = None,
         replica_regions: list[str] | None = None,
+        kms_key_id: str | None = None,
         **kwargs,
     ):
         BaseSecretManager.__init__(self, **kwargs)
@@ -61,6 +65,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         self.aws_web_identity_token = aws_web_identity_token
         self.aws_sts_endpoint = aws_sts_endpoint
         self.replica_regions: list[str] = replica_regions or []
+        self.kms_key_id = kms_key_id
 
     @classmethod
     def validate_environment(cls):
@@ -106,7 +111,8 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 # Remove None values
                 aws_kwargs = {k: v for k, v in aws_kwargs.items() if v is not None}
 
-            litellm.secret_manager_client = cls(**aws_kwargs)
+            kms_key_id: Final = key_management_settings.kms_key_id if key_management_settings is not None else None
+            litellm.secret_manager_client = cls(kms_key_id=kms_key_id, **aws_kwargs)
             litellm._key_management_system = KeyManagementSystem.AWS_SECRET_MANAGER
 
         except Exception as e:
@@ -274,6 +280,9 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
 
         if description:
             data["Description"] = description
+
+        if self.kms_key_id:
+            data["KmsKeyId"] = self.kms_key_id
 
         # ✅ Normalize tags to AWS format
         if tags:
@@ -530,7 +539,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         secret_value: str | None = None,
         optional_params: dict | None = None,
         request_data: dict | None = None,
-    ) -> tuple[str, Any, bytes]:
+    ) -> tuple[str, "HTTPHeaders", bytes]:
         """Prepare the AWS Secrets Manager request"""
         try:
             from botocore.auth import SigV4Auth

@@ -1,0 +1,72 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["domain", "provider", "kind", "priority", "lift", "route", "version", "needs_repro", "reason"],
+  "properties": {
+    "domain": {
+      "type": "string",
+      "enum": [
+        "cost-map",
+        "llm-translation",
+        "routing",
+        "caching",
+        "proxy-core",
+        "proxy-auth",
+        "management",
+        "spend-tracking",
+        "budgets-rate-limits",
+        "db",
+        "logging",
+        "guardrails",
+        "mcp",
+        "agents",
+        "vector-stores",
+        "passthrough",
+        "ui",
+        "sdk",
+        "deploy",
+        "docs",
+        "unknown"
+      ]
+    },
+    "provider": {
+      "type": ["string", "null"],
+      "enum": ["openai", "anthropic", "bedrock", "vertex_ai", "azure", "gemini", "vllm", "ollama", "openrouter", "azure_ai", null],
+      "description": "The provider the issue is about, folded to these ten, or null when it names none or another one."
+    },
+    "kind": { "type": "string", "enum": ["bug", "feature", "question"] },
+    "priority": { "type": "string", "enum": ["p0", "p1", "p2", "p3"] },
+    "lift": { "type": "string", "enum": ["small", "medium", "large"] },
+    "route": {
+      "type": ["string", "null"],
+      "enum": [
+        "chat_completions",
+        "responses",
+        "messages",
+        "embeddings",
+        "images",
+        "audio",
+        "rerank",
+        "files_batches",
+        "realtime",
+        "mcp",
+        "management_endpoints",
+        "ui",
+        null
+      ],
+      "description": "The API surface the reporter was hitting, only when they name one."
+    },
+    "version": {
+      "type": ["string", "null"],
+      "description": "The LiteLLM release the reporter is on, found anywhere in the issue, or null."
+    },
+    "needs_repro": {
+      "type": "boolean",
+      "description": "True for a bug with no command, output or screenshot, or when unsure between p1 and p2."
+    },
+    "reason": {
+      "type": "string",
+      "description": "One or two sentences naming the evidence for the domain and the priority."
+    }
+  }
+}

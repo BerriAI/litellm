@@ -8,17 +8,28 @@ ProxyClient's key/customer methods for cleanup. Read-backs are eventually consis
 
 from __future__ import annotations
 
+import os
 import time
 import warnings
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from functools import reduce
+from dataclasses import dataclass, field, replace
 from datetime import datetime
+from functools import reduce
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
-from pydantic import BaseModel
-
+from e2e_config import (
+    CONTROL_PLANE_BASE_URL,
+    MASTER_KEY,
+    POLL_INTERVAL,
+    POLL_TIMEOUT,
+    PROXY_BASE_URL,
+    PROXY_REPLICA_URLS,
+    REQUEST_TIMEOUT,
+    SLOW_PROVIDER_TIMEOUT_SECONDS,
+    provider_edge_base,
+    settle_propagation,
+)
 from e2e_http import (
     AnthropicHeaders,
     AuthHeaders,
@@ -36,6 +47,8 @@ from models import (
     AnthropicMessagesResponse,
     ChatBody,
     ChatResponse,
+    ConfigFieldList,
+    ConfigListParams,
     CostMap,
     CostMapEntry,
     CountTokensBody,
@@ -55,6 +68,7 @@ from models import (
     KeyInfoParams,
     KeyInfoResponse,
     LiteLLMParamsBody,
+    MemorySummaryResponse,
     ModelDeleteBody,
     ModelInfoBody,
     ModelInfoEntry,
@@ -67,26 +81,29 @@ from models import (
     ModelUpdateBody,
     OcrBody,
     OcrResponse,
+    RerankBody,
+    RerankResponse,
+    RouterCurrentValues,
+    RouterSettingsResponse,
+    SearchToolCreateBody,
+    SearchToolCreateResponse,
     SpendLogRow,
     SpendLogs,
     SpendLogsPage,
     SpendLogsPageParams,
     SpendLogsParams,
+    TeamDeleteBody,
+    TeamNewBody,
+    TeamNewResponse,
+    TeamUpdateBody,
     ToolsetCreateBody,
     ToolsetRow,
     ToolsetUpdateBody,
+    UserDeleteBody,
+    UserDeleteResponse,
 )
-from e2e_config import (
-    CONTROL_PLANE_BASE_URL,
-    MASTER_KEY,
-    POLL_INTERVAL,
-    POLL_TIMEOUT,
-    PROXY_BASE_URL,
-    PROXY_REPLICA_URLS,
-    REQUEST_TIMEOUT,
-    SLOW_PROVIDER_TIMEOUT_SECONDS,
-    settle_propagation,
-)
+from provider_cache_routing import route_cache_model
+from pydantic import BaseModel
 from transport import HttpTransport, SplitTransport, Transport, is_control_plane_path
 
 RowsPredicate = Callable[[list[SpendLogRow]], bool]
@@ -415,11 +432,23 @@ def converge_timeout_message(*, what: str, replica: str, timeout: float, last_re
     )
 
 
+CredentialKind = Literal["master", "direct_jwt", "virtual_key", "dashboard_session"]
+
+
+@dataclass(frozen=True, slots=True)
+class Caller:
+    credential: str = field(repr=False)
+    kind: CredentialKind
+    role: str
+    tenant: str | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class ProxyClient:
     transport: Transport
     replicas: Mapping[str, Transport]
     control_replicas: Mapping[str, Transport]
+    caller: Caller | None = None
     poll_timeout: float = 120.0
     poll_interval: float = 5.0
     model_servable_timeout: float = MODEL_SERVABLE_TIMEOUT
@@ -427,13 +456,24 @@ class ProxyClient:
     model_servable_interval: float = MODEL_SERVABLE_INTERVAL
     model_servable_request_timeout: float = MODEL_SERVABLE_REQUEST_TIMEOUT
 
+    def with_caller(self, caller: Caller) -> ProxyClient:
+        return replace(self, caller=caller)
+
+    def management_headers(self, caller_key: str | None = None, *, transport: Transport | None = None) -> AuthHeaders:
+        selected: Final = self.transport if transport is None else transport
+        if caller_key is not None:
+            return selected.bearer(caller_key)
+        if self.caller is not None:
+            return selected.bearer(self.caller.credential)
+        return selected.master
+
     # ---- keys / customers (satisfies lifecycle.ResourceClient) ----------
 
     def generate_key(self, body: KeyGenerateBody) -> str:
         return unwrap(
             self.transport.post(
                 "/key/generate",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 json=body,
                 response_type=KeyGenerateResponse,
             )
@@ -442,7 +482,7 @@ class ProxyClient:
     def delete_key(self, key: str) -> None:
         _ = self.transport.post(
             "/key/delete",
-            headers=self.transport.master,
+            headers=self.management_headers(),
             json=KeyDeleteBody(keys=[key]),
             response_type=NoBody,
         )
@@ -452,7 +492,7 @@ class ProxyClient:
             return
         _ = self.transport.post(
             "/customer/delete",
-            headers=self.transport.master,
+            headers=self.management_headers(),
             json=CustomerDeleteBody(user_ids=user_ids),
             response_type=NoBody,
         )
@@ -461,11 +501,22 @@ class ProxyClient:
         return unwrap(
             self.transport.get(
                 "/key/info",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 params=KeyInfoParams(key=key),
                 response_type=KeyInfoResponse,
             )
         ).info
+
+    def memory_summary_everywhere(self) -> Mapping[str, Result[MemorySummaryResponse]]:
+        return {
+            url: transport.get(
+                "/debug/memory/summary",
+                headers=self.management_headers(transport=transport),
+                params=NoBody(),
+                response_type=MemorySummaryResponse,
+            )
+            for url, transport in self.replicas.items()
+        }
 
     def read_back_everywhere[R: BaseModel](
         self,
@@ -507,11 +558,12 @@ class ProxyClient:
             {replica: outcome.result for replica, outcome in outcomes.items() if isinstance(outcome, Converged)}
         )
 
-    @staticmethod
     def _body_poller[R: BaseModel](
-        transport: Transport, path: str, params: BaseModel, response_type: type[R]
+        self, transport: Transport, path: str, params: BaseModel, response_type: type[R]
     ) -> Poller[Result[R]]:
-        return lambda: transport.get(path, headers=transport.master, params=params, response_type=response_type)
+        return lambda: transport.get(
+            path, headers=self.management_headers(transport=transport), params=params, response_type=response_type
+        )
 
     def model_info(self) -> list[ModelInfoEntry]:
         """Every configured deployment with the price the proxy resolved for it
@@ -519,17 +571,29 @@ class ProxyClient:
         return unwrap(
             self.transport.get(
                 "/model/info",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 params=NoBody(),
                 response_type=ModelInfoResponse,
             )
         ).data
 
+    def router_settings(self) -> RouterCurrentValues:
+        """The router knobs the proxy is running with, for a test whose behavior
+        needs one of them switched on in the proxy config."""
+        return unwrap(
+            self.transport.get(
+                "/router/settings",
+                headers=self.transport.master,
+                params=NoBody(),
+                response_type=RouterSettingsResponse,
+            )
+        ).current_values
+
     def model_cost_map(self) -> dict[str, CostMapEntry]:
         return unwrap(
             self.transport.get(
                 "/public/litellm_model_cost_map",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 params=NoBody(),
                 response_type=CostMap,
             )
@@ -556,6 +620,8 @@ class ProxyClient:
         model_name: str,
         litellm_params: LiteLLMParamsBody,
         mode: ModelMode | None = None,
+        *,
+        provider_live: bool = False,
     ) -> str:
         """Register a deployment under `model_name` and return its proxy-assigned
         model_id, once the model is actually servable on the data plane."""
@@ -564,15 +630,33 @@ class ProxyClient:
                 model_name=model_name,
                 litellm_params=litellm_params,
                 model_info=ModelInfoBody(mode=mode),
-            )
+            ),
+            provider_live=provider_live,
         )
 
-    def register_model(self, body: ModelNewBody, listed_for: str | None = None) -> str:
+    def general_setting_enabled(self, field_name: str) -> bool:
+        """Whether the proxy is running with the named general_settings flag on, for
+        a test whose behavior only exists under a config flag the stack has to carry."""
+        fields = unwrap(
+            self.transport.get(
+                "/config/list",
+                headers=self.transport.master,
+                params=ConfigListParams(config_type="general_settings"),
+                response_type=ConfigFieldList,
+            )
+        ).root
+        return any(entry.field_name == field_name and entry.field_value is True for entry in fields)
+
+    def register_model(
+        self, body: ModelNewBody, listed_for: str | None = None, *, provider_live: bool = False
+    ) -> str:
         """`create_model` for deployments that carry more than a mode: access groups,
         team scoping, a pinned id. `listed_for` is the virtual key whose /v1/models
         view must list the deployment before it counts as servable, because a
         team-scoped deployment is listed to its own team and to nobody else, master
-        key included; leave it unset for a proxy-wide model.
+        key included; leave it unset for a proxy-wide model. `provider_live` keeps
+        the deployment on its real provider path whatever the cache setting, for a
+        deployment shared across tests or workers, which no one test could own.
 
         /model/new is a control-plane route; the data plane (which serves /chat,
         /ocr, ...) only picks the new model up on its next DB reload, so a call
@@ -590,8 +674,12 @@ class ProxyClient:
         model_id = unwrap(
             self.transport.post(
                 "/model/new",
-                headers=self.transport.master,
-                json=body,
+                headers=self.management_headers(),
+                json=body.model_copy(update={"litellm_params": route_cache_model(
+                    body.litellm_params, provider_edge_base,
+                    enabled=os.environ.get("E2E_PROVIDER_CACHE", "0") == "1" and not provider_live,
+                    mode=body.model_info.mode,
+                )}),
                 response_type=ModelNewResponse,
             )
         ).model_id
@@ -606,7 +694,7 @@ class ProxyClient:
 
     def _await_model_servable(self, model_name: str, listed_for: str | None = None) -> None:
         """Block until every replica lists `model_name`, or fail at model_servable_timeout."""
-        headers: Final = self.transport.master if listed_for is None else self.transport.bearer(listed_for)
+        headers: Final = self.management_headers(listed_for)
         outcome: Final = await_servable_everywhere(
             {url: self._models_poller(transport, headers) for url, transport in self.replicas.items()},
             model_name=model_name,
@@ -649,7 +737,7 @@ class ProxyClient:
         unwrap(
             self.transport.post(
                 "/model/update",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 json=ModelUpdateBody(
                     litellm_params=litellm_params,
                     model_info=ModelInfoBody(id=model_id),
@@ -661,7 +749,7 @@ class ProxyClient:
     def delete_model(self, model_id: str) -> None:
         result = self.transport.post(
             "/model/delete",
-            headers=self.transport.master,
+            headers=self.management_headers(),
             json=ModelDeleteBody(id=model_id),
             response_type=NoBody,
         )
@@ -730,11 +818,10 @@ class ProxyClient:
                     f"GET {path} on {replica} still answers {self.poll_timeout}s after the delete; last read: {last}"
                 )
 
-    @staticmethod
-    def _reader[R: BaseModel](transport: Transport, path: str, response_type: type[R]) -> ReplicaRead[Result[R]]:
+    def _reader[R: BaseModel](self, transport: Transport, path: str, response_type: type[R]) -> ReplicaRead[Result[R]]:
         return lambda request_timeout: transport.get(
             path,
-            headers=transport.master,
+            headers=self.management_headers(transport=transport),
             params=NoBody(),
             response_type=response_type,
             timeout=request_timeout,
@@ -746,7 +833,7 @@ class ProxyClient:
         return unwrap(
             self.transport.post(
                 "/v1/mcp/toolset",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 json=body,
                 response_type=ToolsetRow,
             )
@@ -758,7 +845,7 @@ class ProxyClient:
         return unwrap(
             self.transport.put(
                 "/v1/mcp/toolset",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 json=body,
                 response_type=ToolsetRow,
             )
@@ -769,16 +856,40 @@ class ProxyClient:
         can unwrap it while a deferred teardown can ignore an already-deleted row."""
         return self.transport.delete(
             f"/v1/mcp/toolset/{toolset_id}",
-            headers=self.transport.master,
+            headers=self.management_headers(),
             json=NoBody(),
             response_type=NoBody,
         )
+
+    def create_search_tool(self, body: SearchToolCreateBody) -> str:
+        """POST /search_tools: register a search tool on the running proxy and return its id
+        once every worker has had a config-reload window to pick it up from the DB."""
+        search_tool_id: Final = unwrap(
+            self.transport.post(
+                "/search_tools",
+                headers=self.management_headers(),
+                json=body,
+                response_type=SearchToolCreateResponse,
+            )
+        ).search_tool_id
+        settle_propagation(time.monotonic())
+        return search_tool_id
+
+    def delete_search_tool(self, search_tool_id: str) -> None:
+        result = self.transport.delete(
+            f"/search_tools/{search_tool_id}",
+            headers=self.management_headers(),
+            json=NoBody(),
+            response_type=NoBody,
+        )
+        if not is_ok(result):
+            warnings.warn(f"delete_search_tool({search_tool_id!r}) failed: {result}", stacklevel=2)
 
     def create_credential(self, body: CredentialCreateBody) -> None:
         unwrap(
             self.transport.post(
                 "/credentials",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 json=body,
                 response_type=CredentialCreateResponse,
             )
@@ -787,12 +898,57 @@ class ProxyClient:
     def delete_credential(self, credential_name: str) -> None:
         result = self.transport.delete(
             f"/credentials/{credential_name}",
-            headers=self.transport.master,
+            headers=self.management_headers(),
             json=NoBody(),
             response_type=NoBody,
         )
         if not is_ok(result):
             warnings.warn(f"delete_credential({credential_name!r}) failed: {result}", stacklevel=2)
+
+    def create_team(self, body: TeamNewBody) -> str:
+        return unwrap(
+            self.transport.post(
+                "/team/new",
+                headers=self.management_headers(),
+                json=body,
+                response_type=TeamNewResponse,
+            )
+        ).team_id
+
+    def update_team(self, body: TeamUpdateBody) -> None:
+        unwrap(
+            self.transport.post(
+                "/team/update",
+                headers=self.transport.master,
+                json=body,
+                response_type=NoBody,
+            )
+        )
+
+    def delete_team(self, team_id: str) -> None:
+        result = self.transport.post(
+            "/team/delete",
+            headers=self.management_headers(),
+            json=TeamDeleteBody(team_ids=[team_id]),
+            response_type=NoBody,
+        )
+        if not is_ok(result):
+            warnings.warn(f"delete_team({team_id!r}) failed: {result}", stacklevel=2)
+
+    def delete_user(self, user_id: str) -> None:
+        """Best-effort teardown; a 404 is not a leak, since JWT tests defer this for
+        a user the proxy only upserts after a successful auth."""
+        result = self.transport.post(
+            "/user/delete",
+            headers=self.management_headers(),
+            json=UserDeleteBody(user_ids=[user_id]),
+            response_type=UserDeleteResponse,
+        )
+        match result:
+            case Success() | UnknownApiError(status_code=404):
+                return
+            case _:
+                warnings.warn(f"delete_user({user_id!r}) failed: {result}", stacklevel=2)
 
     # ---- LLM calls ------------------------------------------------------
 
@@ -827,6 +983,16 @@ class ProxyClient:
             timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
         )
 
+    def rerank(self, key: str, body: RerankBody) -> Result[RerankResponse]:
+        """POST /v1/rerank (Cohere-format). No official OpenAI/Anthropic SDK
+        covers this route, so it stays on the shared typed transport."""
+        return self.transport.post(
+            "/v1/rerank",
+            headers=self.transport.bearer(key),
+            json=body,
+            response_type=RerankResponse,
+        )
+
     def count_tokens(self, key: str, body: CountTokensBody) -> Result[CountTokensResponse]:
         """POST /v1/messages/count_tokens (Anthropic-native). Sends the
         anthropic-version header so the native path accepts it; harmless on the
@@ -857,7 +1023,7 @@ class ProxyClient:
     def spend_logs(self, params: SpendLogsParams) -> list[SpendLogRow]:
         result = self.transport.get(
             "/spend/logs",
-            headers=self.transport.master,
+            headers=self.management_headers(),
             params=params,
             response_type=SpendLogs,
         )
@@ -872,7 +1038,7 @@ class ProxyClient:
             return unwrap(
                 self.transport.get(
                     "/spend/logs/v2",
-                    headers=self.transport.master,
+                    headers=self.management_headers(),
                     params=SpendLogsPageParams(
                         start_date=start.strftime("%Y-%m-%d %H:%M:%S"),
                         end_date=end.strftime("%Y-%m-%d %H:%M:%S"),
@@ -925,7 +1091,7 @@ class ProxyClient:
     # ---- route probe ----------------------------------------------------
 
     def probe(self, path: str, *, params: NoBody) -> ProbeResult:
-        return self.transport.probe(path, params=params)
+        return self.transport.probe(path, params=params, headers=self.management_headers())
 
 
 def build_proxy_client(

@@ -40,6 +40,8 @@ from ..utils import is_reasoning_auto_summary_enabled
 from .interceptors import get_messages_interceptors
 from .utils import AnthropicMessagesRequestUtils, mock_response
 
+__all__ = ("anthropic_messages", "anthropic_messages_handler")
+
 # Providers that are routed directly to the OpenAI Responses API instead of
 # going through chat/completions.
 _RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
@@ -69,18 +71,14 @@ def _responses_mode_is_lost_by_prefix_strip(
 
 
 def _points_at_openai_backend(api_base: str | None) -> bool:
-    """Whether api_base is unset or targets api.openai.com rather than a self-hosted backend.
-
-    The ``openai/`` prefix is also how OpenAI-compatible servers (vLLM, llama.cpp, SGLang, ...)
-    are declared. Those set a custom api_base and do not implement the Responses API, so bridging
-    /v1/messages to it there breaks multimodal requests.
-    """
+    """Only real OpenAI hosts keep the Responses path; a custom api_base means a self-hosted
+    openai/-compatible backend (vLLM, llama.cpp, ...) that lacks the Responses API."""
     if not api_base:
         return True
     from urllib.parse import urlparse
 
-    parsed = urlparse(api_base if "://" in api_base else f"//{api_base}")
-    return (parsed.hostname or "").lower() == "api.openai.com"
+    host = (urlparse(api_base if "://" in api_base else f"//{api_base}").hostname or "").lower()
+    return host == "api.openai.com" or host.endswith(".openai.com")
 
 
 def _should_route_to_responses_api(
@@ -594,7 +592,9 @@ def anthropic_messages_handler(
         )
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
-        if _should_route_to_responses_api(custom_llm_provider, original_model, model, dynamic_api_base or api_base):
+        if kwargs.get("compaction") is None and _should_route_to_responses_api(
+            custom_llm_provider, original_model, model, dynamic_api_base or api_base
+        ):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 max_tokens=max_tokens,
                 messages=messages,
@@ -665,6 +665,11 @@ def anthropic_messages_handler(
                 "display": "summarized",
             }
 
+    resolved_api_base: Final = (
+        dynamic_api_base
+        if dynamic_api_base is not None and anthropic_messages_provider_config.uses_get_llm_provider_api_base()
+        else api_base
+    )
     return base_llm_http_handler.anthropic_messages_handler(
         model=model,
         messages=strip_provider_specific_fields_from_anthropic_messages(messages),
@@ -676,7 +681,7 @@ def anthropic_messages_handler(
         litellm_params=litellm_params,
         logging_obj=litellm_logging_obj,
         api_key=api_key,
-        api_base=api_base,
+        api_base=resolved_api_base,
         stream=stream,
         kwargs=kwargs,
     )

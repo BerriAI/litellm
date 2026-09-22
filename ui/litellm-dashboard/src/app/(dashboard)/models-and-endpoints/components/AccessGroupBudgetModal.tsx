@@ -98,7 +98,11 @@ const AccessGroupBudgetModal: React.FC<AccessGroupBudgetModalProps> = ({
                 )}
               >
                 {({ id, value, onChange }) => (
-                  <BudgetDurationDropdown id={id} value={value || null} onChange={onChange} />
+                  <BudgetDurationDropdown
+                    id={id}
+                    value={value || null}
+                    onChange={(next) => onChange(next ?? undefined)}
+                  />
                 )}
               </FormField>
             </FieldGroup>

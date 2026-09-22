@@ -9,7 +9,15 @@ from litellm._version import version as litellm_version
 from litellm.proxy.client.health import HealthManagementClient
 
 from .commands.agents import agent_commands
-from .commands.auth import auth_group, context_secret_vault, get_stored_api_key, login, logout, whoami
+from .commands.auth import (
+    CliContextObj,
+    auth_group,
+    context_secret_vault,
+    get_stored_api_key,
+    login,
+    logout,
+    whoami,
+)
 from .commands.autoroute.commands import autoroute_group
 from .commands.chat import chat
 from .commands.config import config_commands, get_config_value, hidden_command_names
@@ -95,7 +103,7 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
 
     # If no API key provided via flag or environment variable, try to load from saved token.
     # Pass base_url so we only use the stored key when it was issued for this server.
-    api_key_from_token_file: Final = api_key is None
+    api_key_from_token_file: Final = api_key is None and ctx.invoked_subcommand not in ("configure", "unconfigure")
     resolved_api_key: Final = (
         get_stored_api_key(expected_base_url=base_url, vault=context_secret_vault(ctx))
         if api_key_from_token_file
@@ -126,7 +134,8 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
 @click.pass_context
 def version(ctx: click.Context):
     """Show the LiteLLM Proxy CLI and server version."""
-    print_version(ctx.obj.get("base_url"), ctx.obj.get("api_key"))
+    ctx_obj: Final[CliContextObj] = ctx.obj
+    print_version(ctx_obj.get("base_url"), ctx_obj.get("api_key"))
 
 
 # Add authentication commands as top-level commands
@@ -166,6 +175,17 @@ cli.add_command(config_commands)
 # Add configure/unconfigure (persistently wire a coding agent to the proxy with a virtual key)
 cli.add_command(configure_group)
 cli.add_command(unconfigure_group)
+
+
+LITELLM_PROXY_DEPRECATION_NOTICE: Final = (
+    "The `litellm-proxy` command is deprecated and will be removed in a future release; "
+    "run `lite` instead, it takes the same commands and options."
+)
+
+
+def litellm_proxy_cli() -> None:
+    click.secho(LITELLM_PROXY_DEPRECATION_NOTICE, err=True, fg="yellow")
+    cli()
 
 
 if __name__ == "__main__":
