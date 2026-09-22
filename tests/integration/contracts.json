@@ -227,6 +227,9 @@
       "other.observability.callbacks.credentials_stay_out_of_event_bodies",
       "other.observability.callbacks.concurrent_results_join_complete_events_and_rows"
     ],
+    "tests/integration/observability/test_otel_text_completion_choices.py::test_otel_weave_output_keeps_text_completion_provider_fields_beside_the_synthesized_message": [
+      "other.observability.otel.text_completion_choices_keep_provider_fields"
+    ],
     "tests/integration/observability/test_guardrail_effects.py::test_guardrail_rewrites_system_and_user_in_actual_anthropic_request": [
       "other.observability.guardrails.rewrite_reaches_correct_anthropic_positions"
     ],
