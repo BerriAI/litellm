@@ -29,8 +29,11 @@
 
 /* Classic (non-overlay) scrollbars that reserve their own strip instead of floating over content */
 @utility scrollbar-inset {
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  /* Chromium ignores ::-webkit-scrollbar once scrollbar-width or scrollbar-color is set, so those stay Firefox-only */
+  @supports not selector(::-webkit-scrollbar) {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
   &::-webkit-scrollbar {
     width: 8px;
     height: 8px;
