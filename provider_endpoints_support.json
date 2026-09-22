@@ -2334,6 +2334,23 @@
         "a2a": false
       }
     },
+    "yolo-auto": {
+      "display_name": "Yolo-Auto (`yolo-auto`)",
+      "url": "https://docs.litellm.ai/docs/providers/yolo_auto",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "snowflake": {
       "display_name": "Snowflake (`snowflake`)",
       "url": "https://docs.litellm.ai/docs/providers/snowflake",

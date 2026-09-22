@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Yolo-Auto</title>
+  <rect width="64" height="64" rx="14" fill="#ef5b36"/>
+  <path d="M13 15h11l8 15 8-15h11L37 39v11H27V39Z" fill="#20201e"/>
+</svg>

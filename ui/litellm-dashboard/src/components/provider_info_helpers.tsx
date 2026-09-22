@@ -65,6 +65,7 @@ import voyageLogo from "../../public/assets/logos/voyage.webp";
 import watsonxLogo from "../../public/assets/logos/watsonx.svg";
 import xaiLogo from "../../public/assets/logos/xai.svg";
 import xinferenceLogo from "../../public/assets/logos/xinference.svg";
+import yoloAutoLogo from "../../public/assets/logos/yolo_auto.svg";
 
 export enum Providers {
   A2A_Agent = "A2A Agent",
@@ -182,6 +183,7 @@ export enum Providers {
   xAI = "xAI",
   XINFERENCE = "Xinference",
   ZAI = "Z.AI (Zhipu AI)",
+  YOLO_AUTO = "Yolo-Auto",
 }
 
 export const provider_map: Record<string, string> = {
@@ -300,6 +302,7 @@ export const provider_map: Record<string, string> = {
   xAI: "xai",
   XINFERENCE: "xinference",
   ZAI: "zai",
+  YOLO_AUTO: "yolo-auto",
 };
 
 const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
@@ -397,6 +400,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.WATSONX_TEXT]: watsonxLogo.src,
   [Providers.xAI]: xaiLogo.src,
   [Providers.XINFERENCE]: xinferenceLogo.src,
+  [Providers.YOLO_AUTO]: yoloAutoLogo.src,
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string; displayName: string } => {
@@ -455,6 +459,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Voyage]: "voyage/",
   [Providers.WATSONX]: "watsonx/ibm/granite-3-3-8b-instruct",
   [Providers.ZAI]: "zai/glm-4.5",
+  [Providers.YOLO_AUTO]: "yolo-auto/yolo",
 };
 
 export const getPlaceholder = (selectedProvider: string): string => {
