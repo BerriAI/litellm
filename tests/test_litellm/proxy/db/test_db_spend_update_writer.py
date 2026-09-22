@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
@@ -20,7 +20,7 @@ from redis.exceptions import DataError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import Litellm_EntityType, SpendUpdateQueueItem
+from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
     _TEAM_MEMBER_SPEND_SQL,
@@ -29,6 +29,7 @@ from litellm.proxy.db.db_spend_update_writer import (
     _spend_tables_left_to_send,
 )
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
+from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
@@ -4450,3 +4451,53 @@ async def test_cancel_that_lands_after_the_daily_batch_committed_does_not_requeu
 
     assert len(_daily_upserts(db, "LiteLLM_DailyUserSpend")) == 1
     assert queue.update_queue.empty(), "a batch that already committed must not be requeued"
+
+
+class _DrainedTagRedisBuffer:
+    """Hands out one drained tag batch and records whatever is restored."""
+
+    def __init__(self, drained: dict[str, DailyTagSpendTransaction]) -> None:
+        self.drained = drained
+        self.restored: list[dict[str, DailyTagSpendTransaction]] = []
+
+    async def get_all_daily_tag_spend_update_transactions_from_redis_buffer(
+        self,
+    ) -> dict[str, DailyTagSpendTransaction]:
+        return self.drained
+
+    async def restore_transactions_to_redis(
+        self, daily_tag_spend_update_transactions: dict[str, DailyTagSpendTransaction]
+    ) -> None:
+        self.restored.append(daily_tag_spend_update_transactions)
+
+
+@pytest.mark.asyncio
+async def test_tag_batch_drained_from_redis_and_cancelled_mid_flight_is_restored_before_its_rollback_returns():
+    """The Redis tag drain is destructive. A shutdown cancel used to leave the batch nowhere:
+    Redis no longer had it and the interactive transaction rolled the statement back."""
+    db_writer = DBSpendUpdateWriter()
+    drained = {"key-a": cast(DailyTagSpendTransaction, _daily_entity_txn("tag"))}
+    redis_buffer = _DrainedTagRedisBuffer(drained)
+    db_writer.redis_update_buffer = cast(RedisUpdateBuffer, redis_buffer)
+    db = _StallingDailySpendFakeDB(stalled_table="LiteLLM_DailyTagSpend")
+
+    tick = asyncio.ensure_future(
+        db_writer._drain_and_commit_daily_tag_spend_from_redis(
+            prisma_client=_WindowSpendFakePrisma(db),
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+        )
+    )
+    await asyncio.wait_for(db.stalled.wait(), timeout=5)
+    tick.cancel()
+    finished, _ = await asyncio.wait({tick}, timeout=1)
+    assert finished == {tick}, "the cancelled drain must return before the rolled-back statement unwinds"
+    with pytest.raises(asyncio.CancelledError):
+        tick.result()
+
+    assert redis_buffer.restored == [drained], "the drained tag batch must be back in Redis before the rollback lands"
+    assert db.transaction_outcomes == []
+    db.rollback_release.set()
+    await asyncio.wait_for(db.rolled_back.wait(), timeout=5)
+    assert db.transaction_outcomes == ["rollback"]
+    assert _daily_upserts(db, "LiteLLM_DailyTagSpend") == []
