@@ -472,7 +472,7 @@ class TestZeroCostDiagnostic:
         self._assert_flagged(logging_obj, caplog)
         assert payload["zero_cost_diagnostic"] == logging_obj.model_call_details["zero_cost_diagnostic"]
 
-    def test_uncomputed_hidden_cost_is_not_a_zero_cost(
+    def test_uncomputed_hidden_cost_is_priced_like_an_absent_one(
         self, deployment_pricing: Mapping[str, float], caplog: pytest.LogCaptureFixture
     ) -> None:
         usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
@@ -484,8 +484,13 @@ class TestZeroCostDiagnostic:
                 response, start_time=datetime.datetime.now(), end_time=datetime.datetime.now()
             )
 
-        assert logging_obj.model_call_details["standard_logging_object"]["zero_cost_diagnostic"] is None
-        assert self._zero_cost_warnings(caplog) == []
+        payload: Final = logging_obj.model_call_details["standard_logging_object"]
+        assert payload["response_cost"] == 0.0
+        if deployment_pricing is self.FREE_PRICING:
+            assert payload["zero_cost_diagnostic"] is None
+            assert self._zero_cost_warnings(caplog) == []
+            return
+        self._assert_flagged(logging_obj, caplog)
 
     def test_unbilled_read_route_with_usage_stays_silent(
         self, deployment_pricing: Mapping[str, float], caplog: pytest.LogCaptureFixture
@@ -3820,6 +3825,75 @@ def test_process_hidden_params_uses_hidden_params_cost_after_failure_handler_zer
     assert logging_obj.model_call_details.get("response_cost") == passthrough_cost
     slo = logging_obj.model_call_details.get("standard_logging_object") or {}
     assert slo.get("response_cost") == passthrough_cost
+
+
+def test_process_hidden_params_falls_through_on_none_response_cost():
+    """A present-but-None hidden response_cost is priced by the calculator, not logged as 0 (issue #41976)."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse, Usage
+
+    logging_obj = LiteLLMLoggingObj(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="responses",
+        start_time=datetime.now(),
+        litellm_call_id="test-none-hidden-cost",
+        function_id="test-none-hidden-cost",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"model": "openai/gpt-4o-mini"}
+    logging_obj.optional_params = {}
+
+    result = ModelResponse(
+        id="success",
+        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+        usage=Usage(prompt_tokens=100, completion_tokens=10, total_tokens=110),
+    )
+    result._hidden_params = {"response_cost": None}
+
+    logging_obj._process_hidden_params_and_response_cost(result, datetime.now(), datetime.now())
+
+    calculated_cost = logging_obj._response_cost_calculator(result=result)
+    assert calculated_cost is not None and calculated_cost > 0
+    assert logging_obj.model_call_details.get("response_cost") == calculated_cost
+    slo = logging_obj.model_call_details.get("standard_logging_object") or {}
+    assert slo.get("response_cost") == calculated_cost
+
+
+def test_process_hidden_params_explicit_zero_cost_overrides_earlier_cost():
+    """An explicit hidden response_cost of 0 wins over a cost already on model_call_details; only None falls through."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse, Usage
+
+    logging_obj = LiteLLMLoggingObj(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="responses",
+        start_time=datetime.now(),
+        litellm_call_id="test-zero-hidden-cost-overrides",
+        function_id="test-zero-hidden-cost-overrides",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"model": "openai/gpt-4o-mini"}
+    logging_obj.optional_params = {}
+    logging_obj.model_call_details["response_cost"] = 0.5
+
+    result = ModelResponse(
+        id="success",
+        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+        usage=Usage(prompt_tokens=100, completion_tokens=10, total_tokens=110),
+    )
+    result._hidden_params = {"response_cost": 0.0}
+
+    logging_obj._process_hidden_params_and_response_cost(result, datetime.now(), datetime.now())
+
+    assert logging_obj.model_call_details.get("response_cost") == 0.0
+    slo = logging_obj.model_call_details.get("standard_logging_object") or {}
+    assert slo.get("response_cost") == 0.0
 
 
 def test_function_setup_litellm_metadata_populates_metadata():

@@ -125,6 +125,7 @@ SERVER_ENV=(
   "OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:${JAEGER_OTLP_PORT}"
   "SSL_CERT_FILE=${CERTS_DIR}/ca-bundle.pem"
   "PYTHONPATH=${REPO_ROOT}"
+  "E2E_CALLBACK_COST_CAPTURE_FILE=${STACK_DIR}/callback-cost-capture.jsonl"
   "JWT_PUBLIC_KEY_URL=http://127.0.0.1:${KEYCLOAK_PORT}/realms/litellm-e2e/protocol/openid-connect/certs"
   "JWT_ISSUER=http://127.0.0.1:${KEYCLOAK_PORT}/realms/litellm-e2e"
   "JWT_AUDIENCE=litellm-e2e"
@@ -210,6 +211,7 @@ E2E_KEYCLOAK_URL=http://127.0.0.1:${KEYCLOAK_PORT}
 E2E_KEYCLOAK_ADMIN_USER=admin
 E2E_KEYCLOAK_ADMIN_PASSWORD=e2e-ephemeral-idp-not-a-secret
 SSL_CERT_FILE=${CERTS_DIR}/ca-bundle.pem
+E2E_CALLBACK_COST_CAPTURE_FILE=${STACK_DIR}/callback-cost-capture.jsonl
 DATABASE_URL=postgresql://${DATABASE_USER}:${DATABASE_PASSWORD}@${DATABASE_HOST}:${DATABASE_PORT}/${DATABASE_NAME}
 EOF
 
