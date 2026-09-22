@@ -13,8 +13,10 @@ LIT-5045. The deployment carries its own per-token rates, so the expected cost
 is computed from the returned usage rather than read off any one surface, and
 every surface is held to that number.
 
-/metrics is per-pod behind the stack's balancer, so the counter poll scrapes
-until the pod that served the call answers; the request itself is sent once.
+/metrics is per pod, so every replica the stack exports (PROXY_REPLICA_URLS) is
+scraped directly and the samples merged; a stack that exports only its balancer
+is scraped there until the pod that served the call answers. The request itself
+is sent once.
 """
 
 from __future__ import annotations
@@ -22,12 +24,14 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from itertools import groupby
 from math import isclose
 from types import MappingProxyType
 from typing import Final
 
 import pytest
 from e2e_config import provider_edge_base, unique_marker
+from e2e_http import ProbeResult
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, KeyGenerateBody, LiteLLMParamsBody, TeamNewBody
 from prometheus_client.parser import text_string_to_metric_families
@@ -44,27 +48,35 @@ TEAM_LABEL: Final = "team"
 SeriesLabels = tuple[tuple[str, str], ...]
 
 
-def _spend_series_for_key(exposition: str, token: str) -> Mapping[SeriesLabels, float]:
+def _spend_series_for_key(scrapes: Mapping[str, ProbeResult], token: str) -> Mapping[SeriesLabels, float]:
+    samples: Final = sorted(
+        (tuple(sorted(sample.labels.items())), sample.value)
+        for scrape in scrapes.values()
+        if scrape.status_code == 200
+        for family in text_string_to_metric_families(scrape.body)
+        for sample in family.samples
+        if sample.name == SPEND_METRIC and sample.labels.get(KEY_HASH_LABEL) == token
+    )
     return MappingProxyType(
-        {
-            tuple(sorted(sample.labels.items())): sample.value
-            for family in text_string_to_metric_families(exposition)
-            for sample in family.samples
-            if sample.name == SPEND_METRIC and sample.labels.get(KEY_HASH_LABEL) == token
-        }
+        {labels: sum(value for _, value in group) for labels, group in groupby(samples, key=lambda sample: sample[0])}
     )
 
 
 def _poll_spend_series_for_key(client: SpendClient, token: str) -> Mapping[SeriesLabels, float]:
     outcome: Final = await_converged(
-        lambda: _spend_series_for_key(client.scrape_metrics(), token),
-        converged=lambda series: bool(series),
+        client.scrape_metrics,
+        converged=lambda scrapes: bool(_spend_series_for_key(scrapes, token)),
         timeout=client.proxy.poll_timeout,
         interval=client.proxy.poll_interval,
         now=time.monotonic,
         sleep=time.sleep,
     )
-    return outcome.result if isinstance(outcome, Converged) else outcome.last_result
+    scrapes: Final = outcome.result if isinstance(outcome, Converged) else outcome.last_result
+    assert _spend_series_for_key(scrapes, token), (
+        f"{SPEND_METRIC} never exposed a series for {KEY_HASH_LABEL}={token} on any replica; "
+        f"last scrape status per replica: {({replica: scrape.status_code for replica, scrape in scrapes.items()})}"
+    )
+    return _spend_series_for_key(scrapes, token)
 
 
 def _same_spend(actual: float | None, expected: float) -> bool:
@@ -130,7 +142,6 @@ class TestSpendSurfaceConsistency:
         )
         assert export_row is not None, f"/user/daily/activity/aggregated never listed key {token} under api_keys"
         series: Final = _poll_spend_series_for_key(client, token)
-        assert series, f"{SPEND_METRIC} never exposed a series for {KEY_HASH_LABEL}={token} on any scraped pod"
         off_team: Final = tuple(labels for labels in series if dict(labels).get(TEAM_LABEL) != team_id)
         assert not off_team, f"{SPEND_METRIC} series for the key carry a team other than {team_id}: {off_team}"
 

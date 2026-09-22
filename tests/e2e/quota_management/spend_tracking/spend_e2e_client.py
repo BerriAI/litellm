@@ -12,9 +12,10 @@ helpers from one place.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final
 
 from e2e_config import unique_marker
@@ -57,6 +58,8 @@ from models import (
 )
 from proxy_client import Converged, ProxyClient, await_converged
 from pydantic import BaseModel, Field
+
+METRICS_PATH: Final = "/metrics/"
 
 __all__ = [
     "BatchCreateBody",
@@ -368,8 +371,17 @@ class SpendClient:
         )
         return outcome.result if isinstance(outcome, Converged) else outcome.last_result
 
-    def scrape_metrics(self) -> str:
-        return self.proxy.probe("/metrics", params=NoBody()).body
+    def scrape_metrics(self) -> Mapping[str, ProbeResult]:
+        """GET /metrics/ on every replica in PROXY_REPLICA_URLS, keyed by replica. The
+        counter is per pod, so the union of the replicas is the fleet's exposition; the
+        trailing slash is the mounted app's own path, since bare /metrics answers a 307
+        whose Location drops the port behind a Host-rewriting balancer."""
+        return MappingProxyType(
+            {
+                replica: transport.probe(METRICS_PATH, params=NoBody())
+                for replica, transport in self.proxy.replicas.items()
+            }
+        )
 
     def spend_logs_page(
         self, *, api_key: str | None, page: int, page_size: int
