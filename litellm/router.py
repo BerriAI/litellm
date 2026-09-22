@@ -174,6 +174,8 @@ from litellm.router_utils.common_utils import (
     _is_proxy_admin_request,
     filter_team_based_models,
     filter_web_search_deployments,
+    format_fallback_outcome_message,
+    format_no_fallback_group_message,
     get_request_team_id,
     provider_for_generic_call,
     resolve_model_group_alias,
@@ -7352,7 +7354,7 @@ class Router:
                         masked_fallbacks,
                     )
                     if hasattr(original_exception, "message") and litellm.expose_router_debug_in_errors:
-                        original_exception.message += f"No fallback model group found for lookup_groups={' -> '.join(lookup_groups)}. Fallbacks={masked_fallbacks}"
+                        original_exception.message += format_no_fallback_group_message(lookup_groups, fallbacks)
                     raise original_exception
 
                 input_kwargs.update(
@@ -7383,11 +7385,15 @@ class Router:
                 cooldown_info,
             )
 
-        if hasattr(original_exception, "message") and litellm.expose_router_debug_in_errors:
-            # add the available fallbacks to the exception
-            original_exception.message += f". Received Model Group={model_group}\nAvailable Model Group Fallbacks={mask_sensitive_structure(fallback_model_group)}"
-            if len(fallback_failure_exception_str) > 0:
-                original_exception.message += f"\nError doing the fallback: {fallback_failure_exception_str}"
+        lookup_already_explained: Final = fallback_model_group is None and len(fallback_failure_exception_str) > 0
+        if (
+            hasattr(original_exception, "message")
+            and litellm.expose_router_debug_in_errors
+            and not lookup_already_explained
+        ):
+            original_exception.message += format_fallback_outcome_message(
+                model_group, fallback_model_group, fallback_failure_exception_str
+            )
 
         raise original_exception
 
