@@ -1,5 +1,5 @@
 """
-Unit tests for The Grid OpenAI-like provider.
+Unit tests for The Grid AI OpenAI-like provider.
 """
 
 import json
@@ -44,7 +44,7 @@ def test_thegrid_env_api_base_overrides_default(monkeypatch):
 
 
 def test_thegrid_keeps_max_completion_tokens():
-    """The Grid accepts max_completion_tokens natively, so it is not remapped.
+    """The Grid AI accepts max_completion_tokens natively, so it is not remapped.
 
     Unlike providers that only understand the legacy max_tokens field, sending
     max_completion_tokens to /v1/chat/completions caps the response, so the
@@ -81,7 +81,7 @@ def test_thegrid_supports_responses_endpoint():
 
 
 def test_supported_endpoints_matrix():
-    """The Grid must appear in the packaged backup that /public/endpoints serves."""
+    """The Grid AI must appear in the packaged backup that /public/endpoints serves."""
     matrix = json.loads(
         (Path(litellm.__file__).parent / "provider_endpoints_support_backup.json").read_text()
     )

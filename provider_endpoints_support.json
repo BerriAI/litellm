@@ -3035,7 +3035,7 @@
       }
     },
     "thegrid": {
-      "display_name": "The Grid (`thegrid`)",
+      "display_name": "The Grid AI (`thegrid`)",
       "url": "https://docs.litellm.ai/docs/providers/thegrid",
       "endpoints": {
         "chat_completions": true,
