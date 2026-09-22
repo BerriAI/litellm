@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import httpx
 import pytest
@@ -168,3 +168,37 @@ def test_strip_bug_report_notice():
 
     assert strip_bug_report_notice(f"boom\n\n{notice}") == "boom\n"
     assert strip_bug_report_notice("boom") == "boom"
+
+
+def test_issue_description_renders_stream_and_config_block():
+    report = build_bug_report(
+        RuntimeError("boom"),
+        surface="proxy",
+        stream=True,
+        config_lines=("router_settings.routing_strategy = least-busy", "litellm_settings.drop_params = true"),
+    )
+    description = parse_qs(urlparse(bug_report_issue_url(report)).query)["description"][0]
+
+    assert "Stream: true\n" in description
+    assert "```\nrouter_settings.routing_strategy = least-busy\nlitellm_settings.drop_params = true\n```" in description
+
+
+@pytest.mark.parametrize("stream", [None, "true", 1])
+def test_issue_description_omits_stream_unless_it_is_a_bool(stream: object):
+    report = build_bug_report(RuntimeError("boom"), surface="proxy", stream=stream)
+
+    assert report.stream is None
+    assert "Stream:" not in unquote_plus(bug_report_issue_url(report))
+
+
+def test_oversized_config_is_trimmed_from_the_end_before_any_frame():
+    with pytest.raises(BadRequestError) as raised:
+        get_llm_provider(cast(str, None))
+    config_lines = tuple(f"general_settings.flag_{index:04d} = true" for index in range(400))
+    report = build_bug_report(raised.value, surface="proxy", config_lines=config_lines)
+    description = parse_qs(urlparse(url := bug_report_issue_url(report)).query)["description"][0]
+
+    assert len(url) <= MAX_URL_LENGTH
+    assert all(frame in description for frame in report.litellm_frames)
+    assert "general_settings.flag_0000 = true" in description
+    assert "general_settings.flag_0399 = true" not in description

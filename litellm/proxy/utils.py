@@ -59,7 +59,6 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
-    build_bug_report,
     should_report_bug,
     strip_bug_report_notice,
 )
@@ -70,6 +69,7 @@ from litellm.proxy._types import (
     SpendLogsMetadata,
     SpendLogsPayload,
 )
+from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.openai_error_payload import (
     litellm_call_id_headers,
     openai_error_param,
@@ -7996,7 +7996,7 @@ def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) 
         return with_litellm_call_id(e, litellm_call_id)
     _status_code: Final = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
     if should_report_bug(e):
-        verbose_proxy_logger.error(bug_report_notice(build_bug_report(e, surface="proxy")))
+        verbose_proxy_logger.error(bug_report_notice(build_proxy_bug_report(e)))
     return ProxyException(
         message=strip_bug_report_notice(str(e)),
         type=ProxyErrorTypes.internal_server_error,
