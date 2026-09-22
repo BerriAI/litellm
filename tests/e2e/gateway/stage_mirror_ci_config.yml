@@ -10,6 +10,7 @@ general_settings:
   store_prompts_in_spend_logs: true
   database_connection_pool_limit: 10
   forward_client_headers_to_llm_api: false
+  cancel_on_disconnect: true
   maximum_spend_logs_retention_period: "60d"
   maximum_spend_logs_cleanup_cron: "0 1 * * *"
   proxy_budget_rescheduler_min_time: 15

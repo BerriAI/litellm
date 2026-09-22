@@ -1540,18 +1540,17 @@ async def test_user_budget_lookup_is_also_unenforced_when_the_database_is_down()
     """
     KNOWN LIMITATION, pinned deliberately rather than discovered later.
 
-    `get_user_object` cannot tell "row absent" from "database unreachable": the
-    absent case raises inside its own try (auth_checks.py:2177) and the handler
-    at :2213 rewrites every exception into the same
-    `ValueError("User doesn't exist in db...")`. A connection error, a query
-    timeout and a malformed row all reach us as that one type and message.
+    `get_user_object` lets a connection-level outage propagate as-is and rewrites
+    every other read failure (a query-level Prisma error, a malformed row) into
+    the same `ValueError("User doesn't exist in db...")` as an absent row, and
+    `_read_user_model_max_budget` swallows every exception either way.
 
-    So tolerating the absent case, which the test above requires, unavoidably
-    tolerates an outage too, and a user who DOES have a per-model budget goes
+    So tolerating the absent case, which the test above requires, also
+    tolerates an outage, and a user who DOES have a per-model budget goes
     unenforced while the DB is unreachable. This is pre-existing behaviour of
-    `get_user_object` that the virtual-key path inherits identically; it is not
-    introduced here. Distinguishing them needs a dedicated exception type for
-    the absent case and a change to both auth paths.
+    the virtual-key path; it is not introduced here. Distinguishing them needs
+    `_read_user_model_max_budget` to let an outage through the way the JWT
+    path does.
     """
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.auth.user_api_key_auth import _read_user_model_max_budget

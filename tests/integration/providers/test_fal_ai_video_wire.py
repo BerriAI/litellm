@@ -76,6 +76,9 @@ def test_fal_h3_video_create_uses_canonical_body_and_status_path(gateway: Gatewa
     request_id: Final = "fal-h3-req-" + uuid.uuid4().hex
 
     def respond(request: Request) -> Reply:
+        if request.target == f"/files/{request_id}.mp4":
+            assert request.method == "GET"
+            return Reply(body=_MP4, content_type="video/mp4")
         assert request.headers["authorization"] == "Key synthetic-fal-key"
         if request.method == "POST":
             assert request.target == f"/{_H3_MODEL}"
