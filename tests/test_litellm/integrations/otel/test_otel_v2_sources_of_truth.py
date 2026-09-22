@@ -1427,8 +1427,8 @@ def test_llm_call_event_resolves_the_callers_conversation_id(litellm_params, exp
         ({"metadata": {"user_api_key_hash": "hsh"}}, {"session_id": ""}, None),
         (
             {"metadata": {"user_api_key_hash": "hsh"}},
-            {"session_id": "0af7651916cd43dd8448eb211c80319c", "trace_id": "0af7651916cd43dd8448eb211c80319c"},
-            None,
+            {"session_id": "conv-replayed", "trace_id": "conv-replayed"},
+            "conv-replayed",
         ),
         ({"litellm_session_id": "conv-live"}, {"session_id": "conv-replayed"}, "conv-live"),
         (
@@ -1443,16 +1443,16 @@ def test_llm_call_event_resolves_the_callers_conversation_id(litellm_params, exp
     ids=[
         "replayed-payload",
         "replayed-payload-without-a-session",
-        "replayed-payload-whose-session-is-the-trace-id-stays-hidden",
+        "replayed-session-logged-without-a-parent-span-doubles-as-the-trace-id",
         "live-params-win",
         "generated-stays-hidden",
     ],
 )
 def test_llm_call_event_falls_back_to_the_replayed_payloads_session_id(litellm_params, payload, expected):
     """``/callback_logs`` replays a finished ``StandardLoggingPayload`` whose
-    ``litellm_params`` carry only key metadata; the conversation survives on
-    ``payload.session_id`` unless it is the trace id the proxy back-filled or
-    minted, which both leave ``session_id == trace_id`` behind."""
+    ``litellm_params`` carry only key metadata, so the conversation survives on
+    ``payload.session_id``, including when the payload's ``trace_id`` fell back to
+    that same session because the request was served without a parent span."""
     kwargs: Final = {
         "litellm_params": litellm_params,
         "standard_logging_object": _sample_payload(**payload),
