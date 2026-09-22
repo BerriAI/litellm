@@ -3782,6 +3782,7 @@ async def test_native_compaction_wire_roundtrip(
     messages_api: bool, gateway: bool, native_endpoint: bool,
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter,
 ) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
     monkeypatch.setattr(litellm.anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
     monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", False)
