@@ -2807,8 +2807,7 @@ class ProxyBaseLLMRequestProcessing:
                 user_api_key_dict=user_api_key_dict,
                 response=response,
             )
-            if logging_obj is not None:
-                record_served_output_texts(logging_obj.model_call_details, served_output_texts(response))
+            record_served_output_texts(logging_obj.model_call_details, served_output_texts(response))
         except Exception:
             _exception_raised = True
             raise
