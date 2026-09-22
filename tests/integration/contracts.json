@@ -181,6 +181,9 @@
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_flux_dev_generation_targets_dev_endpoint_and_charges_per_image": [
       "other.provider_wire.fal_ai.flux_dev_endpoint_and_per_image_pricing"
     ],
+    "tests/integration/providers/test_fal_ai_passthrough_wire.py::test_fal_queue_submit_charges_and_polls_pass_through_free": [
+      "other.provider_wire.fal_ai.passthrough_queue_submit_charges_and_polls_do_not"
+    ],
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_edit_inlines_upload_as_data_url_and_charges_keyed_row": [
       "other.provider_wire.fal_ai.image_edit_json_data_urls_and_keyed_pricing"
     ],
