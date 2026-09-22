@@ -156,6 +156,15 @@ curl -fsS -X POST "https://api.render.com/v1/cron-jobs/${CRON_ID}/runs" \
 curl -fsS "https://api.render.com/v1/logs?ownerId=${OWNER_ID}&resource=${CRON_ID}&limit=100" \
   -H "Authorization: Bearer ${RENDER_API_KEY}"
 
+# Rebuild the image after a merge that touches tests/e2e/** (see the
+# auto-deploy gotcha below). The deploy is done once its status is
+# `live`; a run triggered before that still uses the previous image.
+curl -fsS -X POST "https://api.render.com/v1/services/${CRON_ID}/deploys" \
+  -H "Authorization: Bearer ${RENDER_API_KEY}" \
+  -H 'Content-Type: application/json' -d '{"clearCache": "do_not_clear"}'
+curl -fsS "https://api.render.com/v1/services/${CRON_ID}/deploys?limit=1" \
+  -H "Authorization: Bearer ${RENDER_API_KEY}"
+
 # A run that does NOT open a PR (first-time validation, CLI bumps):
 # set SKIP_PUBLISH=1 on the service, trigger a run, then remove it.
 # The matrix JSON is printed at the end of the run's log (nothing on
@@ -191,6 +200,14 @@ docker run --rm --platform linux/amd64 \
   uploaded 2026-09-20, released on GitHub 2026-09-22), so the
   `--no-build` install failing means the wheel is genuinely missing,
   not late.
+- **Pushes do not redeploy the service; deploy by hand.** `autoDeploy`
+  is `yes` on the service, but Render only hears about pushes through
+  its GitHub app, which is not installed on the `BerriAI` org (an org
+  admin step), so no push to the branch has ever started a deploy.
+  After a merge that changes anything under `tests/e2e/**`, run the
+  deploy command from the operating section (or "Manual Deploy" on the
+  dashboard) and wait for `live` before triggering a run, otherwise
+  the next scheduled run still executes the old image.
 - **Publish-token rotation is your problem.** The cron does not
   refresh the token; if `mateo-berri`'s PAT in the `github-token`
   secret file expires, the run fails at the `git push`/`gh pr create`
