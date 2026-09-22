@@ -37,6 +37,18 @@ class GenAIEventRecorder:
         self.event_logger.emit(
             Event(
                 name=GenAIEvent.OPERATION_EXCEPTION,
+                # The body MUST be set. ``Event.body`` defaults to ``None``, and
+                # OTLP's ``AnyValue`` has no representation for ``None``: the
+                # exporter's ``_encode_value`` raises ``Invalid type <class
+                # 'NoneType'>``, and ``BatchLogRecordProcessor._export_batch``
+                # swallows that and discards the WHOLE batch — so one such event
+                # silently destroys every log record batched with it. The
+                # encoder grew a ``None`` branch in opentelemetry-exporter-otlp-
+                # proto-common 1.43.0, but litellm pins 1.28.0, so this event is
+                # unexportable as shipped. The message is the natural body for a
+                # WARN record and adds no data the attributes don't already
+                # carry.
+                body=message,
                 timestamp=timestamp_ns,
                 trace_id=span_context.trace_id,
                 span_id=span_context.span_id,
