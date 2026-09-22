@@ -2727,9 +2727,13 @@ dependencies = [
  "litellm-auth-types",
  "litellm-cache",
  "litellm-cache-response",
+ "litellm-cache-testing",
+ "reqwest 0.12.28",
+ "rstest",
  "serde_json",
  "tokio",
  "url",
+ "wiremock",
 ]
 
 [[package]]
@@ -2737,6 +2741,7 @@ name = "litellm-cache-disk"
 version = "0.1.0"
 dependencies = [
  "litellm-cache",
+ "litellm-cache-testing",
  "py_literal",
  "rand 0.8.7",
  "rstest",
@@ -2755,8 +2760,10 @@ dependencies = [
  "litellm-auth-gcp",
  "litellm-auth-types",
  "litellm-cache",
+ "litellm-cache-testing",
  "percent-encoding",
  "reqwest 0.12.28",
+ "rstest",
  "serde_json",
  "tokio",
  "wiremock",
@@ -2767,8 +2774,8 @@ name = "litellm-cache-memory"
 version = "0.1.0"
 dependencies = [
  "litellm-cache",
+ "litellm-cache-testing",
  "rstest",
- "serde_json",
  "tokio",
 ]
 
@@ -2776,9 +2783,10 @@ dependencies = [
 name = "litellm-cache-qdrant-semantic"
 version = "0.1.0"
 dependencies = [
+ "futures-executor",
  "futures-util",
  "litellm-cache",
- "litellm-cache-response",
+ "litellm-cache-testing",
  "qdrant-client",
  "reqwest 0.12.28",
  "rstest",
@@ -2797,9 +2805,11 @@ name = "litellm-cache-redis"
 version = "0.1.0"
 dependencies = [
  "litellm-cache",
+ "litellm-cache-testing",
  "r2d2",
  "redis",
  "redis-test",
+ "rstest",
  "serde_json",
  "tokio",
 ]
@@ -2810,10 +2820,10 @@ version = "0.1.0"
 dependencies = [
  "litellm-cache",
  "litellm-cache-redis",
- "litellm-cache-response",
- "r2d2",
+ "litellm-cache-testing",
  "redis",
  "redis-test",
+ "rstest",
  "serde_json",
  "sha2 0.10.9",
  "tokio",
@@ -2829,6 +2839,7 @@ dependencies = [
  "py_literal",
  "redis",
  "redis-test",
+ "rstest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2841,13 +2852,26 @@ version = "0.1.0"
 dependencies = [
  "aws-credential-types",
  "aws-sdk-s3",
+ "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
+ "futures-util",
+ "http 1.4.2",
  "litellm-auth-aws",
  "litellm-cache",
+ "litellm-cache-testing",
+ "reqwest 0.12.28",
+ "rstest",
  "serde_json",
  "tokio",
  "wiremock",
+]
+
+[[package]]
+name = "litellm-cache-testing"
+version = "0.1.0"
+dependencies = [
+ "litellm-cache",
 ]
 
 [[package]]
@@ -2856,7 +2880,7 @@ version = "0.1.0"
 dependencies = [
  "litellm-cache",
  "litellm-cache-redis",
- "litellm-cache-response",
+ "litellm-cache-testing",
  "redis",
  "redis-test",
  "rstest",
@@ -2894,6 +2918,7 @@ dependencies = [
  "litellm-host",
  "litellm-http",
  "litellm-llms",
+ "litellm-secrets",
  "litellm-types",
  "mime_guess",
  "moka",
@@ -3006,6 +3031,7 @@ dependencies = [
  "litellm-framing",
  "litellm-host",
  "litellm-http",
+ "litellm-secrets",
  "litellm-types",
  "reqwest 0.12.28",
  "rstest",
@@ -3024,6 +3050,7 @@ dependencies = [
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
+ "aws-sdk-secretsmanager",
  "bytes",
  "criterion",
  "futures-util",
@@ -3047,6 +3074,9 @@ dependencies = [
  "litellm-host-python",
  "litellm-http",
  "litellm-llms",
+ "litellm-secrets",
+ "litellm-secrets-aws",
+ "litellm-secrets-types",
  "litellm-token-counter",
  "litellm-types",
  "pyo3",
@@ -3059,9 +3089,26 @@ dependencies = [
  "serde_json",
  "serde_with",
  "sha2 0.10.9",
+ "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite",
  "url",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-python-compat"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "hex",
+ "num-bigint 0.4.8",
+ "num-traits",
+ "rstest",
+ "serde",
+ "serde-pickle",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -3246,6 +3293,7 @@ dependencies = [
 name = "litellm-token-counter-huggingface"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "thiserror 2.0.19",
  "tokenizers",
 ]
@@ -3254,6 +3302,9 @@ dependencies = [
 name = "litellm-token-counter-tiktoken"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "once_cell",
+ "rustc-hash",
  "thiserror 2.0.19",
  "tiktoken-rs",
 ]

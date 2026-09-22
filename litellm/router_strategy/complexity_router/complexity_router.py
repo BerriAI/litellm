@@ -56,6 +56,7 @@ from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
+from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.router_strategy.complexity_router.tier_predictor import (
     TierSuccessPredictor,
     resolve_tier_artifact,
@@ -1779,7 +1780,7 @@ class ComplexityRouter(CustomLogger):
         conversation_continuing: bool = True,
         tier_litellm_params: Mapping[str, object] | None = None,
         context_escalation_original_tier: ComplexityTier | str | None = None,
-        heuristic_v2_forecast: StandardLoggingHeuristicV2Forecast | None = None,
+        previous_decision: StandardLoggingRoutingDecision | None = None,
     ) -> StandardLoggingRoutingDecision:
         """Assemble the per-request provenance record for this router's decision.
 
@@ -1839,8 +1840,15 @@ class ComplexityRouter(CustomLogger):
             masked_tier_litellm_params: Final = mask_credentials_in_payload(tier_litellm_params)
             if isinstance(masked_tier_litellm_params, Mapping):
                 decision["tier_litellm_params"] = masked_tier_litellm_params
-        return (
-            decision if heuristic_v2_forecast is None else {**decision, "heuristic_v2_forecast": heuristic_v2_forecast}
+        forecast_fields: Final = MappingProxyType(
+            {
+                field: value
+                for field, value in (previous_decision.items() if previous_decision is not None else ())
+                if field.startswith("classifier_") or field == "heuristic_v2_forecast"
+            }
+        )
+        return cast(  # cast-ok: retaining optional keys from a typed decision preserves their declared values
+            StandardLoggingRoutingDecision, {**forecast_fields, **decision}
         )
 
     async def aclassify(
@@ -3283,7 +3291,11 @@ class ComplexityRouter(CustomLogger):
         resolved_messages: Sequence[Mapping[str, object]] | None,
         request_kwargs: Mapping[str, object],
     ) -> _RequestContextFit:
-        if not self.config.enable_context_window_escalation or not resolved_messages:
+        if (
+            compaction_pending(request_kwargs)
+            or not self.config.enable_context_window_escalation
+            or not resolved_messages
+        ):
             return _RequestContextFit(EMPTY_MAPPING, None, self.config.context_window_escalation_buffer)
         names: Final = frozenset(model for pool in self._tier_pools().values() for model in pool) | frozenset(
             (self.config.default_model,) if self.config.default_model else ()
@@ -3309,7 +3321,11 @@ class ComplexityRouter(CustomLogger):
         (the placement stands). Only a real tokenizer count ever moves a request, escalation
         lands only on groups whose every deployment declares a fitting window, and a group
         with no resolvable window is never moved on faith in either direction."""
-        if not self.config.enable_context_window_escalation or not resolved_messages:
+        if (
+            compaction_pending(request_kwargs)
+            or not self.config.enable_context_window_escalation
+            or not resolved_messages
+        ):
             return None
         pools: Final = self._tier_pools()
         pool: Final = pool_override if pool_override is not None else tuple(pools.get(_tier_name(tier), ()))
@@ -3595,7 +3611,7 @@ class ComplexityRouter(CustomLogger):
             context_escalation_original_tier=(
                 decision.get("context_escalation_original_tier") if decision is not None else None
             ),
-            heuristic_v2_forecast=decision.get("heuristic_v2_forecast") if decision is not None else None,
+            previous_decision=decision,
         )
         from litellm.types.router import PreRoutingHookResponse as HookResponse
 
@@ -3775,7 +3791,7 @@ class ComplexityRouter(CustomLogger):
                         conversation_continuing=bool(decision.get("conversation_continuing", True)),
                         tier_litellm_params=self._litellm_params_for_model(candidate_tier, new_model),
                         context_escalation_original_tier=decision.get("context_escalation_original_tier"),
-                        heuristic_v2_forecast=decision.get("heuristic_v2_forecast"),
+                        previous_decision=decision,
                     )
                     return response.model_copy(
                         update={  # mutable-ok: model_copy types update as a plain dict
@@ -3820,7 +3836,7 @@ class ComplexityRouter(CustomLogger):
             conversation_continuing=bool(decision.get("conversation_continuing", True)),
             tier_litellm_params=self._litellm_params_for_model(None, default_model),
             context_escalation_original_tier=decision.get("context_escalation_original_tier"),
-            heuristic_v2_forecast=decision.get("heuristic_v2_forecast"),
+            previous_decision=decision,
         )
         return response.model_copy(
             update={  # mutable-ok: model_copy types update as a plain dict

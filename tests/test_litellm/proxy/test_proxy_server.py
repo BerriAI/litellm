@@ -3200,7 +3200,7 @@ def test_normalize_datetime_for_sorting():
 
 
 @pytest.mark.asyncio
-async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
+async def test_add_proxy_budget_to_db_only_creates_user_no_keys(monkeypatch: pytest.MonkeyPatch):
     """
     Test that _add_proxy_budget_to_db only creates a user and no keys are added.
 
@@ -3218,8 +3218,8 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
     from litellm.proxy.proxy_server import ProxyStartupEvent
 
     # Set up required litellm settings
-    litellm.budget_duration = "30d"
-    litellm.max_budget = 100.0
+    monkeypatch.setattr(litellm, "budget_duration", "30d")
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
 
     litellm_proxy_budget_name = "litellm-proxy-budget"
 
@@ -3258,7 +3258,7 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
 
 
 @pytest.mark.asyncio
-async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
+async def test_add_proxy_budget_to_db_backfills_budget_reset_at(monkeypatch: pytest.MonkeyPatch):
     """
     Test that _upsert_proxy_budget_with_reset_at_backfill issues a conditional
     update_many with `WHERE budget_reset_at IS NULL` to backfill the column on
@@ -3276,8 +3276,8 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
     import litellm
     from litellm.proxy.proxy_server import ProxyStartupEvent
 
-    litellm.budget_duration = "30d"
-    litellm.max_budget = 100.0
+    monkeypatch.setattr(litellm, "budget_duration", "30d")
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
     litellm_proxy_budget_name = "litellm-proxy-budget"
 
     mock_prisma = MagicMock()
@@ -14877,7 +14877,7 @@ async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_coun
 
 
 async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeypatch):
-    from tokenizers import Tokenizer
+    from litellm.rust_bridge._native import Tokenizer
 
     from litellm import Router
     from tests.test_litellm.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
@@ -14890,7 +14890,7 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
             time.sleep(0.3)
             return claude_tokenizer
 
-    monkeypatch.setattr(litellm.utils, "Tokenizer", SlowHubTokenizer)
+    monkeypatch.setattr("litellm.rust_bridge.tokenizer.from_pretrained", SlowHubTokenizer.from_pretrained)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
         Router(
@@ -14914,7 +14914,7 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
 
 
 async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revision_and_token(monkeypatch):
-    from tokenizers import Tokenizer
+    from litellm.rust_bridge._native import Tokenizer
 
     from litellm import Router
     from litellm.types.router import DeploymentTypedDict
@@ -14931,7 +14931,7 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
             },
         }
 
-    monkeypatch.setattr(litellm.utils, "Tokenizer", MagicMock(from_pretrained=from_pretrained))
+    monkeypatch.setattr("litellm.rust_bridge.tokenizer.from_pretrained", from_pretrained)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
         Router(

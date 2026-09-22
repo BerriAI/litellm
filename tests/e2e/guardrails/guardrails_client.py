@@ -46,7 +46,7 @@ class BlockedWordBody(BaseModel):
 
 
 class GuardrailParamsBase(BaseModel):
-    mode: GuardrailMode
+    mode: GuardrailMode | list[GuardrailMode]
     default_on: bool
 
 
@@ -291,6 +291,7 @@ class GuardrailsClient:
         text: str,
         *,
         guardrails: list[str] | None = None,
+        include_guardrail_response: bool | None = None,
         max_tokens: int = 16,
         tools: list[ChatTool] | None = None,
     ) -> Result[ChatResponse]:
@@ -306,6 +307,7 @@ class GuardrailsClient:
                 messages=[ChatMessage(role="user", content=text)],
                 max_tokens=max_tokens,
                 guardrails=guardrails,
+                include_guardrail_response=include_guardrail_response,
                 tools=tools,
             ),
         )
@@ -377,6 +379,46 @@ class GuardrailsClient:
                 model=model,
                 messages=[ChatMessage(role="user", content=text)],
                 max_tokens=max_tokens,
+                guardrails=guardrails,
+            ),
+        )
+
+    def messages_raw(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+        max_tokens: int = 64,
+    ) -> StreamingResponse:
+        return self.proxy.transport.send(
+            "/v1/messages",
+            headers=self.proxy.transport.bearer(key),
+            json=AnthropicMessagesBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=text)],
+                max_tokens=max_tokens,
+                guardrails=guardrails,
+            ),
+        )
+
+    def messages_stream_raw(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+        max_tokens: int = 64,
+    ) -> StreamingResponse:
+        return self.proxy.messages_stream(
+            key,
+            AnthropicMessagesBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=text)],
+                max_tokens=max_tokens,
+                stream=True,
                 guardrails=guardrails,
             ),
         )
