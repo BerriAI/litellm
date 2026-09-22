@@ -279,6 +279,16 @@ def test_context_window_suffix_stripped_for_cost_lookup():
     )
 
 
+def test_legacy_mantle_route_prefix_stripped_for_cost_lookup():
+    """The mantle/ route token is a routing prefix like openai/, so a bedrock/mantle/<model>
+    deployment must resolve the bare Bedrock model for cost lookup while still routing to Mantle."""
+    from litellm.llms.bedrock.common_utils import get_bedrock_base_model, strip_bedrock_routing_prefix
+
+    assert strip_bedrock_routing_prefix("mantle/anthropic.claude-sonnet-5") == "anthropic.claude-sonnet-5"
+    assert get_bedrock_base_model("bedrock/mantle/anthropic.claude-sonnet-5") == "anthropic.claude-sonnet-5"
+    assert BedrockModelInfo.get_bedrock_route("bedrock/mantle/anthropic.claude-sonnet-5") == "mantle"
+
+
 def test_output_config_effort_normalization_uses_model_info_ceiling(monkeypatch):
     import litellm.llms.bedrock.common_utils as mod
 
