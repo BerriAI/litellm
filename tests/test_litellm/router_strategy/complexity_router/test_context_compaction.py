@@ -9,7 +9,7 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.anthropic import compaction as native
+from litellm.llms import compaction as native
 from litellm.router_strategy.complexity_router.config import ContextCompactionConfig
 from litellm.router_strategy.complexity_router.context_compaction import (
     CompactionState,
@@ -38,6 +38,7 @@ def native_catalog(monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None) 
 def make_router(
     window: int | None = 512, settings: Mapping[str, object] | None = None, *, compactor_window: int = 32000,
     conflict: bool = False, output: int | None = 64,
+    answer_defaults: Mapping[str, object] | None = None,
 ) -> litellm.Router:
     config: Final = {
         "tiers": {"SIMPLE": "small", "MEDIUM": "large", "COMPLEX": "large", "REASONING": "large"},
@@ -51,6 +52,7 @@ def make_router(
         }},
         {"model_name": "small", "litellm_params": {
             "model": "openai/arbitrary-answer", "api_base": "https://answer.test/v1", "api_key": "answer-test", "max_retries": 0,
+            **(answer_defaults or {}),
         }, "model_info": {"id": "pinned-answer", "max_input_tokens": window, "max_output_tokens": output}},
         {"model_name": "large", "litellm_params": {
             "model": "anthropic/summary-fixture", "api_base": "https://compact.test", "api_key": "compact-test",
@@ -173,7 +175,7 @@ async def test_all_surfaces_compact_and_keep_selected_answerer(
     if retry:
         answer.mock(side_effect=answer_after_retry)
 
-    async def execute(protocol: native.Protocol, request: Mapping[str, object]) -> Mapping[str, object]:
+    async def execute(protocol: native.CompactionProtocol, request: Mapping[str, object]) -> Mapping[str, object]:
         result: Final = await native.dispatch(router, protocol, request)
         captured.put_nowait(result)
         return result
@@ -299,10 +301,35 @@ async def test_client_owned_history_bypasses_compaction(
     original: Final = deepcopy({key: value for key, value in request.items() if key != "_context_compaction_state"})
     before_defaults: Final = {"_context_compaction_state": state} if arm_first else request
     arm_compaction(before_defaults, ContextCompactionConfig(), ("large",))
-    result: Final = await compact_to_fit(router, deployment.model_dump(), request, "responses")
-    assert result is request
-    assert {key: value for key, value in result.items() if key != "_context_compaction_state"} == original
+    counted: Final = router._count_pre_call_check_tokens(None, request["input"], request)
+    if arm_first and counted > 512:
+        with pytest.raises(litellm.ContextWindowExceededError):
+            await compact_to_fit(router, deployment.model_dump(), request, "responses")
+    else:
+        result: Final = await compact_to_fit(router, deployment.model_dump(), request, "responses")
+        assert result is request
+    assert {key: value for key, value in request.items() if key != "_context_compaction_state"} == original
     assert all(route.call_count == 0 for route in wire)
+
+
+@pytest.mark.parametrize("surface", ["chat", "messages", "responses"])
+@pytest.mark.parametrize("source", ["request", "deployment"])
+async def test_client_managed_overflow_keeps_context_window_admission(
+    wire: tuple[respx.Route, respx.Route], surface: Surface, source: str,
+) -> None:
+    managed: Final = {"context_management": {"edits": []}}
+    router: Final = make_router(answer_defaults=managed if source == "deployment" else None)
+    payload: Final = {**history(surface), **(managed if source == "request" else {})}
+    compactor, answer = wire
+    if source == "deployment":
+        with pytest.raises(litellm.ContextWindowExceededError):
+            await invoke(router, surface, payload)
+        assert compactor.call_count == 0
+    else:
+        await invoke(router, surface, payload)
+        assert compactor.call_count == 1
+        assert "compaction" not in json.loads(compactor.calls[0].request.content)
+    assert answer.call_count == 0
 
 
 @pytest.mark.parametrize("case", ["conflicting_defaults", "small_window", "capability_false", "capability_missing"])
@@ -363,7 +390,7 @@ async def test_retry_reuses_summary_or_terminal_cancellation(outcome: Literal["s
     started: Final = asyncio.Event()
     stopped: Final = asyncio.Event()
 
-    async def execute(protocol: native.Protocol, payload: Mapping[str, object]) -> Mapping[str, object]:
+    async def execute(protocol: native.CompactionProtocol, payload: Mapping[str, object]) -> Mapping[str, object]:
         calls.put_nowait(None)
         started.set()
         try:

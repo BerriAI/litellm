@@ -4,7 +4,6 @@ from contextvars import Context
 from types import MappingProxyType
 from typing import Final, Literal, TypeVar
 
-import httpx
 from fastapi import Request
 from pydantic import TypeAdapter, ValidationError
 from starlette.types import ASGIApp
@@ -14,6 +13,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     inherit_message_logging_privacy,
     initialize_standard_callback_dynamic_params,
 )
+from litellm.llms.custom_httpx.asgi_handler import get_async_asgi_client
 from litellm.proxy.litellm_pre_call_utils import UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS
 from litellm.router_strategy.complexity_router.context_compaction import (
     compaction_executor,
@@ -50,17 +50,11 @@ async def with_proxy_compaction_executor(call: Awaitable[_ResultT], request: Req
                 if name.lower() not in _REMOVED_HEADERS
                 and not (logging_disabled and name.decode("latin-1").lower() in UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS)
             )
-            transport: Final = httpx.ASGITransport(
-                app=_ASGI_APP.validate_python(scope["app"]),
-                root_path=root_path,
-                client=request.client,  # pyright: ignore[reportArgumentType]  # ASGI permits a missing client address
-                raise_app_exceptions=False,
-            )
             with native_compaction_call(), inherit_message_logging_privacy(logging_disabled):
-                async with httpx.AsyncClient(
-                    transport=transport,
-                    follow_redirects=False,
-                    timeout=httpx.Timeout(None),
+                with get_async_asgi_client(
+                    app=_ASGI_APP.validate_python(scope["app"]),
+                    root_path=root_path,
+                    client=request.client,
                 ) as client:
                     async with client.stream(
                         "POST", url, headers=headers, json=_JSON_OBJECT.validate_python(payload)

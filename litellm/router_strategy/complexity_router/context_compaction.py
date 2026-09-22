@@ -21,7 +21,12 @@ from litellm.litellm_core_utils.internal_call_metadata import parent_session_kwa
 from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,  # pyright: ignore[reportUnknownVariableType]  # legacy privacy owner accepts validated call details
 )
-from litellm.llms.anthropic import compaction as native
+from litellm.llms.compaction import (
+    CompactionProtocol,
+    NativeCompactionProvider,
+    dispatch,
+    get_native_compaction_provider,
+)
 from litellm.router_strategy.complexity_router.config import ContextCompactionConfig
 
 if TYPE_CHECKING:
@@ -42,7 +47,7 @@ _native_child: Final[ContextVar[bool]] = ContextVar("native_compaction_child", d
 
 
 class CompactionExecutor(Protocol):
-    async def __call__(self, protocol: native.Protocol, payload: Mapping[str, object]) -> Mapping[str, object]: ...
+    async def __call__(self, protocol: CompactionProtocol, payload: Mapping[str, object]) -> Mapping[str, object]: ...
 
 
 compaction_executor: Final[ContextVar[CompactionExecutor | None]] = ContextVar("compaction_executor", default=None)
@@ -113,7 +118,7 @@ def reject_recursive_compactor(model: str) -> None:
 
 def compaction_pending(kwargs: Mapping[str, object] | None) -> bool:
     state: Final = kwargs.get(_STATE_KEY) if kwargs is not None else None
-    return isinstance(state, CompactionState) and state.config is not None
+    return isinstance(state, CompactionState) and state.config is not None and not _client_managed(kwargs or _EMPTY)
 
 
 def _reject(model: str, reason: str) -> NoReturn:
@@ -209,19 +214,23 @@ def _budget(
     return InputBudget(window, int(window * ratio) - output if window is not None and isinstance(output, int) else None)
 
 
-async def _compactor_model(router: Router, state: CompactionState, payload: Mapping[str, object]) -> str:
+async def _compactor_model(
+    router: Router, state: CompactionState, payload: Mapping[str, object]
+) -> tuple[str, NativeCompactionProvider]:
     needed: Final = await _count(router, payload)
     candidates: Final = (
         (state.config.model,) if state.config is not None and state.config.model is not None else state.candidates
     )
     selected: Final = next(
         (
-            candidate
+            (candidate, provider)
             for candidate in candidates
             if (deployments := tuple(router.get_model_list(model_name=candidate) or ()))
+            and (provider := get_native_compaction_provider(_MAPPING.validate_python(deployments[0]["litellm_params"])))
+            is not None
             and all(
-                native.supports_native_compaction(params := _MAPPING.validate_python(deployment["litellm_params"]))
-                and native.compatible_defaults(params)
+                provider.supports_native_compaction(params := _MAPPING.validate_python(deployment["litellm_params"]))
+                and provider.compatible_defaults(params)
                 and (budget := _budget(router, deployment, payload, 0.9)).available is not None
                 and needed <= budget.available
                 for deployment in deployments
@@ -257,15 +266,19 @@ def _native_prefix(payload: Mapping[str, object], surface: Surface) -> Mapping[s
 
 
 async def _generate_summary(
-    router: Router, protocol: native.Protocol, payload: Mapping[str, object], timeout: float
+    router: Router,
+    provider: NativeCompactionProvider,
+    protocol: CompactionProtocol,
+    payload: Mapping[str, object],
+    timeout: float,
 ) -> str:
     executor: Final = compaction_executor.get()
     with native_compaction_call():
         response: Final = await asyncio.wait_for(
-            executor(protocol, payload) if executor is not None else native.dispatch(router, protocol, payload),
+            executor(protocol, payload) if executor is not None else dispatch(router, protocol, payload),
             timeout=timeout,
         )
-    summary: Final = native.extract_summary(protocol, response)
+    summary: Final = provider.extract_summary(protocol, response)
     return (
         summary
         if summary is not None
@@ -279,6 +292,16 @@ async def compact_to_fit(
     state: Final = payload.get(_STATE_KEY)
     config: Final = state.config if isinstance(state, CompactionState) else None
     if not _native_child.get() and (config is None or _client_managed(payload)):
+        if config is not None and router.enable_pre_call_checks:
+            router._pre_call_checks(  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # reuse legacy admission after deployment defaults
+                model=str(payload["model"]),
+                healthy_deployments=_ITEMS.validate_python((deployment,)),
+                messages=_ITEMS.validate_python(payload["messages"]) if "messages" in payload else None,  # pyright: ignore[reportArgumentType]  # legacy annotation omits structured message content
+                input=_INPUT.validate_python(payload.get("input")),
+                request_kwargs=_DICT.validate_python(payload),
+                input_token_count=await _count(router, payload),
+                skip_inline_token_count=True,
+            )
         return payload
     model: Final = str(payload["model"])
     limits: Final = _budget(router, deployment, payload, config.trigger_ratio if config is not None else 0.9)
@@ -292,9 +315,10 @@ async def compact_to_fit(
             return payload
         _reject(model, "A known input window and a smaller output allowance are required")
     if _native_child.get():
+        child_provider: Final = get_native_compaction_provider(payload)
         if (
-            not native.compatible_defaults(payload)
-            or not native.supports_native_compaction(payload)
+            child_provider is None
+            or not child_provider.compatible_defaults(payload)
             or await _count(router, payload) > budget
         ):
             _reject(model, "The selected compactor's effective request is incompatible or exceeds its input budget")
@@ -334,12 +358,11 @@ async def compact_to_fit(
         _MAPPING.validate_python(payload.get("litellm_metadata") or payload.get("metadata") or _EMPTY),
         "autorouter_compaction",
     )
-    protocol: Final[native.Protocol] = "messages" if surface == "messages" else "chat"
+    protocol: Final[CompactionProtocol] = "messages" if surface == "messages" else "chat"
     request: Final = MappingProxyType(
         {
             "model": model,
             "messages": older["messages"],
-            **native.request_kwargs(),
             "max_tokens": config.max_tokens,
             "stream": False,
             "num_retries": 0,
@@ -358,8 +381,8 @@ async def compact_to_fit(
             **MappingProxyType({key: older[key] for key in ("system", "tools", "user") if key in older}),
         }
     )
-    compactor: Final = await _compactor_model(router, state, request)
-    child: Final = MappingProxyType({**request, "model": compactor})
+    compactor, provider = await _compactor_model(router, state, request)
+    child: Final = MappingProxyType({**request, **provider.request_kwargs(), "model": compactor})
     identity: Final = hashlib.sha256(
         json.dumps(
             (protocol, compactor, child["messages"], child.get("system"), child.get("tools")), sort_keys=True
@@ -381,7 +404,7 @@ async def compact_to_fit(
         with inherit_message_logging_privacy(private):
             state.summary = (
                 identity,
-                asyncio.create_task(_generate_summary(router, protocol, child, config.timeout_seconds)),
+                asyncio.create_task(_generate_summary(router, provider, protocol, child, config.timeout_seconds)),
             )
     if state.summary[0] != identity:
         _reject(model, "History changed after this request's single compaction attempt")

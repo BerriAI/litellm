@@ -2,20 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from typing import Final
 
 from pydantic import TypeAdapter
 
+from litellm.llms.compaction import CompactionProtocol
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, AnthropicCompaction
-from litellm.types.llms.openai import AllMessageValues
 
-if TYPE_CHECKING:
-    from litellm.router import Router
-
-Protocol: TypeAlias = Literal["chat", "messages"]
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
 _OBJECTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
-_MESSAGES: Final = TypeAdapter(list[AllMessageValues])
 _HEADERS: Final = TypeAdapter(dict[str, str])
 _EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
 _CONFLICTS: Final = ("context_management", "response_format", "stop", "stop_sequences", "tool_choice")
@@ -49,7 +44,7 @@ def request_kwargs() -> Mapping[str, object]:
     )
 
 
-def _native_blocks(protocol: Protocol, response: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+def _native_blocks(protocol: CompactionProtocol, response: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     if protocol == "messages":
         return (
             _OBJECTS.validate_python(response.get("content", ())) if response.get("stop_reason") == "compaction" else ()
@@ -61,7 +56,7 @@ def _native_blocks(protocol: Protocol, response: Mapping[str, object]) -> tuple[
     return _OBJECTS.validate_python(fields.get("compaction_blocks", ()))
 
 
-def extract_summary(protocol: Protocol, response: Mapping[str, object]) -> str | None:
+def extract_summary(protocol: CompactionProtocol, response: Mapping[str, object]) -> str | None:
     blocks: Final = _native_blocks(protocol, response)
     block: Final = blocks[0] if len(blocks) == 1 else _EMPTY
     content: Final = block.get("content")
@@ -74,19 +69,3 @@ def extract_summary(protocol: Protocol, response: Mapping[str, object]) -> str |
         and content.strip()
         else None
     )
-
-
-async def dispatch(router: Router, protocol: Protocol, payload: Mapping[str, object]) -> Mapping[str, object]:
-    if protocol == "messages":
-        return _MAPPING.validate_python(
-            await router.aanthropic_messages(custom_llm_provider=None, client=None, **payload)
-        )
-    response: Final = await router.acompletion(
-        model=str(payload["model"]),
-        messages=_MESSAGES.validate_python(payload["messages"]),
-        stream=False,
-        **MappingProxyType(
-            {key: value for key, value in payload.items() if key not in ("model", "messages", "stream")}
-        ),
-    )
-    return _MAPPING.validate_python(response.model_dump())

@@ -2,6 +2,7 @@ import copy
 import hashlib
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
 from pydantic import JsonValue, TypeAdapter
@@ -1577,17 +1578,21 @@ class LiteLLMAnthropicMessagesAdapter:
         message_usage: Final = self._translate_openai_usage_to_anthropic_usage(usage)
         polyfill_iterations: Final = polyfill_result.iterations_usage if polyfill_result is not None else None
         anthropic_usage: Final[AnthropicUsage] = (
-            {
-                **message_usage,
-                "iterations": [
-                    *polyfill_iterations,
-                    UsageIteration(
-                        type="message",
-                        input_tokens=message_usage.get("input_tokens", 0),
-                        output_tokens=usage.completion_tokens or 0,
-                    ),
-                ],
-            }
+            TypeAdapter(AnthropicUsage).validate_python(
+                MappingProxyType(
+                    {
+                        **message_usage,
+                        "iterations": (
+                            *polyfill_iterations,
+                            UsageIteration(
+                                type="message",
+                                input_tokens=message_usage.get("input_tokens", 0),
+                                output_tokens=usage.completion_tokens or 0,
+                            ),
+                        ),
+                    }
+                )
+            )
             if polyfill_iterations is not None
             else message_usage
         )
