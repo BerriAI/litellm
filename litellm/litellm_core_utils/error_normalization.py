@@ -65,6 +65,7 @@ _MESSAGE_PATTERNS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
         BUDGET_EXCEEDED,
     ),
     (re.compile(r"no healthy deployments?|no deployments available", re.IGNORECASE), NO_HEALTHY_DEPLOYMENTS),
+    (re.compile(r"not allowed to access model due to tags configuration", re.IGNORECASE), MODEL_ACCESS_DENIED),
     (re.compile(r"upstream passthrough request failed", re.IGNORECASE), UPSTREAM_PASSTHROUGH),
     (re.compile(r"is not supported for provider|not implemented", re.IGNORECASE), UNSUPPORTED_OPERATION),
     (

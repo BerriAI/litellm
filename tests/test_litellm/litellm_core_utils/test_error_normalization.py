@@ -52,6 +52,9 @@ def _proxy_exc(message: str, error_type: str, code: int) -> ProxyException:
             (
                 _proxy_exc("No team has access to gpt-5.5-mini", ProxyErrorTypes.team_model_access_denied.value, 401),
                 _proxy_exc("key not allowed to access claude", ProxyErrorTypes.key_model_access_denied.value, 401),
+                ValueError(
+                    "Not allowed to access model due to tags configuration. Passed model=gpt-5.5 and tags=['team-a']"
+                ),
             ),
             "403_MODEL_ACCESS_DENIED",
         ),
