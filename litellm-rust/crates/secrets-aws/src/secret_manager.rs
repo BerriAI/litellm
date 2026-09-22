@@ -26,7 +26,7 @@ use crate::{Error, auth};
 #[derive(Clone)]
 pub struct AwsSecretsManagerV2 {
     client: Client,
-    context_client_factory: Option<ContextClientFactory>,
+    context_client_factory: Option<Box<ContextClientFactory>>,
     write_settings: AwsSecretWriteSettings,
 }
 
@@ -76,7 +76,7 @@ impl AwsSecretsManagerV2 {
     ) -> Self {
         Self {
             client,
-            context_client_factory: Some(context_client_factory),
+            context_client_factory: Some(Box::new(context_client_factory)),
             write_settings,
         }
     }

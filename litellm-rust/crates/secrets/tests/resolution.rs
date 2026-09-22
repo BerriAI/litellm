@@ -132,7 +132,9 @@ async fn resolver_future_can_run_on_a_tokio_worker() {
 #[cfg(feature = "aws")]
 mod aws {
     use super::*;
-    use litellm_secrets::{AccessMode, FailurePolicy, aws::AwsSecretsManagerV2};
+    use litellm_secrets::{
+        AccessMode, FailurePolicy, KeyManagementSettings, SecretManager, aws::AwsSecretsManagerV2,
+    };
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     fn state(server: &MockServer, settings: KeyManagementSettings) -> SecretManagerState {
@@ -309,7 +311,9 @@ mod aws {
 #[case::failure(503)]
 #[tokio::test]
 async fn google_resolver_distinguishes_absence_from_failure(#[case] status: u16) {
-    use litellm_secrets::{FailurePolicy, google::GoogleSecretManager};
+    use litellm_secrets::{
+        FailurePolicy, KeyManagementSettings, SecretManager, google::GoogleSecretManager,
+    };
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
     let server = MockServer::start().await;
     Mock::given(method("GET"))
