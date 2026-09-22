@@ -844,8 +844,15 @@ class MCPRequestHandler:
             raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
         admitted: Final = await MCPRequestHandler._reload_admitted_principal(result.identity)
         await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
-        injected: Final = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
-        new_headers: Final = {**(mcp_server_auth_headers or {}), **injected}
+        injected: Final = {  # mutable-ok: mcp_server_auth_headers contract requires concrete dicts
+            header_key: {  # mutable-ok: concrete dict header payload
+                "Authorization": result.upstream_authorization.get_secret_value()
+            }
+        }
+        new_headers: Final = {  # mutable-ok: merged header map must stay a concrete dict
+            **(mcp_server_auth_headers or {}),  # mutable-ok: empty-dict fallback for the merge
+            **injected,
+        }
         return admitted, new_headers
 
     @staticmethod
@@ -918,12 +925,24 @@ class MCPRequestHandler:
             presented_token=presented_token,
             identity=result.identity,
         ):
-            raise HTTPException(status_code=403, detail={"error": "oauth_principal_mismatch"})
+            raise HTTPException(
+                status_code=403,
+                detail={  # mutable-ok: HTTPException detail payload requires a concrete dict
+                    "error": "oauth_principal_mismatch"
+                },
+            )
         header_key: Final = server.alias or server.server_name
         if header_key is None:
             raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
-        injected: Final = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
-        new_headers: Final = {**(mcp_server_auth_headers or {}), **injected}
+        injected: Final = {  # mutable-ok: mcp_server_auth_headers contract requires concrete dicts
+            header_key: {  # mutable-ok: concrete dict header payload
+                "Authorization": result.upstream_authorization.get_secret_value()
+            }
+        }
+        new_headers: Final = {  # mutable-ok: merged header map must stay a concrete dict
+            **(mcp_server_auth_headers or {}),  # mutable-ok: empty-dict fallback for the merge
+            **injected,
+        }
         return explicit_auth, new_headers
 
     @staticmethod
