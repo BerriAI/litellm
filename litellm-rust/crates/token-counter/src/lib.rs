@@ -4,18 +4,21 @@
 
 #![forbid(unsafe_code)]
 
-mod byte_level;
-mod cl100k;
 mod counter;
 mod error;
-mod o200k;
 mod python_json;
-mod scanner;
-mod tiktoken;
+mod tokenizer;
 mod tools;
 mod types;
-mod unicode_classes;
+
+#[cfg(feature = "fast")]
+pub mod fast;
+#[cfg(feature = "huggingface")]
+pub mod huggingface;
+#[cfg(feature = "tiktoken")]
+pub mod tiktoken;
 
 pub use counter::{InputTokenCount, TokenCounter};
 pub use error::Error;
+pub use tokenizer::{TextCodec, Tokenizer};
 pub use types::CountableRequest;

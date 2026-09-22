@@ -4,6 +4,7 @@ import datetime
 import json
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Optional, Sequence
+from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -13,6 +14,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.bug_report import (
+    DISABLE_ENV_VAR,
+    ISSUE_URL_BASE,
+    bug_report_notice,
+    build_bug_report,
+)
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -495,7 +502,7 @@ class TestProxyBaseLLMRequestProcessing:
             )
 
         assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
-        assert exc_info.value.code == "429"
+        assert exc_info.value.code == "422"
         tag_budget_check.assert_awaited_once()
         _, call_kwargs = tag_budget_check.call_args
         assert call_kwargs["tags"] == ("guardrail-tag",)
@@ -702,7 +709,7 @@ class TestProxyBaseLLMRequestProcessing:
             )
 
         assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
-        assert exc_info.value.code == "429"
+        assert exc_info.value.code == "422"
         assert "guardrail-tag" in exc_info.value.message
 
     @pytest.mark.asyncio
@@ -2342,6 +2349,39 @@ class TestCommonRequestProcessingHelpers:
         )
         assert isinstance(response, JSONResponse)
         assert response.headers["x-litellm-model-id"] == "fallback-deployment"
+
+    @staticmethod
+    async def _first_chunk_error_response(**create_response_kwargs):
+        async def mock_generator():
+            yield 'data: {"error": {"code": 403, "message": "forbidden"}}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return await create_response(
+            mock_generator(),
+            "text/event-stream",
+            {"x-litellm-call-id": "call-8302"},
+            **create_response_kwargs,
+        )
+
+    async def test_create_response_first_chunk_error_carries_the_call_id_when_opted_in(self):
+        """A stream that fails on its first chunk answers as JSON, and with
+        include_call_id_in_error_body on that JSON names the request like the
+        non-streaming error path does, byte-identical to the header."""
+        response = await self._first_chunk_error_response(general_settings={"include_call_id_in_error_body": True})
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 403
+        assert response.headers["x-litellm-call-id"] == "call-8302"
+        assert json.loads(response.body) == {
+            "error": {"code": 403, "message": "forbidden", "litellm_call_id": "call-8302"}
+        }
+
+    async def test_create_response_first_chunk_error_body_is_unchanged_by_default(self):
+        response = await self._first_chunk_error_response()
+
+        assert isinstance(response, JSONResponse)
+        assert response.headers["x-litellm-call-id"] == "call-8302"
+        assert json.loads(response.body) == {"error": {"code": 403, "message": "forbidden"}}
 
     async def test_create_streaming_response_disables_proxy_buffering(self):
         """Regression for #28384: every StreamingResponse create_response returns
@@ -4256,6 +4296,21 @@ class TestHandleLLMApiExceptionRetryAfter:
     async def test_handle_llm_api_exception_no_retry_after_for_plain_exception(self):
         proxy_exc = await self._invoke(ValueError("some other failure"))
         assert "retry-after" not in proxy_exc.headers
+
+    async def test_handle_llm_api_exception_strips_bug_report_notice_from_client_message(self, caplog):
+        report = build_bug_report(RuntimeError("boom"), surface="sdk")
+        notice = bug_report_notice(report)
+        exc = litellm.APIConnectionError(
+            message=f"boom\n{notice}",
+            model="gpt-4o",
+            llm_provider="openai",
+        )
+
+        with caplog.at_level("ERROR"):
+            proxy_exc = await self._invoke(exc)
+
+        assert ISSUE_URL_BASE not in proxy_exc.message
+        assert ISSUE_URL_BASE in caplog.text
 
     async def test_handle_llm_api_exception_retry_after_survives_callback_headers(self):
         from litellm.types.router import RouterRateLimitError
@@ -8979,6 +9034,60 @@ class TestDetachedStreamFailureHook:
         assert [call["original_exception"] for call in recorder.calls] == [failure]
 
 
+class TestPostCallMaskedOutputReachesDeferredLogging:
+    @pytest.mark.asyncio
+    async def test_non_streaming_records_the_masked_response_before_deferred_logging_fires(self, monkeypatch):
+        from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "lit-8325-call"
+        logging_obj._defer_async_logging = False
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj.cost_breakdown = None
+        logging_obj.model_call_details = {}
+        recorded_at_enqueue: dict[str, object] = {}
+        logging_obj._enqueue_deferred_logging = lambda: recorded_at_enqueue.update(logging_obj.model_call_details)
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "oa", "litellm_logging_obj": logging_obj})
+
+        def mask(data, user_api_key_dict, response):
+            response.choices[0].message.content = "Card: <CREDIT_CARD>"
+            return response
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_success_hook = AsyncMock(side_effect=mask)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=None)
+
+        async def fake_route_request(**kwargs):
+            async def call():
+                return ModelResponse(
+                    choices=[Choices(index=0, message=Message(content="Card: 4111 1111 1111 1111", role="assistant"))]
+                )
+
+            return call()
+
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", fake_route_request)
+
+        result = await processor.base_process_llm_request(
+            request=Request(scope={"type": "http", "headers": []}),
+            fastapi_response=Response(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=MagicMock(),
+            is_streaming_request=False,
+            skip_pre_call_logic=True,
+        )
+
+        assert result.choices[0].message.content == "Card: <CREDIT_CARD>"
+        assert recorded_at_enqueue[SERVED_OUTPUT_TEXTS_KEY] == ("Card: <CREDIT_CARD>",)
+
+
 class TestStreamingResponseHeadersFollowFallback:
     """LIT-6767: the streaming branch has to publish the deployment that served the stream."""
 
@@ -9121,6 +9230,62 @@ class TestStreamingResponseHeadersFollowFallback:
         assert isinstance(result, JSONResponse)
         assert result.status_code == 400
         assert result.headers["x-litellm-applied-guardrails"] == "stream-blocker"
+
+    @pytest.mark.asyncio
+    async def test_streaming_first_chunk_error_carries_the_call_id_when_opted_in(self, monkeypatch):
+        """The opt-in reaches the streaming path through base_process_llm_request, so a stream
+        that fails on its first chunk answers with the call id inside its JSON error body,
+        byte-identical to the x-litellm-call-id header."""
+
+        def select_data_generator(**kwargs):
+            async def generator():
+                yield 'data: {"error": {"code": 403, "message": "forbidden"}}\n\n'
+                yield "data: [DONE]\n\n"
+
+            return generator()
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "lit-8302-call"
+        logging_obj._defer_async_logging = False
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj.cost_breakdown = None
+        processor = ProxyBaseLLMRequestProcessing(
+            data={"model": "oa", "stream": True, "litellm_logging_obj": logging_obj}
+        )
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_success_hook = AsyncMock(
+            side_effect=lambda data, user_api_key_dict, response: response
+        )
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        async def fake_route_request(**kwargs):
+            async def call():
+                return SimpleNamespace(_hidden_params={}, fallback_headers_adopted=False)
+
+            return call()
+
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", fake_route_request)
+
+        result = await processor.base_process_llm_request(
+            request=Request(scope={"type": "http", "headers": []}),
+            fastapi_response=Response(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings={"include_call_id_in_error_body": True},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=select_data_generator,
+            is_streaming_request=True,
+            skip_pre_call_logic=True,
+        )
+
+        assert isinstance(result, JSONResponse)
+        assert result.status_code == 403
+        assert result.headers["x-litellm-call-id"] == "lit-8302-call"
+        assert json.loads(result.body)["error"]["litellm_call_id"] == "lit-8302-call"
 
 
 class _MessagesFallbackStream:
@@ -9283,6 +9448,94 @@ async def test_handle_llm_api_exception_forwards_litellm_response_headers_when_r
     assert exc_info.value.code == "400"
     assert "max_tokens is too large: 999999999." in exc_info.value.message
     assert exc_info.value.headers["llm_provider-x-request-id"] == "req_openai_400"
+
+
+@pytest.mark.asyncio
+async def test_handle_llm_api_exception_logs_bug_report_for_unmapped_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    monkeypatch.delenv(DISABLE_ENV_VAR, raising=False)
+    processor = ProxyBaseLLMRequestProcessing(
+        data={
+            "proxy_server_request": {"url": "https://example.test/v1/chat/completions?debug=true"},
+            "model": "acme-prod-gpt4",
+            "custom_llm_provider": "openai",
+            "stream": True,
+        }
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+        with pytest.raises(ProxyException):
+            await processor._handle_llm_api_exception(
+                e=RuntimeError("unmapped for user@example.com"),
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    issue_url = next(word for word in caplog.text.split() if word.startswith(ISSUE_URL_BASE))
+    assert "Endpoint / call: /v1/chat/completions" in unquote_plus(issue_url)
+    assert "Provider: openai" in unquote_plus(issue_url)
+    assert "Stream: true" in unquote_plus(issue_url)
+    assert "acme-prod-gpt4" not in unquote_plus(issue_url)
+    assert "user@example.com" not in unquote_plus(issue_url)
+
+
+@pytest.mark.asyncio
+async def test_handle_llm_api_exception_bug_report_drops_unknown_route(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    monkeypatch.delenv(DISABLE_ENV_VAR, raising=False)
+    processor = ProxyBaseLLMRequestProcessing(
+        data={"proxy_server_request": {"url": "https://example.test/v1/files/file-customer-123/content"}}
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+        with pytest.raises(ProxyException):
+            await processor._handle_llm_api_exception(
+                e=RuntimeError("unmapped"),
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    issue_url = next(word for word in caplog.text.split() if word.startswith(ISSUE_URL_BASE))
+    assert "Endpoint / call: unknown" in unquote_plus(issue_url)
+    assert "file-customer-123" not in unquote_plus(issue_url)
+
+
+@pytest.mark.asyncio
+async def test_handle_llm_api_exception_skips_bug_report_for_provider_status(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    monkeypatch.delenv(DISABLE_ENV_VAR, raising=False)
+
+    class ProviderRateLimitError(Exception):
+        def __init__(self, message: str):
+            super().__init__(message)
+            self.status_code = 429
+
+    processor = ProxyBaseLLMRequestProcessing(data={})
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+        with pytest.raises(ProxyException):
+            await processor._handle_llm_api_exception(
+                e=ProviderRateLimitError("rate limited"),
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    assert ISSUE_URL_BASE not in caplog.text
 
 
 class TestBackgroundResponseRetrievalGovernance:

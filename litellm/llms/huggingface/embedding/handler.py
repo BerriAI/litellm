@@ -1,6 +1,5 @@
 import json
 import os
-from collections.abc import Sequence
 from typing import Final, Literal, Protocol, get_args
 
 import httpx
@@ -32,7 +31,7 @@ hf_tasks_embeddings: Final = (
 class _SupportsTokenEncode(Protocol):
     """Token encoder handle. Only ``encode`` is ever called on it here."""
 
-    def encode(self, text: str, *, disallowed_special: tuple[str, ...]) -> Sequence[int]: ...
+    def encode(self, text: str) -> list[int]: ...
 
 
 def get_hf_task_embedding_for_model(model: str, task_type: str | None, api_base: str) -> str | None:
@@ -214,7 +213,7 @@ class HuggingFaceEmbedding(BaseLLM):
         model_response.model = model
         input_tokens = 0
         for text in input:
-            input_tokens += len(encoding.encode(text, disallowed_special=()))
+            input_tokens += len(encoding.encode_ordinary(text))
 
         setattr(
             model_response,
