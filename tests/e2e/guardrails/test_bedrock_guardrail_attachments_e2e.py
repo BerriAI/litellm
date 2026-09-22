@@ -53,8 +53,8 @@ from models import (
 
 pytestmark = pytest.mark.e2e
 
-OPENAI_MODEL: Final = os.environ.get("E2E_BEDROCK_ATTACHMENTS_OPENAI_MODEL", "live-openai")
-ANTHROPIC_MODEL: Final = os.environ.get("E2E_BEDROCK_ATTACHMENTS_ANTHROPIC_MODEL", "live-anthropic")
+OPENAI_MODEL: Final = os.environ.get("E2E_BEDROCK_ATTACHMENTS_OPENAI_MODEL", "gemini-2.5-flash")
+ANTHROPIC_MODEL: Final = os.environ.get("E2E_BEDROCK_ATTACHMENTS_ANTHROPIC_MODEL", "gemini-2.5-flash")
 CONVERSE_MODEL: Final = os.environ.get("E2E_BEDROCK_ATTACHMENTS_CONVERSE_MODEL", "us.amazon.nova-lite-v1:0")
 
 _SSN_TEXT: Final = "my social security number is 123-45-6789"
