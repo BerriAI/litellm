@@ -1764,6 +1764,9 @@
     ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[bearer]": [
       "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_tool_search_wire.py::test_gen5_claude_bedrock_invoke_messages_tool_search_sends_bedrock_beta_field": [
+      "providers.bedrock_invoke.tool_search_gen5_claude_sends_bedrock_beta_and_reports_support"
     ]
   },
   "browser": {
