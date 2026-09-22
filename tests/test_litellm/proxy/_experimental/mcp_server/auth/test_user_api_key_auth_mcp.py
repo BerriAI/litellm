@@ -7189,14 +7189,59 @@ class TestMCPDcrBridgeDualCredential:
             ],
         }
 
-    async def test_dual_credential_matching_key_admits_under_explicit_key_and_forwards_upstream_token(self):
+    @pytest.mark.parametrize("dual_credential", [False, True])
+    async def test_admission_rejects_server_without_routable_name(self, dual_credential):
+        envelope = self._DELEGATE._mint_bridge_envelope()
+        server = self._DELEGATE._bridge_delegate_server(server_name=None)
+        admission = (
+            MCPRequestHandler._admit_dcr_bridge_dual_credential(
+                server=server,
+                requested_name="bridge_delegate_server",
+                authorization_value=f"Bearer {envelope}",
+                litellm_api_key="sk-explicit-key",
+                mcp_server_auth_headers=None,
+                request=self._DELEGATE._mcp_request(),
+                route="/mcp/bridge_delegate_server",
+            )
+            if dual_credential
+            else MCPRequestHandler._admit_dcr_bridge_delegate(
+                server=server,
+                requested_name="bridge_delegate_server",
+                authorization_value=f"Bearer {envelope}",
+                mcp_server_auth_headers=None,
+                request=self._DELEGATE._mcp_request(),
+                route="/mcp/bridge_delegate_server",
+            )
+        )
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new=AsyncMock(return_value=self._DELEGATE._reloaded_key()),
+            ),
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._DELEGATE._patch_key_reload() as reload_key,
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await admission
+
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.detail == "Server misconfigured: MCP server has no routable name"
+        reload_key.assert_not_awaited()
+
+    @pytest.mark.parametrize("mapped_jwt", [False, True])
+    async def test_dual_credential_matching_key_admits_under_explicit_key_and_forwards_upstream_token(self, mapped_jwt):
         """The reported bug: before the fix this request validated the key and dropped the
         envelope, so egress forwarded no upstream credential and the upstream 401 yielded
         ``tools: []``. Now the explicit key's auth context wins admission AND the sealed
         upstream token is injected per-server, while the envelope bearer is scrubbed from
         every egress header context."""
         envelope = self._DELEGATE._mint_bridge_envelope(key_hash=self._KEY_HASH)
-        explicit_auth = self._DELEGATE._reloaded_key(user_id="explicit-key-user")
+        explicit_auth = self._DELEGATE._reloaded_key(
+            api_key=None if mapped_jwt else self._KEY_HASH,
+            token=self._KEY_HASH,
+            user_id=None if mapped_jwt else "explicit-key-user",
+        )
+        presented_token = "aaa.bbb.ccc" if mapped_jwt else "sk-explicit-key"
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
@@ -7215,10 +7260,10 @@ class TestMCPDcrBridgeDualCredential:
                 mcp_server_auth_headers,
                 oauth2_headers,
                 raw_headers,
-            ) = await MCPRequestHandler.process_mcp_request(self._dual_scope(envelope, "sk-explicit-key"))
+            ) = await MCPRequestHandler.process_mcp_request(self._dual_scope(envelope, presented_token))
 
         mock_auth.assert_awaited_once()
-        assert mock_auth.await_args.kwargs["api_key"] == "Bearer sk-explicit-key"
+        assert mock_auth.await_args.kwargs["api_key"] == f"Bearer {presented_token}"
         assert auth_result is explicit_auth
         get_key_object.assert_not_awaited()
         assert mcp_server_auth_headers == {

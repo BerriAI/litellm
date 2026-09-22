@@ -6797,9 +6797,6 @@ async def test_bridge_mint_jwt_user_identity_seals_user_subject():
 
 @pytest.mark.asyncio
 async def test_bridge_mint_jwt_mapped_to_virtual_key_seals_key_hash_subject():
-    """A JWT mapped to a virtual key mints a key_hash-subject envelope sealing the mapped key's hash
-    (UserAPIKeyAuth.api_key holds the hashed token), so admission reloads that key just like a
-    presented raw key."""
     from datetime import datetime, timezone
 
     from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
@@ -6810,7 +6807,7 @@ async def test_bridge_mint_jwt_mapped_to_virtual_key_seals_key_hash_subject():
     from litellm.proxy._types import UserAPIKeyAuth
 
     response, _post = await _exchange_for_bridge_server_with_jwt(
-        UserAPIKeyAuth(api_key="mapped-key-hash-99", user_id="mapped-user")
+        UserAPIKeyAuth(token="mapped-key-hash-99", user_id="mapped-user")
     )
     assert response.status_code == 200
     token = json.loads(response.body)["access_token"]
@@ -6842,27 +6839,24 @@ async def test_bridge_mint_jwt_with_no_resolved_identity_is_400_before_upstream(
 
 
 def _jwt_auth_patches(mapped_key):
-    """Patch proxy_server globals and the virtual-key mapping so the real _resolve_jwt_auth runs
-    its mapped-key arm against a JWT-shaped presented credential."""
     from contextlib import ExitStack
 
-    jwtauth = MagicMock()
-    jwtauth.is_virtual_key_mapping_configured.return_value = True
-    jwtauth.custom_validate = None
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    cache.set_cache(key=jwt_key_mapping_cache_key("sub", "mapped-client"), value=mapped_key.token)
+    cache.set_cache(key=mapped_key.token, value=mapped_key)
     handler = MagicMock()
-    handler.litellm_jwtauth = jwtauth
-    handler.auth_jwt = AsyncMock(return_value={})
+    handler.litellm_jwtauth = LiteLLM_JWTAuth(virtual_key_claim_field="sub")
+    handler.auth_jwt = AsyncMock(return_value={"sub": "mapped-client"})
     stack = ExitStack()
     stack.enter_context(patch("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": True}))
     stack.enter_context(patch("litellm.proxy.proxy_server.premium_user", True))
     stack.enter_context(patch("litellm.proxy.proxy_server.prisma_client", object()))
     stack.enter_context(patch("litellm.proxy.proxy_server.jwt_handler", handler))
-    stack.enter_context(
-        patch(
-            "litellm.proxy.auth.user_api_key_auth._resolve_jwt_to_virtual_key",
-            new=AsyncMock(return_value=mapped_key),
-        )
-    )
+    stack.enter_context(patch("litellm.proxy.proxy_server.user_api_key_cache", cache))
     stack.enter_context(
         patch(
             "litellm.proxy._experimental.mcp_server.bridge_token_flow._key_owner_scim_deactivated",
@@ -6881,7 +6875,7 @@ async def test_jwt_mapped_to_service_account_key_without_user_id_resolves():
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp import MCPAuth
 
-    mapped_key = UserAPIKeyAuth(api_key="svc-key-hash-1", user_id=None, token="svc-key-hash-1")
+    mapped_key = UserAPIKeyAuth(user_id=None, token="svc-key-hash-1")
     request = _bridge_mock_request()
     request.headers = {"x-litellm-api-key": "aaa.bbb.ccc"}
     with (
@@ -6889,7 +6883,10 @@ async def test_jwt_mapped_to_service_account_key_without_user_id_resolves():
         patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
     ):
         resolved = await bridge_token_flow._resolve_jwt_auth(request, "aaa.bbb.ccc", None)
-        assert resolved is mapped_key
+        assert isinstance(resolved, UserAPIKeyAuth)
+        assert resolved.token == mapped_key.token
+        assert resolved.api_key is None
+        assert resolved.user_id is None
 
         mint = await bridge_token_flow._prepare_bridge_mint(
             request=request,
@@ -6907,7 +6904,7 @@ async def test_jwt_mapped_to_blocked_key_is_rejected():
     from litellm.proxy._experimental.mcp_server import bridge_token_flow
     from litellm.proxy._types import UserAPIKeyAuth
 
-    mapped_key = UserAPIKeyAuth(api_key="blocked-key-hash-1", user_id=None, token="blocked-key-hash-1", blocked=True)
+    mapped_key = UserAPIKeyAuth(user_id=None, token="blocked-key-hash-1", blocked=True)
     request = _bridge_mock_request()
     request.headers = {"x-litellm-api-key": "aaa.bbb.ccc"}
     with (

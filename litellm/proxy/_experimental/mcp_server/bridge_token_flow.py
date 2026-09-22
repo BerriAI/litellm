@@ -793,8 +793,8 @@ async def _prepare_bridge_mint(
     presented_token: Final = _litellm_key_from_request(request)
     if presented_token is not None and JWTHandler.is_jwt(presented_token):
         resolved_jwt: Final = await _resolve_jwt_auth(request, presented_token, None)
-        if isinstance(resolved_jwt, UserAPIKeyAuth) and resolved_jwt.api_key:
-            identity = key_hash_identity(server_id=mcp_server.server_id, key_hash=resolved_jwt.api_key)
+        if isinstance(resolved_jwt, UserAPIKeyAuth) and resolved_jwt.token:
+            identity = key_hash_identity(server_id=mcp_server.server_id, key_hash=resolved_jwt.token)
             return _BridgeMintReady(identity=identity, keys=keys)
         if isinstance(resolved_jwt, JWTIdentity) and resolved_jwt.user_id:
             identity = user_identity(server_id=mcp_server.server_id, user_id=resolved_jwt.user_id)

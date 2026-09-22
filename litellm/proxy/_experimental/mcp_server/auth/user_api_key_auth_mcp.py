@@ -188,23 +188,13 @@ def _explicit_credential_matches_envelope(
     presented_token: str,
     identity: EnvelopeIdentity,
 ) -> bool:
-    """True when the envelope's sealed identity is the same principal the explicit
-    litellm credential validated to.
-
-    ``explicit_auth.api_key`` is the hashed token of the resolved key record (also for
-    a JWT mapped to a virtual key, where it is the mapped key's hash), so the
-    ``key_hash`` arm compares both against ``hash_token`` of the presented token
-    (covers any auth pipeline that leaves ``api_key`` unset) and against the record's
-    stored hash (covers a JWT whose raw presentation never equals the sealed key
-    hash). A dual-credential request that binds to a different principal is rejected
-    by the caller, never silently admitted on one credential alone."""
+    """Match the stored key hash or user ID, including token-only mapped JWT keys."""
     match identity.subject_type:
         case "key_hash":
-            return identity.subject in (hash_token(presented_token), explicit_auth.api_key)
+            return identity.subject in (hash_token(presented_token), explicit_auth.token)
         case "user_id":
             return explicit_auth.user_id is not None and explicit_auth.user_id == identity.subject
-        case _:
-            assert_never(identity.subject_type)
+    return assert_never(identity.subject_type)
 
 
 def _has_client_supplied_mcp_auth(
@@ -887,8 +877,7 @@ class MCPRequestHandler:
                 raise MCPRequestHandler._dcr_bridge_invalid_token_challenge(
                     requested_name=requested_name, request=request
                 )
-            case _:
-                assert_never(result)
+        return assert_never(result)
 
     @staticmethod
     async def _admit_dcr_bridge_dual_credential(
