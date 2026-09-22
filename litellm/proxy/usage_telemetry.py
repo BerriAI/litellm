@@ -187,12 +187,8 @@ class UsageTelemetryRecorder(CustomLogger):
             }
         )
         self._llm_requests.add(1, attrs)
-        self._tokens.add(
-            payload.prompt_tokens, MappingProxyType({**attrs, "litellm.token.kind": "prompt"})
-        )
-        self._tokens.add(
-            payload.completion_tokens, MappingProxyType({**attrs, "litellm.token.kind": "completion"})
-        )
+        self._tokens.add(payload.prompt_tokens, MappingProxyType({**attrs, "litellm.token.kind": "prompt"}))
+        self._tokens.add(payload.completion_tokens, MappingProxyType({**attrs, "litellm.token.kind": "completion"}))
         self._spend.add(payload.response_cost, attrs)
 
     def shutdown(self) -> None:
