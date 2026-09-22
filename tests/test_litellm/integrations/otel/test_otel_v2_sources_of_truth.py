@@ -1271,6 +1271,22 @@ def test_llm_span_data_carries_the_caller_trace_controls():
             },
             None,
         ),
+        (
+            {
+                "litellm_session_id": "minted-by-proxy",
+                "metadata": {"session_id": "minted-by-proxy", SESSION_ID_GENERATED_METADATA_KEY: True},
+                "proxy_server_request": {"headers": {"langfuse_session_id": "conv-header"}},
+            },
+            "conv-header",
+        ),
+        (
+            {
+                "litellm_session_id": "conv-x-header",
+                "litellm_trace_id": "conv-x-header",
+                "metadata": {"trace_id": "conv-x-header", "session_id": "conv-x-header"},
+            },
+            "conv-x-header",
+        ),
         ({}, None),
     ],
     ids=[
@@ -1284,11 +1300,41 @@ def test_llm_span_data_carries_the_caller_trace_controls():
         "backfilled-from-otel-trace-id-is-not-a-conversation",
         "backfilled-trace-id-does-not-shadow-the-header",
         "proxy-generated-is-not-a-conversation",
+        "proxy-generated-does-not-shadow-the-header",
+        "x-litellm-session-id-header-sets-trace-and-session",
         "empty",
     ],
 )
 def test_llm_call_event_resolves_the_callers_conversation_id(litellm_params, expected):
     kwargs: Final = {"litellm_params": litellm_params, "litellm_trace_id": "per-request-uuid"}
+    assert LLMCallEvent.from_dict(kwargs).session_id == expected
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "payload_session_id", "expected"),
+    [
+        ({"metadata": {"user_api_key_hash": "hsh"}}, "conv-replayed", "conv-replayed"),
+        ({"metadata": {"user_api_key_hash": "hsh"}}, "", None),
+        ({"litellm_session_id": "conv-live"}, "conv-replayed", "conv-live"),
+        (
+            {
+                "litellm_session_id": "minted-by-proxy",
+                "metadata": {"session_id": "minted-by-proxy", SESSION_ID_GENERATED_METADATA_KEY: True},
+            },
+            "minted-by-proxy",
+            None,
+        ),
+    ],
+    ids=["replayed-payload", "replayed-payload-without-a-session", "live-params-win", "generated-stays-hidden"],
+)
+def test_llm_call_event_falls_back_to_the_replayed_payloads_session_id(litellm_params, payload_session_id, expected):
+    """``/callback_logs`` replays a finished ``StandardLoggingPayload`` whose
+    ``litellm_params`` carry only key metadata; the conversation survives on
+    ``payload.session_id``."""
+    kwargs: Final = {
+        "litellm_params": litellm_params,
+        "standard_logging_object": _sample_payload(session_id=payload_session_id),
+    }
     assert LLMCallEvent.from_dict(kwargs).session_id == expected
 
 
