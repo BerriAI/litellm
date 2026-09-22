@@ -17,14 +17,16 @@ import random
 import sys
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm import verbose_logger
@@ -37,6 +39,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 )
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
+_CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
 
 
@@ -87,6 +90,18 @@ class GetModelCostMap:
     def load_local_model_cost_map() -> dict:
         """Load the local backup model cost map bundled with the package."""
         return GetModelCostMap.load_local_model_cost_map_with_revision().model_cost_map
+
+    _loaded_catalog: Mapping[str, Mapping[str, object]] = MappingProxyType({})
+
+    @classmethod
+    def loaded_model_cost_map(cls) -> Mapping[str, Mapping[str, object]]:
+        """The catalog as last loaded (bundled or remote), untouched by ``register_model`` or router registrations."""
+        return cls._loaded_catalog
+
+    @classmethod
+    def _snapshot_loaded_catalog(cls, model_cost: Mapping[str, object]) -> None:
+        raw: Final = _CATALOG_ADAPTER.validate_python(model_cost)
+        cls._loaded_catalog = MappingProxyType({key: MappingProxyType(entry) for key, entry in raw.items()})
 
     @classmethod
     def _get_backup_model_count(cls) -> int:
@@ -533,7 +548,9 @@ def _finalize_model_cost_map(model_cost: dict) -> dict:
 def _finalize_loaded_model_cost_map(loaded: ModelCostMapReloaded) -> ModelCostMapReloaded:
     _cost_map_source_info.source_revision = loaded.revision
     _cost_map_source_info.etag = loaded.etag
-    return replace(loaded, model_cost_map=_finalize_model_cost_map(loaded.model_cost_map))
+    finalized: Final = _finalize_model_cost_map(loaded.model_cost_map)
+    GetModelCostMap._snapshot_loaded_catalog(finalized)  # pyright: ignore[reportPrivateUsage]  # same module
+    return replace(loaded, model_cost_map=finalized)
 
 
 def adopt_model_cost_map(

@@ -449,6 +449,23 @@ async def test_refetch_records_the_blob_id_of_the_bytes_served_and_the_fetch_eta
 
 
 @pytest.mark.asyncio
+async def test_loaded_catalog_snapshot_follows_the_fetched_map_and_ignores_later_registrations(monkeypatch):
+    import litellm
+
+    edited = json.loads(_real_map_bytes())
+    edited["gpt-5.4-mini"]["max_input_tokens"] = 777
+    client, _ = _mock_client([httpx.Response(200, content=json.dumps(edited).encode())])
+
+    result = await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=client)
+
+    assert isinstance(result, ModelCostMapReloaded)
+    monkeypatch.setattr(litellm, "model_cost", result.model_cost_map)
+    litellm.register_model({"gpt-5.4-mini": {"max_input_tokens": 2048}}, persist_across_reloads=False)
+    assert litellm.model_cost["gpt-5.4-mini"]["max_input_tokens"] == 2048
+    assert GetModelCostMap.loaded_model_cost_map()["gpt-5.4-mini"]["max_input_tokens"] == 777
+
+
+@pytest.mark.asyncio
 async def test_refetch_revision_follows_the_bytes_not_the_url():
     edited = json.loads(_real_map_bytes())
     edited["gpt-5.4-mini"]["input_cost_per_token"] = 0.5
