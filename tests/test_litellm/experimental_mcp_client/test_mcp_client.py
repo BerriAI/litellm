@@ -2891,5 +2891,8 @@ async def test_cancellation_delivers_termination_over_tcp(
             task.cancel()
             await asyncio.wait((task,), timeout=8)
         listener.close()
-        await listener.wait_closed()
-        await asyncio.wait_for(asyncio.gather(*connections), 2)
+        for connection in connections:
+            connection.cancel()
+        closed: Final = await asyncio.wait_for(asyncio.gather(*connections, return_exceptions=True), 2)
+        assert all(result is None or isinstance(result, asyncio.CancelledError) for result in closed), closed
+        await asyncio.wait_for(listener.wait_closed(), 2)
