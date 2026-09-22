@@ -17325,7 +17325,7 @@ export interface paths {
         };
         /**
          * Ui View Users
-         * @description Filter users based on partial match of user_id or email with pagination.
+         * @description Filter users based on partial match of user_id or email, or combined ``search``, with pagination.
          *
          *     Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
          *     (stored in the ``litellm_uisettings`` table):
@@ -31476,6 +31476,8 @@ export interface components {
             output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
+            /** Provider Affinity Header */
+            provider_affinity_header?: string | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;
@@ -37418,6 +37420,11 @@ export interface components {
              */
             fields: components["schemas"]["RouterSettingsField"][];
             /**
+             * Routing Group Strategies
+             * @description Strategies supported when constructing a routing group
+             */
+            routing_group_strategies: string[];
+            /**
              * Routing Strategy Descriptions
              * @description Descriptions for each routing strategy option
              */
@@ -37459,6 +37466,11 @@ export interface components {
              */
             fields: components["schemas"]["RouterSettingsField"][];
             /**
+             * Routing Group Strategies
+             * @description Strategies supported when constructing a routing group
+             */
+            routing_group_strategies: string[];
+            /**
              * Routing Strategy Descriptions
              * @description Descriptions for each routing strategy option
              */
@@ -37480,6 +37492,13 @@ export interface components {
         RoutingGroup: {
             /** Group Name */
             group_name: string;
+            /**
+             * Model Priorities
+             * @description For priority groups, every model's priority. Lower numbers are tried first; equal numbers share traffic.
+             */
+            model_priorities?: {
+                [key: string]: number;
+            } | null;
             /** Models */
             models: string[];
             /** Routing Strategy */
@@ -42347,6 +42366,8 @@ export interface components {
             output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
+            /** Provider Affinity Header */
+            provider_affinity_header?: string | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;
@@ -61025,6 +61046,8 @@ export interface operations {
                 status_filter?: string | null;
                 /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
                 cache_hit_filter?: string | null;
+                /** @description Filter logs by span type: llm, agent, mcp, or batch */
+                span_type?: string | null;
                 /** @description Filter logs by model */
                 model?: string | null;
                 /** @description Filter logs by model ID (litellm model deployment id) */
@@ -61143,6 +61166,8 @@ export interface operations {
                 status_filter?: string | null;
                 /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
                 cache_hit_filter?: string | null;
+                /** @description Filter logs by span type: llm, agent, mcp, or batch */
+                span_type?: string | null;
                 /** @description Filter logs by model */
                 model?: string | null;
                 /** @description Filter logs by model ID (litellm model deployment id) */
@@ -64313,6 +64338,8 @@ export interface operations {
                 user_id?: string | null;
                 /** @description User email in the request parameters */
                 user_email?: string | null;
+                /** @description Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive). */
+                search?: string | null;
                 /** @description Team ID — used when a team admin searches for users to add to their team */
                 team_id?: string | null;
                 /** @description Page number for pagination */
