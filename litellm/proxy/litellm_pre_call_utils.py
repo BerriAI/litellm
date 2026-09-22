@@ -2141,7 +2141,7 @@ async def add_litellm_data_to_request(
         data["api_version"] = dynamic_api_version
 
     ## Forward any LLM API Provider specific headers in extra_headers
-    add_provider_specific_headers_to_request(data=data, headers=request.headers)
+    add_provider_specific_headers_to_request(data=data, headers=_headers)
 
     ## Cache Controls
     cache_control_header: Final = _headers.get("Cache-Control", None)
