@@ -172,7 +172,13 @@ class OllamaChatConfig(BaseConfig):
                     optional_params["format"] = value["json_schema"]["schema"]
             if (
                 param == "reasoning_effort"
-                and (think := think_from_reasoning_effort(model, cast(object, value))) is not None
+                and (
+                    think := think_from_reasoning_effort(
+                        model,
+                        cast(object, value),  # cast-ok: [LIT006] untyped dict value, widened to object for the helper
+                    )
+                )
+                is not None
             ):
                 optional_params["think"] = think
             ### FUNCTION CALLING LOGIC ###
