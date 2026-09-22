@@ -183,6 +183,59 @@ async def test_post_call_failure_hook_attribution_does_not_count_against_the_dep
 
 
 @pytest.mark.asyncio
+async def test_post_call_failure_hook_attributes_the_keys_team_deployment_over_the_global_group(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """A team key requesting its team public model name must be attributed to the team's
+    deployment, not to a global group that happens to share the public name."""
+    from litellm.proxy import proxy_server
+
+    recorded: list[dict] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            recorded.append(kwargs)
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "shared-name",
+                    "litellm_params": {"model": "openai/gpt-4.1", "api_key": "sk-test"},
+                    "model_info": {"id": "global-deployment"},
+                },
+                {
+                    "model_name": "shared-name_test-team_deadbeef",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                    "model_info": {
+                        "id": "team-deployment",
+                        "team_id": "test-team",
+                        "team_public_model_name": "shared-name",
+                    },
+                },
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
+    proxy_logging.alert_types = []
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={"model": "shared-name", "messages": [{"role": "user", "content": "hi"}]},
+        original_exception=HTTPException(status_code=429, detail="rate limited"),
+        user_api_key_dict=make_user_api_key_auth(team_id="test-team", request_route="/chat/completions"),
+        route="/chat/completions",
+    )
+
+    assert len(recorded) == 1
+    kwargs = recorded[0]
+    assert kwargs["custom_llm_provider"] == "anthropic"
+    assert kwargs["litellm_params"]["metadata"]["deployment"] == "anthropic/claude-sonnet-4-5"
+    assert kwargs["standard_logging_object"]["model_id"] == "team-deployment"
+
+
+@pytest.mark.asyncio
 async def test_post_call_failure_hook_omits_provider_for_mixed_router_deployments(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):

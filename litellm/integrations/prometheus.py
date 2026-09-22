@@ -206,13 +206,15 @@ def _get_budget_metrics_per_request_timeout() -> float:
     return parsed
 
 
-_PROXY_REJECTION_EXCEPTION_NAMES: Final[frozenset[str]] = frozenset({"HTTPException", "ProxyException"})
+_PROXY_REJECTION_EXCEPTION_NAMES: Final[frozenset[str]] = frozenset(
+    {"HTTPException", "ProxyException", "GuardrailRaisedException"}
+)
 
 
 def _is_proxy_side_rejection(exception: Exception | None) -> bool:
     """Requests the proxy rejects before picking a deployment (auth, rate limit, guardrail) raise
-    fastapi's ``HTTPException`` or ``ProxyException``; matched by class name so this module stays
-    free of a ``fastapi`` import."""
+    fastapi's ``HTTPException``, ``ProxyException`` or ``GuardrailRaisedException``; matched by
+    class name so this module stays free of a ``fastapi`` import."""
     if exception is None:
         return False
     return any(base.__name__ in _PROXY_REJECTION_EXCEPTION_NAMES for base in type(exception).__mro__)

@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 from prometheus_client import REGISTRY
 
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -65,8 +66,9 @@ class _ProviderError(Exception):
         HTTPException(status_code=403, detail="guardrail blocked"),
         ProxyException(message="budget exceeded", type="budget_exceeded", param=None, code=400),
         ProxyRateLimitError(detail={"error": "key rpm limit"}),
+        GuardrailRaisedException(guardrail_name="pii", message="blocked", status_code=403),
     ],
-    ids=["http_exception", "proxy_exception", "proxy_rate_limit"],
+    ids=["http_exception", "proxy_exception", "proxy_rate_limit", "guardrail_raised"],
 )
 def test_attributed_proxy_reject_leaves_deployment_healthy(rejection: Exception):
     logger = PrometheusLogger()

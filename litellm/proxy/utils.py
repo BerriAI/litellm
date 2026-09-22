@@ -975,11 +975,13 @@ def _failure_usage_to_lift(
 _EMPTY_LIFT: Final = MappingProxyType({})
 
 
-def _stamp_deployment_attribution(litellm_params: dict[str, object], model_group: str | None) -> Mapping[str, object]:
+def _stamp_deployment_attribution(
+    litellm_params: dict[str, object], model_group: str | None, team_id: str | None
+) -> Mapping[str, object]:
     """Stamp provider and logging-metadata attribution onto ``litellm_params`` and return it.
     ``litellm_params["model_info"]`` stays unset: the router's cooldown and per-deployment rpm
     callbacks key off it and must not count a proxy-side reject against the deployment."""
-    attribution: Final = _deployment_attribution_for_model_group(model_group)
+    attribution: Final = _deployment_attribution_for_model_group(model_group, team_id)
     if "custom_llm_provider" in attribution:
         litellm_params["custom_llm_provider"] = attribution["custom_llm_provider"]
     if "model_info" not in attribution:
@@ -993,10 +995,11 @@ def _stamp_deployment_attribution(litellm_params: dict[str, object], model_group
     return attribution
 
 
-def _deployment_attribution_for_model_group(model_group: object) -> Mapping[str, object]:
+def _deployment_attribution_for_model_group(model_group: object, team_id: str | None) -> Mapping[str, object]:
     """Provider fields the router would have stamped had it reached a deployment:
     ``custom_llm_provider`` when every deployment in the group resolves to the same
-    provider, plus ``model_info`` and ``deployment`` when the group has exactly one."""
+    provider, plus ``model_info`` and ``deployment`` when the group has exactly one.
+    ``team_id`` picks the key's team deployments over a global group of the same public name."""
     if not isinstance(model_group, str):
         return _EMPTY_LIFT
 
@@ -1004,7 +1007,7 @@ def _deployment_attribution_for_model_group(model_group: object) -> Mapping[str,
 
     if llm_router is None:
         return _EMPTY_LIFT
-    deployments: Final = llm_router.get_model_list(model_name=model_group)
+    deployments: Final = llm_router.get_model_list(model_name=model_group, team_id=team_id)
     if not deployments:
         return _EMPTY_LIFT
 
@@ -3299,7 +3302,9 @@ class ProxyLogging:
                 elif k not in ("model", "user", "litellm_logging_obj"):
                     _optional_params[k] = v
 
-            attribution: Final = _stamp_deployment_attribution(_litellm_params, request_data.get("model"))
+            attribution: Final = _stamp_deployment_attribution(
+                _litellm_params, request_data.get("model"), user_api_key_dict.team_id
+            )
 
             litellm_logging_obj.update_environment_variables(
                 model=request_data.get("model", ""),
