@@ -266,9 +266,14 @@ def caller_session_id(
         for key in ("metadata", "litellm_metadata")
         if (metadata := as_str_mapping(params.get(key))) is not None
     )
-    from_body: Final = frozenset(session for body in bodies if (session := as_str(body.get("session_id"))))
-    if any(body.get(SESSION_ID_GENERATED_METADATA_KEY) for body in bodies):
-        return trace.session_id if trace.session_id and trace.session_id not in from_body else None
+    from_body: Final = tuple(session for body in bodies if (session := as_str(body.get("session_id"))))
+    minted: Final = frozenset(
+        session
+        for body in bodies
+        if body.get(SESSION_ID_GENERATED_METADATA_KEY) and (session := as_str(body.get("session_id")))
+    )
+    if minted:
+        return next((session for session in (trace.session_id, *from_body) if session and session not in minted), None)
     explicit: Final = as_str(params.get("litellm_session_id"))
     if not explicit and not from_body:
         replayed: Final = as_str(payload.get("session_id")) if payload is not None else None

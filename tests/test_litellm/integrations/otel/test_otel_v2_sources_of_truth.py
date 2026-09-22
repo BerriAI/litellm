@@ -1281,6 +1281,22 @@ def test_llm_span_data_carries_the_caller_trace_controls():
         ),
         (
             {
+                "litellm_session_id": "minted-by-proxy",
+                "metadata": {"session_id": "conv-other-key"},
+                "litellm_metadata": {"session_id": "minted-by-proxy", SESSION_ID_GENERATED_METADATA_KEY: True},
+            },
+            "conv-other-key",
+        ),
+        (
+            {
+                "litellm_session_id": "minted-by-proxy",
+                "metadata": {"session_id": "minted-by-proxy", SESSION_ID_GENERATED_METADATA_KEY: True},
+                "litellm_metadata": {"session_id": "conv-other-key"},
+            },
+            "conv-other-key",
+        ),
+        (
+            {
                 "litellm_session_id": "conv-x-header",
                 "litellm_trace_id": "conv-x-header",
                 "metadata": {"trace_id": "conv-x-header", "session_id": "conv-x-header"},
@@ -1301,6 +1317,8 @@ def test_llm_span_data_carries_the_caller_trace_controls():
         "backfilled-trace-id-does-not-shadow-the-header",
         "proxy-generated-is-not-a-conversation",
         "proxy-generated-does-not-shadow-the-header",
+        "proxy-generated-on-litellm_metadata-does-not-shadow-metadata",
+        "proxy-generated-on-metadata-does-not-shadow-litellm_metadata",
         "x-litellm-session-id-header-sets-trace-and-session",
         "empty",
     ],
