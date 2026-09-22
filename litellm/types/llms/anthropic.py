@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 from typing import Any, Final, Literal, TypeAlias
 
@@ -387,7 +387,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     output_config: AnthropicOutputConfig | None  # Configuration for Claude's output behavior
     cache_control: dict[str, Any] | None  # Automatic prompt caching
     reasoning_effort: str | None
-    safeguards: ReadOnly[list[dict[str, object]] | None]
+    safeguards: ReadOnly[Sequence[Mapping[str, object]] | None]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -500,7 +500,7 @@ ContentBlockStart = ContentBlockStartToolUse | ContentBlockStartText
 
 class MessageDelta(TypedDict, total=False):
     stop_reason: str | None
-    safeguard_results: ReadOnly[list[dict[str, object]]]
+    safeguard_results: ReadOnly[Sequence[Mapping[str, object]]]
 
 
 class UsageDelta(TypedDict, total=False):
@@ -566,7 +566,7 @@ class MessageChunk(TypedDict, total=False):
     stop_reason: str | None
     stop_sequence: str | None
     usage: UsageDelta
-    safeguard_results: ReadOnly[list[dict[str, object]]]
+    safeguard_results: ReadOnly[Sequence[Mapping[str, object]]]
 
 
 class MessageStartBlock(TypedDict):
