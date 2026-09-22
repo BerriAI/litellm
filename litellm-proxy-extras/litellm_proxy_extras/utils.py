@@ -489,7 +489,8 @@ class ProxyExtrasDBManager:
             # Fall back: run each migration SQL file directly via prisma db execute.
             # This works with pooler URLs (no schema introspection needed) and is
             # safe to re-run because migrations use IF NOT EXISTS / IF EXISTS guards.
-            migration_files = sorted(Path(migrations_dir).glob("*/migration.sql"))
+            migration_files = sorted(Path(migrations_dir).glob("migrations/*/migration.sql"))
+            fallback_ok = True
             for mig_file in migration_files:
                 try:
                     prisma_toolchain.run_prisma(
@@ -510,8 +511,13 @@ class ProxyExtrasDBManager:
                     logger.warning(
                         f"Failed to apply migration {mig_file.parent.name}: {e.stderr}"
                     )
+                    if not ProxyExtrasDBManager._is_idempotent_error(str(e.stderr or "")):  # pyright: ignore[reportAny]  # CalledProcessError.stderr is Any
+                        fallback_ok = False
                 except subprocess.TimeoutExpired:
                     logger.warning(f"Migration {mig_file.parent.name} timed out.")
+                    fallback_ok = False
+            if mark_all_applied and fallback_ok:
+                ProxyExtrasDBManager._mark_migrations_applied(migrations_dir)
             return
         logger.info(f"Migration diff created at {diff_sql_path}")
 
