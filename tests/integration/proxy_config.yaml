@@ -5,7 +5,6 @@ general_settings:
   store_model_in_db: true
   disable_spend_logs: false
   proxy_batch_write_at: 1
-  allow_unmanaged_response_ids: true
 litellm_settings:
   enable_redis_auth_cache: true
   cache: true
