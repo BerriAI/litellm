@@ -6,6 +6,7 @@ import pytest
 
 from litellm.proxy import proxy_server
 from litellm.proxy.bug_report_config import (
+    MAX_CONFIG_DEPTH,
     build_proxy_bug_report,
     build_proxy_environment_report,
     safe_config_lines,
@@ -225,6 +226,21 @@ def test_verbose_lines_count_operator_keyed_maps_and_type_unknown_leaves():
         "model_list[0].model_info.weight = 1.5",
         "litellm_settings.callbacks = <object>",
         "litellm_settings.tags = [<str>, 7, false]",
+    )
+
+
+def test_verbose_lines_stop_at_the_depth_cap_and_survive_self_referencing_config():
+    deep: dict[str, object] = {"drop_params": True}
+    for _ in range(MAX_CONFIG_DEPTH + 5):
+        deep = {"nested": deep}
+    loop: list[object] = []
+    loop.append(loop)
+
+    lines = verbose_config_lines({"litellm_settings": deep, "guardrails": loop}, {})
+
+    assert lines == (
+        "litellm_settings" + ".nested" * (MAX_CONFIG_DEPTH - 1) + " = <object>",
+        "guardrails" + "[0]" * (MAX_CONFIG_DEPTH - 1) + " = <object>",
     )
 
 

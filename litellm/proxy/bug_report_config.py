@@ -28,6 +28,7 @@ from litellm.types.secret_managers.main import KeyManagementSystem
 _OBJECT_MAP: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _OBJECT_LIST: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+MAX_CONFIG_DEPTH: Final = 32
 
 OPERATOR_KEYED_MAPS: Final = frozenset(
     {
@@ -110,17 +111,21 @@ def _cache_params_keys() -> frozenset[str]:
     return frozenset(name for name in inspect.signature(Cache.__init__).parameters if name != "self")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped params, only names are read
 
 
-def _render_json(value: JsonValue) -> str | None:
+def _render_json_scalar(value: JsonValue) -> str | None:
     match value:
         case bool():
             return str(value).lower()
         case str():
             return value if value in _known_values() else None
-        case list():
-            known_items: Final = tuple(rendered for item in value if (rendered := _render_json(item)) is not None)
-            return f"[{', '.join(known_items)}]" if known_items else None
         case _:
             return None
+
+
+def _render_json(value: JsonValue) -> str | None:
+    if not isinstance(value, list):
+        return _render_json_scalar(value)
+    known_items: Final = tuple(rendered for item in value if (rendered := _render_json_scalar(item)) is not None)
+    return f"[{', '.join(known_items)}]" if known_items else None
 
 
 def _render(value: object) -> str | None:
@@ -207,26 +212,31 @@ def _is_container(value: object) -> bool:
     return _mapping_or_none(value) is not None or _items_or_none(value) is not None
 
 
-def _verbose_lines(path: str, key: str, value: object) -> tuple[str, ...]:
+def _verbose_lines(path: str, key: str, value: object, depth: int) -> tuple[str, ...]:
     entries: Final = _mapping_or_none(value)
+    items: Final = _items_or_none(value)
+    if entries is None and items is None:
+        return (f"{path} = {_verbose_scalar(value)}",)
     if entries is not None and key in OPERATOR_KEYED_MAPS:
         return (f"{path} = <{len(entries)} keys>",)
+    if depth >= MAX_CONFIG_DEPTH:
+        return (f"{path} = <object>",)
     if entries is not None:
         return tuple(
             line
             for child_key, child in entries.items()
-            for line in _verbose_lines(f"{path}.{child_key}" if path else child_key, child_key, child)
+            for line in _verbose_lines(f"{path}.{child_key}" if path else child_key, child_key, child, depth + 1)
         )
-    items: Final = _items_or_none(value)
-    if items is None:
-        return (f"{path} = {_verbose_scalar(value)}",)
-    if not any(_is_container(item) for item in items):
-        return (f"{path} = [{', '.join(_verbose_scalar(item) for item in items)}]",)
-    return tuple(line for index, item in enumerate(items) for line in _verbose_lines(f"{path}[{index}]", key, item))
+    children: Final = items or ()
+    if not any(_is_container(item) for item in children):
+        return (f"{path} = [{', '.join(_verbose_scalar(item) for item in children)}]",)
+    return tuple(
+        line for index, item in enumerate(children) for line in _verbose_lines(f"{path}[{index}]", key, item, depth + 1)
+    )
 
 
 def verbose_config_lines(config: Mapping[str, object], general_settings: Mapping[str, object]) -> tuple[str, ...]:
-    return _verbose_lines("", "", {**config, "general_settings": general_settings})
+    return _verbose_lines("", "", {**config, "general_settings": general_settings}, 0)
 
 
 def safe_config_lines(config: Mapping[str, object], general_settings: Mapping[str, object]) -> tuple[str, ...]:
