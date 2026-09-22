@@ -4223,7 +4223,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         standard_logging_metadata: Mapping[str, Any],
         model_group: str | None,
-    ) -> list[tuple[str, str]]:
+    ) -> Sequence[tuple[str, str]]:
         """Rebuild project ITPM/OTPM scopes from logging metadata.
 
         Combined TPM already charges ``model_per_project`` from metadata when
@@ -4233,12 +4233,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         user_api_key_project_id: Final = standard_logging_metadata.get("user_api_key_project_id")
         if not user_api_key_project_id or not model_group:
-            return []
+            return ()
         descriptor_value: Final = f"{user_api_key_project_id}:{model_group}"
-        return [  # mutable-ok: caller may filter ITPM vs OTPM scopes
+        return (
             (PROJECT_ITPM_DESCRIPTOR_KEY, descriptor_value),
             (PROJECT_OTPM_DESCRIPTOR_KEY, descriptor_value),
-        ]
+        )
 
     def _build_unreserved_project_io_token_ops(
         self,
@@ -4255,10 +4255,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             get_model_group_from_litellm_kwargs,
         )
 
-        standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
+        standard_logging_object: Final = kwargs.get("standard_logging_object")
         if not isinstance(standard_logging_object, dict):
             return ()
-        standard_logging_metadata: Final = standard_logging_object.get("metadata") or {}
+        standard_logging_metadata: Final = standard_logging_object.get("metadata")
         if not isinstance(standard_logging_metadata, Mapping):
             return ()
 
@@ -4289,8 +4289,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             else (aggregate_total, aggregate_total, True)
         )
         billable_input, completion_tokens, _ = resolved_usage
-        itpm_targets: Final = [t for t in targets if t[0] == PROJECT_ITPM_DESCRIPTOR_KEY]
-        otpm_targets: Final = [t for t in targets if t[0] == PROJECT_OTPM_DESCRIPTOR_KEY]
+        itpm_targets: Final = tuple(t for t in targets if t[0] == PROJECT_ITPM_DESCRIPTOR_KEY)
+        otpm_targets: Final = tuple(t for t in targets if t[0] == PROJECT_OTPM_DESCRIPTOR_KEY)
         return self._build_reservation_aware_tpm_ops(
             targets=itpm_targets,
             reserved_scopes=frozenset(),
