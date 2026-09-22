@@ -3877,6 +3877,15 @@ class TestSyncUiSettingsToGeneralSettings:
         assert general_settings["forward_client_headers_to_llm_api"] is True
         assert general_settings.source("forward_client_headers_to_llm_api") == "db"
 
+    def test_every_runtime_flag_resolves_from_the_ui_settings_row(self):
+        """A flag missing from the settings rules resolves against the wrong stored row and never reaches a reader."""
+        from litellm.proxy.config_resolvers.settings_rules import rule_for
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import _RUNTIME_GENERAL_SETTINGS_FLAGS
+
+        wrong_row = [key for key in _RUNTIME_GENERAL_SETTINGS_FLAGS if rule_for("general_settings", key).db_row != "ui_settings"]
+
+        assert wrong_row == []
+
     def test_applied_runtime_flags_cannot_override_the_config_file(self, monkeypatch):
         from litellm.proxy import proxy_server
         from litellm.proxy.config_resolvers import SettingsStore

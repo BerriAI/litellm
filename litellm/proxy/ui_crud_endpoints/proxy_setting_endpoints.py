@@ -394,6 +394,7 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
+    "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 ]
