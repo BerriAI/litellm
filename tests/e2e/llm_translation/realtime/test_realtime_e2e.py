@@ -159,7 +159,6 @@ _REFUSED_UPSTREAMS = (
         "azure-realtime-refused",
         LiteLLMParamsBody(
             model="azure/gpt-realtime",
-            api_base="os.environ/AZURE_AI_API_BASE",
             api_key="invalid-e2e-key",
             api_version="2025-08-28",
             realtime_protocol="GA",
@@ -175,9 +174,6 @@ def test_upstream_handshake_refusal_is_an_error_event_and_policy_close(
     scoped_key: str,
     provider: RealtimeProvider,
 ) -> None:
-    """An upstream that refuses the realtime handshake (bad credential) must
-    surface to the client as an error event plus a mapped close code. Anything
-    less shows up client-side as an abnormal 1006 with no event at all."""
     model_name, model_id = client.provision(provider)
     resources.defer(lambda: client.proxy.delete_model(model_id))
 

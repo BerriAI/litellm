@@ -286,11 +286,8 @@ def function_call_item(events: tuple[ReceivedEvent, ...]) -> OutputItem | None:
 # ---- session + client --------------------------------------------------
 
 
-def _as_text(message: str | bytes) -> str:
+def as_text(message: str | bytes) -> str:
     return message.decode("utf-8") if isinstance(message, bytes) else message
-
-
-as_text = _as_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,7 +304,7 @@ class RealtimeSession:
         collected: list[ReceivedEvent] = []
         while time.monotonic() < deadline:
             try:
-                text = _as_text(
+                text = as_text(
                     self.connection.recv(timeout=deadline - time.monotonic())
                 )
             except TimeoutError:
