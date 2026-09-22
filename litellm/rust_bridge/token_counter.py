@@ -10,12 +10,9 @@ from typing import Final, Literal, Protocol, cast  # noqa: TID251  # native exte
 from pydantic import TypeAdapter
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.default_encoding import cl100k_base_rank_file, o200k_base_rank_file
 from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding, uses_legacy_message_accounting
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.configuration import rust_enabled
-from litellm.rust_bridge.runtime import BridgeErrorContext, RustHandled, aattempt
 from litellm.utils import claude_json_str, huggingface_tokenizer_kind
 
 RustTokenizer = Literal["anthropic", "cl100k_base", "o200k_base"]
@@ -93,22 +90,10 @@ def _counter(factory: RustTokenCounterFactory, tokenizer: RustTokenizer) -> Rust
             return factory.from_o200k_ranks(o200k_base_rank_file())
 
 
-async def count_input_tokens(body: bytes, tokenizer: RustTokenizer) -> InputTokenCount | None:
-    if not rust_enabled():
-        return None
-    factory: Final = TOKEN_COUNTER.load()
-    if factory is None:
-        return None
-    try:
-        attempt: Final = await aattempt(
-            native_call=lambda: _counter(factory, tokenizer).acount_request(body),
-            adapt=_INPUT_TOKEN_COUNT.validate_python,
-            context=BridgeErrorContext(route="token_counter", provider=tokenizer, model=""),
-        )
-    except (RuntimeError, ValueError) as error:
-        verbose_logger.debug("Rust token counter (%s) failed, counting in Python: %s", tokenizer, error)
-        return None
-    if not isinstance(attempt, RustHandled):
-        return None
-    verbose_logger.debug("Rust token counter (%s) counted %d input tokens", tokenizer, attempt.value.input_tokens)
-    return attempt.value
+async def native_count(factory: RustTokenCounterFactory, tokenizer: RustTokenizer, body: bytes) -> InputTokenCount:
+    """One native count, validated into the public shape.
+
+    ``RustBridgeDeclined`` and upstream errors propagate so the caller's route
+    runner can map them onto its fallback policy; other failures (RuntimeError,
+    ValueError) propagate as-is."""
+    return _INPUT_TOKEN_COUNT.validate_python(await _counter(factory, tokenizer).acount_request(body))

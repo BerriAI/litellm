@@ -20,7 +20,7 @@ use pyo3::{
 
 #[cfg(not(all(feature = "tiktoken", feature = "huggingface")))]
 use crate::errors::RustBridgeDeclined;
-use crate::token_counter::token_count_error_to_pyerr;
+use crate::routes::token_counter::token_count_error_to_pyerr;
 
 #[cfg(feature = "huggingface")]
 use litellm_token_counter::huggingface::{

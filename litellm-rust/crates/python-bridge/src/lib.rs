@@ -7,7 +7,6 @@ mod http;
 mod marshal;
 mod python_settings;
 mod routes;
-mod token_counter;
 mod tokenizer;
 
 #[pymodule(gil_used = true)]
@@ -33,7 +32,7 @@ mod _native {
     #[pymodule_export]
     use crate::routes::responses::ResponsesWebSocketConnection;
     #[pymodule_export]
-    use crate::token_counter::TokenCounter;
+    use crate::routes::token_counter::TokenCounter;
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
     use crate::tokenizer::HuggingFaceEncoding;

@@ -22,6 +22,7 @@ class Route(str, Enum):
     RESPONSES = "responses"
     TRANSCRIPTION = "transcription"
     OCR = "ocr"
+    TOKEN_COUNTER = "token_counter"
 
 
 class Delivery(Enum):
@@ -61,6 +62,7 @@ RULES: Final[Rules] = (
     Rule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),
     Rule(Route.OCR, Rollout.RUST_OPT_OUT),
     Rule(Route.MESSAGES, Rollout.RUST_OPT_IN),
+    Rule(Route.TOKEN_COUNTER, Rollout.RUST_OPT_IN),
     Rule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
 )
 
