@@ -3660,8 +3660,13 @@ _GPT_IMAGE_2_HIGH_1024: Final = {"quality": "high", "image_size": {"width": 1024
     ],
 )
 def test_route_image_generation_cost_honors_deployment_model_info(
-    _local_model_cost_map, model, optional_params, model_info, num_images, expected_cost
-):
+    _local_model_cost_map: None,
+    model: str,
+    optional_params: dict[str, object] | None,
+    model_info: ModelInfo,
+    num_images: int,
+    expected_cost: float,
+) -> None:
     cost = CostCalculatorUtils.route_image_generation_cost_calculator(
         model=model,
         completion_response=_image_response(num_images),
@@ -3674,7 +3679,9 @@ def test_route_image_generation_cost_honors_deployment_model_info(
     assert cost == pytest.approx(expected_cost)
 
 
-def test_route_image_generation_cost_openai_honors_deployment_input_cost_per_image(_local_model_cost_map):
+def test_route_image_generation_cost_openai_honors_deployment_input_cost_per_image(
+    _local_model_cost_map: None,
+) -> None:
     cost = CostCalculatorUtils.route_image_generation_cost_calculator(
         model="dall-e-3",
         completion_response=_image_response(),
@@ -3688,7 +3695,9 @@ def test_route_image_generation_cost_openai_honors_deployment_input_cost_per_ima
     assert cost == pytest.approx(0.07)
 
 
-def test_route_image_generation_cost_gemini_adds_grounding_to_deployment_image_price(_local_model_cost_map):
+def test_route_image_generation_cost_gemini_adds_grounding_to_deployment_image_price(
+    _local_model_cost_map: None,
+) -> None:
     usage = ImageUsage(
         input_tokens=0,
         input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=0),
@@ -3708,7 +3717,9 @@ def test_route_image_generation_cost_gemini_adds_grounding_to_deployment_image_p
     assert cost == pytest.approx(0.1 + 3 * 0.014)
 
 
-def test_route_image_generation_cost_gemini_bills_tokens_when_no_image_returned(_local_model_cost_map):
+def test_route_image_generation_cost_gemini_bills_tokens_when_no_image_returned(
+    _local_model_cost_map: None,
+) -> None:
     usage = ImageUsage(
         input_tokens=10,
         input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=10),

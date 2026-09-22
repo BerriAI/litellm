@@ -693,8 +693,8 @@ def test_tiered_pricing_only_deployment_selects_router_model_id():
 
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
 def test_completion_cost_image_generation_reads_deployment_model_info_price_from_logging_metadata(
-    _local_model_cost_map, metadata_key: str
-):
+    _local_model_cost_map: None, metadata_key: str
+) -> None:
     cost = completion_cost(
         completion_response=ImageResponse(data=[ImageObject(url="https://example.com/img.png")]),
         model="fal_ai/fal-ai/unlisted-image-model",
