@@ -129,6 +129,17 @@ jobs:
       - name: Install Playwright chromium
         run: uv run --no-sync playwright install --with-deps chromium
 
+      - name: Set up Node for the client_apps suite
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: tests/e2e/client_apps/.nvmrc
+          cache: npm
+          cache-dependency-path: tests/e2e/client_apps/package-lock.json
+
+      - name: Install the client apps the client_apps suite drives
+        working-directory: tests/e2e/client_apps
+        run: npm ci --no-audit --no-fund
+
       - name: Configure AWS credentials
         id: aws
         uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0

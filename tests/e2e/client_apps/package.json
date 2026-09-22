@@ -1,0 +1,15 @@
+{
+  "name": "litellm-e2e-client-apps",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "4.0.72",
+    "@anthropic-ai/claude-code": "2.1.278",
+    "@openai/codex": "0.155.1",
+    "ai": "7.0.109",
+    "zod": "4.6.5"
+  }
+}
