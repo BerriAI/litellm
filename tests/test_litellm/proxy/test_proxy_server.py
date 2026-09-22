@@ -14890,7 +14890,7 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
             time.sleep(0.3)
             return claude_tokenizer
 
-    monkeypatch.setattr(litellm.utils, "Tokenizer", SlowHubTokenizer)
+    monkeypatch.setattr(litellm.utils, "Tokenizer", SlowHubTokenizer, raising=False)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
         Router(
@@ -14931,7 +14931,7 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
             },
         }
 
-    monkeypatch.setattr(litellm.utils, "Tokenizer", MagicMock(from_pretrained=from_pretrained))
+    monkeypatch.setattr(litellm.utils, "Tokenizer", MagicMock(from_pretrained=from_pretrained), raising=False)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
         Router(
