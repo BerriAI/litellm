@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import contextlib
 import functools
 import gc
 import http.server
@@ -31,7 +32,7 @@ from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogExporter, LogExportResult, SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, MetricsData
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -2187,11 +2188,18 @@ def _isolate_otlp_tls_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "ssl_verify", True)
 
 
-def _ended_span():
+def _ended_span() -> tuple[TracerProvider, ReadableSpan]:
     provider: Final = TracerProvider()
     span = provider.get_tracer(__name__).start_span("tls-export-test")
     span.end()
     return provider, span
+
+
+def _assert_export_rejected(processor, span: ReadableSpan, sink: _TlsSink) -> None:
+    with contextlib.suppress(requests.exceptions.SSLError):
+        result: Final = processor.span_exporter.export([span])
+        assert result is SpanExportResult.FAILURE, f"rejected export must report failure, got {result}"
+    assert sink.received.empty(), "sink received a request it should never have trusted"
 
 
 def _otlp_http_otel(endpoint: str) -> OpenTelemetry:
@@ -2275,9 +2283,7 @@ def test_otlp_http_export_rejects_untrusted_collector_by_default(
     processor: Final = otel._get_span_processor()
     provider, span = _ended_span()
     try:
-        with pytest.raises(requests.exceptions.SSLError):
-            processor.span_exporter.export([span])
-        assert tls_sink.received.empty(), "sink received a request it should never have trusted"
+        _assert_export_rejected(processor, span, tls_sink)
     finally:
         processor.shutdown()
         provider.shutdown()
@@ -2294,9 +2300,7 @@ def test_otel_certificate_env_takes_precedence_over_ssl_cert_file(
     processor: Final = otel._get_span_processor()
     provider, span = _ended_span()
     try:
-        with pytest.raises(requests.exceptions.SSLError):
-            processor.span_exporter.export([span])
-        assert tls_sink.received.empty(), "sink received a request it should never have trusted"
+        _assert_export_rejected(processor, span, tls_sink)
     finally:
         processor.shutdown()
         provider.shutdown()
