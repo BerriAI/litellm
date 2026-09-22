@@ -15,12 +15,14 @@ dependencies = [
     # When changing a floor, verify it installs + imports on every supported
     # Python with: `uv pip install --resolution=lowest-direct .`
     "fastuuid>=0.14.0,<1.0",
+    "filelock>=3.16.1,<4.0",
     "httpx[http2]>=0.28.0,<1.0",
     "openai>=2.20.0,<3.0.0",
     "python-dotenv>=1.0.0,<2.0",
     "tiktoken>=0.8.0,<1.0; python_version < '3.14'",
     "tiktoken>=0.12.0,<1.0; python_version >= '3.14'",
     "importlib-metadata>=8.0.0,<9.0",
+    "packaging>=24.0",
     "tokenizers>=0.21.0,<1.0",
     "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
@@ -236,6 +238,7 @@ e2e-dev = [
     "playwright==1.61.0",
     "websockets>=15.0.1,<16.0",
     "locust==2.45.0",
+    "anthropic==0.84.0",
     "psutil==7.2.2",
     "mcp>=2.2.0,<3",
 ]

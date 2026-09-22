@@ -1246,9 +1246,10 @@ export interface paths {
          * @description Benchmarks for the auto-router dashboard: session shape, savings against the configured
          *     baseline, and prompt-caching behaviour bucketed by what the router did.
          *
-         *     Reads the LiteLLM_AutoRouterSession rollup, folded once per request at spend-write time,
-         *     so this endpoint never scans LiteLLM_SpendLogs. A session is in the window when it
-         *     overlaps it: its last turn is on or after start_date and its first turn is on or before
+         *     Reads session rollups folded once per request at spend-write time, so this endpoint
+         *     never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
+         *     internal user when written; older key-only history remains outside user views. A session
+         *     is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
          *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
          *     over that bucket's turns.
          *
@@ -3534,6 +3535,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cost_optimization/prompt_caching/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Prompt Caching Requests */
+        get: operations["get_prompt_caching_requests_cost_optimization_prompt_caching_requests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials": {
         parameters: {
             query?: never;
@@ -5294,6 +5312,27 @@ export interface paths {
          *     Returns a structured object with values and descriptions for UI display.
          */
         get: operations["get_internal_user_settings_get_internal_user_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/get/latest_release_info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Release Info
+         * @description Latest stable LiteLLM GitHub release with its PR count split into new features, bug fixes and other updates.
+         *     Returns null when GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
+         */
+        get: operations["latest_release_info_get_latest_release_info_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -17370,6 +17409,7 @@ export interface paths {
          *     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *     - organizations: List[str] - List of organization id's the user is a member of
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - password: Optional[str] - Not supported; any value is rejected with a 422. Users set their own password through an invitation link (POST /invitation/new).
          *     Returns:
          *     - key: (str) The generated api key for the user
          *     - expires: (datetime) Datetime object for when key expires.
@@ -17386,6 +17426,39 @@ export interface paths {
          *     ```
          */
         post: operations["new_user_user_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user/password/change": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change Password
+         * @description Change the calling user's own password.
+         *
+         *     Only callable with the dashboard session issued by a username/password
+         *     login; SSO sessions and virtual keys are rejected with 403. Requires the
+         *     current password. The new password must differ from the
+         *     current one and satisfy the configured password policy
+         *     (`general_settings.password_policy_*`: minimum length, character classes,
+         *     and, when enabled, breached-password screening via haveibeenpwned.com).
+         *     A successful change lifts any pending forced password reset
+         *     (`password_reset_required`) on the account.
+         *
+         *     Parameters:
+         *     - current_password: str - The user's current password.
+         *     - new_password: str - The password to change to.
+         */
+        post: operations["change_password_user_password_change_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -17439,7 +17512,7 @@ export interface paths {
          *     Parameters:
          *         - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
          *         - user_email: Optional[str] - Specify a user email.
-         *         - password: Optional[str] - Specify a user password.
+         *         - password: Optional[str] - Set the user's password (admin only). Must satisfy the configured password policy. The user is required to change it at their next login. Users change their own password with POST /user/password/change.
          *         - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
          *         - teams: Optional[list] - specify a list of team id's a user belongs to.
          *         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
@@ -23625,6 +23698,8 @@ export interface components {
         };
         /** AgentConfig */
         AgentConfig: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
             agent_card_params: components["schemas"]["AgentCard"];
             /** Agent Name */
             agent_name: string;
@@ -23772,6 +23847,8 @@ export interface components {
         };
         /** AgentResponse */
         AgentResponse: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
             /** Agent Card Params */
             agent_card_params: {
                 [key: string]: unknown;
@@ -25315,6 +25392,8 @@ export interface components {
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organizations */
             organizations?: string[] | null;
+            /** Password */
+            password?: string | null;
             /**
              * Permissions
              * @default {}
@@ -25814,7 +25893,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -25963,6 +26042,20 @@ export interface components {
              * @default 0
              */
             threshold_step: number;
+        };
+        /** ChangePasswordRequest */
+        ChangePasswordRequest: {
+            /** Current Password */
+            current_password: string;
+            /** New Password */
+            new_password: string;
+        };
+        /** ChangePasswordResponse */
+        ChangePasswordResponse: {
+            /** Message */
+            message: string;
+            /** User Id */
+            user_id: string;
         };
         /** ChatCompletionAnnotation */
         ChatCompletionAnnotation: {
@@ -27948,7 +28041,9 @@ export interface components {
             /** Jwt Issuer */
             jwt_issuer?: string | null;
             /** Key */
-            key: string;
+            key?: string | null;
+            /** Token */
+            token?: string | null;
         };
         /** CreateSearchToolRequest */
         CreateSearchToolRequest: {
@@ -29872,6 +29967,19 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** LatestReleaseInfo */
+        LatestReleaseInfo: {
+            /** Bug Fixes */
+            bug_fixes: number;
+            /** New Features */
+            new_features: number;
+            /** Other Updates */
+            other_updates: number;
+            /** Release Url */
+            release_url: string;
+            /** Version */
+            version: string;
+        };
         /** ListAccessGroupsResponse */
         ListAccessGroupsResponse: {
             /** Access Groups */
@@ -31196,12 +31304,16 @@ export interface components {
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
             output_cost_per_second_1080p?: number | null;
+            /** Output Cost Per Second 2K */
+            output_cost_per_second_2k?: number | null;
             /** Output Cost Per Second 480P */
             output_cost_per_second_480p?: number | null;
             /** Output Cost Per Second 4K */
             output_cost_per_second_4k?: number | null;
             /** Output Cost Per Second 720P */
             output_cost_per_second_720p?: number | null;
+            /** Output Cost Per Second 768P */
+            output_cost_per_second_768p?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -31248,8 +31360,12 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
+            /** S3 Access Key Id */
+            s3_access_key_id?: string | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
+            /** S3 Bucket Owner */
+            s3_bucket_owner?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
             /** S3 Endpoint Url */
@@ -31258,6 +31374,8 @@ export interface components {
             s3_output_bucket_name?: string | null;
             /** S3 Region Name */
             s3_region_name?: string | null;
+            /** S3 Secret Access Key */
+            s3_secret_access_key?: string | null;
             /** Search Context Cost Per Query */
             search_context_cost_per_query?: {
                 [key: string]: unknown;
@@ -31667,6 +31785,8 @@ export interface components {
             budget_reset_at?: string | null;
             /** Created At */
             created_at?: string | null;
+            /** Last Breach Check At */
+            last_breach_check_at?: string | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -31701,6 +31821,8 @@ export interface components {
             organization_id?: string | null;
             /** Organization Memberships */
             organization_memberships?: components["schemas"]["LiteLLM_OrganizationMembershipTable"][] | null;
+            /** Password Reset Required */
+            password_reset_required?: boolean | null;
             /**
              * Policies
              * @default []
@@ -31760,6 +31882,8 @@ export interface components {
              * @default 0
              */
             key_count: number;
+            /** Last Breach Check At */
+            last_breach_check_at?: string | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -31794,6 +31918,8 @@ export interface components {
             organization_id?: string | null;
             /** Organization Memberships */
             organization_memberships?: components["schemas"]["LiteLLM_OrganizationMembershipTable"][] | null;
+            /** Password Reset Required */
+            password_reset_required?: boolean | null;
             /**
              * Policies
              * @default []
@@ -34390,6 +34516,8 @@ export interface components {
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organizations */
             organizations?: string[] | null;
+            /** Password */
+            password?: string | null;
             /**
              * Permissions
              * @default {}
@@ -34919,6 +35047,8 @@ export interface components {
         };
         /** PatchAgentRequest */
         PatchAgentRequest: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
             agent_card_params?: components["schemas"]["AgentCard"];
             /** Agent Name */
             agent_name?: string;
@@ -35281,6 +35411,12 @@ export interface components {
          */
         PolicyAttachmentCreateRequest: {
             /**
+             * Default
+             * @description Apply this attachment only when no non-default attachment matches the request.
+             * @default false
+             */
+            default: boolean;
+            /**
              * Keys
              * @description Key aliases or patterns this attachment applies to.
              */
@@ -35336,6 +35472,12 @@ export interface components {
              * @description Who created the attachment.
              */
             created_by?: string | null;
+            /**
+             * Default
+             * @description Apply this attachment only when no non-default attachment matches the request.
+             * @default false
+             */
+            default: boolean;
             /**
              * Definition Location
              * @description Where this attachment is defined: 'db' (database) or 'config' (config.yaml).
@@ -35935,6 +36077,48 @@ export interface components {
             /** Prompt Id */
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
+        };
+        /** PromptCachingRequest */
+        PromptCachingRequest: {
+            /** Cache Creation Tokens */
+            cache_creation_tokens: number;
+            /** Cache Read Tokens */
+            cache_read_tokens: number;
+            /** Gateway Injected */
+            gateway_injected: boolean;
+            /** Model */
+            model: string;
+            /** Net Savings */
+            net_savings: number | null;
+            /** Request Id */
+            request_id: string;
+            /** Spend */
+            spend: number;
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+        };
+        /** PromptCachingRequestCursor */
+        PromptCachingRequestCursor: {
+            /** Request Id */
+            request_id: string;
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+        };
+        /** PromptCachingRequestsResponse */
+        PromptCachingRequestsResponse: {
+            /** Has More */
+            has_more: boolean;
+            next_cursor: components["schemas"]["PromptCachingRequestCursor"] | null;
+            /** Page Size */
+            page_size: number;
+            /** Requests */
+            requests: components["schemas"]["PromptCachingRequest"][];
         };
         /** PromptInfo */
         PromptInfo: {
@@ -36767,8 +36951,8 @@ export interface components {
             embedding_model?: string | null;
             /**
              * Enable Context Window Escalation
-             * @description Escalate a request off a tier whose models provably cannot hold its prompt, before dispatch. The classifier scores complexity and never prompt size, so a long agentic session whose newest ask is trivial lands on a small-window tier and the provider rejects it with a context-window 400 that nothing retries. When every model of the decided tier has a declared window smaller than the estimated prompt, the request moves to the lowest configured tier with a model whose declared window fits; when only some of the tier's models fit, the pick is restricted to those and the tier keeps the request. Models with no resolvable window are never escalated away from and never escalated onto. Set false to dispatch on complexity alone, as before.
-             * @default true
+             * @description Escalate a request off a tier whose models provably cannot hold its prompt, before dispatch. The classifier scores complexity and never prompt size, so a long agentic session whose newest ask is trivial lands on a small-window tier and the provider rejects it with a context-window 400 that nothing retries. When every model of the decided tier has a declared window smaller than the estimated prompt, the request moves to the lowest configured tier with a model whose declared window fits; when only some of the tier's models fit, the pick is restricted to those and the tier keeps the request. Models with no resolvable window are never escalated away from and never escalated onto. Disabled by default: omit or set false to dispatch on complexity alone; set true to enable context-window escalation.
+             * @default false
              */
             enable_context_window_escalation: boolean;
             /**
@@ -37126,6 +37310,13 @@ export interface components {
              */
             routing_strategy_descriptions: {
                 [key: string]: string;
+            };
+            /**
+             * Source
+             * @description Source of each current router setting
+             */
+            source: {
+                [key: string]: "config" | "db" | "env" | "default" | "unset";
             };
         };
         /**
@@ -39590,6 +39781,10 @@ export interface components {
             field_schema: {
                 [key: string]: unknown;
             };
+            /** Source */
+            source: {
+                [key: string]: "config" | "db" | "env" | "default" | "unset";
+            };
             /** Values */
             values: {
                 [key: string]: unknown;
@@ -39721,6 +39916,8 @@ export interface components {
             jwt_issuer?: string | null;
             /** Key */
             key?: string | null;
+            /** Token */
+            token?: string | null;
         };
         /** UpdateKeyRequest */
         UpdateKeyRequest: {
@@ -41936,12 +42133,16 @@ export interface components {
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
             output_cost_per_second_1080p?: number | null;
+            /** Output Cost Per Second 2K */
+            output_cost_per_second_2k?: number | null;
             /** Output Cost Per Second 480P */
             output_cost_per_second_480p?: number | null;
             /** Output Cost Per Second 4K */
             output_cost_per_second_4k?: number | null;
             /** Output Cost Per Second 720P */
             output_cost_per_second_720p?: number | null;
+            /** Output Cost Per Second 768P */
+            output_cost_per_second_768p?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -41988,8 +42189,12 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
+            /** S3 Access Key Id */
+            s3_access_key_id?: string | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
+            /** S3 Bucket Owner */
+            s3_bucket_owner?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
             /** S3 Endpoint Url */
@@ -41998,6 +42203,8 @@ export interface components {
             s3_output_bucket_name?: string | null;
             /** S3 Region Name */
             s3_region_name?: string | null;
+            /** S3 Secret Access Key */
+            s3_secret_access_key?: string | null;
             /** Search Context Cost Per Query */
             search_context_cost_per_query?: {
                 [key: string]: unknown;
@@ -43754,6 +43961,8 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one virtual key token hash */
                 api_key?: string | null;
+                /** @description Filter to one canonical internal user recorded on each turn */
+                user_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -47391,6 +47600,42 @@ export interface operations {
             };
         };
     };
+    get_prompt_caching_requests_cost_optimization_prompt_caching_requests_get: {
+        parameters: {
+            query: {
+                start_date: string;
+                end_date: string;
+                page_size?: number;
+                filter?: "all" | "injected" | "hits";
+                cursor_start_time?: string | null;
+                cursor_request_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptCachingRequestsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_credentials_credentials_get: {
         parameters: {
             query?: never;
@@ -49849,6 +50094,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InternalUserSettingsResponse"];
+                };
+            };
+        };
+    };
+    latest_release_info_get_latest_release_info_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LatestReleaseInfo"] | null;
                 };
             };
         };
@@ -63681,6 +63946,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NewUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_password_user_password_change_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangePasswordResponse"];
                 };
             };
             /** @description Validation Error */

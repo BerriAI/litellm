@@ -73,6 +73,7 @@ model LiteLLM_AgentsTable {
   static_headers       Json?          @default("{}")
   extra_headers        String[]       @default([])
   agent_access_groups String[]       @default([])
+  access_group_ids     String[]       @default([])
   object_permission_id String?
   object_permission LiteLLM_ObjectPermissionTable? @relation(fields: [object_permission_id], references: [object_permission_id])
   spend      Float    @default(0.0)
@@ -246,6 +247,8 @@ model LiteLLM_UserTable {
     organization_id String?
     object_permission_id String?
     password  String?
+    password_reset_required Boolean?
+    last_breach_check_at DateTime?
     teams    String[] @default([])
     user_role  String?
 		max_budget Float?
@@ -1419,6 +1422,7 @@ model LiteLLM_PolicyAttachmentTable {
   models           String[]  @default([])  // Model names or patterns
   tags             String[]  @default([])  // Tag patterns (e.g., ["healthcare", "prod-*"])
   priority         Int?                    // Explicit execution order
+  is_default       Boolean   @default(false)  // Applied only when no non-default attachment matches
   created_at       DateTime  @default(now())
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt
@@ -1618,6 +1622,47 @@ model LiteLLM_AutoRouterSession {
 
   @@id([api_key, session_id, router_name])
   @@index([last_turn_at], map: "idx_autorouter_session_last_turn")
+}
+
+model LiteLLM_AutoRouterUserSession {
+  user_id               String
+  api_key               String
+  session_id            String
+  router_name           String
+  router_type           String
+  first_turn_at         DateTime
+  last_turn_at          DateTime
+  last_model            String
+  models                Json     @default("{}")
+  turns                 Int      @default(0)
+  unordered_turns       Int      @default(0)
+  covered_turns         Int      @default(0)
+  cache_hits            Int      @default(0)
+  same_model_turns      Int      @default(0)
+  same_model_hits       Int      @default(0)
+  first_visit_turns     Int      @default(0)
+  first_visit_hits      Int      @default(0)
+  return_turns          Int      @default(0)
+  return_hits           Int      @default(0)
+  return_expired_misses Int      @default(0)
+  return_within_ttl_misses  Int      @default(0)
+  ttl_5m_turns          Int      @default(0)
+  ttl_1h_turns          Int      @default(0)
+  total_tokens          BigInt   @default(0)
+  spend                 Float    @default(0)
+  saved_spend           Float    @default(0)
+  savings_estimated_turns Int    @default(0)
+  savings_estimated_actual_spend Float @default(0)
+  savings_estimated_saved_spend Float @default(0)
+  savings_estimated_baseline_models Json @default("{}")
+  classifier_cost       Float    @default(0)
+  classifier_cost_recorded_turns Int @default(0)
+  tier_turns            Json     @default("{}")
+  baseline_models       Json     @default("{}")
+
+  @@id([user_id, api_key, session_id, router_name])
+  @@index([last_turn_at], map: "idx_autorouter_user_session_last_turn")
+  @@index([user_id, last_turn_at], map: "idx_autorouter_user_session_user_last_turn")
 }
 
 // Shadow eval: evaluation of an auto-router against one or more keys' live traffic, in

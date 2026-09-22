@@ -148,6 +148,7 @@ from litellm.proxy._types import (
     Member,
     UserAPIKeyAuth,
 )
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.common_utils.config_sync_pubsub import publish_config_param_change
@@ -4052,7 +4053,7 @@ class _ConfigRow:
 
     __slots__ = ("param_name", "param_value")
 
-    def __init__(self, param_name: str, param_value: Any) -> None:
+    def __init__(self, param_name: str, param_value: object) -> None:
         self.param_name = param_name
         self.param_value = param_value
 
@@ -4065,7 +4066,7 @@ def _pack_config_row(row: Any) -> dict[str, object]:
     return {"param_name": row.param_name, "param_value": row.param_value}
 
 
-def _unpack_config_row(cached: Any) -> _ConfigRow | None:
+def _unpack_config_row(cached: object) -> _ConfigRow | None:
     if cached is None or cached == _CONFIG_CACHE_MISS:
         return None
     if isinstance(cached, dict):
@@ -4218,6 +4219,7 @@ class PrismaClient:
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma
+            from prisma.types import DatasourceOverride
         except Exception as e:
             verbose_proxy_logger.error("Failed to import Prisma client: %s", e)
             verbose_proxy_logger.error("This usually means 'prisma generate' hasn't been run yet.")
@@ -4272,11 +4274,11 @@ class PrismaClient:
                         token_refresh_params_from_url(read_replica_url),
                     )
                     os.environ["DATABASE_URL_READ_REPLICA"] = read_replica_url
-                reader_kwargs: Final[dict[str, Any]] = {"datasource": {"url": read_replica_url}}
+                reader_datasource: Final = DatasourceOverride(url=read_replica_url)
                 if http_client is not None:
-                    reader_prisma = Prisma(http=http_client, **reader_kwargs)
+                    reader_prisma = Prisma(http=http_client, datasource=reader_datasource)
                 else:
-                    reader_prisma = Prisma(**reader_kwargs)
+                    reader_prisma = Prisma(datasource=reader_datasource)
                 reader_wrapper: Final = PrismaWrapper(
                     original_prisma=reader_prisma,
                     token_auth=token_auth,
@@ -8260,6 +8262,51 @@ async def _get_access_group_models(
     return tuple(dict.fromkeys((*team_group_models, *key_group_models)))
 
 
+async def _agent_access_group_visible_models(
+    user_api_key_dict: "UserAPIKeyAuth",
+    llm_router: "Router | None",
+    include_model_access_groups: bool,
+    return_wildcard_routes: bool,
+    team_id: str | None,
+    resolve_agent_ceiling: CeilingResolver,
+) -> frozenset[str] | None:
+    """Models an agent key may still list once its attached access groups cap it, ``None`` when
+    nothing caps it, so ``/v1/models`` never advertises a model the same key would be denied on."""
+    from litellm.proxy.auth.model_checks import get_complete_model_list, get_team_models
+
+    if not user_api_key_dict.agent_id:
+        return None
+    ceiling: Final = await resolve_agent_ceiling(user_api_key_dict.agent_id)
+    if ceiling is None:
+        return None
+    if llm_router is None:
+        return ceiling.models
+    proxy_model_list: Final = llm_router.get_model_names()
+    model_access_groups: Final = llm_router.get_model_access_groups()
+    granted: Final = get_team_models(
+        team_models=sorted(ceiling.models),
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=include_model_access_groups,
+    )
+    if not granted:
+        return frozenset()
+    return frozenset(
+        get_complete_model_list(
+            key_models=granted,
+            team_models=(),
+            proxy_model_list=proxy_model_list,
+            user_model=None,
+            infer_model_from_keys=False,
+            return_wildcard_routes=return_wildcard_routes,
+            llm_router=llm_router,
+            model_access_groups=model_access_groups,
+            include_model_access_groups=include_model_access_groups,
+            team_id=team_id,
+        )
+    )
+
+
 async def get_available_models_for_user(
     user_api_key_dict: "UserAPIKeyAuth",
     llm_router: Optional["Router"],
@@ -8272,6 +8319,7 @@ async def get_available_models_for_user(
     only_model_access_groups: bool = False,
     return_wildcard_routes: bool = False,
     user_api_key_cache: Optional["UserApiKeyCache"] = None,
+    resolve_agent_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
 ) -> list[str]:
     """
     Get the list of models available to a user based on their API key and team permissions.
@@ -8375,7 +8423,18 @@ async def get_available_models_for_user(
         team_id=effective_team_id,
     )
 
-    return all_models
+    agent_visible: Final = await _agent_access_group_visible_models(
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        include_model_access_groups=include_model_access_groups,
+        return_wildcard_routes=return_wildcard_routes,
+        team_id=effective_team_id,
+        resolve_agent_ceiling=resolve_agent_ceiling,
+    )
+    if agent_visible is None:
+        return all_models
+    capped: Final = [m for m in all_models if m in agent_visible]  # mutable-ok: callers expect the list all_models is
+    return capped
 
 
 def _safe_get_model_info(model: str, get_model_info: Callable[[str], ModelInfo]) -> ModelInfo | None:
