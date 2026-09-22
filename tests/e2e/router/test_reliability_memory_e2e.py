@@ -77,6 +77,7 @@ from e2e_config import (
     MEMORY_RSS_SETTLE_SAMPLES,
     MEMORY_STORED_REQUEST_BUDGET_KB,
     MEMORY_TRANSCRIPT_TURNS,
+    PROXY_REPLICA_URLS,
     unique_marker,
 )
 from lifecycle import ResourceManager
@@ -226,7 +227,11 @@ class TestReliabilityMemory:
             f"{len(idle_rss.failures)} replica(s) gave no RSS reading when the session started, so their idle "
             f"footprint went unmeasured: {'; '.join(idle_rss.failures)}"
         )
-        assert idle_rss.readings, "no replica answered /debug/memory/summary when the session started"
+        unmeasured: Final = frozenset(PROXY_REPLICA_URLS) - frozenset(reading.replica for reading in idle_rss.readings)
+        assert not unmeasured, (
+            f"{len(unmeasured)} of {len(PROXY_REPLICA_URLS)} replica(s) gave neither an RSS reading nor a failure "
+            f"reason when the session started, so their idle footprint went unmeasured: {', '.join(sorted(unmeasured))}"
+        )
         heaviest: Final = max(idle_rss.readings, key=lambda reading: reading.ram_usage_mb)
         assert heaviest.ram_usage_mb <= MEMORY_IDLE_RSS_BUDGET_MB, (
             f"{heaviest.where} sat at {heaviest.ram_usage_mb:.0f} MB RSS when the session started, before it sent "

@@ -190,6 +190,10 @@ def _reaches_proxy(item: pytest.Item) -> bool:
     return item.get_closest_marker("e2e") is not None and item.get_closest_marker("migration_startup") is None
 
 
+def _uses_idle_rss(item: pytest.Item) -> bool:
+    return isinstance(item, pytest.Function) and "idle_rss" in item.fixturenames
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Deselect every test behind an opt-in marker whose env var is unset (see
     OPT_IN_MARKERS): those tests need a proxy configured differently from the
@@ -206,12 +210,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     Also sort `load`-marked items last so a whole-tree run drives heavy throughput
     traffic only after the latency-sensitive suites have finished.
 
-    Last, when any selected test will reach the shared proxy, read every replica's
-    RSS once, right here at collection time, before this process sends any traffic:
-    under xdist every worker finishes collecting before the controller schedules
-    the first test, so this is the idle footprint of a stack that just passed its
-    readiness gate. The `idle_rss` fixture hands the capture to the idle-budget
-    test in router/test_reliability_memory_e2e.py."""
+    Last, when a selected test asks for the `idle_rss` fixture and this is not a
+    `--collect-only` run, read every replica's RSS once, right here at collection
+    time, before this process sends any traffic: under xdist every worker finishes
+    collecting before the controller schedules the first test, so this is the idle
+    footprint of a stack that just passed its readiness gate. The fixture hands the
+    capture to the idle-budget test in router/test_reliability_memory_e2e.py."""
     deselected = [item for item in items if _needs_unset_opt_in(item)]
     if deselected:
         config.hook.pytest_deselected(items=deselected)
@@ -224,8 +228,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         if deselected:
             deselected[0].config.hook.pytest_deselected(items=deselected)
     items.sort(key=lambda item: item.get_closest_marker("load") is not None)
-    if any(_reaches_proxy(item) for item in items):
-        config.stash[_IDLE_RSS] = read_rss_everywhere(build_proxy_client(), timeout=IDLE_RSS_READ_TIMEOUT_SECONDS)
+    if config.getoption("collectonly") or not any(_uses_idle_rss(item) for item in items):
+        return
+    config.stash[_IDLE_RSS] = read_rss_everywhere(build_proxy_client(), timeout=IDLE_RSS_READ_TIMEOUT_SECONDS)
 
 
 def _liveness_reason(label: str, base_url: str) -> str | None:
