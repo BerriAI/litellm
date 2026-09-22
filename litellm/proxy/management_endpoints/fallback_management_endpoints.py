@@ -139,7 +139,7 @@ async def create_fallback(
         existing_fallbacks: Final[list[dict[str, list[str]]]] = (
             list(  # mutable-ok: copy so edits stay off the frozen config
                 cast(  # cast-ok: entries are model -> fallback models maps
-                    "list[dict[str, list[str]]]", router_settings.get(fallback_key)
+                    "list[dict[str, list[str]]]", router_settings.get(fallback_key) or ()
                 )
             )
         )
@@ -316,7 +316,7 @@ async def delete_fallback(
         existing_fallbacks: Final[list[dict[str, list[str]]]] = (
             list(  # mutable-ok: copy so edits stay off the frozen config
                 cast(  # cast-ok: entries are model -> fallback models maps
-                    "list[dict[str, list[str]]]", router_settings.get(fallback_key)
+                    "list[dict[str, list[str]]]", router_settings.get(fallback_key) or ()
                 )
             )
         )

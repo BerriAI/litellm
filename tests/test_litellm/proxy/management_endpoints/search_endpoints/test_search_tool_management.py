@@ -1055,7 +1055,7 @@ def _live_router_and_db(db_rows: list):
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-    proxy_config.update_config_state({})
+    proxy_config.update_config_state(ProxyRuntimeConfig())
     fake_router = MagicMock()
     fake_router.search_tools = list(db_rows)
 
