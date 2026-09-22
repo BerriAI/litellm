@@ -163,6 +163,9 @@
       "other.provider_wire.anthropic.tool_history_system_cache_and_internal_fields",
       "quota_management.spend_tracking.cache_tokens.disjoint_classes_use_explicit_rates"
     ],
+    "tests/integration/providers/test_websearch_interception_wire.py::test_streamed_web_search_turn_capped_by_max_agentic_loops_ends_turn_with_snippets_and_ordered_blocks": [
+      "other.provider_wire.bedrock.websearch_interception_streamed_capped_turn_ends_with_native_results"
+    ],
     "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_video_create_status_and_content_follow_queue_wire_contract": [
       "other.provider_wire.fal_ai.video_queue_create_status_and_content_download"
     ],
