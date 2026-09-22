@@ -75,6 +75,12 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.bug_report import (
+    allowlisted,
+    bug_report_notice,
+    build_bug_report,
+    should_report_bug,
+)
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
 )
@@ -371,6 +377,7 @@ from litellm.proxy.batches_endpoints.endpoints import router as batches_router
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_request_processing import (
+    KNOWN_PROXY_ROUTES,
     ProxyBaseLLMRequestProcessing,
     _is_azure_model_router_request,
     _should_return_raw_model_name,
@@ -1965,6 +1972,16 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
         raise exc
     verbose_proxy_logger.exception("Unhandled exception in request: %s", type(exc).__name__)
+    if should_report_bug(exc):
+        verbose_proxy_logger.error(
+            bug_report_notice(
+                build_bug_report(
+                    exc,
+                    surface="proxy",
+                    call_type=allowlisted(request.url.path, KNOWN_PROXY_ROUTES),
+                )
+            )
+        )
     _close_dangling_otel_server_span(request, 500, exc=exc)
     return JSONResponse(
         status_code=500,
