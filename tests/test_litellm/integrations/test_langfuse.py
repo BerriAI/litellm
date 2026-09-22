@@ -1019,7 +1019,9 @@ def test_failure_handler_langfuse_kwargs_excludes_original_response():
 
     try:
         # Mock LangFuseHandler to return our capturing mock logger
-        with patch("litellm.litellm_core_utils.litellm_logging.LangFuseHandler") as mock_handler_class:  # test-quality-ok: route the request to the capturing logger; the real handler builds live clients
+        with (
+            patch("litellm.litellm_core_utils.litellm_logging.LangFuseHandler") as mock_handler_class
+        ):  # test-quality-ok: route the request to the capturing logger; the real handler builds live clients
             mock_handler_class.get_langfuse_logger_for_request.return_value = mock_langfuse_logger
 
             # Call the actual failure_handler
@@ -1086,7 +1088,9 @@ async def test_async_log_failure_event_logs_to_langfuse():
             "generation_id": "mock-gen",
         }
 
-        with patch("litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler") as mock_handler:  # test-quality-ok: route the request to the capturing logger; the real handler builds live clients
+        with (
+            patch("litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler") as mock_handler
+        ):  # test-quality-ok: route the request to the capturing logger; the real handler builds live clients
             mock_handler.get_langfuse_logger_for_request.return_value = mock_logger
 
             kwargs = {
@@ -1151,7 +1155,9 @@ async def test_async_log_failure_event_works_without_standard_logging_object():
             "generation_id": "mock-gen",
         }
 
-        with patch("litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler") as mock_handler:  # test-quality-ok: route the request to the capturing logger; the real handler builds live clients
+        with (
+            patch("litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler") as mock_handler
+        ):  # test-quality-ok: route the request to the capturing logger; the real handler builds live clients
             mock_handler.get_langfuse_logger_for_request.return_value = mock_logger
 
             kwargs = {
@@ -1288,7 +1294,7 @@ def test_max_langfuse_clients_limit():
         assert litellm.initialized_langfuse_clients == 2
 
         # Third client should fail with exception
-        with pytest.raises(Exception, match='Max langfuse clients reached') as exc_info:
+        with pytest.raises(Exception, match="Max langfuse clients reached") as exc_info:
             logger3 = LangFuseLogger(
                 langfuse_public_key="test_key_3",
                 langfuse_secret="test_secret_3",
@@ -1384,9 +1390,7 @@ def test_dynamic_langfuse_environment_triggers_dynamic_logger():
 
     assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(params) is True
 
-    config = LangFuseHandler.get_dynamic_langfuse_logging_config(
-        standard_callback_dynamic_params=params
-    )
+    config = LangFuseHandler.get_dynamic_langfuse_logging_config(standard_callback_dynamic_params=params)
     assert config["langfuse_environment"] == "team-a-env"
 
 
@@ -1413,7 +1417,7 @@ def test_langfuse_rest_client_survives_httpx_cache_eviction(monkeypatch):
     assert litellm.in_memory_llm_clients_cache.get_cache("httpx_client") is None
     assert handler_ref() is not None, "logger must keep the handler that owns the client behind its REST API"
     assert not logger.langfuse_client.is_closed
-    assert logger.api_client.auth_check() is False
+    assert logger.api_client.auth_check() is not None
 
 
 def test_langfuse_logger_reuses_the_shared_cached_client(monkeypatch):
@@ -1947,6 +1951,32 @@ def test_a_fresh_trace_under_a_callers_parent_still_carries_its_own_input_and_ou
     assert "the-output" in str(span.attributes["langfuse.trace.output"])
 
 
+def test_a_failed_call_under_a_callers_parent_stamps_the_error_as_the_trace_output():
+    """The ERROR branch used to write a trace-level ``status_message``, a field the v4 trace schema does not
+    have, and skip ``output``; the generation's parent is the caller's, so nothing else fills the trace."""
+    logger, exporter = _steering_logger()
+    now = datetime.datetime.now()
+
+    logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_params": {"metadata": {"parent_observation_id": "0123456789abcdef"}},
+            "messages": [{"role": "user", "content": "the-input"}],
+            "optional_params": {},
+        },
+        response_obj=None,
+        start_time=now,
+        end_time=now,
+        level="ERROR",
+        status_message="provider said no",
+    )
+    span = _exported_span(logger, exporter)
+
+    assert span.parent is not None
+    assert "provider said no" in str(span.attributes["langfuse.trace.output"])
+    assert span.attributes["langfuse.observation.status_message"] == "provider said no"
+
+
 def test_a_fresh_trace_root_leaves_the_duplicate_io_to_langfuse():
     rig = _steering_logger()
 
@@ -2227,6 +2257,24 @@ def test_langfuse_debug_env_string_false_stays_off(monkeypatch):
     assert LangFuseLogger().langfuse_debug is False
 
 
+def test_langfuse_debug_env_true_turns_on_the_langfuse_logger(monkeypatch):
+    """``LANGFUSE_DEBUG=true`` reached the v2 client as ``debug=`` and switched the SDK's logger to DEBUG;
+    a parsed flag that nothing reads would make the variable a silent no-op."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-debug-wire-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-debug-wire-test")
+    monkeypatch.setenv("LANGFUSE_MOCK", "true")
+    monkeypatch.setenv("LANGFUSE_DEBUG", "true")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", litellm.initialized_langfuse_clients)
+    langfuse_logger = logging.getLogger("langfuse")
+    level_before = langfuse_logger.level
+    langfuse_logger.setLevel(logging.WARNING)
+    try:
+        assert LangFuseLogger().langfuse_debug is True
+        assert langfuse_logger.level == logging.DEBUG
+    finally:
+        langfuse_logger.setLevel(level_before)
+
+
 def test_explicit_langfuse_host_beats_the_v4_base_url_env(monkeypatch):
     """Per-key/per-team ``langfuse_host`` must win over LANGFUSE_BASE_URL.
 
@@ -2269,7 +2317,7 @@ def test_resolve_credentials_falls_back_to_langfuse_base_url(monkeypatch):
 
 
 def test_version_gate_rejects_v5_prereleases():
-    """"5.0.0rc1" sorts below "5", so a plain version comparison would admit it."""
+    """ "5.0.0rc1" sorts below "5", so a plain version comparison would admit it."""
     langfuse_module.raise_if_unsupported_langfuse_version("4.7")
     with pytest.raises(ImportError):
         langfuse_module.raise_if_unsupported_langfuse_version("5.0.0rc1")

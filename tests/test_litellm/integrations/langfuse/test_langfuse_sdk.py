@@ -34,12 +34,14 @@ from litellm.integrations.langfuse.langfuse_sdk import (
     LangfuseSpanExporter,
     LangfuseTracing,
     _build_span_exporter,
+    _encode,
     acquire_langfuse_tracing,
     build_langfuse_client,
     build_langfuse_tracing,
     configured_flush_at,
     configured_prompt_cache_ttl,
     configured_sample_rate,
+    enable_langfuse_debug_logging,
     flush_langfuse_tracing,
     observation_attributes,
     release_langfuse_tracing,
@@ -978,7 +980,7 @@ def test_rest_client_authenticates_with_the_credentials_it_was_built_with():
         httpx_client=_recording_transport(requests),
     )
 
-    assert rotated.auth_check() is False
+    assert rotated.auth_check() is not None
     assert requests[-1].url.host == "127.0.0.1" and requests[-1].url.port == 2
     assert requests[-1].headers["authorization"] == "Basic " + b64encode(b"pk-rest-test:sk-second").decode()
 
@@ -988,7 +990,50 @@ def test_rest_client_without_keys_fails_auth_check_instead_of_raising(monkeypatc
     for name in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
         monkeypatch.delenv(name, raising=False)
     client = build_langfuse_client(public_key=None, secret_key=None, base_url="http://127.0.0.1:1", httpx_client=None)
-    assert client.auth_check() is False
+    assert client.auth_check() is not None
+
+
+def test_auth_check_names_the_servers_rejection(caplog):
+    """``/health/services`` used to print the 401 verbatim; a generic credentials message hides a 403 or a 500."""
+    client = build_langfuse_client(
+        public_key="pk",
+        secret_key="sk",
+        base_url="http://127.0.0.1:1",
+        httpx_client=_recording_transport([], status=401),
+    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        failure = client.auth_check()
+    assert failure is not None
+    assert "status_code: 401" in failure.reason and "unauthorized" in failure.reason
+    assert failure.reason in caplog.text
+
+
+def test_auth_check_names_an_unreachable_destination_rather_than_the_keys():
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused by lf.internal.example", request=request)
+
+    client = build_langfuse_client(
+        public_key="pk",
+        secret_key="sk",
+        base_url="http://lf.internal.example",
+        httpx_client=httpx.Client(transport=httpx.MockTransport(refuse)),
+    )
+    failure = client.auth_check()
+    assert failure is not None
+    assert "connection refused by lf.internal.example" in failure.reason
+
+
+def test_auth_check_fails_when_the_keys_reach_no_project():
+    """A 200 with an empty project list is what the SDK's own ``auth_check`` raises on; it is not a pass."""
+    client = build_langfuse_client(
+        public_key="pk",
+        secret_key="sk",
+        base_url="http://127.0.0.1:1",
+        httpx_client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"data": []}))),
+    )
+    failure = client.auth_check()
+    assert failure is not None
+    assert "no project" in failure.reason
 
 
 def test_rest_client_reports_the_project_id_and_a_passing_auth_check():
@@ -1000,7 +1045,7 @@ def test_rest_client_reports_the_project_id_and_a_passing_auth_check():
         httpx_client=_recording_transport(requests, status=200),
     )
     assert client.project_id() == "proj-under-test"
-    assert client.auth_check() is True
+    assert client.auth_check() is None
 
 
 def test_rest_client_leaves_a_host_applications_langfuse_client_alone():
@@ -1127,7 +1172,62 @@ def test_exporter_gives_up_after_the_last_delay(monkeypatch):
     assert slept == [1.0, 2.0]
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 404, 413, 422, 499])
+def _exporter_with_body_cap(max_bytes: int, *, deliveries: list[int]):
+    """A destination that answers 413 to any body over ``max_bytes``, the way an ingress with a body limit does."""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        if len(request.content) > max_bytes:
+            return httpx.Response(413, request=request)
+        deliveries.append(len(request.content))
+        return httpx.Response(200, request=request)
+
+    return LangfuseSpanExporter(
+        handler=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(transport))),
+        endpoint="https://lf.internal.example/api/public/otel/v1/traces",
+        headers=MappingProxyType({}),
+        timeout=5.0,
+        delays=(),
+    )
+
+
+def test_exporter_splits_a_batch_the_destination_finds_too_large(monkeypatch):
+    """One 413 used to drop every span in the batch; the v2 consumer sized its batches by bytes before posting."""
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", lambda _: None)
+    spans = tuple(_finished_span() for _ in range(8))
+    whole = _encode(spans)
+    assert whole is not None
+    deliveries: list[int] = []
+    exporter = _exporter_with_body_cap(len(whole) // 2, deliveries=deliveries)
+
+    assert exporter.export(spans) is SpanExportResult.SUCCESS
+    assert len(deliveries) >= 2
+    assert all(size <= len(whole) // 2 for size in deliveries)
+    assert (
+        sum(deliveries) >= len(whole) - 8 * 8
+    )  # each half repeats the resource and scope envelope, spans are not lost
+
+
+def test_exporter_drops_only_the_single_span_that_alone_exceeds_the_cap(monkeypatch, caplog):
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", lambda _: None)
+    provider = TracerProvider()
+    huge = provider.get_tracer("t").start_span("generation", attributes={"body": "x" * 4000})
+    huge.end()
+    small = tuple(_finished_span() for _ in range(3))
+    single_small = _encode(small[:1])
+    assert single_small is not None
+    deliveries: list[int] = []
+    exporter = _exporter_with_body_cap(len(single_small) * 3, deliveries=deliveries)
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        result = exporter.export((*small, huge))
+
+    assert result is SpanExportResult.FAILURE
+    assert len(deliveries) >= 1 and all(size <= len(single_small) * 3 for size in deliveries)
+    assert "single" in caplog.text and "too large" in caplog.text
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422, 499])
 def test_exporter_does_not_retry_a_rejected_batch(monkeypatch, status):
     """Bad credentials or a bad payload will not get better on the next attempt, so retrying only delays the flush."""
     slept = []
@@ -1137,6 +1237,17 @@ def test_exporter_does_not_retry_a_rejected_batch(monkeypatch, status):
     assert exporter.export((_finished_span(),)) is SpanExportResult.FAILURE
     assert len(seen) == 1
     assert slept == []
+
+
+def test_exporter_names_the_server_floor_when_the_otlp_route_is_missing(monkeypatch, caplog):
+    """A Langfuse server too old to serve the OTLP route answers 404; a bare status leaves the operator guessing."""
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", lambda _: None)
+    exporter, _ = _exporter_over([404])
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        assert exporter.export((_finished_span(),)) is SpanExportResult.FAILURE
+
+    assert "HTTP 404" in caplog.text and "3.63.0" in caplog.text
 
 
 def _finished_span_named(name: object):
@@ -1192,6 +1303,25 @@ def test_built_exporter_uses_the_shared_litellm_handler_and_langfuse_headers(mon
     assert exporter.headers["Authorization"] == "Basic " + b64encode(b"pk:sk").decode()
     assert exporter.headers["x-langfuse-public-key"] == "pk"
     assert exporter.headers["x-langfuse-sdk-version"] == installed_langfuse_version()
+    assert exporter.headers["x-langfuse-ingestion-version"] == "4"
+
+
+def test_enable_langfuse_debug_logging_makes_deliveries_visible_on_the_langfuse_logger(caplog):
+    """``LANGFUSE_DEBUG`` turned on the v2 SDK's own logger; it has to do the same for litellm's export channel."""
+    exporter, _ = _exporter_over([200])
+    langfuse_logger = logging.getLogger("langfuse")
+    level_before = langfuse_logger.level
+    try:
+        with caplog.at_level(logging.INFO, logger="langfuse"):
+            assert exporter.export((_finished_span(),)) is SpanExportResult.SUCCESS
+        assert "Exported" not in caplog.text
+        enable_langfuse_debug_logging()
+        assert langfuse_logger.level == logging.DEBUG
+        exporter_after, _ = _exporter_over([200])
+        assert exporter_after.export((_finished_span(),)) is SpanExportResult.SUCCESS
+        assert "Exported" in caplog.text and "lf.internal.example" in caplog.text
+    finally:
+        langfuse_logger.setLevel(level_before)
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
@@ -37,6 +38,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
 
 __all__ = (
+    "AuthCheckFailure",
     "DiscardingSpanExporter",
     "LangfuseApiClient",
     "LangfuseObservation",
@@ -51,6 +53,7 @@ __all__ = (
     "configured_release",
     "configured_sample_rate",
     "configured_timeout",
+    "enable_langfuse_debug_logging",
     "flush_langfuse_tracing",
     "observation_attributes",
     "release_langfuse_tracing",
@@ -65,6 +68,13 @@ __all__ = (
 _TRACE_ID_PATTERN: Final = re.compile(r"^(?=.*[1-9a-f])[0-9a-f]{32}$")
 _OBSERVATION_ID_PATTERN: Final = re.compile(r"^(?=.*[1-9a-f])[0-9a-f]{16}$")
 _TRACER_NAME: Final = "langfuse-sdk"
+_LANGFUSE_INGESTION_VERSION_HEADER: Final = "x-langfuse-ingestion-version"
+_LANGFUSE_INGESTION_VERSION: Final = "4"
+_SERVER_FLOOR_HINT: Final = (
+    "; the OTLP traces route needs a self-hosted Langfuse server on 3.63.0 or newer "
+    "(https://langfuse.com/self-hosting/upgrade/versioning#sdk-server)"
+)
+_langfuse_logger: Final = logging.getLogger("langfuse")
 _MAX_QUEUE_SIZE: Final = 100_000
 _DEFAULT_FLUSH_AT: Final = 512
 _CHANNEL_RETIRE_GRACE_SECONDS: Final = 60.0
@@ -541,7 +551,13 @@ class DiscardingSpanExporter(SpanExporter):
         return True
 
 
-_ExportOutcome = Literal["delivered", "retry", "rejected"]
+_ExportOutcome = Literal["delivered", "retry", "rejected", "too_large"]
+
+
+def enable_langfuse_debug_logging() -> None:
+    """What ``Langfuse(debug=True)`` does: a root handler if none exists, and the ``langfuse`` logger at DEBUG."""
+    logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    _langfuse_logger.setLevel(logging.DEBUG)
 
 
 def _retryable_status(status: int) -> bool:
@@ -556,7 +572,8 @@ class LangfuseSpanExporter(SpanExporter):
     The handler carries litellm's TLS material (``ssl_verify``, CA bundle, client certificate) exactly
     as v2's injected httpx client did. A connect or read failure and a retryable status are re-sent after
     each delay, matching the v2 ingestion consumer; ``BatchSpanProcessor`` would otherwise drop the whole
-    batch on the first exception.
+    batch on the first exception. A 413 splits the batch in halves until each body fits or a single span
+    is left, which stands in for the byte ceiling the v2 consumer applied before posting.
     """
 
     handler: HTTPHandler
@@ -569,19 +586,38 @@ class LangfuseSpanExporter(SpanExporter):
         body: Final = _encode(spans)
         if body is None:
             return SpanExportResult.FAILURE
-        return self._send(body)
+        outcome: Final = self._send(body)
+        if outcome != "too_large":
+            return SpanExportResult.SUCCESS if outcome == "delivered" else SpanExportResult.FAILURE
+        if len(spans) == 1:
+            verbose_logger.error(
+                "Langfuse rejected a single %d byte span export to %s as too large, dropping it",
+                len(body),
+                self.endpoint,
+            )
+            return SpanExportResult.FAILURE
+        verbose_logger.warning(
+            "Langfuse rejected a %d byte export of %d spans as too large, resending in halves", len(body), len(spans)
+        )
+        half: Final = len(spans) // 2
+        results: Final = (self.export(spans[:half]), self.export(spans[half:]))
+        return (
+            SpanExportResult.SUCCESS
+            if all(r is SpanExportResult.SUCCESS for r in results)
+            else SpanExportResult.FAILURE
+        )
 
-    def _send(self, body: bytes) -> SpanExportResult:
+    def _send(self, body: bytes) -> _ExportOutcome:
         for delay in self.delays:
             outcome: _ExportOutcome = self._post(body)
             if outcome != "retry":
-                return SpanExportResult.SUCCESS if outcome == "delivered" else SpanExportResult.FAILURE
+                return outcome
             verbose_logger.warning("Langfuse export to %s failed, retrying in %ss", self.endpoint, delay)
             sleep(delay)
         last: Final = self._post(body)
         if last == "retry":
             verbose_logger.error("Langfuse export to %s failed after %d retries", self.endpoint, len(self.delays))
-        return SpanExportResult.SUCCESS if last == "delivered" else SpanExportResult.FAILURE
+        return last
 
     def _post(self, body: bytes) -> _ExportOutcome:
         try:
@@ -590,11 +626,19 @@ class LangfuseSpanExporter(SpanExporter):
             status: Final = error.response.status_code
             if _retryable_status(status):
                 return "retry"
-            verbose_logger.error("Langfuse rejected an export to %s with HTTP %d", self.endpoint, status)
+            if status == 413:
+                return "too_large"
+            verbose_logger.error(
+                "Langfuse rejected an export to %s with HTTP %d%s",
+                self.endpoint,
+                status,
+                _SERVER_FLOOR_HINT if status == 404 else "",
+            )
             return "rejected"
         except (httpx.TransportError, litellm.Timeout) as error:
             verbose_logger.warning("Langfuse export to %s raised %s", self.endpoint, error)
             return "retry"
+        _langfuse_logger.debug("Exported %d bytes of spans to %s", len(body), self.endpoint)
         return "delivered"
 
     def shutdown(self) -> None:
@@ -623,7 +667,9 @@ def _encodes(span: ReadableSpan) -> bool:
 
 
 def _build_span_exporter(*, public_key: str, secret_key: str, base_url: str) -> LangfuseSpanExporter:
-    """Endpoint, headers, timeout and retries mirror the v2 SDK's so the server treats the spans as SDK traffic."""
+    """Endpoint, headers and export path are the v4 SDK span processor's, so the server treats the spans as SDK
+    traffic; the 20 s timeout and the retry count are what the v2 consumer used. The ingestion-version header is
+    the one Langfuse's compatibility matrix asks a v4 producer to send."""
     export_path: Final = os.getenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH") or "/api/public/otel/v1/traces"
     encoded_auth: Final = b64encode(f"{public_key}:{secret_key}".encode()).decode("ascii")
     return LangfuseSpanExporter(
@@ -636,6 +682,7 @@ def _build_span_exporter(*, public_key: str, secret_key: str, base_url: str) -> 
                 "x-langfuse-sdk-name": "python",
                 "x-langfuse-sdk-version": version("langfuse"),
                 "x-langfuse-public-key": public_key,
+                _LANGFUSE_INGESTION_VERSION_HEADER: _LANGFUSE_INGESTION_VERSION,
             }
         ),
         timeout=configured_timeout(),
@@ -885,6 +932,16 @@ def _prompt_client(prompt: Prompt) -> PromptClient:
     return ChatPromptClient(prompt) if isinstance(prompt, Prompt_Chat) else TextPromptClient(prompt)
 
 
+@dataclass(frozen=True, slots=True)
+class AuthCheckFailure:
+    reason: str
+
+
+def _auth_check_failure(reason: str) -> AuthCheckFailure:
+    verbose_logger.warning("Langfuse auth check failed: %s", reason)
+    return AuthCheckFailure(reason)
+
+
 class LangfuseApiClient:
     """litellm's handle on one Langfuse project over its REST API: prompts, ``auth_check`` and the project id.
 
@@ -908,12 +965,19 @@ class LangfuseApiClient:
         self._refreshing: Final[set[_PromptKey]] = set()
         self._lock: Final = threading.Lock()
 
-    def auth_check(self) -> bool:
+    def auth_check(self) -> AuthCheckFailure | None:
+        """``None`` when the keys reach a project; otherwise the reason, which is also logged.
+
+        Mirrors the SDK's ``Langfuse.auth_check``: a 200 with no project is a failure too, and a server
+        error or a transport failure is reported as itself rather than as bad credentials.
+        """
         try:
-            self.api.projects.get()
-        except Exception:
-            return False
-        return True
+            projects: Final = self.api.projects.get().data
+        except Exception as error:  # noqa: BLE001  # ApiError, httpx transport errors or a body the response model rejects
+            return _auth_check_failure(str(error) or type(error).__name__)
+        if not projects:
+            return _auth_check_failure("no project found for the keys provided")
+        return None
 
     def project_id(self) -> str | None:
         projects: Final = self.api.projects.get().data
@@ -963,7 +1027,7 @@ def build_langfuse_client(
     """The REST client for prompt management, ``auth_check`` and the Slack project link.
 
     Missing keys are passed through as absent credentials: the server answers 401, which
-    ``auth_check`` reports as ``False`` rather than raising at construction.
+    ``auth_check`` reports as a failure rather than raising at construction.
     """
     return LangfuseApiClient(
         LangfuseAPI(

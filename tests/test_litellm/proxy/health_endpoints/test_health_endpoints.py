@@ -4183,15 +4183,14 @@ async def test_health_services_endpoint_pointfive_blocks_non_admin(monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_health_services_endpoint_langfuse_missing_keys_errors(monkeypatch):
-    """A disabled v4 client returns False from auth_check instead of raising.
-
-    v2 raised out of ``auth_check`` on missing keys, so the endpoint errored;
-    the endpoint must not report success when the return value says the check
-    failed.
-    """
-    for key in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST", "LANGFUSE_BASE_URL", "LANGFUSE_MOCK"):
+    """v2 raised out of ``auth_check`` and the endpoint printed the server's answer; the v4 check
+    returns the failure as a value, and the endpoint has to error with that reason rather than a
+    generic credentials message that reads the same for an outage and a bad key."""
+    for key in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL", "LANGFUSE_MOCK"):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("LANGFUSE_HOST", "http://127.0.0.1:9")
     monkeypatch.setattr(litellm, "initialized_langfuse_clients", litellm.initialized_langfuse_clients)
 
-    with pytest.raises(ProxyException, match="auth_check failed"):
+    with pytest.raises(ProxyException, match="auth_check failed") as raised:
         await health_services_endpoint(service="langfuse")
+    assert "127.0.0.1" in str(raised.value.message) or "refused" in str(raised.value.message).lower()

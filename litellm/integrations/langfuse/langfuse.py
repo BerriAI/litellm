@@ -302,7 +302,7 @@ class LangFuseLogger:
             ) from e
         raise_if_unsupported_langfuse_version(self.langfuse_sdk_version)
         raise_if_unusable_prompt_cache_ttl()
-        from litellm.integrations.langfuse.langfuse_sdk import configured_release
+        from litellm.integrations.langfuse.langfuse_sdk import configured_release, enable_langfuse_debug_logging
 
         self.public_key, self.secret_key, self.langfuse_host = resolve_langfuse_credentials(
             langfuse_public_key=langfuse_public_key,
@@ -318,6 +318,8 @@ class LangFuseLogger:
             self.langfuse_environment = self.resolve_deployment_environment()
         self.langfuse_release = configured_release()
         self.langfuse_debug = parse_langfuse_debug(os.getenv("LANGFUSE_DEBUG"))
+        if self.langfuse_debug:
+            enable_langfuse_debug_logging()
         self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(flush_interval)
 
         if should_use_langfuse_mock():
@@ -751,10 +753,7 @@ class LangFuseLogger:
                 for key in list(filter(lambda key: key.startswith("trace_"), clean_metadata.keys())):
                     trace_params[key.replace("trace_", "")] = clean_metadata.pop(key, None)
 
-                if level == "ERROR":
-                    trace_params["status_message"] = masked_output
-                else:
-                    trace_params["output"] = masked_output if not mask_output else "redacted-by-litellm"
+                trace_params["output"] = masked_output if not mask_output else "redacted-by-litellm"
 
             if debug is True or (isinstance(debug, str) and debug.lower() == "true"):
                 debug_metadata: Final = {
