@@ -909,7 +909,6 @@ class SpendLogMetadata(BaseModel):
 
 class SpendLogRow(BaseModel):
     request_id: str | None = None
-    startTime: str | None = None
     api_key: str | None = None
     model: str | None = None
     spend: float | None = None
@@ -947,27 +946,6 @@ class SpendLogsParams(BaseModel):
                 "or use ProxyClient.spend_logs_window for a bounded /spend/logs/v2 read"
             )
         return self
-
-
-class SpendLogsDateRangeParams(BaseModel):
-    """Query for legacy /spend/logs with a YYYY-MM-DD window; api_key keeps the
-    read bounded."""
-    start_date: str
-    end_date: str
-    api_key: str
-    summarize: bool | None = None
-
-
-class SpendDailySummaryRow(BaseModel):
-    model_config = ConfigDict(extra="allow")
-    startTime: str
-    spend: float
-    users: dict[str, float]
-    models: dict[str, float]
-
-
-class SpendDailySummary(RootModel[list[SpendDailySummaryRow]]):
-    pass
 
 
 class SpendLogsPageParams(BaseModel):
