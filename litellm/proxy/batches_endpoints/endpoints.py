@@ -254,6 +254,8 @@ async def _create_stored_input_batch_for_managed_file(
         model=bare_model,
         provider=LlmProviders(provider),
     )
+    if provider_config is None:
+        raise batch_error(400, f"Provider {provider} does not support stored batch input")
     try:
         extra_body: Final = (
             cast(  # cast-ok: extra_body is declared dict[str, str] but the provider requests array is a list value
