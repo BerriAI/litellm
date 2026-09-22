@@ -104,6 +104,8 @@ def _nested_selector(
 
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Tokenizer
+
     from .vector_stores import VectorStoreSearchResponse
 else:
     VectorStoreSearchResponse = Any
@@ -196,6 +198,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_output_config: bool | None
     supports_image_size: bool | None
     supports_anthropic_thinking_payload: ReadOnly[bool | None]
+    supports_anthropic_compaction: ReadOnly[bool | None]
     supported_audio_formats: ReadOnly[Sequence[Literal["mp3", "wav"]] | None]
     vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"] | None]
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
@@ -3023,6 +3026,7 @@ RoutingDecisionCause = Literal[
 
 InternalCallOrigin = Literal[
     "autorouter_classifier",
+    "autorouter_compaction",
     "shadow_eval_router",
     "shadow_eval_judge",
     "llm_as_a_judge_guardrail",
@@ -3936,6 +3940,7 @@ all_litellm_params = (
     agentic_loop_internal_litellm_params
     + [TRUSTED_CALLBACK_VARS_FIELD, ADDRESSED_RESPONSE_ID_FIELD, *bedrock_batch_litellm_params]
     + [
+        "_context_compaction_state",
         "metadata",
         "litellm_metadata",
         "keepalive_seconds",
@@ -4406,7 +4411,7 @@ class ProviderSpecificHeader(TypedDict):
 
 class SelectTokenizerResponse(TypedDict):
     type: Literal["openai_tokenizer", "huggingface_tokenizer"]
-    tokenizer: Any
+    tokenizer: ReadOnly["Tokenizer"]
 
 
 class LiteLLMFineTuningJob(FineTuningJob):

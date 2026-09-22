@@ -245,6 +245,8 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                 if "audio" in choice["delta"]:
                     choice["delta"]["audio"] = None
                 _redact_tool_calls_dict(choice["delta"])
+            elif choice.get("text") is not None:
+                choice["text"] = redacted_str
         else:
             _redact_choice_content(choice)
 

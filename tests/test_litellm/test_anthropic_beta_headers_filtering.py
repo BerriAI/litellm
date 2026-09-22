@@ -83,6 +83,7 @@ class TestAnthropicBetaHeadersFiltering:
         filtered = filter_and_transform_beta_headers(
             beta_headers=all_headers, provider=provider
         )
+        assert ("compact-2026-09-04" in filtered) is (provider == "anthropic")
 
         for header in unsupported_headers:
             assert (

@@ -75,6 +75,11 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.bug_report import (
+    allowlisted,
+    bug_report_notice,
+    should_report_bug,
+)
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
 )
@@ -367,10 +372,12 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket,
 )
 from litellm.proxy.batches_endpoints.endpoints import router as batches_router
+from litellm.proxy.bug_report_config import build_proxy_bug_report
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_request_processing import (
+    KNOWN_PROXY_ROUTES,
     ProxyBaseLLMRequestProcessing,
     _is_azure_model_router_request,
     _should_return_raw_model_name,
@@ -1487,23 +1494,29 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
-    model_info_scheduler: Final = scheduler if scheduler is not None else AsyncIOScheduler()
-    model_info_scheduler.add_job(
-        ProxyStartupEvent.refresh_model_info,
-        "interval",
-        seconds=MODEL_INFO_REFRESH_SECONDS,
-        id="refresh_model_info",
-        next_run_time=datetime.now(timezone.utc),
-        max_instances=1,
-        replace_existing=True,
+    model_info_refresh_disabled: Final = (
+        "disable_model_info_refresh" in general_settings and general_settings["disable_model_info_refresh"] is True
     )
-    if not model_info_scheduler.running:
-        model_info_scheduler.start()
+    model_info_scheduler: Final = (
+        None if model_info_refresh_disabled else scheduler if scheduler is not None else AsyncIOScheduler()
+    )
+    if model_info_scheduler is not None:
+        model_info_scheduler.add_job(
+            ProxyStartupEvent.refresh_model_info,
+            "interval",
+            seconds=MODEL_INFO_REFRESH_SECONDS,
+            id="refresh_model_info",
+            next_run_time=datetime.now(timezone.utc),
+            max_instances=1,
+            replace_existing=True,
+        )
+        if not model_info_scheduler.running:
+            model_info_scheduler.start()
 
     # End of startup event
     yield
 
-    if model_info_scheduler.running:
+    if model_info_scheduler is not None and model_info_scheduler.running:
         model_info_scheduler.remove_job("refresh_model_info")
         if model_info_scheduler is not scheduler:
             model_info_scheduler.shutdown(wait=False)
@@ -1964,7 +1977,21 @@ async def otel_request_validation_exception_handler(request: Request, exc: Reque
 async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
         raise exc
+    if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(exc):
+        verbose_proxy_logger.warning("Database unavailable during request: %s", type(exc).__name__)
+        return await openai_exception_handler(
+            request=request, exc=PrismaDBExceptionHandler.service_unavailable_proxy_exception(exc)
+        )
     verbose_proxy_logger.exception("Unhandled exception in request: %s", type(exc).__name__)
+    if should_report_bug(exc):
+        verbose_proxy_logger.error(
+            bug_report_notice(
+                build_proxy_bug_report(
+                    exc,
+                    call_type=allowlisted(request.url.path, KNOWN_PROXY_ROUTES),
+                )
+            )
+        )
     _close_dangling_otel_server_span(request, 500, exc=exc)
     return JSONResponse(
         status_code=500,

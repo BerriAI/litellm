@@ -31,6 +31,7 @@ from e2e_config import (
     FIXTURE_MODE_RAW,
     MANAGED_FILES_OPT_IN_ENV,
     MCP_OAUTH_LIVE_OPT_IN_ENV,
+    OTEL_V2_OPT_IN_ENV,
     PROMPT_CACHING_OPT_IN_ENV,
     PROVIDER_EDGE_HOST_OPT_IN_ENV,
     PROXY_BASE_URL,
@@ -63,6 +64,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
         "provider_edge_host": PROVIDER_EDGE_HOST_OPT_IN_ENV,
         "callback_cost_capture": CALLBACK_COST_CAPTURE_OPT_IN_ENV,
+        "otel_v2": OTEL_V2_OPT_IN_ENV,
     }
 )
 
@@ -157,6 +159,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "callback_cost_capture: reads the JSONL written by the gateway's registered "
         "logging.callback_cost_capture.capture CustomLogger, so the gateway and pytest must share a filesystem; "
         "deselected unless E2E_CALLBACK_COST_CAPTURE_FILE is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "otel_v2: needs a proxy running with LITELLM_OTEL_V2=true; deselected unless E2E_OTEL_V2 is set",
     )
 
 
