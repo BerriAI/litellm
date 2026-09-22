@@ -1,17 +1,3 @@
-"""Live e2e: a pre_call guardrail block on POST /v1/responses must answer in the
-shape the caller asked for.
-
-A custom_code guardrail whose apply_guardrail returns block(...) raises
-ModifyResponseException before the model is called. On /v1/responses the
-caller still gets a 200 carrying the denial, so the response must satisfy the
-Responses API contract the request selected: stream=true answers SSE
-(text/event-stream) with a typed event sequence ending in exactly one
-response.completed whose output[0] is a completed assistant message item with
-output_text content, and stream=false/omitted answers application/json with the
-same schema-valid output item. Both report zero usage because no provider call
-happened.
-"""
-
 from __future__ import annotations
 
 import time
@@ -77,21 +63,24 @@ def _denial_delivered(result: StreamingResponse) -> bool:
     return any(DENIAL in event for event in result.stream_events)
 
 
+def _poll_terminal(result: StreamingResponse) -> bool:
+    if _denial_delivered(result):
+        return True
+    if result.ok:
+        return False
+    return "Guardrail not found" not in result.body and result.status_code not in (-1, 401, 429)
+
+
+def _poll_attempt(call: Callable[[], StreamingResponse], deadline: float) -> StreamingResponse:
+    result: Final = call()
+    if _poll_terminal(result) or time.monotonic() >= deadline:
+        return result
+    time.sleep(POLL_INTERVAL)
+    return _poll_attempt(call, deadline)
+
+
 def _poll_for_block(call: Callable[[], StreamingResponse]) -> StreamingResponse:
-    """Retry until the guardrail block lands. A registered guardrail reaches the
-    data plane on the periodic DB sync, so the first calls can still 404 with
-    "Guardrail not found" or pass through unblocked; both are retried to the
-    deadline and the last outcome is what the assertions judge."""
-    deadline: Final = time.monotonic() + POLL_TIMEOUT
-    result = call()
-    while time.monotonic() < deadline:
-        if _denial_delivered(result):
-            return result
-        if not result.ok and "Guardrail not found" not in result.body and result.status_code not in (-1, 401, 429):
-            return result
-        time.sleep(POLL_INTERVAL)
-        result = call()
-    return result
+    return _poll_attempt(call, time.monotonic() + POLL_TIMEOUT)
 
 
 def _assert_blocked_response(response: _ResponseBody) -> None:
