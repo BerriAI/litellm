@@ -11,10 +11,11 @@ use litellm_http::{
     HttpClientPool, HttpSettings, Resolution,
     media::{PublicDnsResolver, UrlPolicy},
 };
+use litellm_llms::base_llm::inference::secrets::{SecretSource, Secrets};
 use litellm_llms::base_llm::ocr::{
     error::Error as OcrError,
     handler::OcrClient,
-    settings::{OcrSettings, SecretSource, Secrets},
+    settings::OcrSettings,
     transformation::{
         BaseOcrConfig, LiteLLMOcrResponse, OCR_RESPONSE_MAX_BYTES, OcrTransportConfig,
     },
@@ -285,7 +286,7 @@ async fn ocr_client_uses_the_injected_http_pool_configuration() {
         UrlPolicy::default(),
         VertexAuth::default(),
         OcrSettings::default(),
-        Arc::new(litellm_llms::base_llm::ocr::settings::EnvironmentSecrets),
+        Arc::new(litellm_llms::base_llm::inference::secrets::EnvironmentSecrets),
     )
     .unwrap();
     crate::ocr::client::perform(&client, wire_request("mistral/model", &base, json!({})))

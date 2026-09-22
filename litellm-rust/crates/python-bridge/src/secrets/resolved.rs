@@ -2,15 +2,38 @@ use std::{collections::HashMap, sync::Arc};
 
 use futures_util::{future::BoxFuture, future::join_all};
 use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
-use litellm_llms::base_llm::ocr::settings::{SecretSource, Secrets};
-use litellm_secrets::{FailurePolicy, OidcResolver, Secret, SecretManagerState, SecretResolver};
+use litellm_llms::base_llm::inference::secrets::{SecretSource, Secrets};
+use litellm_secrets::{
+    FailurePolicy, OidcResolver, Secret, SecretManager, SecretManagerState, SecretResolver,
+};
+
+use super::{
+    binding::{ResolvedSecretManager, SecretManagerBinding},
+    callback::PythonSecretManager,
+};
 
 pub(crate) struct ResolvedSecrets {
     resolver: SecretResolver,
 }
 
 impl ResolvedSecrets {
-    pub(crate) fn new(state: Arc<SecretManagerState>) -> Self {
+    pub(crate) fn new(resolved: ResolvedSecretManager) -> Self {
+        let state = match resolved.binding {
+            SecretManagerBinding::Local => Arc::new(SecretManagerState::default()),
+            SecretManagerBinding::Native(service) => service,
+            SecretManagerBinding::PythonCallback(client) => Arc::new(SecretManagerState::new(
+                SecretManager::External(Arc::new(PythonSecretManager::new(
+                    client,
+                    resolved.snapshot.system,
+                    resolved.python_settings,
+                ))),
+                resolved.snapshot.settings,
+            )),
+        };
+        Self::from_state(state)
+    }
+
+    fn from_state(state: Arc<SecretManagerState>) -> Self {
         Self {
             resolver: SecretResolver::new(
                 state,
@@ -82,7 +105,7 @@ mod tests {
     };
 
     use super::ResolvedSecrets;
-    use litellm_llms::base_llm::ocr::settings::SecretSource;
+    use litellm_llms::base_llm::inference::secrets::SecretSource;
 
     fn state(server: &MockServer, settings: KeyManagementSettings) -> Arc<SecretManagerState> {
         let client = Client::from_conf(
@@ -104,7 +127,10 @@ mod tests {
     }
 
     async fn resolve(state: Arc<SecretManagerState>, name: &'static str) -> Option<String> {
-        ResolvedSecrets::new(state).resolve(&[name]).await.get(name)
+        ResolvedSecrets::from_state(state)
+            .resolve(&[name])
+            .await
+            .get(name)
     }
 
     #[tokio::test]

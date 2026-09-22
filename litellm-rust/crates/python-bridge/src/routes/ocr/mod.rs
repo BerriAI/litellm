@@ -38,8 +38,7 @@ fn run_ocr(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let snapshot = secrets::config::project(&PythonSettings::SecretManager.read(py)?)?;
-    let state = secrets::state::secret_manager_state(py, snapshot)?;
+    let secret_manager = secrets::binding::resolve(py)?;
     let config = http::call_config(py, &kwargs, asynchronous)?;
     let client = OcrClient::new(
         http::pool(),
@@ -47,7 +46,7 @@ fn run_ocr(
         http::url_policy(py)?,
         VERTEX_AUTH.clone(),
         ocr_settings(py)?,
-        Arc::new(secrets::resolved::ResolvedSecrets::new(state)),
+        Arc::new(secrets::resolved::ResolvedSecrets::new(secret_manager)),
     )
     .map_err(http::client_error)?;
     run_legacy_call(

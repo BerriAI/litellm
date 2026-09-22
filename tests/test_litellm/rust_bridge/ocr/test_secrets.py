@@ -12,6 +12,7 @@ from litellm.llms.custom_httpx import llm_http_handler
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.rust_bridge import bindings, configuration
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
+from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
 
 
 class _VaultSecrets(CustomSecretManager):
@@ -56,10 +57,11 @@ def provider(monkeypatch: pytest.MonkeyPatch) -> Mock:
     client.close()
 
 
-def _call() -> object:
+def _call(api_base: str | None = None) -> object:
     return litellm.ocr(
         model="mistral/mistral-ocr-latest",
         document={"type": "document_url", "document_url": "https://example.com/document.pdf"},
+        api_base=api_base,
     )
 
 
@@ -73,15 +75,44 @@ def test_bridge_disabled_uses_custom_secret_manager(provider: Mock, monkeypatch:
     assert provider.call_args.args[0].headers["Authorization"] == "Bearer vault-key"
 
 
-def test_bridge_enabled_with_native_extension_rejects_custom_secret_manager(
+def test_bridge_enabled_with_native_extension_uses_custom_secret_manager(
     provider: Mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1")
     configuration.reset_rust_configuration()
 
-    with pytest.raises(ValueError, match="custom"):
-        _call()
+    response: Final = {
+        "pages": [{"index": 0, "markdown": "parsed document", "images": []}],
+        "model": "mistral-ocr-latest",
+        "usage_info": {"pages_processed": 1},
+    }
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body=response)
+        result: Final = _call(server.base_url)
+
+    assert result.pages[0].markdown == "parsed document"
+    assert server.requests[0].headers["authorization"] == "Bearer vault-key"
+    assert provider.call_count == 0
+
+
+def test_bridge_enabled_uses_manually_assigned_secret_manager(provider: Mock, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    monkeypatch.setattr(litellm, "_key_management_system", None)
+    configuration.reset_rust_configuration()
+
+    response: Final = {
+        "pages": [{"index": 0, "markdown": "parsed document", "images": []}],
+        "model": "mistral-ocr-latest",
+        "usage_info": {"pages_processed": 1},
+    }
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body=response)
+        result: Final = _call(server.base_url)
+
+    assert result.pages[0].markdown == "parsed document"
+    assert server.requests[0].headers["authorization"] == "Bearer vault-key"
     assert provider.call_count == 0
 
 
