@@ -200,6 +200,9 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
     return <div>Loading...</div>;
   }
 
+  const canEdit = is_admin && !vectorStoreDetails.is_config;
+  const showEditForm = isEditing && canEdit;
+
   return (
     <div className="p-4 max-w-full">
       <div className="flex justify-between items-center mb-6">
@@ -213,8 +216,14 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
             {vectorStoreDetails.vector_store_description || "No description"}
           </p>
         </div>
-        {is_admin && !isEditing && <Button onClick={startEditing}>Edit Vector Store</Button>}
+        {canEdit && !isEditing && <Button onClick={startEditing}>Edit Vector Store</Button>}
       </div>
+
+      {vectorStoreDetails.is_config && (
+        <p className="mb-4 text-sm text-muted-foreground">
+          Defined in config. Edit your YAML configuration to make changes
+        </p>
+      )}
 
       <Tabs defaultValue="details">
         <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none p-0">
@@ -227,7 +236,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
         </TabsList>
 
         <TabsContent value="details" keepMounted>
-          {isEditing ? (
+          {showEditForm ? (
             <div>
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Edit Vector Store</h3>
@@ -373,7 +382,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
             <div>
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Vector Store Details</h3>
-                {is_admin && <Button onClick={startEditing}>Edit Vector Store</Button>}
+                {canEdit && <Button onClick={startEditing}>Edit Vector Store</Button>}
               </div>
               <Card>
                 <CardContent>

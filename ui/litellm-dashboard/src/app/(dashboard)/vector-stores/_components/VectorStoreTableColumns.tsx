@@ -74,7 +74,11 @@ function VectorStoreRowActions({ vectorStore, onEdit, onDelete }: VectorStoreRow
         <MoreHorizontal className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuItem data-testid="vector-store-action-edit" onClick={() => onEdit(vectorStore.vector_store_id)}>
+        <DropdownMenuItem
+          data-testid="vector-store-action-edit"
+          disabled={vectorStore.is_config}
+          onClick={() => onEdit(vectorStore.vector_store_id)}
+        >
           <Pencil />
           Edit
         </DropdownMenuItem>
@@ -89,6 +93,7 @@ function VectorStoreRowActions({ vectorStore, onEdit, onDelete }: VectorStoreRow
         <DropdownMenuItem
           variant="destructive"
           data-testid="vector-store-action-delete"
+          disabled={vectorStore.is_config}
           onClick={() => onDelete(vectorStore.vector_store_id)}
         >
           <Trash2 />

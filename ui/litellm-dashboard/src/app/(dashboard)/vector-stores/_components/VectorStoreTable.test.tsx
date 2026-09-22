@@ -112,6 +112,23 @@ describe("VectorStoreTable", () => {
     expect(mockOnDelete).toHaveBeenCalledWith("vs-newer");
   });
 
+  it("should keep edit and delete disabled for a config-defined store while copy still works", async () => {
+    const user = userEvent.setup();
+    const configStore: VectorStore = { ...mockVectorStores[1], vector_store_id: "vs-config", is_config: true };
+    render(<VectorStoreTable {...defaultProps} data={[mockVectorStores[0], configStore]} />);
+    await user.click(screen.getByTestId("vector-store-actions-vs-config"));
+    const editItem = await screen.findByTestId("vector-store-action-edit");
+    const deleteItem = screen.getByTestId("vector-store-action-delete");
+    expect(editItem).toHaveAttribute("aria-disabled", "true");
+    expect(deleteItem).toHaveAttribute("aria-disabled", "true");
+    await user.click(editItem);
+    await user.click(deleteItem);
+    expect(mockOnEdit).not.toHaveBeenCalled();
+    expect(mockOnDelete).not.toHaveBeenCalled();
+    await user.click(screen.getByTestId("vector-store-action-copy"));
+    expect(await window.navigator.clipboard.readText()).toBe("vs-config");
+  });
+
   it("should copy the vector store ID through the actions menu", async () => {
     const user = userEvent.setup();
     render(<VectorStoreTable {...defaultProps} />);

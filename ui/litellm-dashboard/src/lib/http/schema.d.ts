@@ -21151,7 +21151,9 @@ export interface paths {
          * List Vector Stores
          * @description List all available vector stores with optional filtering and pagination.
          *     Combines both in-memory vector stores and those stored in the database.
-         *     Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
+         *     Database is the source of truth for stores it owns: deleted stores are removed from memory, updated stores
+         *     sync to memory. Stores declared in the config file are owned by the config file, are always listed, and are
+         *     never overwritten by database rows.
          *
          *     Parameters:
          *     - page: int - Page number for pagination (default: 1)
@@ -22454,7 +22456,9 @@ export interface paths {
          * List Vector Stores
          * @description List all available vector stores with optional filtering and pagination.
          *     Combines both in-memory vector stores and those stored in the database.
-         *     Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
+         *     Database is the source of truth for stores it owns: deleted stores are removed from memory, updated stores
+         *     sync to memory. Stores declared in the config file are owned by the config file, are always listed, and are
+         *     never overwritten by database rows.
          *
          *     Parameters:
          *     - page: int - Page number for pagination (default: 1)
@@ -30822,6 +30826,8 @@ export interface components {
             created_at?: string | null;
             /** Custom Llm Provider */
             custom_llm_provider?: string;
+            /** Is Config */
+            is_config?: boolean;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Params */
@@ -30893,6 +30899,11 @@ export interface components {
             created_at?: string | null;
             /** Custom Llm Provider */
             custom_llm_provider: string;
+            /**
+             * Is Config
+             * @default false
+             */
+            is_config: boolean;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Params */
