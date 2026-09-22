@@ -18,8 +18,8 @@ import { VectorStore } from "@/components/vector_store_management/types";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
-const CONFIG_EDIT_HINT = "Config vector stores cannot be edited on the dashboard. Please edit the config file.";
-const CONFIG_DELETE_HINT = "Config vector stores cannot be deleted on the dashboard. Please edit the config file.";
+const CONFIG_STORE_HINT =
+  "Read only: this vector store is defined in the config file and cannot be edited or deleted on the dashboard.";
 
 function VectorStoreProviderCell({ provider }: { provider: string }) {
   const { displayName, logo } = getVectorStoreProviderLogoAndName(provider);
@@ -81,7 +81,6 @@ function VectorStoreRowActions({ vectorStore, onEdit, onDelete }: VectorStoreRow
         <DropdownMenuItem
           data-testid="vector-store-action-edit"
           disabled={isFromConfig}
-          title={isFromConfig ? CONFIG_EDIT_HINT : undefined}
           onClick={() => onEdit(vectorStore.vector_store_id)}
         >
           <Pencil />
@@ -99,12 +98,16 @@ function VectorStoreRowActions({ vectorStore, onEdit, onDelete }: VectorStoreRow
           variant="destructive"
           data-testid="vector-store-action-delete"
           disabled={isFromConfig}
-          title={isFromConfig ? CONFIG_DELETE_HINT : undefined}
           onClick={() => onDelete(vectorStore.vector_store_id)}
         >
           <Trash2 />
           Delete
         </DropdownMenuItem>
+        {isFromConfig && (
+          <div data-testid="vector-store-config-hint" className="px-2 py-1.5 text-xs text-muted-foreground">
+            {CONFIG_STORE_HINT}
+          </div>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

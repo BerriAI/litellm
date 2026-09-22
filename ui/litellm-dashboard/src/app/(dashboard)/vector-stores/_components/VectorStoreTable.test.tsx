@@ -141,9 +141,8 @@ describe("VectorStoreTable", () => {
     const editItem = await screen.findByTestId("vector-store-action-edit");
     const deleteItem = screen.getByTestId("vector-store-action-delete");
     expect(editItem).toHaveAttribute("aria-disabled", "true");
-    expect(editItem).toHaveAttribute("title", expect.stringContaining("edit the config file"));
     expect(deleteItem).toHaveAttribute("aria-disabled", "true");
-    expect(deleteItem).toHaveAttribute("title", expect.stringContaining("edit the config file"));
+    expect(screen.getByText(/Read only: this vector store is defined in the config file/)).toBeVisible();
     await user.click(editItem);
     await user.click(deleteItem);
     expect(mockOnEdit).not.toHaveBeenCalled();
@@ -158,5 +157,13 @@ describe("VectorStoreTable", () => {
     await user.click(screen.getByTestId("vector-store-actions-vs-newer"));
     await user.click(await screen.findByTestId("vector-store-action-copy"));
     expect(await window.navigator.clipboard.readText()).toBe("vs-newer");
+  });
+
+  it("should not show the read-only hint for a database-backed store", async () => {
+    const user = userEvent.setup();
+    render(<VectorStoreTable {...defaultProps} />);
+    await user.click(screen.getByTestId("vector-store-actions-vs-newer"));
+    await screen.findByTestId("vector-store-action-edit");
+    expect(screen.queryByText(/Read only: this vector store is defined in the config file/)).not.toBeInTheDocument();
   });
 });
