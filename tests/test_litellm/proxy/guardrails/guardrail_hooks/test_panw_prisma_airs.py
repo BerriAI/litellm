@@ -4539,10 +4539,11 @@ class TestPanwAirsLatestRoleMessageOnly:
             assert mock_api.call_args.kwargs["content"] == "Latest user message"
 
     @pytest.mark.asyncio
-    async def test_non_anthropic_any_flag_unchanged(self):
-        """Non-Anthropic + any flag state: existing role-filter behavior."""
-        # Even with flag explicitly True, non-Anthropic should not change
-        handler = make_handler(experimental_use_latest_role_message_only=True)
+    @pytest.mark.parametrize("flag_value", [None, False])
+    async def test_non_anthropic_flag_unset_or_false_full_scan(self, flag_value):
+        """Non-Anthropic + flag unset or False: existing role-filter behavior."""
+        overrides = {} if flag_value is None else {"experimental_use_latest_role_message_only": flag_value}
+        handler = make_handler(**overrides)
 
         inputs: GenericGuardrailAPIInputs = {
             "texts": ["user prompt", "assistant reply", "system instruction"],
@@ -4902,6 +4903,124 @@ class TestPanwAirsLatestRoleMessageOnly:
                 mock_api.call_args.kwargs["content"]
                 == "Developer instruction after user"
             )
+
+
+class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
+    """experimental_use_latest_role_message_only=true scopes the request-side scan to the
+    latest user/developer message on every request shape, not only Anthropic /v1/messages."""
+
+    LATEST: Final = "Latest user turn"
+    HISTORY: Final = (
+        {"role": "user", "content": "First user turn"},
+        {"role": "assistant", "content": "First assistant turn"},
+    )
+
+    def _scan(self, handler: PanwPrismaAirsHandler, scan_result: dict | None = None):
+        mock_api = AsyncMock(return_value=scan_result or {"action": "allow", "category": "benign"})
+        return patch.object(handler, "_call_panw_api", mock_api), mock_api
+
+    @pytest.mark.asyncio
+    async def test_flag_true_chat_completions_scans_latest_user_only(self):
+        from litellm.llms.openai.chat.guardrail_translation.handler import (
+            OpenAIChatCompletionsHandler,
+        )
+
+        handler = make_handler(experimental_use_latest_role_message_only=True)
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "model": "gpt-4.1-mini",
+            "messages": [
+                {"role": "system", "content": "You are terse"},
+                *self.HISTORY,
+                {"role": "user", "content": self.LATEST},
+            ],
+        }
+        patcher, mock_api = self._scan(handler)
+        with patcher:
+            await OpenAIChatCompletionsHandler().process_input_messages(data=request_data, guardrail_to_apply=handler)
+
+        assert [call.kwargs["content"] for call in mock_api.call_args_list] == [self.LATEST]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "shape",
+        [
+            pytest.param({}, id="plain"),
+            pytest.param({"instructions": "answer briefly"}, id="instructions"),
+            pytest.param(
+                {
+                    "history_tail": [
+                        {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                        {"type": "function_call_output", "call_id": "call_1", "output": "tool result"},
+                    ]
+                },
+                id="function_call_output",
+            ),
+            pytest.param(
+                {
+                    "history_tail": [
+                        {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "thinking"}]}
+                    ]
+                },
+                id="reasoning",
+            ),
+        ],
+    )
+    async def test_flag_true_responses_scans_latest_user_only(self, shape: dict):
+        """Regression: instructions, function_call_output and reasoning items land in
+        structured_messages but not in texts, which used to derail the latest-only walk
+        and silently rescan the whole history."""
+        from litellm.llms.openai.responses.guardrail_translation.handler import (
+            OpenAIResponsesHandler,
+        )
+
+        handler = make_handler(experimental_use_latest_role_message_only=True)
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "model": "gpt-4.1-mini",
+            "input": [*self.HISTORY, *shape.get("history_tail", []), {"role": "user", "content": self.LATEST}],
+            **({"instructions": shape["instructions"]} if "instructions" in shape else {}),
+        }
+        patcher, mock_api = self._scan(handler, {"action": "allow", "category": "dlp", "prompt_masked_data": {"data": "[MASKED]"}})
+        with patcher:
+            result = await OpenAIResponsesHandler().process_input_messages(data=request_data, guardrail_to_apply=handler)
+
+        assert [call.kwargs["content"] for call in mock_api.call_args_list] == [self.LATEST]
+        assert result["input"][-1]["content"] == "[MASKED]"
+        assert result["input"][0]["content"] == "First user turn"
+
+    @pytest.mark.asyncio
+    async def test_flag_false_responses_scans_full_history(self):
+        from litellm.llms.openai.responses.guardrail_translation.handler import (
+            OpenAIResponsesHandler,
+        )
+
+        handler = make_handler(experimental_use_latest_role_message_only=False)
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "model": "gpt-4.1-mini",
+            "instructions": "answer briefly",
+            "input": [*self.HISTORY, {"role": "user", "content": self.LATEST}],
+        }
+        patcher, mock_api = self._scan(handler)
+        with patcher:
+            await OpenAIResponsesHandler().process_input_messages(data=request_data, guardrail_to_apply=handler)
+
+        assert [call.kwargs["content"] for call in mock_api.call_args_list] == ["First user turn", self.LATEST]
+
+    @pytest.mark.asyncio
+    async def test_flag_true_unalignable_texts_fall_back_to_scanning_everything(self):
+        """A text the structured messages cannot account for disables scope narrowing."""
+        handler = make_handler(experimental_use_latest_role_message_only=True)
+        inputs: GenericGuardrailAPIInputs = {
+            "texts": ["First user turn", "not in any message", self.LATEST],
+            "structured_messages": [*self.HISTORY, {"role": "user", "content": self.LATEST}],
+        }
+        patcher, mock_api = self._scan(handler)
+        with patcher:
+            await handler.apply_guardrail(inputs=inputs, request_data={"litellm_call_id": "id"}, input_type="request")
+
+        assert [call.kwargs["content"] for call in mock_api.call_args_list] == list(inputs["texts"])
 
 
 class TestPanwAirsMcpToolCallWithoutCallId:

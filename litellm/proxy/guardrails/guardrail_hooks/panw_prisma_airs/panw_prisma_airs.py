@@ -5,6 +5,7 @@ Palo Alto Networks Prisma AI Runtime Security (AIRS) Guardrail Integration for L
 Provides real-time threat detection, DLP, URL filtering, content masking, and policy enforcement for AI applications.
 """
 
+import functools
 import json
 import os
 import re
@@ -194,7 +195,6 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # internal '<=' comparison and surfaces as a misleading api_error.
         self.timeout = float(timeout) if timeout is not None else 10.0
 
-        # Tri-state: None = not set (default-on for Anthropic), True = explicit on, False = explicit off
         self.experimental_use_latest_role_message_only: bool | None = kwargs.get(
             "experimental_use_latest_role_message_only"
         )
@@ -1578,119 +1578,99 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         request_data: Mapping[str, object],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> bool:
-        """Resolve whether to scan only the latest user message.
+        """Resolve whether to scan only the latest user/developer message.
 
-        - Non-Anthropic requests: always False (existing behavior)
-        - Anthropic requests:
-          - Flag explicitly True/False: respect it
-          - Flag None (not set): default to True
+        - Flag explicitly True/False: respect it for every request shape,
+          matching the bedrock guardrail's semantics for the same flag
+        - Flag None (not set): True for Anthropic /v1/messages requests, False otherwise
         """
-        if not self._is_anthropic_request(request_data, logging_obj):
-            return False
-        if self.experimental_use_latest_role_message_only is None:
-            return True  # Default-on for Anthropic
-        return self.experimental_use_latest_role_message_only
+        if self.experimental_use_latest_role_message_only is not None:
+            return self.experimental_use_latest_role_message_only
+        return self._is_anthropic_request(request_data, logging_obj)
 
     @staticmethod
-    def _get_latest_user_text_indices(
+    def _message_role(message: object) -> str | None:
+        role: Final = message.get("role") if isinstance(message, dict) else None
+        return role if isinstance(role, str) else None
+
+    @staticmethod
+    def _message_texts(message: object) -> tuple[str, ...]:
+        """Text entries the framework flattens out of one structured message."""
+        content: Final = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str):
+            return (content,)
+        if not isinstance(content, list):
+            return ()
+        return tuple(text for item in content if isinstance(item, dict) and isinstance(text := item.get("text"), str))
+
+    @classmethod
+    def _text_source_message_indices(
+        cls,
         texts: Sequence[str],
         messages: Sequence[object],
-    ) -> set | None:
+    ) -> tuple[int, ...] | None:
+        """Map every ``texts`` entry to the index of the structured message it was flattened from.
+
+        A message's texts are consumed only when they sit at the running position of
+        ``texts``; messages the translation handler added without a counterpart in
+        ``texts`` (Responses ``instructions``, ``function_call_output``, ``reasoning``)
+        are skipped. Returns None when the walk does not account for every ``texts`` entry.
+        """
+
+        def consume(sources: tuple[int, ...], message_idx: int) -> tuple[int, ...]:
+            run: Final = cls._message_texts(messages[message_idx])
+            start: Final = len(sources)
+            if run and tuple(texts[start : start + len(run)]) == run:
+                return sources + (message_idx,) * len(run)
+            return sources
+
+        sources: Final = functools.reduce(consume, range(len(messages)), ())
+        return sources if len(sources) == len(texts) else None
+
+    @classmethod
+    def _get_latest_user_text_indices(
+        cls,
+        texts: Sequence[str],
+        messages: Sequence[object],
+    ) -> frozenset[int] | None:
         """Return text indices belonging to only the latest scannable human-authored (user or developer) message.
 
-        Args:
-            texts: Flattened text entries from the framework.
-            messages: The structured messages the framework flattened into ``texts``,
-                      hoisted top-level system prompt included, so positions line up.
-
-        Returns a set of scannable indices, or None on count mismatch or no user/developer
-        message (safety fallback to existing role-filter behavior).
+        Returns None when ``texts`` cannot be aligned with ``messages`` or no user/developer
+        message contributed a text (safety fallback to the role-filter scan).
         """
-        last_human_msg_idx: int | None = None
-        for idx in range(len(messages) - 1, -1, -1):
-            msg = messages[idx]
-            if isinstance(msg, dict) and msg.get("role") in ("user", "developer"):
-                last_human_msg_idx = idx
-                break
-
-        if last_human_msg_idx is None:
-            return None  # No user/developer message → fallback to existing role-filter scan
-
-        scannable: Final[set] = set()
-        text_idx = 0
-        for msg_idx, msg in enumerate(messages):
-            if not isinstance(msg, dict):
-                continue
-            content = msg.get("content")
-            is_latest_human = msg_idx == last_human_msg_idx
-
-            if content is None:
-                pass
-            elif isinstance(content, str):
-                if is_latest_human:
-                    scannable.add(text_idx)
-                text_idx += 1
-            elif isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("text") is not None:
-                        if is_latest_human:
-                            scannable.add(text_idx)
-                        text_idx += 1
-
-        if text_idx != len(texts):
-            return None  # Count mismatch → safety fallback
-
-        return scannable
+        sources: Final = cls._text_source_message_indices(texts, messages)
+        if sources is None:
+            return None
+        latest_human: Final = max(
+            (idx for idx in set(sources) if cls._message_role(messages[idx]) in ("user", "developer")),
+            default=None,
+        )
+        if latest_human is None:
+            return None
+        return frozenset(text_idx for text_idx, source in enumerate(sources) if source == latest_human)
 
     def supports_scan_only_tool_results(self) -> bool:
         return False
 
-    @staticmethod
+    @classmethod
     def _get_scannable_text_indices(
+        cls,
         texts: Sequence[str],
         structured_messages: Sequence[object],
-    ) -> set | None:
-        """Derive which ``texts`` indices originate from user/system messages.
+    ) -> frozenset[int] | None:
+        """Derive which ``texts`` indices originate from user/system/developer messages.
 
-        The unified guardrail framework flattens message content into ``texts``
-        without preserving role info.  This helper re-walks
-        ``structured_messages`` using the **same** extraction logic the
-        framework uses (string content → 1 entry, list content → 1 per text
-        item, None → 0) and records the running text index for each entry
-        whose source role is ``"user"``, ``"system"``, or ``"developer"``.
-
-        Returns a set of scannable indices, or ``None`` if the count doesn't
-        match ``len(texts)`` (safety fallback → scan everything).
+        Returns None when ``texts`` cannot be aligned with ``structured_messages``
+        (safety fallback: scan everything).
         """
-        scannable: Final[set] = set()
-        text_idx = 0
-        for msg in structured_messages:
-            if not isinstance(msg, dict):
-                continue
-            role = msg.get("role", "")
-            content = msg.get("content")
-            is_scannable = role in ("user", "system", "developer")
-
-            if content is None:
-                # No content → 0 text entries
-                pass
-            elif isinstance(content, str):
-                if is_scannable:
-                    scannable.add(text_idx)
-                text_idx += 1
-            elif isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("text") is not None:
-                        if is_scannable:
-                            scannable.add(text_idx)
-                        text_idx += 1
-            # Ignore other content types (shouldn't happen)
-
-        if text_idx != len(texts):
-            # Count mismatch → safety fallback: scan all
+        sources: Final = cls._text_source_message_indices(texts, structured_messages)
+        if sources is None:
             return None
-
-        return scannable
+        return frozenset(
+            text_idx
+            for text_idx, source in enumerate(sources)
+            if cls._message_role(structured_messages[source]) in ("user", "system", "developer")
+        )
 
     @staticmethod
     def _mcp_name_fallback(rd: dict) -> str | None:
@@ -1783,16 +1763,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         # On request side, determine which text indices correspond to scannable
         # messages so we can skip scanning assistant/tool history text.
-        scannable_indices: set | None = None
+        scannable_indices: frozenset[int] | None = None
         if input_type == "request":
             structured_messages: Final = inputs.get("structured_messages")
             if structured_messages:
-                # For Anthropic /v1/messages: default to latest-user-only scanning.
                 if self._use_latest_user_only(request_data, logging_obj):
                     scannable_indices = self._get_latest_user_text_indices(texts, structured_messages)
-                # Fall through to existing role filtering if:
-                # - not Anthropic, OR flag explicitly False, OR
-                # - latest-user extraction returned None (no user / count mismatch)
                 if scannable_indices is None:
                     scannable_indices = self._get_scannable_text_indices(texts, structured_messages)
                 if (
