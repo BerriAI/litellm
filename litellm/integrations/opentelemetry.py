@@ -1240,7 +1240,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     # End of Team/Key Based Logging Control Flow
     #########################################################
 
-    def _otel_internal_state(self, kwargs: dict) -> dict:
+    def _otel_internal_state(self, kwargs: dict[str, object]) -> dict[str, object]:
         """Return the request-local ``_otel_internal`` marker dict, creating it if absent."""
         litellm_params = kwargs.get("litellm_params")
         if not isinstance(litellm_params, dict):

@@ -4,6 +4,7 @@ arize AI is OTEL compatible
 this file has Arize ai specific helper functions
 """
 
+import math
 import os
 import random
 from collections.abc import Callable, Mapping
@@ -81,17 +82,29 @@ class ArizeLogger(OpenTelemetry):
         self.tracer = provider.get_tracer("litellm")
         self.span_kind = SpanKind
 
-    def _handle_success(self, kwargs, response_obj, start_time, end_time):
+    def _handle_success(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
         if not self._should_export(kwargs, _SUCCESS_SAMPLING_RATE_VAR):
             return
         super()._handle_success(kwargs, response_obj, start_time, end_time)
 
-    def _handle_failure(self, kwargs, response_obj, start_time, end_time):
+    def _handle_failure(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
         if not self._should_export(kwargs, _ERROR_SAMPLING_RATE_VAR):
             return
         super()._handle_failure(kwargs, response_obj, start_time, end_time)
 
-    def _sampling_rate_for_request(self, kwargs: dict, var: str) -> float | None:
+    def _sampling_rate_for_request(self, kwargs: Mapping[str, object], var: str) -> float | None:
         dynamic_params: Final = kwargs.get("standard_callback_dynamic_params")
         if not isinstance(dynamic_params, Mapping):
             return None
@@ -99,7 +112,7 @@ class ArizeLogger(OpenTelemetry):
         if value is None or value in ("", "None"):
             return None
         try:
-            return float(value)
+            rate = float(value)
         except (TypeError, ValueError):
             verbose_logger.warning(
                 "ArizeLogger: %s value %r is not a number; exporting the request",
@@ -107,15 +120,24 @@ class ArizeLogger(OpenTelemetry):
                 value,
             )
             return None
+        if not math.isfinite(rate) or not 0.0 <= rate <= 1.0:
+            verbose_logger.warning(
+                "ArizeLogger: %s value %r is outside 0.0..1.0; exporting the request",
+                var,
+                value,
+            )
+            return None
+        return rate
 
-    def _should_export(self, kwargs: dict, var: str) -> bool:
+    def _should_export(self, kwargs: dict[str, object], var: str) -> bool:
         rate: Final = self._sampling_rate_for_request(kwargs, var)
         if rate is None:
             return True
         otel_internal: Final = self._otel_internal_state(kwargs)
         key: Final = f"arize_sampled:{var}"
-        if key in otel_internal:
-            return otel_internal[key]
+        cached: Final = otel_internal.get(key)
+        if isinstance(cached, bool):
+            return cached
         sampled: Final = rate > 0.0 and self._random_draw() <= rate
         otel_internal[key] = sampled
         if not sampled:

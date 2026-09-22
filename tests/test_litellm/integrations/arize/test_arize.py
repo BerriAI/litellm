@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import asyncio
 import datetime
+from collections.abc import Callable
 
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -166,7 +167,9 @@ _START = datetime.datetime.now()
 _END = datetime.datetime.now()
 
 
-def _sampled_arize_logger(random_draw=None):
+def _sampled_arize_logger(
+    random_draw: Callable[[], float] | None = None,
+) -> tuple[ArizeLogger, InMemorySpanExporter]:
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
@@ -177,11 +180,11 @@ def _sampled_arize_logger(random_draw=None):
     return logger, exporter
 
 
-def _request_spans(exporter):
+def _request_spans(exporter: InMemorySpanExporter) -> int:
     return sum(1 for span in exporter.get_finished_spans() if span.name == "litellm_request")
 
 
-def _arize_kwargs(callback_vars=None):
+def _arize_kwargs(callback_vars: dict[str, str] | None = None) -> dict[str, object]:
     kwargs = {
         "model": "gpt-4",
         "litellm_params": {"metadata": {}},
@@ -264,4 +267,12 @@ async def test_one_draw_per_request_across_sync_and_async_handlers():
 async def test_unparsable_sampling_rate_exports_rather_than_dropping():
     logger, exporter = _sampled_arize_logger(random_draw=lambda: 0.99)
     await logger.async_log_success_event(_arize_kwargs({"arize_success_sampling_rate": "abc"}), None, _START, _END)
+    assert _request_spans(exporter) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf", "1.5", "-0.1"])
+async def test_out_of_range_sampling_rate_exports_rather_than_dropping(bad):
+    logger, exporter = _sampled_arize_logger(random_draw=lambda: 0.99)
+    await logger.async_log_success_event(_arize_kwargs({"arize_success_sampling_rate": bad}), None, _START, _END)
     assert _request_spans(exporter) == 1

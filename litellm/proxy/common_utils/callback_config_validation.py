@@ -14,6 +14,7 @@ _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
 _LANGFUSE_OTEL_CALLBACK: Final = "langfuse_otel"
 _LANGFUSE_SPAN_SCOPE_VAR: Final = "langfuse_span_scope"
+_ARIZE_CALLBACK: Final = "arize"
 _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
     {"arize_success_sampling_rate", "arize_error_sampling_rate"}
 )
@@ -22,7 +23,7 @@ _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
 def callback_config_error(callback_name: str | None, callback_vars: Mapping[str, str] | None) -> str | None:
     if not callback_vars:
         return None
-    arize_error: Final = _arize_sampling_rate_error(callback_vars)
+    arize_error: Final = _arize_sampling_rate_error(callback_name, callback_vars)
     if arize_error is not None:
         return arize_error
     langfuse_error: Final = _langfuse_environment_error(callback_vars) or _langfuse_span_scope_error(
@@ -219,11 +220,13 @@ def _logging_entry_error(entry: object) -> str | None:
     return callback_config_error(callback_name, _entry_callback_vars(entry))
 
 
-def _arize_sampling_rate_error(callback_vars: Mapping[str, str]) -> str | None:
+def _arize_sampling_rate_error(callback_name: str | None, callback_vars: Mapping[str, str]) -> str | None:
     for var in sorted(_ARIZE_SAMPLING_RATE_VARS):
         value = callback_vars.get(var)
         if value is None or value in ("", "None"):
             continue
+        if callback_name != _ARIZE_CALLBACK:
+            return f"{var} applies to the {_ARIZE_CALLBACK} callback only, not {callback_name!r}"
         try:
             rate = float(value)
         except (TypeError, ValueError):

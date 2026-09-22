@@ -114,6 +114,13 @@ def test_callback_config_error_accepts_in_range_arize_sampling_rate(var, good):
     assert callback_config_error("arize", {var: good}) is None
 
 
+def test_arize_sampling_rate_rejected_on_non_arize_callback():
+    error = callback_config_error("langfuse", {"arize_success_sampling_rate": "0.5"})
+    assert error is not None
+    assert "applies to the arize callback only" in error
+    assert callback_config_error("arize", {"arize_success_sampling_rate": "0.5"}) is None
+
+
 def test_arize_sampling_rates_are_not_family_credentials():
     """The rates choose what the Arize family exports, not where it sends, so an
     entry that repeats or adds a rate next to a stored Arize entry is not the
