@@ -1,6 +1,6 @@
 """Test Bedrock cross-region inference profile model mapping"""
 
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
 import pytest
 
@@ -36,6 +36,21 @@ def local_model_cost_map(monkeypatch):
         litellm.bedrock_converse_models.clear()
         litellm.bedrock_converse_models.update(original_converse_models)
         litellm.get_model_info.cache_clear()
+
+
+KIMI_K3_KEYS: Final = ("moonshotai.kimi-k3", "global.moonshotai.kimi-k3", "us.moonshotai.kimi-k3")
+NON_PRICE_FIELDS: Final = frozenset(
+    {
+        "mode",
+        "litellm_provider",
+        "max_input_tokens",
+        "max_output_tokens",
+        "max_tokens",
+        "supports_reasoning",
+        "supports_function_calling",
+        "supports_prompt_caching",
+    }
+)
 
 
 class GptProfile(NamedTuple):
@@ -135,6 +150,23 @@ def _bedrock_response(model, usage):
         ],
         usage=usage,
     )
+
+
+def test_kimi_k3_siblings_agree(local_model_cost_map: None) -> None:
+    entries: Final = tuple(litellm.model_cost[k] for k in KIMI_K3_KEYS)
+    for field in NON_PRICE_FIELDS:
+        assert len({repr(e.get(field)) for e in entries}) == 1, field
+    for key in KIMI_K3_KEYS:
+        assert BedrockModelInfo.get_bedrock_route(f"bedrock/{key}") == "converse"
+
+
+@pytest.mark.parametrize("key", KIMI_K3_KEYS)
+def test_kimi_k3_key_resolves_to_itself_and_costs_rate_times_tokens(key: str, local_model_cost_map: None) -> None:
+    info: Final = litellm.get_model_info(f"bedrock/{key}")
+    assert info["key"] == key, "resolved through the CRIS-to-parent fallback instead of its own entry"
+    r: Final = ModelResponse(model=key, usage=Usage(prompt_tokens=87, completion_tokens=133, total_tokens=220))
+    expected: Final = 87 * info["input_cost_per_token"] + 133 * info["output_cost_per_token"]
+    assert completion_cost(completion_response=r, custom_llm_provider="bedrock") == pytest.approx(expected)
 
 
 @pytest.mark.parametrize("profile", GPT_5_6_PROFILES, ids=lambda p: p.model_id)
