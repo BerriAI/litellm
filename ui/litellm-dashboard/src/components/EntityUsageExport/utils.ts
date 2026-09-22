@@ -166,6 +166,8 @@ export const generateDailyWithKeysData = (
       entityAlias: string;
       keyId: string;
       keyAlias: string | null;
+      userId: string | null;
+      userEmail: string | null;
       metrics: {
         spend: number;
         api_requests: number;
@@ -200,6 +202,8 @@ export const generateDailyWithKeysData = (
             entityAlias,
             keyId,
             keyAlias,
+            userId: keyData?.metadata?.user_id || null,
+            userEmail: keyData?.metadata?.user_email || null,
             metrics: {
               spend: keyData.metrics?.spend || 0,
               api_requests: keyData.metrics?.api_requests || 0,
@@ -236,6 +240,7 @@ export const generateDailyWithKeysData = (
     [`${entityLabel} ID`]: item.entityId,
     "Key Alias": item.keyAlias || "-",
     "Key ID": item.keyId,
+    ...(entityLabel === "User" ? {} : { "User ID": item.userId || "-", "User Email": item.userEmail || "-" }),
     "Spend ($)": formatNumberWithCommas(item.metrics.spend, 4),
     Requests: item.metrics.api_requests,
     "Successful Requests": item.metrics.successful_requests,
@@ -248,6 +253,71 @@ export const generateDailyWithKeysData = (
   }));
 
   return dailyKeyBreakdown.sort((a, b) => new Date(a.Date).getTime() - new Date(b.Date).getTime());
+};
+
+export const generateDailyWithUsersData = (
+  spendData: EntitySpendData,
+  entityLabel: string,
+  teamAliasMap: Record<string, string> = {},
+): any[] => {
+  const aggregatedData: {
+    [key: string]: {
+      Date: string;
+      entityId: string;
+      entityAlias: string;
+      userId: string;
+      userEmail: string | null;
+      keyIds: Set<string>;
+      metrics: Record<(typeof METRIC_KEYS)[number], number>;
+    };
+  } = {};
+
+  spendData.results.forEach((day) => {
+    Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
+      const { id: entityId, alias: entityAlias } = resolveEntityDisplay(entity, teamAliasMap, data.metadata);
+      Object.entries(data.api_key_breakdown || {}).forEach(([keyId, keyData]: [string, any]) => {
+        const userId = keyData?.metadata?.user_id || "Unassigned";
+        const uniqueKey = JSON.stringify([day.date, entityId, userId]);
+        if (!aggregatedData[uniqueKey]) {
+          aggregatedData[uniqueKey] = {
+            Date: day.date,
+            entityId,
+            entityAlias,
+            userId,
+            userEmail: null,
+            keyIds: new Set(),
+            metrics: Object.fromEntries(METRIC_KEYS.map((k) => [k, 0])) as Record<(typeof METRIC_KEYS)[number], number>,
+          };
+        }
+        const bucket = aggregatedData[uniqueKey];
+        bucket.userEmail = bucket.userEmail || keyData?.metadata?.user_email || null;
+        bucket.keyIds.add(keyId);
+        for (const k of METRIC_KEYS) {
+          bucket.metrics[k] += keyData?.metrics?.[k] || 0;
+        }
+      });
+    });
+  });
+
+  return Object.values(aggregatedData)
+    .map((item) => ({
+      Date: item.Date,
+      [entityLabel]: item.entityAlias,
+      [`${entityLabel} ID`]: item.entityId,
+      "User ID": item.userId,
+      "User Email": item.userEmail || "-",
+      Keys: item.keyIds.size,
+      "Spend ($)": formatNumberWithCommas(item.metrics.spend, 4),
+      Requests: item.metrics.api_requests,
+      "Successful Requests": item.metrics.successful_requests,
+      "Failed Requests": item.metrics.failed_requests,
+      "Total Tokens": item.metrics.total_tokens,
+      "Prompt Tokens": item.metrics.prompt_tokens,
+      "Completion Tokens": item.metrics.completion_tokens,
+      "Cache Read Input Tokens": item.metrics.cache_read_input_tokens,
+      "Cache Creation Input Tokens": item.metrics.cache_creation_input_tokens,
+    }))
+    .sort((a, b) => new Date(a.Date).getTime() - new Date(b.Date).getTime());
 };
 
 export const generateDailyWithModelsData = (
@@ -340,6 +410,8 @@ export const generateExportData = (
       return generateDailyWithKeysData(spendData, entityLabel, teamAliasMap);
     case "daily_with_models":
       return generateDailyWithModelsData(spendData, entityLabel, teamAliasMap);
+    case "daily_with_users":
+      return generateDailyWithUsersData(spendData, entityLabel, teamAliasMap);
     default:
       return generateDailyData(spendData, entityLabel, teamAliasMap);
   }
