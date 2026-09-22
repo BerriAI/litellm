@@ -7,11 +7,11 @@ import base64
 import hashlib
 import json
 import os
-from collections.abc import Awaitable, Callable, Generator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Sequence
 from contextlib import AbstractAsyncContextManager
 from functools import partial
 from types import MappingProxyType
-from typing import Final, TypeAlias, TypeVar
+from typing import Final, TypeAlias, TypeVar, cast
 
 import anyio
 import httpx2
@@ -121,14 +121,14 @@ def _strip_header_whitespace(headers: dict[str, str]) -> dict[str, str]:
     }
 
 
-def _first_non_cancelled_cause(exc: BaseException) -> BaseException | None:
+def _first_non_cancelled_cause(exc: BaseException, cleanup_errors: tuple[Exception, ...] = ()) -> BaseException | None:
     queue: Final[list[BaseException]] = [exc]
     while queue:
         current = queue.pop(0)
         nested = getattr(current, "exceptions", None)
         if nested:
             queue.extend(nested)
-        elif not isinstance(current, asyncio.CancelledError):
+        elif not isinstance(current, asyncio.CancelledError) and not any(current is error for error in cleanup_errors):
             return current
     return None
 
@@ -183,8 +183,34 @@ async def _run_bounded_cleanup(operation: Callable[[], Awaitable[TSessionResult]
         return task.result()
 
 
+class _MCPResponseStream(httpx2.AsyncByteStream):
+    def __init__(self, stream: httpx2.AsyncByteStream, record_error: Callable[[Exception], None]) -> None:
+        self._stream: Final = stream
+        self._record_error: Final = record_error
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        try:
+            async for chunk in self._stream:
+                yield chunk
+        except Exception as error:
+            self._record_error(error)
+            raise
+
+    async def aclose(self) -> None:
+        try:
+            await self._stream.aclose()
+        except Exception as error:
+            self._record_error(error)
+            raise
+
+
 class _MCPHTTPClient(httpx2.AsyncClient):
     cleanup_scope: anyio.CancelScope | None = None
+    cleanup_errors: tuple[Exception, ...] = ()
+
+    def _record_cleanup_error(self, error: Exception) -> None:
+        if self.cleanup_scope is not None and self.cleanup_scope.shield:
+            self.cleanup_errors += (error,)
 
     async def send(
         self,
@@ -204,11 +230,19 @@ class _MCPHTTPClient(httpx2.AsyncClient):
                 return termination
 
             return await _run_bounded_cleanup(terminate, self.cleanup_scope.deadline)
-        response: Final = await super().send(request, stream=stream, auth=auth, follow_redirects=follow_redirects)
-        if request.method == "POST" and response.is_error and response.status_code != 404:
-            await response.aclose()
-            response.raise_for_status()
-        return response
+        try:
+            response: Final = await super().send(request, stream=stream, auth=auth, follow_redirects=follow_redirects)
+            if request.method == "POST" and response.is_error and response.status_code != 404:
+                await response.aclose()
+                response.raise_for_status()
+            if stream:
+                response.stream = _MCPResponseStream(
+                    cast(httpx2.AsyncByteStream, response.stream), self._record_cleanup_error
+                )
+            return response
+        except Exception as error:
+            self._record_cleanup_error(error)
+            raise
 
 
 class MCPSigV4Auth(httpx2.Auth):
@@ -503,12 +537,12 @@ class MCPClient:
         so that upstream MCP servers can request LLM inference (sampling),
         user input (elicitation), or send log messages.
         """
+        in_flight_error: BaseException | None = None
         with anyio.CancelScope() as cleanup_scope:
             if isinstance(http_client, _MCPHTTPClient):
                 http_client.cleanup_scope = cleanup_scope
             try:
                 transport: Final = await transport_ctx.__aenter__()
-                in_flight_error: BaseException | None = None
                 try:
                     read_stream: Final = transport[0]
                     write_stream: Final = transport[1]
@@ -568,23 +602,31 @@ class MCPClient:
                     in_flight_error = e
                     raise
                 finally:
-                    if not cleanup_scope.shield:
-                        cleanup_scope.shield = True
-                        cleanup_scope.deadline = anyio.current_time() + 5
+                    cleanup_scope.shield = True
+                    cleanup_scope.deadline = min(cleanup_scope.deadline, anyio.current_time() + 5)
                     try:
                         await transport_ctx.__aexit__(None, None, None)
                     except BaseException as exit_error:
                         verbose_logger.debug("Error during transport context exit: %s", exit_error)
                         if in_flight_error is None and isinstance(exit_error, asyncio.CancelledError):
                             raise
-                        root_cause: Final = _first_non_cancelled_cause(exit_error)
+                        root_cause: Final = _first_non_cancelled_cause(
+                            exit_error, http_client.cleanup_errors if isinstance(http_client, _MCPHTTPClient) else ()
+                        )
                         if root_cause is not None and isinstance(in_flight_error, asyncio.CancelledError):
                             raise root_cause from in_flight_error
             finally:
                 cleanup_scope.shield = False
+                if isinstance(http_client, _MCPHTTPClient):
+                    http_client.cleanup_errors = ()
+                    http_client.cleanup_scope = None
         await anyio.lowlevel.checkpoint_if_cancelled()
         if cleanup_scope.cancel_called:
-            raise asyncio.CancelledError("MCP session cleanup timed out")
+            raise (
+                in_flight_error
+                if in_flight_error is not None
+                else asyncio.CancelledError("MCP session cleanup timed out")
+            )
         return result
 
     async def run_with_session(

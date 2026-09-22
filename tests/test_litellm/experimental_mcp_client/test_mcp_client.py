@@ -553,6 +553,50 @@ class TestExecuteSessionOperationSurfacesTransportError:
             await client._execute_session_operation(transport_ctx, _op)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure_phase", ("early", "late", "mixed"))
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_response_close_preserves_cancellation_and_original_errors(self, session_class, failure_phase):
+        closed: Final = asyncio.Event()
+        close_error: Final = httpx2.ReadError("response close failed")
+        connect_error: Final = httpx2.ConnectError("another request failed before cancellation")
+        cancelled: Final = asyncio.CancelledError("caller cancelled")
+
+        class FailingCloseStream(httpx2.AsyncByteStream):
+            async def __aiter__(self) -> AsyncIterator[bytes]:
+                yield b"pending"
+
+            async def aclose(self) -> None:
+                closed.set()
+                raise close_error
+
+        client: Final = MCPClient(server_url="https://example.com/mcp")
+        async with client._create_httpx_client_factory(
+            transport=httpx2.MockTransport(lambda _: httpx2.Response(200, stream=FailingCloseStream()))
+        )() as http_client:
+            response: Final = await http_client.send(http_client.build_request("POST", client.server_url), stream=True)
+
+            async def initialize():
+                if failure_phase == "early":
+                    await response.aclose()
+                raise cancelled
+
+            async def close_transport(*args):
+                if failure_phase == "early":
+                    return
+                try:
+                    await response.aclose()
+                except httpx2.ReadError as error:
+                    failures: Final = [error, connect_error] if failure_phase == "mixed" else [error]
+                    raise _FakeExceptionGroup("transport", [_FakeExceptionGroup("reader", failures)])
+
+            self._make_session(session_class, initialize)
+            expected: Final = close_error if failure_phase == "early" else connect_error if failure_phase == "mixed" else cancelled
+            with pytest.raises(type(expected)) as caught:
+                await client._execute_session_operation(self._make_transport(close_transport), AsyncMock(), http_client)
+            assert caught.value is expected
+            assert closed.is_set()
+
+    @pytest.mark.asyncio
     @patch("litellm.experimental_mcp_client.client.ClientSession")
     async def test_cleanup_error_after_success_is_swallowed(self, mock_session_cls):
         client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
@@ -1558,7 +1602,9 @@ async def test_http_response_handler_preserves_success_and_http_errors(status_co
     client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30)
     async with client._create_httpx_client_factory(transport=httpx2.MockTransport(respond))() as http_client:
         operation: Final = client._execute_session_operation(
-            streamable_http_client(client.server_url, http_client=http_client), lambda session: session.list_tools()
+            streamable_http_client(client.server_url, http_client=http_client),
+            lambda session: session.list_tools(),
+            http_client=http_client,
         )
         if status_code == 200:
             result: Final = await asyncio.wait_for(operation, timeout=3)
@@ -1888,13 +1934,14 @@ async def test_interrupted_http_response_preserves_the_transport_failure() -> No
     def respond(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(200, headers={"Content-Type": "application/json"}, stream=_InterruptedHTTPBody())
 
-    async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http_client:
-        client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30)
+    client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30)
+    async with client._create_httpx_client_factory(transport=httpx2.MockTransport(respond))() as http_client:
         with pytest.raises(httpx2.RemoteProtocolError, match="secret-incomplete-response"):
             await asyncio.wait_for(
                 client._execute_session_operation(
                     streamable_http_client(client.server_url, http_client=http_client),
                     lambda session: session.list_tools(),
+                    http_client=http_client,
                 ),
                 timeout=3,
             )
@@ -2530,8 +2577,10 @@ def test_public_mcp_import_preserves_incompatible_sdk_error() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("grouped", (False, True))
+@pytest.mark.parametrize("raise_on_error", (False, True))
 @pytest.mark.parametrize("termination", ("ok", "failure", "hang"))
-async def test_outer_deadline_delivers_session_termination(termination: str) -> None:
+async def test_outer_deadline_delivers_session_termination(termination: str, grouped: bool, raise_on_error: bool) -> None:
     deleted: Final = asyncio.Event()
     started: Final = asyncio.Event()
 
@@ -2556,7 +2605,7 @@ async def test_outer_deadline_delivers_session_termination(termination: str) -> 
                     "jsonrpc": "2.0",
                     "id": payload.id,
                     "result": {
-                        "protocolVersion": (payload.params or {})["protocolVersion"],
+                        "protocolVersion": "2025-11-25",
                         "capabilities": {"tools": {}},
                         "serverInfo": {"name": "cancellation-peer", "version": "1"},
                     },
@@ -2569,10 +2618,18 @@ async def test_outer_deadline_delivers_session_termination(termination: str) -> 
         raise AssertionError("cancelled request resumed")
 
     client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", timeout=30)
+
+    async def invoke():
+        with anyio.fail_after(0.2):
+            pending: Final = client.call_tool(CallToolRequestParams(name="slow", arguments={}), raise_on_error=raise_on_error)
+            if grouped:
+                await asyncio.gather(pending)
+            else:
+                await pending
+
     before: Final = anyio.current_time()
     with pytest.raises(TimeoutError):
-        with anyio.fail_after(0.2):
-            await client.call_tool(CallToolRequestParams(name="slow", arguments={}), raise_on_error=True)
+        await invoke()
     assert started.is_set()
     assert deleted.is_set(), "Cancellation must deliver DELETE before returning to the caller"
 
@@ -2682,7 +2739,11 @@ async def test_http_close_cancellation_cannot_turn_into_success(original_error: 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_mode", ("scope", "task", "wait_for", "read_timeout"))
 @pytest.mark.parametrize("concurrency", (1, 5))
-async def test_cancellation_delivers_termination_over_tcp(cancel_mode: str, concurrency: int) -> None:
+@pytest.mark.parametrize("termination", ("ok", "hang", "hang_body"))
+@pytest.mark.parametrize("raise_on_error", (False, True))
+async def test_cancellation_delivers_termination_over_tcp(
+    cancel_mode: str, concurrency: int, termination: str, raise_on_error: bool
+) -> None:
     started: Final = asyncio.Event()
     terminations: Final[list[bytes]] = []
     starts: Final[list[bytes]] = []
@@ -2710,12 +2771,21 @@ async def test_cancellation_delivers_termination_over_tcp(cancel_mode: str, conc
             body: Final = await reader.readexactly(length)
             if method == b"DELETE":
                 terminations.append(body)
+                if termination != "ok":
+                    await stop.wait()
+                    return
                 writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             elif method == b"GET":
                 writer.write(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             else:
                 payload: Final = json.loads(body)
                 if payload["method"] == "tools/call":
+                    if termination == "hang_body":
+                        writer.write(
+                            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                            b"Content-Length: 200\r\nConnection: close\r\n\r\n"
+                        )
+                        await writer.drain()
                     starts.append(body)
                     if len(starts) == concurrency:
                         started.set()
@@ -2727,7 +2797,7 @@ async def test_cancellation_delivers_termination_over_tcp(cancel_mode: str, conc
                             "jsonrpc": "2.0",
                             "id": payload["id"],
                             "result": {
-                                "protocolVersion": payload["params"]["protocolVersion"],
+                                "protocolVersion": "2025-06-18",
                                 "capabilities": {"tools": {}},
                                 "serverInfo": {"name": "tcp-peer", "version": "1"},
                             },
@@ -2748,19 +2818,22 @@ async def test_cancellation_delivers_termination_over_tcp(cancel_mode: str, conc
     listener: Final = await asyncio.start_server(handle_connection, "127.0.0.1", 0)
     port: Final = listener.sockets[0].getsockname()[1]
     client: Final = MCPClient(
-        server_url=f"http://127.0.0.1:{port}/mcp", timeout=0.2 if cancel_mode == "read_timeout" else 30
+        server_url=f"http://127.0.0.1:{port}/mcp", timeout=0.2 if cancel_mode == "read_timeout" else 0.5 if termination != "ok" else 30
     )
 
     async def calls():
         results: Final = await asyncio.gather(
             *(
-                client.call_tool(CallToolRequestParams(name="slow", arguments={}), raise_on_error=True)
+                client.call_tool(CallToolRequestParams(name="slow", arguments={}), raise_on_error=raise_on_error)
                 for _ in range(concurrency)
             ),
             return_exceptions=cancel_mode == "read_timeout",
         )
         if cancel_mode == "read_timeout":
-            assert all(isinstance(result, TimeoutError) for result in results)
+            if raise_on_error:
+                assert all(isinstance(result, TimeoutError) for result in results)
+            else:
+                assert all(isinstance(result, CallToolResult) and result.is_error for result in results)
         return results
 
     async def invoke():
