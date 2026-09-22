@@ -1,8 +1,9 @@
 import json
+from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from typing_extensions import Required, TypedDict, override
+from typing_extensions import ReadOnly, Required, TypedDict, override
 
 from .openai import ChatCompletionToolCallChunk
 
@@ -1090,6 +1091,7 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     thinking: dict
     metadata: dict
     output_config: dict
+    safeguards: ReadOnly[Sequence[Mapping[str, object]]]
 
     # `context_management` is allowed for Bedrock InvokeModel only when it
     # carries `compact_20260112` edits paired with the `compact-2026-01-12`
