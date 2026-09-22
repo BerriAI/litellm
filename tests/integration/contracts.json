@@ -33,6 +33,9 @@
     "tests/integration/management/test_key_updates.py::test_update_preserves_independent_fields_and_serving": [
       "mgmt.key.update.preserves_independent_fields"
     ],
+    "tests/integration/pricing/test_databricks_cache_pricing.py::test_databricks_cached_prompt_tokens_bill_at_cache_rates_not_input_rate": [
+      "pricing.databricks.cached_prompt_tokens_bill_at_cache_rates"
+    ],
     "tests/integration/pricing/test_configured_prices.py::test_custom_price_is_reported_and_charged": [
       "quota_management.spend_tracking.custom_price.matches_input_rates"
     ],
