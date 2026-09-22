@@ -57,12 +57,31 @@ class Rule:
 
 Rules: TypeAlias = tuple[Rule, ...]
 
+
+@dataclass(frozen=True, slots=True)
+class CacheContext:
+    backend: str
+
+
+@dataclass(frozen=True, slots=True)
+class CacheRule:
+    rollout: Rollout
+    backends: frozenset[str] | None = None
+
+    def matches(self, context: CacheContext) -> bool:
+        return self.backends is None or context.backend in self.backends
+
+
+CacheRules: TypeAlias = tuple[CacheRule, ...]
+
 RULES: Final[Rules] = (
     Rule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),
     Rule(Route.OCR, Rollout.RUST_OPT_OUT),
     Rule(Route.MESSAGES, Rollout.RUST_OPT_IN),
     Rule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
 )
+
+CACHE_RULES: Final[CacheRules] = ()
 
 
 def rollout(context: Context, rules: Rules = RULES) -> Rollout:
@@ -71,3 +90,12 @@ def rollout(context: Context, rules: Rules = RULES) -> Rollout:
 
 def decision(context: Context, rules: Rules = RULES) -> Decision:
     return _decision(rollout(context, rules))
+
+
+def cache_rollout(context: CacheContext, rules: CacheRules | None = None) -> Rollout:
+    selected_rules: Final = CACHE_RULES if rules is None else rules
+    return next((rule.rollout for rule in selected_rules if rule.matches(context)), Rollout.PYTHON_ONLY)
+
+
+def cache_decision(context: CacheContext, rules: CacheRules | None = None) -> Decision:
+    return _decision(cache_rollout(context, rules))

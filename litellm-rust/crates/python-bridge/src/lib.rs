@@ -44,7 +44,7 @@ mod _native {
         let dict = module.dict();
         dict.set_item("_CacheTestHandle", py.get_type::<CacheTestHandle>())?;
         dict.set_item("_CacheTestResolver", py.get_type::<CacheTestResolver>())?;
-        dict.set_item("_CacheTestBinding", py.get_type::<ResolvedCache>())
+        dict.set_item("_ResponseCacheRuntime", py.get_type::<ResolvedCache>())
     }
 }
 

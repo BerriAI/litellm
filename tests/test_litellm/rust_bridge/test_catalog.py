@@ -6,7 +6,7 @@ from typing import Final
 import pytest
 
 from litellm.rust_bridge import catalog, configuration
-from litellm.rust_bridge.catalog import Context, Delivery, Route, Rule
+from litellm.rust_bridge.catalog import CacheContext, CacheRule, Context, Delivery, Route, Rule
 from litellm.rust_bridge.configuration import Decision, Rollout
 
 
@@ -59,6 +59,23 @@ def test_missing_rule_stays_on_python_even_when_rust_is_enabled(monkeypatch: pyt
 
     assert catalog.rollout(Context(route), rules=()) is Rollout.PYTHON_ONLY
     assert catalog.decision(Context(route), rules=()) is Decision.PYTHON
+
+
+def test_response_cache_stays_on_python_when_global_rust_is_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    configuration.rust(True)
+    monkeypatch.setenv("LITELLM_RUST", "1")
+
+    assert catalog.cache_decision(CacheContext(backend="local")) is Decision.PYTHON
+
+
+def test_response_cache_rules_select_the_whole_backend_runtime() -> None:
+    rules: Final = (
+        CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({"local"})),
+        CacheRule(Rollout.PYTHON_ONLY),
+    )
+
+    assert catalog.cache_decision(CacheContext(backend="local"), rules) is Decision.RUST_REQUIRED
+    assert catalog.cache_decision(CacheContext(backend="redis"), rules) is Decision.PYTHON
 
 
 @pytest.mark.parametrize(
