@@ -146,7 +146,7 @@ Tests marked `@pytest.mark.e2e` hard-fail when no proxy answers `/health/livelin
 E2E_MATRIX_PROVIDERS=openai,anthropic E2E_MATRIX_AUTH_MODES=env_ref uv run pytest tests/e2e/llm_translation/test_endpoint_matrix_e2e.py
 ```
 
-Providers with a generic edge mount (OpenAI and Anthropic today) are edge-wired and marked `replayable`, so their cells join the scheduled record/replay lane and run with zero provider egress on weekdays; the rest hit their provider live in every fixture mode. The module registers the deployments its selected cells need as one `register_models` batch in a module fixture, so a run pays the data-plane reload and propagation budget once rather than once per cell, which is what keeps a 60-cell replay in the tens of seconds
+Providers with a generic edge mount (OpenAI and Anthropic today) are edge-wired and marked `replayable`, so their cells join the scheduled record/replay lane and run with zero provider egress on weekdays; the rest hit their provider live in every fixture mode. The two lanes prove different things: replay proves routing and response shape, since the edge keys fixtures on the request body and never on the provider auth header, so only the live and record lanes prove the proxy sent the deployment's own secret, and even there an `inline` or `stored_credential` cell whose value equals the runner's `os.environ/` value cannot tell the two resolutions apart. The module registers the deployments its selected cells need as one `register_models` batch in a module fixture, so a run pays the data-plane reload and propagation budget once rather than once per cell, which is what keeps a 60-cell replay in the tens of seconds
 
 ## What a complete test looks like
 
