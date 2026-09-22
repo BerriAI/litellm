@@ -169,6 +169,15 @@ class _CacheTestHandle:
     @staticmethod
     def azure_blob(account_url: str, container: str) -> _CacheTestHandle: ...
     @staticmethod
+    def redis_semantic(backend: object) -> _CacheTestHandle: ...
+    @staticmethod
+    def valkey_semantic(
+        url: str,
+        similarity_threshold: float,
+        index_name: str,
+        embedder: object,
+    ) -> _CacheTestHandle: ...
+    @staticmethod
     def gcs(
         bucket_name: str,
         *,
