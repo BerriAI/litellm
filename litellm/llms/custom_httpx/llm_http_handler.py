@@ -8812,6 +8812,7 @@ class BaseLLMHTTPHandler:
                 raw_response=response,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                client=sync_httpx_client,
             )
 
         except Exception as e:
@@ -8901,6 +8902,7 @@ class BaseLLMHTTPHandler:
                 raw_response=response,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                client=async_httpx_client,
             )
 
         except Exception as e:
