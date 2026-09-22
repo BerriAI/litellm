@@ -6,7 +6,7 @@ import datetime
 import enum
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
@@ -16,6 +16,7 @@ from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_c
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.provider_affinity import validate_provider_affinity_header_name
 from litellm.types.router_weights import RouterWeights
 
 if TYPE_CHECKING:
@@ -59,6 +60,25 @@ class RoutingGroup(BaseModel):
     models: list[str]
     routing_strategy: str
     routing_strategy_args: dict | None = None
+
+    model_priorities: dict[str, Annotated[int, Field(strict=True, ge=1, le=9007199254740991)]] | None = Field(
+        default=None,
+        description="For priority groups, every model's priority. Lower numbers are tried first; equal numbers share traffic.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_model_priorities(self) -> "RoutingGroup":
+        if self.routing_strategy != "priority":
+            if self.model_priorities:
+                raise ValueError("model_priorities requires routing_strategy='priority'")
+            return self
+        if not self.models or len(self.models) != len(frozenset(self.models)):
+            raise ValueError("Priority routing groups require nonempty, distinct models")
+        if self.model_priorities is None or frozenset(self.model_priorities) != frozenset(self.models):
+            raise ValueError("model_priorities must contain exactly the group's models")
+        if self.routing_strategy_args:
+            raise ValueError("Priority routing groups use model_priorities, not routing_strategy_args")
+        return self
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -377,6 +397,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     organization: str | None = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     litellm_credential_name: str | None = None
+    provider_affinity_header: str | None = None
 
     ## LOGGING PARAMS ##
     litellm_trace_id: str | None = None
@@ -447,6 +468,13 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     valkey_ssl: bool | None = None
     valkey_text_field: str | None = None
     valkey_embedding_field: str | None = None
+
+    @field_validator("provider_affinity_header")
+    @classmethod
+    def validate_provider_affinity_header(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_provider_affinity_header_name(value)
 
     @model_validator(mode="before")
     @classmethod
@@ -550,6 +578,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     stream_timeout: float | str | None
     max_retries: int | None
     organization: list | str | None  # for openai orgs
+    provider_affinity_header: ReadOnly[str | None]
     configurable_clientside_auth_params: (
         CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS  # for allowing api base switching on finetuned models
     )
