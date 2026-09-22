@@ -194,6 +194,12 @@ def test_shipped_provider_prefixed_model_labels_as_itself() -> None:
     assert ut._public_model_label(model, provider) == shipped
 
 
+def test_provider_prefixed_bare_shipped_model_labels_as_bare_name() -> None:
+    bare: Final = min(key for key in ut._PUBLIC_MODELS if "/" not in key and f"openai/{key}" not in ut._PUBLIC_MODELS)
+    assert ut._public_model_label(f"openai/{bare}", "openai") == bare
+    assert ut._public_model_label(f"openai/{bare}", None) == "other"
+
+
 async def test_success_event_with_missing_payload_records_nothing() -> None:
     recorder, reader = _recorder_with_reader()
 

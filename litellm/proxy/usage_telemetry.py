@@ -221,11 +221,10 @@ _PUBLIC_MODELS: Final[frozenset[str]] = frozenset(GetModelCostMap.load_local_mod
 def _public_model_label(model: str, provider: str | None) -> str:
     """Only names shipped in the packaged pricing map are exported; anything
     else, including names operators registered for billing, becomes "other"."""
-    if model in _PUBLIC_MODELS:
-        return model
-    if provider is not None and f"{provider}/{model}" in _PUBLIC_MODELS:
-        return f"{provider}/{model}"
-    return "other"
+    candidates: Final = (
+        (model, f"{provider}/{model}", model.removeprefix(f"{provider}/")) if provider is not None else (model,)
+    )
+    return next((candidate for candidate in candidates if candidate in _PUBLIC_MODELS), "other")
 
 
 class _ConfigParamWhere(TypedDict):
