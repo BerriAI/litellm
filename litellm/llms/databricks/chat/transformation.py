@@ -187,7 +187,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         return "databricks"
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls, *, model: str | None = None):
         return super().get_config()
 
     def get_required_params(self) -> list[ProviderField]:
