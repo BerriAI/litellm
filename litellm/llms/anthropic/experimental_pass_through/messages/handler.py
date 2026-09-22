@@ -9,7 +9,7 @@ import asyncio
 import contextvars
 from collections.abc import AsyncIterator, Coroutine, Iterator
 from functools import partial
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
@@ -39,6 +39,10 @@ from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
 from ..utils import is_reasoning_auto_summary_enabled
 from .interceptors import get_messages_interceptors
 from .utils import AnthropicMessagesRequestUtils, mock_response
+
+if TYPE_CHECKING:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
 
 # Providers that are routed directly to the OpenAI Responses API instead of
 # going through chat/completions.
@@ -119,10 +123,10 @@ async def _execute_pre_request_hooks(
     **kwargs,
 ) -> dict:
     """
-    Execute pre-request hooks from CustomLogger callbacks.
+    Execute pre-call and pre-request hooks from CustomLogger callbacks.
 
     Allows CustomLoggers to modify request parameters before the API call.
-    Used for WebSearch tool conversion, stream modification, etc.
+    Used for proxy guardrails, WebSearch tool conversion, stream modification, etc.
 
     Args:
         model: Model name
@@ -145,6 +149,8 @@ async def _execute_pre_request_hooks(
 
     # Build complete request kwargs dict
     request_kwargs = {
+        "model": model,
+        "messages": messages,
         "tools": tools,
         "stream": stream,
         "litellm_params": {
@@ -162,8 +168,28 @@ async def _execute_pre_request_hooks(
         if not isinstance(callback, _CustomLogger):
             continue
 
-        # Call the pre-request hook
-        modified_kwargs = await callback.async_pre_request_hook(model, messages, request_kwargs)
+        if (
+            "async_pre_call_hook" in vars(callback.__class__)
+            and callback.__class__.async_pre_call_hook != _CustomLogger.async_pre_call_hook
+        ):
+            modified_kwargs = await callback.async_pre_call_hook(
+                user_api_key_dict=cast("UserAPIKeyAuth", request_kwargs.get("user_api_key_dict")),
+                cache=cast("DualCache", request_kwargs.get("cache")),
+                data=request_kwargs,
+                call_type="anthropic_messages",
+            )
+            if isinstance(modified_kwargs, Exception):
+                raise modified_kwargs
+            if isinstance(modified_kwargs, str):
+                raise ValueError(modified_kwargs)
+            if modified_kwargs is not None:
+                request_kwargs = modified_kwargs
+
+        modified_kwargs = await callback.async_pre_request_hook(
+            request_kwargs.get("model", model),
+            request_kwargs.get("messages", messages),
+            request_kwargs,
+        )
 
         # If hook returned modified kwargs, use them
         if modified_kwargs is not None:
@@ -286,7 +312,15 @@ async def anthropic_messages(
         tools=tools,
         stream=stream,
         custom_llm_provider=custom_llm_provider,
+        max_tokens=max_tokens,
+        metadata=metadata,
+        stop_sequences=stop_sequences,
+        system=system,
+        temperature=temperature,
+        thinking=thinking,
         tool_choice=tool_choice,
+        top_k=top_k,
+        top_p=top_p,
         **kwargs,
     )
 
@@ -294,6 +328,9 @@ async def anthropic_messages(
     # that we may forward explicitly downstream, so we (a) honor pre-request hook
     # overrides and (b) avoid duplicate-keyword conflicts when splatting `kwargs`
     # into call sites that already pass these as named arguments.
+    model = request_kwargs.pop("model", model)
+    messages = request_kwargs.pop("messages", messages)
+    max_tokens = request_kwargs.pop("max_tokens", max_tokens)
     tools = request_kwargs.pop("tools", tools)
     stream = request_kwargs.pop("stream", stream)
     metadata = request_kwargs.pop("metadata", metadata)
@@ -382,12 +419,11 @@ async def anthropic_messages(
         api_base=api_base,
         client=client,
         custom_llm_provider=custom_llm_provider,
-        # messages were already empty-content-block sanitized at the top of this
-        # function and are NOT reassigned before this dispatch, so the handler
-        # can skip its (otherwise redundant) second full-messages scan. Passed
-        # explicitly (not via **kwargs) so it only affects this direct
-        # dispatch -- interceptor / sync entry points still sanitize.
-        _litellm_messages_presanitized=True,
+        # Messages are sanitized above. When no callback can edit them
+        # afterwards, skip the handler's second scan. Passed explicitly
+        # (not via **kwargs) so it only affects this direct dispatch --
+        # interceptor / sync entry points still sanitize.
+        _litellm_messages_presanitized=not litellm.callbacks,
         **kwargs,
     )
     ctx: Final = contextvars.copy_context()
