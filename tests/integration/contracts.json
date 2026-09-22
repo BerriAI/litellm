@@ -39,6 +39,9 @@
     "tests/integration/providers/test_request_boundary.py::test_internal_request_state_does_not_reach_provider": [
       "other.provider_wire.internal_parameters_filtered"
     ],
+    "tests/integration/pricing/test_configured_prices.py::test_cost_estimate_reports_configured_prices_for_model_absent_from_cost_map": [
+      "quota_management.cost_estimate.configured_price.reported_for_model_absent_from_cost_map"
+    ],
     "tests/integration/pricing/test_configured_prices.py::test_default_prices_survive_nullable_sibling_and_reload": [
       "quota_management.spend_tracking.default_prices.survive_nullable_sibling_reload"
     ],

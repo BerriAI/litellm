@@ -28,6 +28,31 @@ def test_custom_price_is_reported_and_charged(gateway: Gateway) -> None:
         assert params["output_cost_per_token"] == 0.002
 
 
+@pytest.mark.covers("quota_management.cost_estimate.configured_price.reported_for_model_absent_from_cost_map")
+def test_cost_estimate_reports_configured_prices_for_model_absent_from_cost_map(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"openai/integration-on-prem-{uuid.uuid4().hex}",
+            input_cost_per_token=0.003,
+            output_cost_per_token=0.007,
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/cost/estimate",
+            {"model": model, "input_tokens": 1000, "output_tokens": 500, "num_requests_per_day": 10},
+        )
+        assert response.status_code == 200, response.text
+        body: Final = object_value(response.json())
+        assert body["input_cost_per_token"] == pytest.approx(0.003), response.text
+        assert body["output_cost_per_token"] == pytest.approx(0.007), response.text
+        assert body["input_cost_per_request"] == pytest.approx(1000 * 0.003), response.text
+        assert body["output_cost_per_request"] == pytest.approx(500 * 0.007), response.text
+        margin: Final = body["margin_cost_per_request"]
+        assert isinstance(margin, float), response.text
+        assert body["cost_per_request"] == pytest.approx(1000 * 0.003 + 500 * 0.007 + margin), response.text
+        assert body["daily_cost"] == pytest.approx(10 * (1000 * 0.003 + 500 * 0.007 + margin)), response.text
+
+
 @pytest.mark.covers("quota_management.spend_tracking.default_prices.survive_nullable_sibling_reload")
 def test_default_prices_survive_nullable_sibling_and_reload(gateway: Gateway) -> None:
     for registration_order in (("custom", "omitted", "nullable"), ("nullable", "omitted", "custom")):
