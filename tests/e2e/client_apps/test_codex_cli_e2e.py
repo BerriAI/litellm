@@ -2,7 +2,8 @@
 `codex exec --json` turn against the proxy on a virtual key through a custom
 model provider (`wire_api = "responses"`, so `/v1/responses`): it runs a shell
 command, reads its output, and answers. Client side the JSONL events carry the
-completed command execution and the agent message; proxy side the spend rows
+completed command execution and the agent message (the last one: Codex sometimes
+sends a one-line preamble before running the command); proxy side the spend rows
 carry real spend and `stream: true` (Codex always streams the Responses API).
 The echoed word is unique per run: the CI stack caches responses, and an
 identical prompt across runs would be served a $0 cache-hit row instead of a
@@ -47,8 +48,8 @@ class TestCodexCli:
         assert word in commands[0].aggregated_output, commands[0]
 
         messages = [item for item in completed_items if isinstance(item, CodexAgentMessage)]
-        assert len(messages) == 1, events
-        assert word in messages[0].text, messages[0]
+        assert messages, events
+        assert word in messages[-1].text, messages
 
         turns = [event for event in events if isinstance(event, CodexTurnCompleted)]
         assert len(turns) == 1, events

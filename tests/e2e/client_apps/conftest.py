@@ -42,7 +42,7 @@ def anthropic_model(proxy: ProxyClient) -> Iterator[str]:
 
 @pytest.fixture(scope="session")
 def openai_model(proxy: ProxyClient) -> Iterator[str]:
-    yield from _suite_model(proxy, "openai/gpt-5.5", "OPENAI_API_KEY")
+    yield from _suite_model(proxy, "openai/gpt-5.6", "OPENAI_API_KEY")
 
 
 def _suite_model(proxy: ProxyClient, provider_model: str, env_var: str) -> Iterator[str]:
