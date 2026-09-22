@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
@@ -362,6 +364,39 @@ async def test_otel_unhandled_exception_handler_returns_500_generic_payload():
             "type": "internal_server_error",
         }
     }
+
+
+_DB_OUTAGE_503_BODY: Final = {
+    "error": {
+        "message": "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
+        "type": "no_db_connection",
+        "param": "None",
+        "code": "503",
+    }
+}
+
+
+def _raised_from(outer: Exception, cause: Exception) -> Exception:
+    try:
+        raise outer from cause
+    except Exception as chained:
+        return chained
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        httpx.ConnectError("All connection attempts failed"),
+        _raised_from(RuntimeError("user read failed"), httpx.ConnectError("All connection attempts failed")),
+    ],
+    ids=["raw_connect_error", "connect_error_as_cause"],
+)
+async def test_otel_unhandled_exception_handler_answers_a_db_outage_with_503_no_db_connection(exc):
+    response = await otel_unhandled_exception_handler(request=_make_request(path="/v2/team/list"), exc=exc)
+
+    assert response.status_code == 503
+    assert json.loads(response.body) == _DB_OUTAGE_503_BODY
 
 
 @pytest.mark.asyncio
