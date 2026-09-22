@@ -711,7 +711,9 @@ class JevClassifierConfig(BaseModel):
             "Maximum request complexity (0-1) a route-down verdict may carry. The built-in Jev "
             "request asks only the tier question today, so an absent complexity answer counts as "
             "the hardest score (1.0): while this is set below 1.0 every route-down is refused "
-            "until the classifier protocol carries a complexity answer. None disables the gate."
+            "until the classifier protocol carries a complexity answer. Wire complexity scores "
+            "arrive as weighted level indices (0..levels-1), so a future score question "
+            "must normalize to 0-1 before this gate (routing-spec v1.1). None disables the gate."
         ),
     )
     complexity_confidence_min: float | None = Field(
