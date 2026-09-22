@@ -497,23 +497,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return None
 
     async def _build_anthropic_image_content_item(self, part: Mapping[str, object]) -> BedrockContentItem:
-        """Build an image item from a raw Anthropic ``type == "image"`` block.
-
-        The /v1/messages during_call path hands these to the builder untranslated.
-        Only inline base64 is scannable; url and file sources are refused.
-        """
+        """Only inline base64 is scannable; url and file sources are refused."""
         source: Final = part.get("source")
-        if isinstance(source, dict) and source.get("type") == "base64":
-            data: Final = source.get("data")
-            if isinstance(data, str) and data:
-                media_type: Final = source.get("media_type")
-                image_ref: Final = (
-                    f"data:{media_type};base64,{data}"
-                    if isinstance(media_type, str) and media_type
-                    else self._normalize_image_input(data)
-                )
-                return await self._build_image_content_item(image_url=image_ref)
-        self._handle_unscannable_attachment(reason="an image source without inline base64 data cannot be scanned")
+        if not isinstance(source, dict) or source.get("type") != "base64":
+            self._handle_unscannable_attachment(reason="an image source without inline base64 data cannot be scanned")
+        data: Final = source.get("data")
+        if not isinstance(data, str) or not data:
+            self._handle_unscannable_attachment(reason="an image source without inline base64 data cannot be scanned")
+        media_type: Final = source.get("media_type")
+        image_ref: Final = (
+            f"data:{media_type};base64,{data}"
+            if isinstance(media_type, str) and media_type
+            else self._normalize_image_input(data)
+        )
+        return await self._build_image_content_item(image_url=image_ref)
 
     @classmethod
     def _anthropic_base64_image_ref(cls, part: Mapping[str, object]) -> str | None:
@@ -628,22 +625,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return value
 
     async def _build_image_content_item(self, image_url: str) -> BedrockContentItem:
-        """Decode an inline image into an ApplyGuardrail image block.
-
-        A remote url is named as its own rejection rather than left to the decoder:
-        fetching one is a separate piece of work (size cap, SSRF, and handing the
-        same bytes to the model), so the operator gets "not supported" instead of
-        the decoder's "could not be read". Anything else that is not a data URI is
-        an unrecognized payload and falls through to the decoder, which rejects it.
-
-        The test is a substring, not a prefix, deliberately: it has to reject
-        everything `BedrockImageProcessor.process_image_async` would treat as
-        remote, and that check is `"http://" in image_url or "https://" in
-        image_url`. A prefix test reads more naturally but leaves a hole -- a url
-        carrying leading whitespace fails it, then matches downstream and is
-        fetched, so the fail-closed policy here would be bypassed into an
-        uncapped server-side download. Keep the two predicates identical.
-        """
+        """Refuse remote urls with the same substring test
+        `BedrockImageProcessor.process_image_async` uses to decide to fetch, so nothing
+        it would download slips past."""
         if "http://" in image_url or "https://" in image_url:
             self._handle_unscannable_attachment(reason="remote image URLs are not supported")
 
