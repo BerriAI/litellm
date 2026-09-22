@@ -2859,6 +2859,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             verbose_proxy_logger.warning("Bedrock AI: not running guardrail. No messages in data")
             return
 
+        # A file or unscannable image is refused even when role scoping below drops
+        # its message from the scan set; the ApplyGuardrail call itself stays scoped
+        await asyncio.gather(*(self._build_input_content_items(message=m) for m in new_messages))
+
         filter_result: Final = self._prepare_guardrail_messages_for_role(messages=new_messages)
         filtered_messages: Final = filter_result.payload_messages
         if not filtered_messages:

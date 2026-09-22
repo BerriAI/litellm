@@ -1084,6 +1084,48 @@ async def test_during_call_hook_still_scans_tool_result_turn_carrying_text():
 
 
 @pytest.mark.asyncio
+async def test_during_call_hook_refuses_attachment_in_scoped_out_message():
+    """A file in a message that latest-role scoping drops must still be refused."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-scoped-out-file",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+        experimental_use_latest_role_message_only=True,
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize this"},
+                    {
+                        "type": "file",
+                        "file": {"filename": "ssn.pdf", "file_data": "data:application/pdf;base64,JVBERi0="},
+                    },
+                ],
+            },
+            {"role": "user", "content": "what is 2+2"},
+        ],
+    }
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_make_apply_guardrail_request_skips_output_scan_without_response_text():
     """A tool-calls-only assistant response yields no OUTPUT content, so it must not be posted."""
     guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
