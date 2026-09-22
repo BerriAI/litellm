@@ -29,6 +29,22 @@ _OBJECT_MAP: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str,
 _OBJECT_LIST: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
+OPERATOR_KEYED_MAPS: Final = frozenset(
+    {
+        "environment_variables",
+        "mcp_servers",
+        "model_group_alias",
+        "model_group_retry_policy",
+        "fallbacks",
+        "context_window_fallbacks",
+        "content_policy_fallbacks",
+        "extra_headers",
+        "default_headers",
+        "extra_body",
+        "metadata",
+    }
+)
+
 
 def _object_map(value: object) -> Mapping[str, object]:
     try:
@@ -156,6 +172,63 @@ def _model_list_lines(model_list: object) -> tuple[str, ...]:
     return (f"model_list[*].provider = [{', '.join(providers)}]",) if providers else ()
 
 
+def _verbose_scalar(value: object) -> str:
+    match value:
+        case bool():
+            return str(value).lower()
+        case int() | float():
+            return str(value)
+        case None:
+            return "null"
+        case str() if value in _known_values():
+            return value
+        case str():
+            provider: Final = _deployment_provider(value)
+            return "<str>" if provider is None else f"{provider}/<str>"
+        case _:
+            return "<object>"
+
+
+def _mapping_or_none(value: object) -> Mapping[str, object] | None:
+    try:
+        return _OBJECT_MAP.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _items_or_none(value: object) -> Sequence[object] | None:
+    try:
+        return _OBJECT_LIST.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _is_container(value: object) -> bool:
+    return _mapping_or_none(value) is not None or _items_or_none(value) is not None
+
+
+def _verbose_lines(path: str, key: str, value: object) -> tuple[str, ...]:
+    entries: Final = _mapping_or_none(value)
+    if entries is not None and key in OPERATOR_KEYED_MAPS:
+        return (f"{path} = <{len(entries)} keys>",)
+    if entries is not None:
+        return tuple(
+            line
+            for child_key, child in entries.items()
+            for line in _verbose_lines(f"{path}.{child_key}" if path else child_key, child_key, child)
+        )
+    items: Final = _items_or_none(value)
+    if items is None:
+        return (f"{path} = {_verbose_scalar(value)}",)
+    if not any(_is_container(item) for item in items):
+        return (f"{path} = [{', '.join(_verbose_scalar(item) for item in items)}]",)
+    return tuple(line for index, item in enumerate(items) for line in _verbose_lines(f"{path}[{index}]", key, item))
+
+
+def verbose_config_lines(config: Mapping[str, object], general_settings: Mapping[str, object]) -> tuple[str, ...]:
+    return _verbose_lines("", "", {**config, "general_settings": general_settings})
+
+
 def safe_config_lines(config: Mapping[str, object], general_settings: Mapping[str, object]) -> tuple[str, ...]:
     litellm_settings: Final = _object_map(config.get("litellm_settings"))
     return (
@@ -170,17 +243,18 @@ def safe_config_lines(config: Mapping[str, object], general_settings: Mapping[st
     )
 
 
-def _proxy_config_lines() -> tuple[str, ...]:
+def _proxy_config_lines(*, verbose: bool = False) -> tuple[str, ...]:
     from litellm.proxy import proxy_server
 
-    return safe_config_lines(
+    render: Final = verbose_config_lines if verbose else safe_config_lines
+    return render(
         proxy_server.proxy_config.config,
         _object_map(proxy_server.general_settings),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # bare dict global, validated by _object_map
     )
 
 
-def build_proxy_environment_report() -> EnvironmentReport:
-    return build_environment_report(surface="proxy", config_lines=_proxy_config_lines())
+def build_proxy_environment_report(*, verbose: bool = False) -> EnvironmentReport:
+    return build_environment_report(surface="proxy", config_lines=_proxy_config_lines(verbose=verbose))
 
 
 def build_proxy_bug_report(

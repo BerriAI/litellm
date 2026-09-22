@@ -5,7 +5,12 @@ from collections.abc import Iterator, Mapping
 import pytest
 
 from litellm.proxy import proxy_server
-from litellm.proxy.bug_report_config import build_proxy_bug_report, safe_config_lines
+from litellm.proxy.bug_report_config import (
+    build_proxy_bug_report,
+    build_proxy_environment_report,
+    safe_config_lines,
+    verbose_config_lines,
+)
 
 CUSTOMER_STRINGS = (
     "acme",
@@ -13,6 +18,25 @@ CUSTOMER_STRINGS = (
     "hunter2",
     "postgres://",
     "10.0.0.7",
+)
+
+CUSTOMER_VALUES = (
+    "acme-prod",
+    "acme-gpt4o",
+    "acme-mini",
+    "acme-backup",
+    "acme-bare",
+    "acme-custom",
+    "acme-pii",
+    "acme-policy",
+    "acme_hooks",
+    "acme_guardrails",
+    "ACME_",
+    "sk-live-secret",
+    "hunter2",
+    "postgres://",
+    "10.0.0.7",
+    "azure.com",
 )
 
 CUSTOMER_CONFIG: Mapping[str, object] = {
@@ -124,6 +148,86 @@ def test_secrets_numbers_and_unknown_values_leave_no_line():
     assert safe_config_lines({}, general_settings) == ("general_settings.background_health_checks = false",)
 
 
+def test_verbose_lines_show_every_key_but_only_litellm_defined_or_numeric_values():
+    lines = verbose_config_lines(CUSTOMER_CONFIG, CUSTOMER_GENERAL_SETTINGS)
+
+    assert lines == (
+        "model_list[0].model_name = <str>",
+        "model_list[0].litellm_params.model = azure/<str>",
+        "model_list[0].litellm_params.api_base = <str>",
+        "model_list[0].litellm_params.api_key = <str>",
+        "model_list[0].litellm_params.rpm = 600",
+        "model_list[0].litellm_params.acme_extra_param = <str>",
+        "model_list[1].model_name = <str>",
+        "model_list[1].litellm_params.model = openai/<str>",
+        "model_list[1].litellm_params.api_key = <str>",
+        "model_list[2].model_name = <str>",
+        "model_list[2].litellm_params.model = azure/<str>",
+        "model_list[2].litellm_params.api_key = <str>",
+        "model_list[3].model_name = <str>",
+        "model_list[3].litellm_params.model = <str>",
+        "litellm_settings.callbacks = [langfuse, <str>]",
+        "litellm_settings.drop_params = true",
+        "litellm_settings.num_retries = 3",
+        "litellm_settings.acme_internal_flag = true",
+        "litellm_settings.cache = true",
+        "litellm_settings.cache_params.type = redis",
+        "litellm_settings.cache_params.host = <str>",
+        "litellm_settings.cache_params.port = 6379",
+        "litellm_settings.cache_params.password = <str>",
+        "litellm_settings.cache_params.acme_cache_option = <str>",
+        "router_settings.routing_strategy = latency-based-routing",
+        "router_settings.redis_host = <str>",
+        "router_settings.acme_router_option = true",
+        "guardrails[0].guardrail_name = <str>",
+        "guardrails[0].litellm_params.guardrail = presidio",
+        "guardrails[0].litellm_params.mode = pre_call",
+        "guardrails[1].guardrail_name = <str>",
+        "guardrails[1].litellm_params.guardrail = <str>",
+        "guardrails[1].litellm_params.api_key = <str>",
+        "environment_variables = <2 keys>",
+        "general_settings.master_key = <str>",
+        "general_settings.database_url = <str>",
+        "general_settings.key_management_system = aws_secret_manager",
+        "general_settings.store_model_in_db = true",
+        "general_settings.health_check_interval = 300",
+        "general_settings.acme_sso_tenant = <str>",
+    )
+    assert not any(customer_value in "\n".join(lines) for customer_value in CUSTOMER_VALUES)
+
+
+def test_verbose_lines_count_operator_keyed_maps_and_type_unknown_leaves():
+    config: Mapping[str, object] = {
+        "router_settings": {
+            "model_group_alias": {"acme-gpt4": "acme-prod-gpt4", "acme-fast": {"model": "acme-mini", "hidden": True}},
+            "timeout": None,
+            "fallbacks": [{"acme-prod-gpt4": ["acme-backup"]}],
+        },
+        "model_list": [
+            {
+                "model_name": "acme-prod-gpt4",
+                "litellm_params": {"model": "acme/acme-custom", "extra_headers": {"x-acme-tenant": "acme"}},
+                "model_info": {"metadata": {"owner": "acme"}, "supports_vision": True, "weight": 1.5},
+            }
+        ],
+        "litellm_settings": {"callbacks": object(), "tags": ["acme", 7, False]},
+    }
+
+    assert verbose_config_lines(config, {}) == (
+        "router_settings.model_group_alias = <2 keys>",
+        "router_settings.timeout = null",
+        "router_settings.fallbacks[0] = <1 keys>",
+        "model_list[0].model_name = <str>",
+        "model_list[0].litellm_params.model = <str>",
+        "model_list[0].litellm_params.extra_headers = <1 keys>",
+        "model_list[0].model_info.metadata = <1 keys>",
+        "model_list[0].model_info.supports_vision = true",
+        "model_list[0].model_info.weight = 1.5",
+        "litellm_settings.callbacks = <object>",
+        "litellm_settings.tags = [<str>, 7, false]",
+    )
+
+
 def test_malformed_sections_produce_no_lines():
     config: Mapping[str, object] = {
         "litellm_settings": "acme",
@@ -152,3 +256,18 @@ def test_build_proxy_bug_report_reads_the_loaded_proxy_config():
     assert report.environment.surface == "proxy"
     assert report.stream is False
     assert report.environment.config_lines == safe_config_lines(CUSTOMER_CONFIG, CUSTOMER_GENERAL_SETTINGS)
+
+
+@pytest.mark.usefixtures("loaded_proxy_config")
+def test_proxy_environment_report_switches_between_safe_and_verbose_config_lines():
+    safe = build_proxy_environment_report()
+    verbose = build_proxy_environment_report(verbose=True)
+
+    assert safe.config_lines == safe_config_lines(CUSTOMER_CONFIG, CUSTOMER_GENERAL_SETTINGS)
+    assert verbose.config_lines == verbose_config_lines(CUSTOMER_CONFIG, CUSTOMER_GENERAL_SETTINGS)
+    assert (safe.surface, safe.litellm_version, safe.python_version, safe.deployment) == (
+        verbose.surface,
+        verbose.litellm_version,
+        verbose.python_version,
+        verbose.deployment,
+    )
