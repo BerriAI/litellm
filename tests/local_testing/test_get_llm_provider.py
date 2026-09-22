@@ -68,7 +68,16 @@ def test_get_llm_provider_deepseek_custom_api_base():
 
 
 def test_get_llm_provider_vertex_ai_image_models(monkeypatch):
-    monkeypatch.setattr(litellm, "vertex_ai_image_models", {"imagegeneration@006"})
+    monkeypatch.setattr(litellm, "vertex_ai_image_models", set())
+    monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
+    litellm.add_known_models(
+        model_cost_map={
+            "vertex_ai/imagegeneration@006": {
+                "litellm_provider": "vertex_ai-image-models",
+                "mode": "image_generation",
+            }
+        }
+    )
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
         model="imagegeneration@006", custom_llm_provider=None
     )
