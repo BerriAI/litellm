@@ -2198,6 +2198,33 @@ async def test_ProxyConfig_load_config_wires_general_settings_url_validation(tmp
 
 
 @pytest.mark.asyncio
+async def test_ssrf_block_message_names_a_config_section_load_config_honors(tmp_path, monkeypatch):
+    """Regression for LIT-8349: the remediation in the SSRF block message must point at a section that works."""
+    from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
+
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [])
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    with pytest.raises(SSRFError) as blocked:
+        validate_url("http://10.96.3.245:10002/agent.json")
+    section_match = re.search(r"add the host to `user_url_allowed_hosts` in (\w+)\.", str(blocked.value))
+    assert section_match is not None, str(blocked.value)
+    section: Final = section_match.group(1)
+
+    f = tmp_path / "c.yaml"
+    f.write_text(f"model_list: []\n{section}:\n  user_url_allowed_hosts:\n    - '10.96.3.245:10002'\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+    assert litellm.user_url_allowed_hosts == ["10.96.3.245:10002"], f"{section} did not apply the allowlist"
+    assert validate_url("http://10.96.3.245:10002/agent.json") == (
+        "http://10.96.3.245:10002/agent.json",
+        "10.96.3.245:10002",
+    )
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_load_config_wires_config_reload_interval(tmp_path, monkeypatch):
     """general_settings.proxy_config_reload_interval_seconds must reach the proxy_server
     module global that schedules the DB config-reload jobs, so operators can tune multi-pod
