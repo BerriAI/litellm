@@ -165,6 +165,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
             apply_to_output=True,
             event_hook=GuardrailEventHooks.post_call.value,
             output_parse_pii=False,
+            mask_response_content=True,
         )
         if run_output
         else None

@@ -30,6 +30,7 @@ this suite deliberately requires the detected-entity details to remain visible.
 from __future__ import annotations
 
 import os
+import re
 import time
 from collections.abc import Callable
 from typing import Final, Literal
@@ -65,9 +66,13 @@ GUARDRAIL_PROPAGATION_POLL_INTERVAL_SECONDS = 5.0
 # angle brackets; the logged payload keeps the placeholder verbatim.
 MASKED_EMAIL_TOKEN = "EMAIL_ADDRESS"
 MASKED_PHONE_TOKEN = "PHONE_NUMBER"
+MASKED_CREDIT_CARD_TOKEN = "CREDIT_CARD"
 
 # Fictional NANP 555 number; a standard format Presidio's phone recognizer detects.
 FAKE_PHONE = "+1 415-555-0134"
+FAKE_VISA_TEST_CARD = "4111 1111 1111 1111"
+
+_CARD_DIGIT_RUN: Final = re.compile(r"(?:\d[ -]?){13,19}")
 
 
 def _presidio_bases() -> tuple[str, str]:
@@ -86,8 +91,8 @@ def _register_presidio(
     resources: ResourceManager,
     *,
     name: str,
-    mode: GuardrailMode = "pre_call",
-    filter_scope: Literal["input", "output", "both"] = "input",
+    mode: GuardrailMode | list[GuardrailMode] = "pre_call",
+    filter_scope: Literal["input", "output", "both"] | None = "input",
     entities: dict[PiiEntity, PiiAction] | None = None,
 ) -> None:
     analyzer, anonymizer = _presidio_bases()
@@ -121,6 +126,74 @@ def _first_content(response: ChatResponse) -> str:
         return ""
     message = response.choices[0].message
     return (message.content if message else None) or ""
+
+
+class _StreamDelta(BaseModel):
+    content: str | None = None
+
+
+class _StreamChoice(BaseModel):
+    delta: _StreamDelta
+
+
+class _StreamChunk(BaseModel):
+    choices: tuple[_StreamChoice, ...] = ()
+
+
+class _AnthropicStreamDelta(BaseModel):
+    type: str | None = None
+    text: str | None = None
+
+
+class _AnthropicStreamEvent(BaseModel):
+    type: str
+    delta: _AnthropicStreamDelta | None = None
+
+
+def _credit_card_prompt(marker: str) -> str:
+    return (
+        f"{marker} Reply with only the well known Visa sandbox test card number that starts with 4111, "
+        "the 16 digits grouped in fours separated by spaces, and nothing else."
+    )
+
+
+def _passes_luhn(digits: str) -> bool:
+    checksum = sum(
+        digit if position % 2 == 0 else (digit * 2 - 9 if digit * 2 > 9 else digit * 2)
+        for position, digit in enumerate(int(char) for char in reversed(digits))
+    )
+    return checksum % 10 == 0
+
+
+def _contains_card_number(text: str) -> bool:
+    """Presidio's CREDIT_CARD recognizer only reports Luhn-valid digit runs, so a
+    Luhn-invalid number the model hallucinates is not something masking can catch."""
+    return any(
+        13 <= len(digits) <= 19 and _passes_luhn(digits)
+        for digits in (re.sub(r"[ -]", "", match.group()) for match in _CARD_DIGIT_RUN.finditer(text))
+    )
+
+
+def _stream_content(result: StreamingResponse) -> str:
+    return "".join(
+        choice.delta.content
+        for event in result.stream_events
+        if event != "[DONE]"
+        for choice in _StreamChunk.model_validate_json(event).choices[:1]
+        if choice.delta.content
+    )
+
+
+def _anthropic_stream_content(result: StreamingResponse) -> str:
+    return "".join(
+        event.delta.text
+        for payload in result.stream_events
+        for event in [_AnthropicStreamEvent.model_validate_json(payload)]
+        if event.type == "content_block_delta"
+        and event.delta is not None
+        and event.delta.type == "text_delta"
+        and event.delta.text
+    )
 
 
 def _messages_text(response: AnthropicMessagesResponse) -> str:
@@ -288,6 +361,124 @@ class TestPresidioPostCallMasking:
                     f"{GUARDRAIL_PROPAGATION_DEADLINE_SECONDS}s; last observation: {last[:300]!r}"
                 )
             time.sleep(GUARDRAIL_PROPAGATION_POLL_INTERVAL_SECONDS)
+
+
+def _assert_eventually_masks_generated_card(fetch: Callable[[], str | None]) -> None:
+    deadline = time.monotonic() + GUARDRAIL_PROPAGATION_DEADLINE_SECONDS
+    last: str = "<no successful response yet>"
+    while True:
+        content = fetch()
+        if content is not None:
+            last = content
+            if _contains_card_number(content):
+                pytest.fail(
+                    "the post_call output masking let a card number through: "
+                    f"{content[:300]!r}"
+                )
+            if MASKED_CREDIT_CARD_TOKEN in content:
+                return
+        if time.monotonic() >= deadline:
+            pytest.fail(
+                "presidio post_call output masking never masked the generated card within "
+                f"{GUARDRAIL_PROPAGATION_DEADLINE_SECONDS}s; last observation: {last[:300]!r}"
+            )
+        time.sleep(GUARDRAIL_PROPAGATION_POLL_INTERVAL_SECONDS)
+
+
+class TestPresidioCreditCardOutputMasking:
+    """Proves the UI-default Presidio scope masks model-generated card output."""
+
+    @pytest.mark.covers(
+        "guardrail.presidio.post_call.masks_generated_output",
+        exercised_on=["chat_completions"],
+    )
+    def test_ui_default_scope_masks_a_card_number_the_model_generates_on_chat_completions(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        name = f"e2e-presidio-card-chat-{unique_marker()}"
+        _register_presidio(
+            client,
+            resources,
+            name=name,
+            mode=["pre_call", "post_call"],
+            filter_scope=None,
+            entities={"CREDIT_CARD": "MASK"},
+        )
+        prompt: Final = _credit_card_prompt(unique_marker())
+
+        def fetch() -> str | None:
+            result: Final = client.chat(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=512)
+            match result:
+                case Success(data=data):
+                    return _first_content(data)
+                case _:
+                    return None
+
+        _assert_eventually_masks_generated_card(fetch)
+
+    @pytest.mark.covers(
+        "guardrail.presidio.post_call.masks_generated_output",
+        exercised_on=["chat_completions_stream"],
+    )
+    def test_ui_default_scope_masks_a_card_number_the_model_generates_on_streaming_chat_completions(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        name = f"e2e-presidio-card-stream-{unique_marker()}"
+        _register_presidio(
+            client,
+            resources,
+            name=name,
+            mode=["pre_call", "post_call"],
+            filter_scope=None,
+            entities={"CREDIT_CARD": "MASK"},
+        )
+        prompt: Final = _credit_card_prompt(unique_marker())
+
+        def fetch() -> str | None:
+            result: Final = client.chat_stream_raw(
+                scoped_key,
+                MODEL,
+                prompt,
+                guardrails=[name],
+                max_tokens=512,
+            )
+            if not result.ok or result.stream_error:
+                return None
+            return _stream_content(result)
+
+        _assert_eventually_masks_generated_card(fetch)
+
+    @pytest.mark.covers(
+        "guardrail.presidio.post_call.masks_generated_output",
+        exercised_on=["anthropic_messages_stream"],
+    )
+    def test_ui_default_scope_masks_a_card_number_the_model_generates_on_streaming_anthropic_messages(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        name = f"e2e-presidio-card-messages-stream-{unique_marker()}"
+        _register_presidio(
+            client,
+            resources,
+            name=name,
+            mode=["pre_call", "post_call"],
+            filter_scope=None,
+            entities={"CREDIT_CARD": "MASK"},
+        )
+        prompt: Final = _credit_card_prompt(unique_marker())
+
+        def fetch() -> str | None:
+            result: Final = client.messages_stream_raw(
+                scoped_key,
+                MODEL,
+                prompt,
+                guardrails=[name],
+                max_tokens=512,
+            )
+            if not result.ok or result.stream_error:
+                return None
+            return _anthropic_stream_content(result)
+
+        _assert_eventually_masks_generated_card(fetch)
 
 
 _LOGGED_ENTITIES: dict[PiiEntity, PiiAction] = {"EMAIL_ADDRESS": "MASK", "PHONE_NUMBER": "MASK"}
