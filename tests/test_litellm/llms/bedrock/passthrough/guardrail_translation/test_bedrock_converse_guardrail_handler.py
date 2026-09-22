@@ -1,0 +1,174 @@
+"""
+Unit tests for the Bedrock Converse passthrough guardrail handler's attachment
+extraction: image and document blocks in converse content must reach
+apply_guardrail so a guardrail can scan or refuse them.
+"""
+
+from typing import Any, Literal
+
+import pytest
+
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
+    BedrockPassthroughGuardrailHandler,
+)
+from litellm.types.utils import GenericGuardrailAPIInputs
+
+
+class InputRecordingGuardrail(CustomGuardrail):
+    """Records the inputs each apply_guardrail call was handed."""
+
+    def __init__(self, guardrail_name: str = "recording"):
+        super().__init__(guardrail_name=guardrail_name)
+        self.calls = 0
+        self.inputs: GenericGuardrailAPIInputs | None = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Any | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.calls += 1
+        self.inputs = inputs.copy()
+        return inputs
+
+
+class TestBedrockConverseHandlerAttachments:
+    @staticmethod
+    def _data(body: dict) -> dict:
+        return {
+            "endpoint": "/bedrock/model/us.amazon.nova-lite-v1:0/converse",
+            "model": "us.amazon.nova-lite-v1:0",
+            "data": body,
+        }
+
+    @pytest.mark.asyncio
+    async def test_image_block_reaches_guardrail_as_data_uri(self):
+        """Converse image blocks used to be dropped before the guardrail ran."""
+        guardrail = InputRecordingGuardrail()
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"text": "what does this show?"},
+                        {"image": {"format": "gif", "source": {"bytes": "R0lGODlhAQABAAAAACw="}}},
+                    ],
+                }
+            ]
+        }
+
+        await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data=self._data(body), guardrail_to_apply=guardrail
+        )
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["images"] == ["data:image/gif;base64,R0lGODlhAQABAAAAACw="]
+
+    @pytest.mark.asyncio
+    async def test_document_block_reaches_guardrail_as_files(self):
+        """Converse document blocks used to be dropped before the guardrail ran."""
+        guardrail = InputRecordingGuardrail()
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"text": "summarize this"},
+                        {"document": {"format": "pdf", "name": "a", "source": {"bytes": "QUFBQQ=="}}},
+                    ],
+                }
+            ]
+        }
+
+        await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data=self._data(body), guardrail_to_apply=guardrail
+        )
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["files"] == ["data:application/pdf;base64,QUFBQQ=="]
+
+    @pytest.mark.asyncio
+    async def test_document_only_turn_invokes_guardrail(self):
+        """A turn whose only content is a document still must reach the guardrail."""
+        guardrail = InputRecordingGuardrail()
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"document": {"format": "pdf", "name": "a", "source": {"bytes": "QUFBQQ=="}}},
+                    ],
+                }
+            ]
+        }
+
+        await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data=self._data(body), guardrail_to_apply=guardrail
+        )
+
+        assert guardrail.calls == 1, "document-only turn never reached apply_guardrail"
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["files"] == ["data:application/pdf;base64,QUFBQQ=="]
+
+    @pytest.mark.asyncio
+    async def test_document_inside_tool_result_reaches_guardrail_as_files(self):
+        guardrail = InputRecordingGuardrail()
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"text": "use this"},
+                        {
+                            "toolResult": {
+                                "toolUseId": "tu_1",
+                                "content": [
+                                    {"document": {"format": "pdf", "name": "a", "source": {"bytes": "QkJCQg=="}}}
+                                ],
+                            }
+                        },
+                    ],
+                }
+            ]
+        }
+
+        await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data=self._data(body), guardrail_to_apply=guardrail
+        )
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["files"] == ["data:application/pdf;base64,QkJCQg=="]
+
+    @pytest.mark.asyncio
+    async def test_s3_backed_document_yields_its_uri(self):
+        guardrail = InputRecordingGuardrail()
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "document": {
+                                "format": "pdf",
+                                "name": "a",
+                                "source": {"s3Location": {"uri": "s3://bucket/a.pdf"}},
+                            }
+                        },
+                    ],
+                }
+            ]
+        }
+
+        await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data=self._data(body), guardrail_to_apply=guardrail
+        )
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["files"] == ["s3://bucket/a.pdf"]

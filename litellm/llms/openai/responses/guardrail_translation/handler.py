@@ -450,6 +450,65 @@ def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> i
     return next((n + 1 for n in sequence_numbers if isinstance(n, int)), 0)
 
 
+def _input_image_ref(content_item: Mapping[str, object]) -> str:
+    """Identify an ``input_image`` part by whichever reference field it carries."""
+    image_url: Final = content_item.get("image_url")
+    if isinstance(image_url, str) and image_url:
+        return image_url
+    if isinstance(image_url, dict):
+        url: Final = image_url.get("url")
+        if isinstance(url, str) and url:
+            return url
+    file_id: Final = content_item.get("file_id")
+    if isinstance(file_id, str) and file_id:
+        return file_id
+    return "input_image"
+
+
+def _image_url_part_ref(content_item: Mapping[str, object]) -> str | None:
+    image_url: Final = content_item.get("image_url")
+    if not isinstance(image_url, dict):
+        return None
+    url: Final = image_url.get("url")
+    return url if isinstance(url, str) and url else None
+
+
+def _input_file_ref(content_item: Mapping[str, object]) -> str:
+    """Identify an ``input_file`` part by whichever reference field it carries."""
+    return next(
+        (
+            value
+            for key in ("file_data", "file_url", "file_id")
+            if isinstance((value := content_item.get(key)), str) and value
+        ),
+        "input_file",
+    )
+
+
+def _extract_input_content_item(
+    content_item: Mapping[str, object],
+    msg_idx: int,
+    content_idx: int,
+    texts_to_check: list[str],
+    images_to_check: list[str],
+    files_to_check: list[str],
+    task_mappings: list[tuple[int, int | None]],
+) -> None:
+    text_str: Final = content_item.get("text")
+    if text_str is not None:
+        texts_to_check.append(text_str)
+        task_mappings.append((msg_idx, content_idx))
+    kind: Final = content_item.get("type")
+    if kind == "image_url":
+        url: Final = _image_url_part_ref(content_item)
+        if url:
+            images_to_check.append(url)
+    elif kind == "input_image":
+        images_to_check.append(_input_image_ref(content_item))
+    elif kind == "input_file":
+        files_to_check.append(_input_file_ref(content_item))
+
+
 class OpenAIResponsesHandler(BaseTranslation):
     """
     Handler for processing OpenAI Responses API with guardrails.
@@ -503,7 +562,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(original_tools)
         )
         extracted: Final = self._extract_guardrail_inputs(data, input_data, flattened_tool_groups)
-        if not extracted.inputs.get("texts"):
+        if not (extracted.inputs.get("texts") or extracted.inputs.get("images") or extracted.inputs.get("files")):
             return data
         if structured_messages:
             extracted.inputs["structured_messages"] = structured_messages
@@ -548,6 +607,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     ) -> _ExtractedInputs:
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
+        files_to_check: Final[list[str]] = []  # mutable-ok: accumulated across messages, then copied into inputs
         task_mappings: Final[list[tuple[int, int | None]]] = []
         tools_to_check: Final[list[ChatCompletionToolParam]] = list(  # mutable-ok: guardrail inputs want a list
             copy.deepcopy(
@@ -567,11 +627,14 @@ class OpenAIResponsesHandler(BaseTranslation):
                     msg_idx=msg_idx,
                     texts_to_check=texts_to_check,
                     images_to_check=images_to_check,
+                    files_to_check=files_to_check,
                     task_mappings=task_mappings,
                 )
         inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
         if images_to_check:
             inputs["images"] = images_to_check
+        if files_to_check:
+            inputs["files"] = files_to_check
         if tools_to_check:
             inputs["tools"] = tools_to_check
         model: Final = data.get("model")
@@ -627,6 +690,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         msg_idx: int,
         texts_to_check: list[str],
         images_to_check: list[str],
+        files_to_check: list[str],
         task_mappings: list[tuple[int, int | None]],
     ) -> None:
         """
@@ -647,19 +711,15 @@ class OpenAIResponsesHandler(BaseTranslation):
             # List content (e.g., multimodal with text and images)
             for content_idx, content_item in enumerate(content):
                 if isinstance(content_item, dict):
-                    # Extract text
-                    text_str = content_item.get("text", None)
-                    if text_str is not None:
-                        texts_to_check.append(text_str)
-                        task_mappings.append((msg_idx, int(content_idx)))
-
-                    # Extract images
-                    if content_item.get("type") == "image_url":
-                        image_url = content_item.get("image_url", {})
-                        if isinstance(image_url, dict):
-                            url = image_url.get("url")
-                            if url:
-                                images_to_check.append(url)
+                    _extract_input_content_item(
+                        content_item=content_item,
+                        msg_idx=msg_idx,
+                        content_idx=int(content_idx),
+                        texts_to_check=texts_to_check,
+                        images_to_check=images_to_check,
+                        files_to_check=files_to_check,
+                        task_mappings=task_mappings,
+                    )
 
     async def _apply_guardrail_responses_to_input(
         self,

@@ -173,10 +173,11 @@ class ScannedToolCall:
 class ExtractedInput:
     scanned: tuple[ScannedText, ...]
     images: tuple[str, ...]
+    files: tuple[str, ...] = ()
     tool_calls: tuple[ScannedToolCall, ...] = ()
 
 
-EMPTY_EXTRACTED_INPUT: Final = ExtractedInput(scanned=(), images=())
+EMPTY_EXTRACTED_INPUT: Final = ExtractedInput(scanned=(), images=(), files=())
 
 
 @dataclass(frozen=True, slots=True)
@@ -603,20 +604,25 @@ class AnthropicMessagesHandler(BaseTranslation):
             *(item for one_message in extracted for item in one_message.scanned),
         )
         texts_to_check: Final = [item.text for item in scanned]  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
-        images_to_check: Final = [
+        images_to_check: Final = [  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
             image for one_message in extracted for image in one_message.images
-        ]  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
+        ]
+        files_to_check: Final = [  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
+            file for one_message in extracted for file in one_message.files
+        ]
         scanned_tool_calls: Final = tuple(item for one_message in extracted for item in one_message.tool_calls)
-        tool_calls_to_check: Final = [
+        tool_calls_to_check: Final = [  # mutable-ok: GenericGuardrailAPIInputs takes list[ChatCompletionToolCallChunk]
             item.tool_call for item in scanned_tool_calls
-        ]  # mutable-ok: GenericGuardrailAPIInputs takes list[ChatCompletionToolCallChunk]
+        ]
         pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
-        if texts_to_check or tool_calls_to_check:
+        if texts_to_check or tool_calls_to_check or images_to_check or files_to_check:
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
+            if files_to_check:
+                inputs["files"] = files_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check
             if tools_to_check:
@@ -993,6 +999,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         return ExtractedInput(
             scanned=tuple(item for block in blocks for item in block.scanned),
             images=tuple(image for block in blocks for image in block.images),
+            files=tuple(file for block in blocks for file in block.files),
             tool_calls=tuple(
                 ScannedToolCall(
                     tool_call=AnthropicConfig.convert_tool_use_to_openai_format(content_item, tool_call_idx),
@@ -1025,6 +1032,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 () if text_str is None else (ScannedText(text_str, ContentBlockTextTarget(msg_idx, content_idx)),)
             ),
             images=cls._image_sources(content_item) if content_item.get("type") == "image" else (),
+            files=cls._document_sources(content_item) if content_item.get("type") == "document" else (),
         )
 
     @classmethod
@@ -1056,6 +1064,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             images=tuple(
                 image for _, block in blocks if block.get("type") == "image" for image in cls._image_sources(block)
             ),
+            files=tuple(
+                file for _, block in blocks if block.get("type") == "document" for file in cls._document_sources(block)
+            ),
         )
 
     @staticmethod
@@ -1063,8 +1074,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         """Normalize an Anthropic image block into strings a guardrail can read.
 
         base64 becomes a data URI so the format travels with the payload, which is what
-        the OpenAI path already puts in this field. A file source yields nothing: those
-        bytes live behind the Files API and this extractor has no client to fetch them.
+        the OpenAI path already puts in this field. url and file sources yield their
+        reference string so the guardrail can refuse them rather than drop them.
         """
         source: Final = block.get("source")
         if not isinstance(source, Mapping):
@@ -1074,6 +1085,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         if source_type == "url":
             url: Final = source.get("url")
             return (url,) if isinstance(url, str) and url else ()
+        if source_type == "file":
+            file_id: Final = source.get("file_id")
+            return (file_id,) if isinstance(file_id, str) and file_id else ()
 
         data: Final = source.get("data")
         if not isinstance(data, str) or not data:
@@ -1082,6 +1096,37 @@ class AnthropicMessagesHandler(BaseTranslation):
         if isinstance(media_type, str) and media_type:
             return (f"data:{media_type};base64,{data}",)
         return (data,)
+
+    @staticmethod
+    def _document_sources(block: Mapping[str, object]) -> tuple[str, ...]:
+        """Normalize an Anthropic document block into a single reference string.
+
+        The string is only used to prove an unscannable attachment reached the model,
+        so every source shape yields exactly one entry.
+        """
+        source: Final = block.get("source")
+        if not isinstance(source, Mapping):
+            return ("document",)
+
+        source_type: Final = source.get("type")
+        if source_type == "url":
+            url: Final = source.get("url")
+            return (url,) if isinstance(url, str) and url else ("document",)
+        if source_type == "file":
+            file_id: Final = source.get("file_id")
+            return (file_id,) if isinstance(file_id, str) and file_id else ("document",)
+
+        data: Final = source.get("data")
+        if not isinstance(data, str) or not data:
+            return ("document",)
+        media_type: Final = source.get("media_type")
+        if source_type == "text":
+            text_media_type: Final = media_type if isinstance(media_type, str) and media_type else "text/plain"
+            return (f"data:{text_media_type},{data}",)
+        base64_media_type: Final = (
+            media_type if isinstance(media_type, str) and media_type else "application/octet-stream"
+        )
+        return (f"data:{base64_media_type};base64,{data}",)
 
     async def _apply_guardrail_responses_to_input(
         self,

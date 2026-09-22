@@ -1811,15 +1811,12 @@ class TestAnthropicMessagesImageSources:
         assert seen == ["AAAA"]
 
     @pytest.mark.asyncio
-    async def test_file_source_yields_nothing(self):
-        """The bytes live behind the Files API and this extractor has no client.
-
-        Documented as a known gap rather than silently handed on as a file_id string,
-        which a consumer would try to decode as an image.
-        """
+    async def test_file_source_yields_its_file_id(self):
+        """The bytes live behind the Files API, so the file_id goes through as a ref
+        the guardrail can refuse rather than drop silently."""
         seen = await self._images_seen([{"type": "image", "source": {"type": "file", "file_id": "file_abc"}}])
 
-        assert seen == []
+        assert seen == ["file_abc"]
 
     @pytest.mark.asyncio
     async def test_a_malformed_source_is_dropped_rather_than_passed_on(self):
@@ -2648,3 +2645,158 @@ class TestAnthropicMessagesHandlerPostCallHookResponse:
         native = {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "hi"}]}
 
         assert AnthropicMessagesHandler().post_call_hook_response(native) is native
+
+
+class InputRecordingGuardrail(CustomGuardrail):
+    """Records the inputs each apply_guardrail call was handed."""
+
+    def __init__(self, guardrail_name: str = "recording"):
+        super().__init__(guardrail_name=guardrail_name)
+        self.calls = 0
+        self.inputs: GenericGuardrailAPIInputs | None = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Any | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.calls += 1
+        self.inputs = inputs.copy()
+        return inputs
+
+
+class TestAnthropicMessagesHandlerAttachments:
+    _PNG_B64 = "iVBORw0KGgoAAAANSUhEUg=="
+    _PNG_DATA_URI = f"data:image/png;base64,{_PNG_B64}"
+
+    @pytest.mark.asyncio
+    async def test_image_only_message_invokes_guardrail_with_images(self):
+        """An image-only turn used to skip apply_guardrail entirely."""
+        guardrail = InputRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/png", "data": self._PNG_B64},
+                        }
+                    ],
+                }
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1, "image-only turn never reached apply_guardrail"
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["images"] == [self._PNG_DATA_URI]
+
+    @pytest.mark.asyncio
+    async def test_url_and_file_image_sources_reach_the_guardrail(self):
+        """Non-inline image sources surface as refs so the guardrail can refuse them."""
+        guardrail = InputRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what does this say?"},
+                        {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+                        {"type": "image", "source": {"type": "file", "file_id": "file_abc"}},
+                    ],
+                }
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["images"] == ["https://example.com/a.png", "file_abc"]
+
+    @pytest.mark.asyncio
+    async def test_document_block_reaches_guardrail_as_files(self):
+        guardrail = InputRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+                        },
+                        {"type": "text", "text": "summarize this"},
+                    ],
+                }
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["files"] == ["data:application/pdf;base64,AAAA"]
+
+    @pytest.mark.asyncio
+    async def test_document_inside_tool_result_reaches_guardrail_as_files(self):
+        guardrail = InputRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "use this"},
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu_1",
+                            "content": [
+                                {
+                                    "type": "document",
+                                    "source": {"type": "base64", "media_type": "application/pdf", "data": "BBBB"},
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["files"] == ["data:application/pdf;base64,BBBB"]
+
+    @pytest.mark.asyncio
+    async def test_document_only_message_invokes_guardrail(self):
+        """A turn carrying only a document block still must reach the guardrail."""
+        guardrail = InputRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+                        }
+                    ],
+                }
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1, "document-only turn never reached apply_guardrail"
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["files"] == ["data:application/pdf;base64,AAAA"]

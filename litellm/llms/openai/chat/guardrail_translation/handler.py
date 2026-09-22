@@ -71,6 +71,21 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
 
 
+def _file_part_ref(content_item: Mapping[str, object]) -> str:
+    """Identify a ``type == "file"`` part by whichever reference field it carries."""
+    file_part: Final = content_item.get("file")
+    if not isinstance(file_part, dict):
+        return "file"
+    return next(
+        (
+            value
+            for key in ("file_data", "file_id", "file_url")
+            if isinstance((value := file_part.get(key)), str) and value
+        ),
+        "file",
+    )
+
+
 class OpenAIChatCompletionsHandler(BaseTranslation):
     """
     Handler for processing OpenAI chat completions messages with guardrails.
@@ -115,6 +130,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
+        files_to_check: Final[list[str]] = []  # mutable-ok: accumulated across messages, then copied into inputs
         tool_calls_to_check: Final[list[ChatCompletionToolParam]] = []
         text_task_mappings: Final[list[tuple[int, int | None]]] = []
         tool_call_task_mappings: Final[list[tuple[int, int]]] = []
@@ -126,6 +142,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 msg_idx=msg_idx,
                 texts_to_check=texts_to_check,
                 images_to_check=images_to_check,
+                files_to_check=files_to_check,
                 tool_calls_to_check=tool_calls_to_check,
                 text_task_mappings=text_task_mappings,
                 tool_call_task_mappings=tool_call_task_mappings,
@@ -135,30 +152,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
-        if texts_to_check or tool_calls_to_check:
-            inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
-            if images_to_check:
-                inputs["images"] = images_to_check
-            if tool_calls_to_check:
-                inputs["tool_calls"] = tool_calls_to_check
-            structured_messages: Final = self.get_structured_messages(data)
-            scoped_message_indices: Final = scoped_structured_message_indices(
-                structured_messages or [],
-                scan_only_tool_results=scan_only_tool_results,
+        if texts_to_check or tool_calls_to_check or images_to_check or files_to_check:
+            inputs, structured_messages, scoped_message_indices = self._build_input_guardrail_inputs(
+                data=data,
+                texts_to_check=texts_to_check,
+                images_to_check=images_to_check,
+                files_to_check=files_to_check,
+                tool_calls_to_check=tool_calls_to_check,
                 skip_system=skip_system,
                 skip_tool=skip_tool,
+                scan_only_tool_results=scan_only_tool_results,
             )
-            if structured_messages:
-                inputs["structured_messages"] = [structured_messages[index] for index in scoped_message_indices]
-            # Pass tools (function definitions) to the guardrail
-            tools: Final = data.get("tools")
-            if tools and not scan_only_tool_results:
-                inputs["tools"] = tools
-            # Include model information if available
-            model: Final = data.get("model")
-            if model:
-                inputs["model"] = model
-
             original_structured_messages: Final = inputs.get("structured_messages")
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -170,6 +174,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             guardrailed_tool_calls: Final = guardrailed_inputs.get("tool_calls", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
+            tools: Final = data.get("tools")
             if guardrailed_tools is not None:
                 data["tools"] = (
                     merge_returned_tools_into_request_tools(
@@ -216,6 +221,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         elif (
             not images_to_check
+            and not files_to_check
             and not guardrail_to_apply.records_own_guardrail_information
             and (not_run_reason := self._not_run_reason(messages)) is not None
         ):
@@ -232,13 +238,50 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         return data
 
+    def _build_input_guardrail_inputs(
+        self,
+        data: dict,
+        texts_to_check: list[str],
+        images_to_check: list[str],
+        files_to_check: list[str],
+        tool_calls_to_check: list[ChatCompletionToolParam],
+        *,
+        skip_system: bool,
+        skip_tool: bool,
+        scan_only_tool_results: bool,
+    ) -> tuple[GenericGuardrailAPIInputs, "list[AllMessageValues] | None", list[int]]:
+        inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
+        if images_to_check:
+            inputs["images"] = images_to_check
+        if files_to_check:
+            inputs["files"] = files_to_check
+        if tool_calls_to_check:
+            inputs["tool_calls"] = tool_calls_to_check
+        structured_messages: Final = self.get_structured_messages(data)
+        scoped_message_indices: Final = scoped_structured_message_indices(
+            structured_messages or [],
+            scan_only_tool_results=scan_only_tool_results,
+            skip_system=skip_system,
+            skip_tool=skip_tool,
+        )
+        if structured_messages:
+            inputs["structured_messages"] = [structured_messages[index] for index in scoped_message_indices]
+        tools: Final = data.get("tools")
+        if tools and not scan_only_tool_results:
+            inputs["tools"] = tools
+        model: Final = data.get("model")
+        if model:
+            inputs["model"] = model
+        return inputs, structured_messages, scoped_message_indices
+
     def _not_run_reason(
         self,
         messages: Sequence[dict[str, Any]],  # mutable-ok: raw request messages consumed by _extract_inputs
     ) -> str | None:
-        """Why nothing was scanned, or None when the only unscoped content is images, which this handler never scans."""
+        """Why nothing was scanned, or None when the only unscoped content is attachments, which reach the guardrail but carry no texts."""
         texts: Final[list[str]] = []  # mutable-ok: filled by _extract_inputs
         images: Final[list[str]] = []  # mutable-ok: filled by _extract_inputs
+        files: Final[list[str]] = []  # mutable-ok: filled by _extract_inputs
         tool_calls: Final[list[ChatCompletionToolParam]] = []  # mutable-ok: filled by _extract_inputs
         for msg_idx, message in enumerate(messages):
             self._extract_inputs(
@@ -246,13 +289,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 msg_idx=msg_idx,
                 texts_to_check=texts,
                 images_to_check=images,
+                files_to_check=files,
                 tool_calls_to_check=tool_calls,
                 text_task_mappings=[],  # mutable-ok: required by _extract_inputs, unused here
                 tool_call_task_mappings=[],  # mutable-ok: required by _extract_inputs, unused here
             )
         if texts or tool_calls:
             return "no scannable content after message scoping"
-        return None if images else "no scannable content"
+        return None if images or files else "no scannable content"
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """Extract tool names from OpenAI chat completions request (tools[].function.name, functions[].name)."""
@@ -273,6 +317,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         msg_idx: int,
         texts_to_check: list[str],
         images_to_check: list[str],
+        files_to_check: list[str],
         tool_calls_to_check: list[ChatCompletionToolParam],
         text_task_mappings: list[tuple[int, int | None]],
         tool_call_task_mappings: list[tuple[int, int]],
@@ -318,6 +363,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 images_to_check.append(url)
                         elif isinstance(image_url, str):
                             images_to_check.append(image_url)
+
+                    # Extract non-image file attachments
+                    if content_item.get("type") == "file":
+                        files_to_check.append(_file_part_ref(content_item))
 
         # Extract tool calls (typically in assistant messages)
         tool_calls: Final = message.get("tool_calls", None)

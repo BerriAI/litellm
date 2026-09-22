@@ -5806,20 +5806,6 @@ class TestBedrockGuardrailImageInput:
         decode.assert_not_awaited()
         assert "remote image URLs are not supported" in str(exc_info.value.detail)
 
-    def test_file_backed_part_counting_skips_non_mapping_entries(self):
-        """A content list may mix plain strings in with typed parts.
-
-        `_file_backed_image_count` walks the raw request rather than a normalized
-        shape, so a non-dict entry must be skipped rather than raise or be miscounted.
-        """
-        content = [
-            "just a string",
-            {"type": "text", "text": "hi"},
-            {"type": "image", "source": {"type": "file", "file_id": "file_abc"}},
-        ]
-
-        assert BedrockGuardrail._file_backed_parts(content) == 1
-
     def test_the_url_helper_guards_its_own_inputs(self):
         """Exercised directly so the guards are not dropped in a later refactor."""
         assert BedrockGuardrail._get_image_url(item={"type": "image_url"}) is None
@@ -5827,49 +5813,37 @@ class TestBedrockGuardrailImageInput:
         assert BedrockGuardrail._get_image_url(item={"type": "image_url", "image_url": 7}) is None
 
     @pytest.mark.asyncio
-    async def test_a_file_backed_image_is_refused_rather_than_ignored(self):
-        """`{"type": "file"}` carries no bytes, so nothing reaches inputs["images"].
+    async def test_document_attachments_are_refused_before_any_scan(self):
+        """inputs["files"] carries attachments ApplyGuardrail has no content type for.
 
         The provider still forwards the file to the model, so ignoring it is exactly
-        the silent pass this path exists to remove. Documented is not the same as
-        safe; under the default policy the request is refused.
+        the silent pass this check exists to remove. Under the default policy the
+        request is refused without calling Bedrock.
         """
-        inputs = {"texts": ["what does this say?"], "images": []}
-        request_data = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "what does this say?"},
-                        {"type": "image", "source": {"type": "file", "file_id": "file_abc"}},
-                    ],
-                }
-            ]
-        }
-
         g = self._guardrail()
         sent: list = []
 
         async def spy(**kwargs):
-            sent.append(kwargs["messages"])
+            sent.append(kwargs)
             return {"action": "NONE", "outputs": []}
 
-        # Stubbed so that without the refusal this request would simply succeed:
-        # the failure mode being pinned is a silent pass, not an AWS error.
         with patch.object(g, "make_bedrock_api_request", new=spy):
             with pytest.raises(HTTPException) as exc_info:
-                await g.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
+                await g.apply_guardrail(
+                    inputs={"texts": ["what does this say?"], "files": ["data:application/pdf;base64,AAAA"]},
+                    request_data={"messages": []},
+                    input_type="request",
+                )
 
-        assert "file id" in str(exc_info.value.detail)
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
         assert sent == [], "refused before any scan was attempted"
 
     @pytest.mark.asyncio
     async def test_a_file_backed_image_is_refused_through_the_real_translation(self):
-        """Drive the /v1/messages handler instead of hand-building its output.
+        """Drive the /v1/messages handler: a file-source image lands in images.
 
-        The handler translates to OpenAI spec before filling structured_messages, and
-        that translation drops a file source, so a check reading structured_messages
-        passes every hand-written fixture and never fires in production.
+        The handler now yields the file_id as the image ref, so the guardrail refuses
+        it through the same unreadable-image path as any other non-inline source.
         """
         from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 
@@ -5885,57 +5859,137 @@ class TestBedrockGuardrailImageInput:
                 }
             ],
         }
-        assert not self._file_parts_in(AnthropicMessagesHandler().get_structured_messages(data)), (
-            "the translation is expected to drop the file source; that is why this test exists"
-        )
 
         g = self._guardrail()
-        with patch.object(g, "make_bedrock_api_request", new=AsyncMock(return_value={"action": "NONE"})):
+        # The decoder is pinned to fail so the refusal is deterministic: what is being
+        # asserted is that the file_id reaches the image path at all, not that decoding
+        # of a non-image string happens to fail.
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.process_image_async",
+            new=AsyncMock(side_effect=ValueError("not an image")),
+        ):
             with pytest.raises(HTTPException) as exc_info:
                 await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=g)
 
-        assert "file id" in str(exc_info.value.detail)
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_a_file_backed_image_inside_a_tool_result_is_refused(self):
-        """The extractor pulls scannable images out of a tool_result's nested blocks.
+        """A file source nested in tool_result content is extracted and refused."""
+        from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 
-        A file source sitting there is invisible to both: it yields no bytes to scan
-        and, until the count descended into tool_result, no refusal either.
-        """
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what does this say?"},
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu_1",
+                            "content": [
+                                {"type": "image", "source": {"type": "file", "file_id": "file_abc"}}
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+
         g = self._guardrail()
-        sent: list = []
-
-        async def spy(**kwargs):
-            sent.append(kwargs["messages"])
-            return {"action": "NONE", "outputs": []}
-
-        with patch.object(g, "make_bedrock_api_request", new=spy):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.process_image_async",
+            new=AsyncMock(side_effect=ValueError("not an image")),
+        ):
             with pytest.raises(HTTPException) as exc_info:
-                await g.apply_guardrail(
-                    inputs={"texts": ["what does this say?"], "images": []},
-                    request_data={
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": [
-                                    {"type": "text", "text": "what does this say?"},
-                                    {
-                                        "type": "tool_result",
-                                        "tool_use_id": "tu_1",
-                                        "content": [
-                                            {"type": "image", "source": {"type": "file", "file_id": "file_abc"}}
-                                        ],
-                                    },
-                                ],
-                            }
-                        ]
-                    },
-                    input_type="request",
-                )
+                await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=g)
 
-        assert "file id" in str(exc_info.value.detail)
-        assert sent == []
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_an_openai_file_part_is_refused(self):
+        """An OpenAI `type: file` part has no scannable content type in ApplyGuardrail."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize this"},
+                    {"type": "file", "file": {"filename": "a.pdf", "file_data": "data:application/pdf;base64,AAAA"}},
+                ],
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_an_anthropic_document_block_is_refused(self):
+        """A raw Anthropic document block has no scannable content type either."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+                    },
+                    {"type": "text", "text": "summarize this"},
+                ],
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_an_anthropic_base64_image_block_builds_an_image_item(self):
+        """The /v1/messages during_call path hands raw image blocks to the builder."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what does this say?"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": self._PNG_DATA_URI.split(",")[1],
+                        },
+                    },
+                ],
+            }
+        ]
+
+        request = await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert request["content"] == [
+            {"text": {"text": "what does this say?"}},
+            {"image": {"format": "png", "source": {"bytes": self._PNG_DATA_URI.split(",")[1]}}},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_an_anthropic_url_image_is_refused(self):
+        """A url image source is not inline data, so it fails closed like a remote url."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what does this say?"},
+                    {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+                ],
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_a_scannable_image_inside_a_tool_result_is_not_refused(self):
@@ -5971,16 +6025,6 @@ class TestBedrockGuardrailImageInput:
             )
 
         assert sent, "a scannable nested image still has to be scanned, not refused"
-
-    @staticmethod
-    def _file_parts_in(messages) -> int:
-        return sum(
-            1
-            for message in messages or ()
-            if isinstance(message, dict)
-            for part in (message.get("content") if isinstance(message.get("content"), list) else ())
-            if isinstance(part, dict) and part.get("type") == "image"
-        )
 
     @pytest.mark.asyncio
     async def test_latest_message_only_does_not_scan_the_same_image_twice(self):
@@ -6056,44 +6100,8 @@ class TestBedrockGuardrailImageInput:
         assert "image" in kinds
 
     @pytest.mark.asyncio
-    async def test_a_malformed_structured_message_does_not_derail_the_file_check(self):
-        """structured_messages comes from the caller, so its shape is not guaranteed.
-
-        The scan must keep walking past an entry it cannot read rather than throwing
-        or giving up, or a single junk element would hide a file image sitting after
-        it -- turning a defensive guard into the bypass it was meant to prevent.
-        """
-        g = self._guardrail()
-        sent: list = []
-
-        async def spy(**kwargs):
-            sent.append(kwargs["messages"])
-            return {"action": "NONE", "outputs": []}
-
-        with patch.object(g, "make_bedrock_api_request", new=spy):
-            with pytest.raises(HTTPException) as exc_info:
-                await g.apply_guardrail(
-                    inputs={"texts": ["hello"], "images": []},
-                    request_data={
-                        "messages": [
-                            "not a message",
-                            123,
-                            {"role": "user", "content": "a plain string, not a list"},
-                            {
-                                "role": "user",
-                                "content": [{"type": "image", "source": {"type": "file", "file_id": "file_abc"}}],
-                            },
-                        ]
-                    },
-                    input_type="request",
-                )
-
-        assert "file id" in str(exc_info.value.detail)
-        assert sent == []
-
-    @pytest.mark.asyncio
-    async def test_a_file_backed_image_on_the_response_side_is_not_refused(self):
-        """Images are a request-side concern; an OUTPUT scan takes generated text."""
+    async def test_files_on_the_response_side_are_not_refused(self):
+        """Attachments are a request-side concern; an OUTPUT scan takes generated text."""
         g = self._guardrail()
 
         async def spy(**kwargs):
@@ -6103,6 +6111,7 @@ class TestBedrockGuardrailImageInput:
             result = await g.apply_guardrail(
                 inputs={
                     "texts": ["the model said this"],
+                    "files": ["data:application/pdf;base64,AAAA"],
                     "structured_messages": [
                         {
                             "role": "user",

@@ -17,9 +17,7 @@ import json
 import os
 import struct
 import zlib
-from typing import Final
-
-from collections.abc import Sequence
+from typing import Final, cast
 
 import pytest
 from e2e_config import unique_marker
@@ -124,7 +122,9 @@ def _register_bedrock(
 
 
 def _assert_guardrail_block(response: StreamingResponse, case: str) -> None:
-    assert response.status_code == 400, f"{case}: expected 400 guardrail block, got {response.status_code}: {response.body[:300]}"
+    assert response.status_code == 400, (
+        f"{case}: expected 400 guardrail block, got {response.status_code}: {response.body[:300]}"
+    )
     assert "Violated guardrail policy" in response.body, (
         f"{case}: 400 body should name the guardrail verdict; got: {response.body[:300]}"
     )
@@ -137,7 +137,7 @@ def _has_pre_call_record(rows: list[SpendLogRow]) -> bool:
 
 class TestBedrockGuardrailAttachments:
     def _chat(
-        self, client: GuardrailsClient, key: str, content: Sequence[ContentPart], guardrails: list[str]
+        self, client: GuardrailsClient, key: str, content: list[ContentPart], guardrails: list[str]
     ) -> StreamingResponse:
         return client.proxy.transport.send(
             "/chat/completions",
@@ -176,9 +176,14 @@ class TestBedrockGuardrailAttachments:
             [ImageContentPart(image_url=ImageUrl(url=f"data:image/png;base64,{_png_b64()}"))],
             [name],
         )
-        assert response.ok, f"png image-only message should pass the scan, got {response.status_code}: {response.body[:300]}"
-        request_id = json.loads(response.body).get("id")
-        assert request_id, f"200 body must carry a response id for the spend-log lookup; got: {response.body[:300]}"
+        assert response.ok, (
+            f"png image-only message should pass the scan, got {response.status_code}: {response.body[:300]}"
+        )
+        parsed: Final = cast("dict[str, object]", json.loads(response.body))
+        request_id: Final = parsed.get("id")
+        assert isinstance(request_id, str) and request_id, (
+            f"200 body must carry a response id for the spend-log lookup; got: {response.body[:300]}"
+        )
         rows = client.proxy.poll_logs_for_request_id(request_id, predicate=_has_pre_call_record)
         records = (rows[0].metadata.guardrail_information if rows[0].metadata else None) or []
         image_units = [
@@ -296,9 +301,7 @@ class TestBedrockGuardrailAttachments:
     def test_converse_document_block_blocks(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        name = _register_bedrock(
-            client, resources, f"e2e-bedrock-att-{unique_marker()}", default_on=True
-        )
+        _register_bedrock(client, resources, f"e2e-bedrock-att-{unique_marker()}", default_on=True)
         response = poll_until_blocked_stream(
             lambda: client.proxy.transport.send(
                 f"/bedrock/model/{CONVERSE_MODEL}/converse",
@@ -322,9 +325,7 @@ class TestBedrockGuardrailAttachments:
     def test_converse_image_block_blocks(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        name = _register_bedrock(
-            client, resources, f"e2e-bedrock-att-{unique_marker()}", default_on=True
-        )
+        _register_bedrock(client, resources, f"e2e-bedrock-att-{unique_marker()}", default_on=True)
         response = poll_until_blocked_stream(
             lambda: client.proxy.transport.send(
                 f"/bedrock/model/{CONVERSE_MODEL}/converse",
@@ -348,9 +349,7 @@ class TestBedrockGuardrailAttachments:
     def test_during_call_file_part_blocks(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        name = _register_bedrock(
-            client, resources, f"e2e-bedrock-during-{unique_marker()}", mode="during_call"
-        )
+        name = _register_bedrock(client, resources, f"e2e-bedrock-during-{unique_marker()}", mode="during_call")
         response = poll_until_blocked_stream(
             lambda: self._chat(
                 client,

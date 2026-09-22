@@ -3374,3 +3374,95 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         ended_key = handler.get_streaming_scan_key([self._delta(0, "hi"), added, self._completed(3, [function_call])])
         assert ended_key.tool_calls_in_flight is False
         assert len(ended_key.tool_calls) == 1
+
+
+class InputRecordingGuardrail(CustomGuardrail):
+    """Records the inputs each apply_guardrail call was handed."""
+
+    def __init__(self, guardrail_name: str = "recording"):
+        super().__init__(guardrail_name=guardrail_name)
+        self.calls = 0
+        self.inputs: GenericGuardrailAPIInputs | None = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Any | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.calls += 1
+        self.inputs = inputs.copy()
+        return inputs
+
+
+class TestOpenAIResponsesHandlerAttachments:
+    _GIF_DATA_URI = "data:image/gif;base64,R0lGODlhAQABAAAAACw="
+
+    @pytest.mark.asyncio
+    async def test_input_image_only_invokes_guardrail_with_images(self):
+        """An input_image-only turn used to skip apply_guardrail entirely."""
+        handler = OpenAIResponsesHandler()
+        guardrail = InputRecordingGuardrail()
+        data = {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_image", "image_url": self._GIF_DATA_URI}],
+                }
+            ],
+            "model": "gpt-4o",
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.calls == 1, "input_image-only turn never reached apply_guardrail"
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["images"] == [self._GIF_DATA_URI]
+
+    @pytest.mark.asyncio
+    async def test_input_file_reaches_guardrail_as_files(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = InputRecordingGuardrail()
+        data = {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "summarize this document"},
+                        {
+                            "type": "input_file",
+                            "filename": "a.pdf",
+                            "file_data": "data:application/pdf;base64,AAAA",
+                        },
+                    ],
+                }
+            ],
+            "model": "gpt-4o",
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["files"] == ["data:application/pdf;base64,AAAA"]
+
+    @pytest.mark.asyncio
+    async def test_input_file_with_only_a_file_id_reaches_guardrail(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = InputRecordingGuardrail()
+        data = {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_file", "file_id": "file_abc"}],
+                }
+            ],
+            "model": "gpt-4o",
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.calls == 1, "file-only turn never reached apply_guardrail"
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["files"] == ["file_abc"]

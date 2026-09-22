@@ -143,6 +143,77 @@ def _extract_converse_texts(
     return texts, holders
 
 
+def _converse_media_ref(media: Mapping[str, object], media_kind: str, fallback: str) -> str:
+    """Identify a Converse image/document/video block by whichever source it carries.
+
+    Inline bytes become a data URI so the format travels with the payload; an s3
+    location yields its uri. Anything else still yields the fallback literal so an
+    unreadable attachment is surfaced to the guardrail rather than dropped.
+    """
+    source: Final = media.get("source")
+    if isinstance(source, dict):
+        data: Final = source.get("bytes")
+        if isinstance(data, str) and data:
+            media_format: Final = media.get("format")
+            if isinstance(media_format, str) and media_format:
+                return f"data:{media_kind}/{media_format};base64,{data}"
+            return f"data:{media_kind};base64,{data}"
+        s3_location: Final = source.get("s3Location")
+        if isinstance(s3_location, dict):
+            uri: Final = s3_location.get("uri")
+            if isinstance(uri, str) and uri:
+                return uri
+    return fallback
+
+
+def _converse_block_attachments(block: Mapping[str, object]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return the (image refs, file refs) one converse content block carries."""
+    image: Final = block.get("image")
+    document: Final = block.get("document")
+    video: Final = block.get("video")
+    return (
+        (_converse_media_ref(image, media_kind="image", fallback="image"),) if isinstance(image, dict) else (),
+        tuple(
+            _converse_media_ref(media, media_kind=kind, fallback=fallback)
+            for media, kind, fallback in (
+                (document, "application", "document"),
+                (video, "video", "video"),
+            )
+            if isinstance(media, dict)
+        ),
+    )
+
+
+def _converse_input_blocks(body: dict, skip_tool: bool) -> tuple[Mapping[str, object], ...]:
+    """Content blocks the attachment walk covers, at the same positions
+    ``_extract_converse_texts`` scans: message content blocks and toolResult inner
+    content blocks."""
+    top_level: Final = tuple(
+        block
+        for message in body.get("messages") or ()
+        if isinstance(message, dict)
+        for block in message.get("content") or ()
+        if isinstance(block, dict) and not (skip_tool and ("toolUse" in block or "toolResult" in block))
+    )
+    nested: Final = tuple(
+        inner
+        for block in top_level
+        for tool_result in (block.get("toolResult"),)
+        if isinstance(tool_result, dict)
+        for inner in tool_result.get("content") or ()
+        if isinstance(inner, dict)
+    )
+    return top_level + nested
+
+
+def _extract_converse_attachments(body: dict, skip_tool: bool) -> tuple[list[str], list[str]]:
+    """Collect image and document/video references the text walk would skip."""
+    attachments: Final = tuple(_converse_block_attachments(block) for block in _converse_input_blocks(body, skip_tool))
+    images: Final = [ref for pair in attachments for ref in pair[0]]  # mutable-ok: inputs takes list[str]
+    files: Final = [ref for pair in attachments for ref in pair[1]]  # mutable-ok: inputs takes list[str]
+    return images, files
+
+
 def _extract_converse_output_texts(
     content_blocks: Sequence[object],
 ) -> tuple[list[str], list[_StringHolder]]:
@@ -443,11 +514,16 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
 
         texts, holders = _extract_converse_texts(body, skip_system, skip_tool)
+        images, files = _extract_converse_attachments(body, skip_tool)
 
-        if not texts:
+        if not texts and not images and not files:
             return data
 
         inputs: Final = GenericGuardrailAPIInputs(texts=texts)
+        if images:
+            inputs["images"] = images
+        if files:
+            inputs["files"] = files
         model: Final = data.get("model")
         if model:
             inputs["model"] = model
