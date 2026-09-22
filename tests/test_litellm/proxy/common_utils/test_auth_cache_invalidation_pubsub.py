@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import time
 from typing import Iterable, List, Optional, Tuple
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AUTH_CACHE_INVALIDATION_CHANNEL,
     AuthCacheInvalidationSubscriber,
+    evict_and_broadcast,
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -222,3 +224,17 @@ async def test_subscriber_ignores_malformed_messages() -> None:
     subscriber._apply_message(None)
 
     assert cache.in_memory_cache.get_cache("project_id:p-1") is not None
+
+
+@pytest.mark.asyncio
+async def test_evict_and_broadcast_evicts_locally_and_returns_when_publish_never_completes() -> None:
+    cache = UserApiKeyCache()
+    cache.set_cache("user-wedged", UserAPIKeyAuth(user_id="user-wedged"), model_type=UserAPIKeyAuth)
+
+    async def hanging_publish(cache_key: str) -> None:
+        await asyncio.Event().wait()
+
+    started = time.monotonic()
+    await evict_and_broadcast(cache_keys=("user-wedged",), user_api_key_cache=cache, publish=hanging_publish)
+    assert time.monotonic() - started < 2.0
+    assert cache.get_cache("user-wedged", model_type=UserAPIKeyAuth) is None

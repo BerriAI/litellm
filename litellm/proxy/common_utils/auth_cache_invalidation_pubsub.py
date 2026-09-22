@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Final
 
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 AUTH_CACHE_INVALIDATION_CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 _POLL_TIMEOUT_SECONDS: Final = 1.0
+_PUBLISH_TIMEOUT_SECONDS: Final = 1.0
 _BACKOFF_INITIAL_SECONDS: Final = 5.0
 _BACKOFF_MAX_SECONDS: Final = 60.0
 
@@ -100,14 +101,21 @@ async def publish_auth_cache_invalidation(
         verbose_proxy_logger.warning("auth cache invalidation publish for %s failed: %s", cache_key, e)
 
 
-async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
+async def evict_and_broadcast(
+    cache_keys: Sequence[str],
+    user_api_key_cache: "UserApiKeyCache",
+    *,
+    publish: Callable[[str], Awaitable[None]] = publish_auth_cache_invalidation,
+) -> None:
     """
     Drop cached management objects here and on every other worker.
 
     Every endpoint that mutates a cached object must call this: auth serves those objects
     cache-first with no freshness check, so a mutation that leaves the entry in place keeps the
     stale object enforced until its TTL expires (LIT-3803). Best-effort on both steps: the DB write
-    has already committed, so a cache backend error must not fail the endpoint.
+    has already committed, so a cache backend error must not fail the endpoint, and the broadcast is
+    bounded by ``_PUBLISH_TIMEOUT_SECONDS`` so a Redis that accepts connections but never replies
+    cannot hold the request handler.
     """
     for cache_key in cache_keys:
         try:
@@ -118,7 +126,15 @@ async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "Us
                 cache_key,
                 e,
             )
-        await publish_auth_cache_invalidation(cache_key=cache_key)
+        try:
+            await asyncio.wait_for(publish(cache_key), timeout=_PUBLISH_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            verbose_proxy_logger.warning(
+                "auth cache invalidation publish for %s timed out after %.1fs; "
+                "other workers keep their cached copy until its TTL expires",
+                cache_key,
+                _PUBLISH_TIMEOUT_SECONDS,
+            )
 
 
 class AuthCacheInvalidationSubscriber:
