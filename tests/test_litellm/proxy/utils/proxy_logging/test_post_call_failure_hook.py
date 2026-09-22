@@ -13,6 +13,7 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
+from litellm.constants import PROXY_REJECTED_BEFORE_ROUTING_KEY
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
@@ -141,10 +142,60 @@ async def test_post_call_failure_hook_attributes_single_router_deployment(
     assert kwargs["litellm_params"]["custom_llm_provider"] == "openai"
     assert kwargs["litellm_params"]["metadata"]["model_info"]["provider"] == "acme"
     assert kwargs["litellm_params"]["metadata"]["deployment"] == "openai/gpt-4.1"
+    assert kwargs["litellm_params"][PROXY_REJECTED_BEFORE_ROUTING_KEY] is True
     assert kwargs["standard_logging_object"]["custom_llm_provider"] == "openai"
     assert (
         kwargs["standard_logging_object"]["model_id"] == proxy_server.llm_router.get_model_list()[0]["model_info"]["id"]
     )
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_keeps_router_stamped_metadata_for_post_call_failures(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """A post-call guardrail block arrives with the router's own ``model_info`` already in
+    the request metadata. The pre-routing flag must stay off so deployment metrics keep
+    attributing the failure to the deployment that actually served the call."""
+    from litellm.proxy import proxy_server
+
+    recorded: list[dict] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            recorded.append(kwargs)
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "internal-model",
+                    "litellm_params": {"model": "openai/gpt-4.1", "api_key": "sk-test"},
+                    "model_info": {"id": "routed-deployment"},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
+    proxy_logging.alert_types = []
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={
+            "model": "internal-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"model_info": {"id": "routed-deployment", "served": True}},
+        },
+        original_exception=GuardrailRaisedException(guardrail_name="g", message="response blocked"),
+        user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions"),
+        route="/chat/completions",
+    )
+
+    assert len(recorded) == 1
+    kwargs = recorded[0]
+    assert kwargs["litellm_params"]["metadata"]["model_info"] == {"id": "routed-deployment", "served": True}
+    assert PROXY_REJECTED_BEFORE_ROUTING_KEY not in kwargs["litellm_params"]
+    assert kwargs["standard_logging_object"]["model_id"] == "routed-deployment"
 
 
 @pytest.mark.asyncio

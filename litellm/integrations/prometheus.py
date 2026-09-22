@@ -18,7 +18,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK
+from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK, PROXY_REJECTED_BEFORE_ROUTING_KEY
 from litellm.exceptions import (
     validate_rate_limit_category,
     validate_rate_limit_type,
@@ -204,20 +204,6 @@ def _get_budget_metrics_per_request_timeout() -> float:
         )
         return _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT
     return parsed
-
-
-_PROXY_REJECTION_EXCEPTION_NAMES: Final[frozenset[str]] = frozenset(
-    {"HTTPException", "ProxyException", "GuardrailRaisedException"}
-)
-
-
-def _is_proxy_side_rejection(exception: Exception | None) -> bool:
-    """Requests the proxy rejects before picking a deployment (auth, rate limit, guardrail) raise
-    fastapi's ``HTTPException``, ``ProxyException`` or ``GuardrailRaisedException``; matched by
-    class name so this module stays free of a ``fastapi`` import."""
-    if exception is None:
-        return False
-    return any(base.__name__ in _PROXY_REJECTION_EXCEPTION_NAMES for base in type(exception).__mro__)
 
 
 def _get_proxy_llm_router() -> Router | None:
@@ -2851,7 +2837,7 @@ class PrometheusLogger(CustomLogger):
 
             # On LiteLLM-side rejects (no deployment picked), route request_kwargs["model"]
             # into requested_model and leave deployment-scoped labels empty.
-            deployment_selected: Final = bool(model_id) and not _is_proxy_side_rejection(exception)
+            deployment_selected: Final = bool(model_id) and not _litellm_params.get(PROXY_REJECTED_BEFORE_ROUTING_KEY)
             if deployment_selected:
                 label_litellm_model_name = litellm_model_name
                 label_model_id = model_id

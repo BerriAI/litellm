@@ -52,6 +52,7 @@ from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
+    PROXY_REJECTED_BEFORE_ROUTING_KEY,
     REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT,
     SPEND_LOG_QUEUE_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
@@ -980,7 +981,9 @@ def _stamp_deployment_attribution(
 ) -> Mapping[str, object]:
     """Stamp provider and logging-metadata attribution onto ``litellm_params`` and return it.
     ``litellm_params["model_info"]`` stays unset: the router's cooldown and per-deployment rpm
-    callbacks key off it and must not count a proxy-side reject against the deployment."""
+    callbacks key off it and must not count a proxy-side reject against the deployment. Metadata
+    the router already stamped (a post-call failure) is left alone; only a pre-routing reject gets
+    the attribution plus the ``PROXY_REJECTED_BEFORE_ROUTING_KEY`` flag deployment metrics key off."""
     attribution: Final = _deployment_attribution_for_model_group(model_group, team_id)
     if "custom_llm_provider" in attribution:
         litellm_params["custom_llm_provider"] = attribution["custom_llm_provider"]
@@ -989,9 +992,11 @@ def _stamp_deployment_attribution(
     if litellm_params.get("metadata") is None:
         litellm_params["metadata"] = {}  # mutable-ok: legacy logging payload is populated in place
     metadata: Final = litellm_params["metadata"]
-    if isinstance(metadata, dict):
-        metadata.setdefault("model_info", attribution["model_info"])
-        metadata.setdefault("deployment", attribution["deployment"])
+    if not isinstance(metadata, dict) or "model_info" in metadata:
+        return attribution
+    metadata["model_info"] = attribution["model_info"]
+    metadata.setdefault("deployment", attribution["deployment"])
+    litellm_params[PROXY_REJECTED_BEFORE_ROUTING_KEY] = True
     return attribution
 
 
