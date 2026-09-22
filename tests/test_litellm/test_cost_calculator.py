@@ -3120,15 +3120,20 @@ def _logging_obj_with_call_window(duration_ms: float) -> Logging:
 
 
 @pytest.mark.parametrize(
-    ("stamped_response_ms", "logged_duration_ms", "expected_seconds"),
-    [(None, 1500.0, 1.5), (3000.0, 1500.0, 3.0)],
+    ("stamped_response_ms", "total_time", "logged_duration_ms", "expected_seconds"),
+    [(None, 0.0, 1500.0, 1.5), (3000.0, 0.0, 1500.0, 3.0), (None, 2500.0, 1500.0, 2.5), (3000.0, 2500.0, 1500.0, 3.0)],
 )
 def test_completion_cost_per_second_deployment_bills_the_call_duration(
-    monkeypatch, stamped_response_ms: float | None, logged_duration_ms: float, expected_seconds: float
+    monkeypatch,
+    stamped_response_ms: float | None,
+    total_time: float,
+    logged_duration_ms: float,
+    expected_seconds: float,
 ):
     """
     A deployment priced only per second bills the stamped ``_response_ms`` when there is one,
-    and the logging object's start/end window otherwise (a streamed response is never stamped).
+    then the caller's explicit ``total_time``, and the logging object's start/end window otherwise
+    (a streamed response is never stamped).
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
@@ -3156,6 +3161,7 @@ def test_completion_cost_per_second_deployment_bills_the_call_duration(
         custom_llm_provider="openai",
         custom_pricing=True,
         router_model_id=deployment_id,
+        total_time=total_time,
         litellm_logging_obj=_logging_obj_with_call_window(logged_duration_ms),
     )
 

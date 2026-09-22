@@ -1233,13 +1233,15 @@ def _response_time_ms_for_cost(
     completion_response: object,
     litellm_logging_obj: LitellmLoggingObject | None,
     total_time: float | None,
-) -> float | None:
+) -> float:
     stamped: Final = getattr(completion_response, "_response_ms", None)
     if isinstance(stamped, (int, float)):
         return float(stamped)
+    if total_time:
+        return total_time
     if litellm_logging_obj is not None:
         return litellm_logging_obj.get_response_ms()
-    return total_time
+    return 0.0
 
 
 def completion_cost(
