@@ -68,6 +68,10 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.served_output_texts import (
+    record_served_output_texts,
+    served_output_texts,
+)
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
@@ -2803,6 +2807,7 @@ class ProxyBaseLLMRequestProcessing:
                 user_api_key_dict=user_api_key_dict,
                 response=response,
             )
+            record_served_output_texts(logging_obj.model_call_details, served_output_texts(response))
         except Exception:
             _exception_raised = True
             raise

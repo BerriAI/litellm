@@ -1,10 +1,12 @@
 import asyncio
 import contextlib
 import datetime
+import json
 import logging
 import os
 import sys
 from collections.abc import Callable, Iterator, Mapping
+from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -3011,6 +3013,54 @@ def test_get_final_response_obj_with_empty_response_obj_and_list_init():
     assert len(result) == 2
     assert result[0].name == "Object1"
     assert result[1].name == "Object2"
+
+
+def test_get_final_response_obj_stores_the_text_a_post_call_guardrail_served():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+
+    raw = {
+        "id": "x",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "Card: 4111 1111 1111 1111"},
+            }
+        ],
+    }
+
+    logged = StandardLoggingPayloadSetup.get_final_response_obj(
+        response_obj=raw, init_response_obj=raw, kwargs={SERVED_OUTPUT_TEXTS_KEY: ("Card: <CREDIT_CARD>",)}
+    )
+    untouched = StandardLoggingPayloadSetup.get_final_response_obj(response_obj=raw, init_response_obj=raw, kwargs={})
+
+    assert isinstance(logged, dict)
+    assert logged["choices"][0]["message"]["content"] == "Card: <CREDIT_CARD>"
+    assert logged["choices"][0]["finish_reason"] == "stop"
+    assert untouched == raw
+
+
+def test_get_final_response_obj_redacts_the_served_text_when_message_logging_is_off(monkeypatch: pytest.MonkeyPatch):
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    raw = {
+        "id": "x",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Card: 4111"}}],
+    }
+
+    logged = StandardLoggingPayloadSetup.get_final_response_obj(
+        response_obj=raw,
+        init_response_obj=raw,
+        kwargs={SERVED_OUTPUT_TEXTS_KEY: ("Card: <CREDIT_CARD>",), "litellm_params": {}},
+    )
+
+    assert isinstance(logged, dict)
+    assert "<CREDIT_CARD>" not in json.dumps(logged), logged
+    assert "4111" not in json.dumps(logged), logged
 
 
 def test_get_usage_as_dict():
@@ -7427,6 +7477,141 @@ def test_passthrough_embeddings_result_swapped_for_callbacks():
 
     assert isinstance(swapped_result, EmbeddingResponse)
     assert swapped_result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+_PUBLISHED_BATCH_MODEL: Final = "lit-published-batch-tier-model"
+_PUBLISHED_BATCH_DEPLOYMENT: Final = f"openai/{_PUBLISHED_BATCH_MODEL}"
+_PUBLISHED_BATCH_RATES: Final = MappingProxyType(
+    {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 8e-6,
+        "input_cost_per_token_batches": 1.1e-6,
+        "output_cost_per_token_batches": 4.1e-6,
+        "cache_read_input_token_cost_batches": 1.2e-7,
+        "cache_creation_input_token_cost_batches": 1.3e-6,
+        "input_cost_per_token_above_272k_tokens_batches": 3.1e-6,
+        "output_cost_per_token_above_272k_tokens_batches": 7.1e-6,
+        "cache_read_input_token_cost_above_272k_tokens_batches": 3.2e-7,
+        "cache_creation_input_token_cost_above_272k_tokens_batches": 3.3e-6,
+    }
+)
+_PUBLISHED_INPUT_BATCH_KEYS: Final = (
+    "input_cost_per_token_batches",
+    "input_cost_per_token_above_272k_tokens_batches",
+    "cache_read_input_token_cost_batches",
+    "cache_read_input_token_cost_above_272k_tokens_batches",
+    "cache_creation_input_token_cost_batches",
+    "cache_creation_input_token_cost_above_272k_tokens_batches",
+)
+_PUBLISHED_OUTPUT_BATCH_KEYS: Final = (
+    "output_cost_per_token_batches",
+    "output_cost_per_token_above_272k_tokens_batches",
+)
+
+
+@pytest.fixture
+def _published_batch_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.register_model(
+        model_cost={_PUBLISHED_BATCH_MODEL: {**_PUBLISHED_BATCH_RATES}}, persist_across_reloads=False
+    )
+
+
+def _batch_deployment_id(custom_pricing: dict[str, float]) -> str:
+    from litellm import Router
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "published-batch",
+                "litellm_params": {"model": _PUBLISHED_BATCH_DEPLOYMENT, "api_key": "sk-test", **custom_pricing},
+            }
+        ]
+    )
+    return router.model_list[0]["model_info"]["id"]
+
+
+def test_deployment_pricing_model_info_carries_every_published_input_batch_rate_when_only_output_is_declared(
+    _published_batch_model: None,
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+
+    info: Final = deployment_pricing_model_info(
+        _batch_deployment_id({"output_cost_per_token_batches": 4e-6}), _PUBLISHED_BATCH_DEPLOYMENT
+    )
+
+    assert info is not None
+    assert {key: info[key] for key in _PUBLISHED_INPUT_BATCH_KEYS} == {
+        key: _PUBLISHED_BATCH_RATES[key] for key in _PUBLISHED_INPUT_BATCH_KEYS
+    }
+    assert info["output_cost_per_token_batches"] == 4e-6
+    assert info["output_cost_per_token_above_272k_tokens_batches"] is None
+
+
+def test_deployment_pricing_model_info_carries_the_published_output_batch_tier_when_only_input_is_declared(
+    _published_batch_model: None,
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+
+    info: Final = deployment_pricing_model_info(
+        _batch_deployment_id({"input_cost_per_token_batches": 1e-6}), _PUBLISHED_BATCH_DEPLOYMENT
+    )
+
+    assert info is not None
+    assert {key: info[key] for key in _PUBLISHED_OUTPUT_BATCH_KEYS} == {
+        key: _PUBLISHED_BATCH_RATES[key] for key in _PUBLISHED_OUTPUT_BATCH_KEYS
+    }
+    assert info["input_cost_per_token_batches"] == 1e-6
+    assert info["input_cost_per_token_above_272k_tokens_batches"] is None
+    assert info["cache_read_input_token_cost_batches"] is None
+    assert info["cache_creation_input_token_cost_batches"] is None
+
+
+def test_batch_cost_calculator_bills_the_carried_output_tier_when_the_deployment_declares_its_own_input_rate(
+    _published_batch_model: None,
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+    from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+    from litellm.types.utils import Usage
+
+    info: Final = deployment_pricing_model_info(
+        _batch_deployment_id({"input_cost_per_token": 5e-6}), _PUBLISHED_BATCH_DEPLOYMENT
+    )
+    assert info is not None
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=Usage(prompt_tokens=300_000, completion_tokens=10, total_tokens=300_010),
+        model=_PUBLISHED_BATCH_DEPLOYMENT,
+        custom_llm_provider="openai",
+        model_info=info,
+    )
+
+    assert prompt_cost == pytest.approx(300_000 * 5e-6 / 2)
+    assert completion_cost == pytest.approx(
+        10 * _PUBLISHED_BATCH_RATES["output_cost_per_token_above_272k_tokens_batches"]
+    )
+
+
+def test_deployment_pricing_model_info_honors_a_tier_only_batch_override_over_the_published_flat_rates(
+    _published_batch_model: None,
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+
+    info: Final = deployment_pricing_model_info(
+        _batch_deployment_id({"input_cost_per_token_above_272k_tokens_batches": 1e-3}), _PUBLISHED_BATCH_DEPLOYMENT
+    )
+    carried_keys: Final = tuple(
+        key
+        for key in (*_PUBLISHED_INPUT_BATCH_KEYS, *_PUBLISHED_OUTPUT_BATCH_KEYS)
+        if key != "input_cost_per_token_above_272k_tokens_batches"
+    )
+
+    assert info is not None
+    assert info["input_cost_per_token_above_272k_tokens_batches"] == 1e-3
+    assert {key: info[key] for key in carried_keys} == {key: _PUBLISHED_BATCH_RATES[key] for key in carried_keys}
 
 
 def test_get_status_fields_ranks_guardrail_flagged_between_success_and_intervened():

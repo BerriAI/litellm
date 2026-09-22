@@ -3065,10 +3065,26 @@ dependencies = [
  "serde_json",
  "serde_with",
  "sha2 0.10.9",
+ "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite",
  "url",
  "wiremock",
+]
+
+[[package]]
+name = "litellm-python-compat"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "hex",
+ "num-bigint 0.4.8",
+ "num-traits",
+ "rstest",
+ "serde",
+ "serde-pickle",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

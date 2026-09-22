@@ -49,6 +49,7 @@ class AnthropicHeaders(AuthHeaders):
     on its own internal calls."""
 
     anthropic_version: str = Field(default="2023-06-01", alias="anthropic-version")
+    x_litellm_session_id: str | None = Field(default=None, serialization_alias="x-litellm-session-id")
 
 
 class PartialBody(BaseModel):

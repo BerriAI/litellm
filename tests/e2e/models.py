@@ -124,6 +124,32 @@ class KeyDeleteBody(BaseModel):
     keys: list[str]
 
 
+class KeyDeleteByAliasBody(BaseModel):
+    key_aliases: list[str]
+
+
+class AuditLogParams(BaseModel):
+    object_id: str
+    action: str
+    table_name: str
+    page_size: int
+
+
+class AuditLogEntry(BaseModel):
+    id: str
+    changed_by: str | None = None
+    changed_by_api_key: str | None = None
+    action: str
+    table_name: str
+    object_id: str
+    before_value: object | None = None
+
+
+class AuditLogPage(BaseModel):
+    audit_logs: list[AuditLogEntry]
+    total: int
+
+
 class KeyInfoParams(BaseModel):
     key: str
 
@@ -749,6 +775,12 @@ class OcrBody(BaseModel):
     document: OcrDocument
 
 
+class OcrForm(BaseModel):
+    """Multipart /v1/ocr form fields; the document travels as the `file` part."""
+
+    model: str
+
+
 class OcrPage(BaseModel):
     index: int
     markdown: str
@@ -796,6 +828,51 @@ class ImageDatum(BaseModel):
 
 class ImageGenerationResponse(BaseModel):
     data: list[ImageDatum] = []
+
+
+class ImageEditForm(BaseModel):
+    """POST /v1/images/edits form fields; the image travels as the `image` multipart part."""
+
+    model: str
+    prompt: str
+    size: str = "1024x1024"
+    quality: str = "low"
+
+
+class SearchBody(BaseModel):
+    """POST /v1/search/{search_tool_name} body (Perplexity-compatible)."""
+
+    query: str
+    max_results: int = 2
+
+
+class SearchResultItem(BaseModel):
+    title: str = ""
+    url: str = ""
+    snippet: str = ""
+
+
+class SearchResponse(BaseModel):
+    results: list[SearchResultItem] = []
+
+
+class SearchToolLiteLLMParamsBody(BaseModel):
+    search_provider: str
+
+
+class SearchToolBody(BaseModel):
+    search_tool_name: str
+    litellm_params: SearchToolLiteLLMParamsBody
+
+
+class SearchToolCreateBody(BaseModel):
+    """POST /search_tools body: the tool as it would sit under `search_tools:` in the config."""
+
+    search_tool: SearchToolBody
+
+
+class SearchToolCreateResponse(BaseModel):
+    search_tool_id: str
 
 
 # ---------- audio ----------
@@ -872,8 +949,11 @@ class SpendLogRow(BaseModel):
     completion_tokens: int | None = None
     total_tokens: int | None = None
     request_tags: list[str] | None = None
+    session_id: str | None = None
     metadata: SpendLogMetadata | None = None
     proxy_server_request: JsonValue = None
+    response: JsonValue = None
+    litellm_call_id: str | None = None
 
 
 class SpendLogs(RootModel[list[SpendLogRow]]):
@@ -904,6 +984,15 @@ class SpendLogsPageParams(BaseModel):
     page: int
     page_size: int
     api_key: str | None = None
+
+
+class SessionSpendLogsParams(BaseModel):
+    """Query for /spend/logs/session/ui, the session view the Admin UI logs page
+    opens: every row whose session_id equals the given one, newest first."""
+
+    session_id: str
+    page: int = 1
+    page_size: int = 100
 
 
 class SpendLogsPage(BaseModel):

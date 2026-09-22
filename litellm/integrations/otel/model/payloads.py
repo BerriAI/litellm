@@ -760,6 +760,8 @@ def _output_choices(response: Mapping[str, object]) -> tuple[Mapping[str, object
         or _ocr_choices(response)
         or _transcription_choices(response)
         or _moderation_choices(response)
+        or _rerank_choices(response)
+        or _search_choices(response)
         or _image_choices(response)
         or _binary_choices(response)
     )
@@ -813,6 +815,32 @@ def _moderation_verdict(flagged: bool, categories: object) -> str:
         else ()
     )
     return f"flagged: {', '.join(hits)}" if hits else "flagged"
+
+
+def _rerank_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
+    return _joined_choice(
+        tuple(
+            _rerank_line(index, score, result.get("document"))
+            for result in _dicts(response.get("results"))
+            if (index := as_int(result.get("index"))) is not None
+            if (score := as_float(result.get("relevance_score"))) is not None
+        )
+    )
+
+
+def _rerank_line(index: int, score: float, document: object) -> str:
+    text: Final = as_str((as_str_mapping(document) or {}).get("text"))
+    return f"[{index}] {score}\n{text}" if text else f"[{index}] {score}"
+
+
+def _search_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
+    return _joined_choice(
+        tuple(
+            line
+            for result in _dicts(response.get("results"))
+            if (line := "\n".join(part for key in ("title", "url", "snippet") if (part := as_str(result.get(key)))))
+        )
+    )
 
 
 def _image_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
