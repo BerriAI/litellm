@@ -5,9 +5,10 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.gemini.audio_transcription.transformation import (
-    GeminiAudioTranscriptionConfig,
+from litellm.llms.gemini.audio_transcription.realtime_transformation import (
+    GeminiRealtimeAudioTranscriptionConfig,
 )
+from litellm.llms.gemini.audio_transcription.transformation import GeminiAudioTranscriptionConfig
 from litellm.llms.gemini.common_utils import GeminiError
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_optional_params_transcription
@@ -72,11 +73,12 @@ def test_provider_config_manager_returns_gemini_config():
     assert isinstance(provider_config, GeminiAudioTranscriptionConfig)
 
 
-def test_provider_config_manager_does_not_use_batch_config_for_gemini_live():
+def test_provider_config_manager_uses_realtime_config_for_gemini_live():
     provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
         model="gemini-3.5-transcribe-live", provider=LlmProviders.GEMINI
     )
-    assert provider_config is None
+    assert isinstance(provider_config, GeminiRealtimeAudioTranscriptionConfig)
+    assert provider_config.get_supported_openai_params("gemini-3.5-transcribe-live") == ["language", "keywords"]
 
 
 class TestSupportedParams:

@@ -27,14 +27,24 @@ def test_gemini_transcription_dispatch_returns_batch_params(monkeypatch):
     assert "timestamp_granularities" in params
 
 
-def test_gemini_live_transcription_dispatch_does_not_use_batch_params():
+def test_gemini_live_transcription_dispatch_returns_realtime_params(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gemini/gemini-3.5-transcribe-live",
+        {
+            "audio_transcription_config": "gemini_realtime_transcribe",
+            "mode": "audio_transcription",
+            "supported_endpoints": ["/v1/realtime"],
+        },
+    )
+
     params = get_supported_openai_params(
         model="gemini-3.5-transcribe-live",
         custom_llm_provider="gemini",
         request_type="transcription",
     )
 
-    assert params is None
+    assert params == ["language", "keywords"]
 
 
 def test_base_model_label_does_not_strip_bedrock_tools():

@@ -8953,6 +8953,15 @@ class ProviderConfigManager:
             return VertexAIAudioTranscriptionConfig()
         elif (
             litellm.LlmProviders.GEMINI == provider
+            and model_cost_entry.get("audio_transcription_config") == "gemini_realtime_transcribe"
+        ):
+            from litellm.llms.gemini.audio_transcription.realtime_transformation import (
+                GeminiRealtimeAudioTranscriptionConfig,
+            )
+
+            return GeminiRealtimeAudioTranscriptionConfig()
+        elif (
+            litellm.LlmProviders.GEMINI == provider
             and model_cost_entry.get("audio_transcription_config") == "gemini_transcribe"
         ):
             from litellm.llms.gemini.audio_transcription.transformation import (

@@ -62738,6 +62738,7 @@
         "supports_function_calling": false
     },
     "gemini/gemini-3.5-transcribe-live": {
+        "audio_transcription_config": "gemini_realtime_transcribe",
         "input_cost_per_audio_token": 3.5e-06,
         "input_cost_per_token": 3.5e-06,
         "litellm_provider": "gemini",

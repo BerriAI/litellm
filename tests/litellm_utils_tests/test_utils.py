@@ -2148,9 +2148,19 @@ def test_gemini_model_info_reports_transcription_params(monkeypatch):
     assert "keywords" in model_info["supported_openai_params"]
 
 
-def test_gemini_live_transcription_dispatch_has_no_batch_params():
+def test_gemini_live_transcription_dispatch_returns_realtime_params(monkeypatch):
     from litellm.litellm_core_utils.get_supported_openai_params import (
         get_supported_openai_params,
+    )
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gemini/gemini-3.5-transcribe-live",
+        {
+            "audio_transcription_config": "gemini_realtime_transcribe",
+            "mode": "audio_transcription",
+            "supported_endpoints": ["/v1/realtime"],
+        },
     )
 
     params = get_supported_openai_params(
@@ -2159,7 +2169,7 @@ def test_gemini_live_transcription_dispatch_has_no_batch_params():
         request_type="transcription",
     )
 
-    assert params is None
+    assert params == ["language", "keywords"]
 
 
 @pytest.mark.parametrize(
