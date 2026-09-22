@@ -2204,13 +2204,11 @@ def _cli_sso_team_detail(team_row: Mapping[str, object]) -> CliSsoTeamDetail:
 
 
 def _cli_sso_team_sort_key(detail: CliSsoTeamDetail) -> tuple[str, str]:
-    """Stable, predictable order for a user's team choices.
-
-    The DB returns rows in an arbitrary order, so the consent page (and the
-    classic login team choice, which shares this lookup) would preselect
-    whichever team happened to come back first -- silently binding a user who
-    takes the default to a team they did not mean to pick. Order by alias
-    case-insensitively, with team_id as a deterministic tiebreaker.
+    """The DB returns team rows in an arbitrary order, so without a stable
+    sort the consent page (and the classic login team choice, which shares
+    this lookup) would preselect whichever team happened to come back first --
+    silently binding a user who takes the default to a team they did not mean
+    to pick.
     """
     return ((detail.team_alias or "").casefold(), detail.team_id or "")
 
