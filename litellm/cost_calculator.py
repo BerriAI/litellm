@@ -800,6 +800,52 @@ def _cost_map_entry_prices_anything(entry: Mapping[str, object]) -> bool:
     )
 
 
+def _has_rate(model: str, custom_llm_provider: str | None) -> bool:
+    """Whether the price map can quote this name.
+
+    ``get_model_info`` answers a model it does not know with zero rates rather than
+    raising, so asking it is not enough to tell "free" from "unknown".
+    """
+    if model in litellm.model_cost:
+        return True
+    try:
+        info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return False
+    return any(
+        info.get(key)
+        for key in ("input_cost_per_token", "output_cost_per_token", "input_cost_per_second")
+    )
+
+
+def _priced_provider_response_model(
+    provider_response_model: str | None,
+    completion_response_model: str | None,
+    custom_llm_provider: str | None,
+) -> str | None:
+    """The provider's own model name, unless charging by it would bill the turn at zero.
+
+    Providers report a build rather than a family: Anthropic's ``message_start`` names
+    ``claude-opus-5-20250930`` while the price map carries ``claude-opus-5``. Preferring
+    the reported name is right when it is priced — it is the most specific truth about
+    what served the turn — but when the map has never heard of it the turn is billed
+    ``0.0`` with nothing in the logs to say why, because ``get_model_info`` returns zero
+    rates for an unknown model instead of raising.
+
+    Falling back to the response's own model keeps the previous, working behaviour for
+    that case: it is the name the deployment resolved to, and it is what an unstreamed
+    turn — which carries no ``provider_response_model`` at all — is already priced by.
+    """
+    if provider_response_model is None:
+        return None
+    if _has_rate(provider_response_model, custom_llm_provider):
+        return provider_response_model
+    if completion_response_model is not None and _has_rate(completion_response_model, custom_llm_provider):
+        return completion_response_model
+    # Neither is priced: keep the provider's name, so the zero that follows is reported
+    # against what actually served the turn.
+    return provider_response_model
+
 def _select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
@@ -846,7 +892,13 @@ def _select_model_name_for_cost_calc(
             return_model = model
 
     elif base_model is not None or provider_response_model is not None:
-        return_model = base_model if base_model is not None else provider_response_model
+        return_model = (
+            base_model
+            if base_model is not None
+            else _priced_provider_response_model(
+                provider_response_model, completion_response_model, custom_llm_provider
+            )
+        )
 
     elif completion_response_model is None and hidden_params is not None:
         if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:
