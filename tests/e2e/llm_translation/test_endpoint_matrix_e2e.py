@@ -352,7 +352,7 @@ def deployments(request: pytest.FixtureRequest, proxy: ProxyClient) -> Iterator[
 
 class TestEndpointMatrix:
     @pytest.mark.parametrize("cell", tuple(_param(cell) for cell in _cells()))
-    def test_endpoint_answers_through_every_provider_and_auth_mode(
+    def test_endpoint_answers_through_every_provider_and_auth_mode(  # test-quality-ok: the cell runner asserts
         self,
         cell: MatrixCell,
         sdk: SdkClients,
