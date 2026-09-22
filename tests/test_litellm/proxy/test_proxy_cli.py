@@ -10,6 +10,8 @@ import pytest
 
 
 import builtins
+import runpy
+import sys
 import types
 import urllib.parse as urlparse
 
@@ -18,6 +20,7 @@ import yaml
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
+from litellm.proxy import proxy_cli
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 
 
@@ -635,6 +638,36 @@ class TestProxyInitializationHelpers:
                 result.exit_code == 0
             ), f"exit_code={result.exit_code}, output={result.output}"
             mock_uvicorn_run.assert_called_once()
+
+    @patch("uvicorn.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False)
+    def test_script_boot_imports_the_package_proxy_server(
+        self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run
+    ):
+        package_proxy_server = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        sibling_proxy_server = types.ModuleType("proxy_server")
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": sibling_proxy_server, "litellm.proxy.proxy_server": package_proxy_server},
+            ),
+            patch.object(sys, "argv", ["proxy_cli.py", "--skip_server_startup"]),
+            patch.object(sys, "path", list(sys.path)),
+            pytest.raises(SystemExit) as exit_info,
+        ):
+            runpy.run_path(proxy_cli.__file__, run_name="__main__")
+
+        assert exit_info.value.code == 0
+        package_proxy_server.save_worker_config.assert_called_once()
 
     @patch("uvicorn.run")
     @patch("atexit.register")
@@ -1779,13 +1812,18 @@ class TestProxyInitializationHelpers:
         mock_proxy_config_instance.get_config = mock_get_config
         mock_proxy_config.return_value = mock_proxy_config_instance
 
-        mock_proxy_server_module = MagicMock(app=mock_app)
+        mock_proxy_server_module = MagicMock(
+            app=mock_app,
+            ProxyConfig=mock_proxy_config,
+            KeyManagementSettings=mock_key_mgmt,
+            save_worker_config=mock_save_worker_config,
+        )
 
         # Only remove DATABASE_URL and DIRECT_URL to prevent the database setup
         # code path from running. Do NOT use clear=True as it removes PATH, HOME,
         # etc., which causes imports inside run_server to break in CI (the real
-        # litellm.proxy.proxy_server import at line 820 of proxy_cli.py has heavy
-        # side effects that fail without a proper environment).
+        # litellm.proxy.proxy_server import has heavy side effects that fail
+        # without a proper environment).
         env_overrides = {
             "DATABASE_URL": "",
             "DIRECT_URL": "",
@@ -1801,18 +1839,7 @@ class TestProxyInitializationHelpers:
             with (
                 patch.dict(
                     "sys.modules",
-                    {
-                        "proxy_server": MagicMock(
-                            app=mock_app,
-                            ProxyConfig=mock_proxy_config,
-                            KeyManagementSettings=mock_key_mgmt,
-                            save_worker_config=mock_save_worker_config,
-                        ),
-                        # Also mock litellm.proxy.proxy_server to prevent the real
-                        # import at line 820 of proxy_cli.py which has heavy side
-                        # effects (FastAPI app init, logging setup, etc.)
-                        "litellm.proxy.proxy_server": mock_proxy_server_module,
-                    },
+                    {"litellm.proxy.proxy_server": mock_proxy_server_module},
                 ),
                 patch(
                     "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
