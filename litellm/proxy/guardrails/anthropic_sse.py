@@ -8,8 +8,11 @@ hook scan such a stream, and re-emit it when the guardrail rewrote the response.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
-from typing import Final
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final, cast
 
 from litellm.types.utils import Choices, ModelResponse
 
@@ -177,3 +180,93 @@ def anthropic_sse_chunks_from_response(assembled: ModelResponse) -> tuple[bytes,
         response=assembled
     )
     return tuple(FakeAnthropicMessagesStreamIterator(response=anthropic_response).chunks)
+
+
+@dataclass(frozen=True, slots=True)
+class SseFrame:
+    raw: str
+    event: Mapping[str, object] | None
+
+
+def _frame_event(body: str) -> Mapping[str, object] | None:
+    data: Final = next(
+        (line[len("data:") :].strip() for line in body.splitlines() if line.startswith("data:")),
+        None,
+    )
+    if data is None:
+        return None
+    try:
+        parsed: Final = cast(object, json.loads(data))
+    except json.JSONDecodeError:
+        return None
+    return cast(Mapping[str, object], parsed) if isinstance(parsed, dict) else None
+
+
+def anthropic_sse_frames(all_chunks: Sequence[object]) -> tuple[SseFrame, ...] | None:
+    sse_stream: Final = _joined_sse_stream(all_chunks)
+    if sse_stream is None:
+        return None
+    parts: Final = re.split(r"(\r?\n\r?\n)", sse_stream)
+    bodies: Final = parts[::2]
+    separators: Final = parts[1::2]
+    frames: Final = tuple(
+        SseFrame(raw=body + separator, event=_frame_event(body)) for body, separator in zip(bodies, separators)
+    ) + ((SseFrame(raw=bodies[-1], event=_frame_event(bodies[-1])),) if bodies[-1] else ())
+    if not any(frame.event is not None and frame.event.get("type") == "message_start" for frame in frames):
+        return None
+    return frames
+
+
+def _text_delta(frame: SseFrame) -> tuple[int, str] | None:
+    if frame.event is None or frame.event.get("type") != "content_block_delta":
+        return None
+    index: Final = frame.event.get("index")
+    delta: Final = frame.event.get("delta")
+    if not isinstance(index, int) or not isinstance(delta, dict):
+        return None
+    delta_map: Final = cast(Mapping[str, object], delta)
+    text: Final = delta_map.get("text")
+    if delta_map.get("type") != "text_delta" or not isinstance(text, str):
+        return None
+    return index, text
+
+
+def text_block_texts(frames: Sequence[SseFrame]) -> Mapping[int, str]:
+    deltas: Final = tuple(delta for frame in frames if (delta := _text_delta(frame)) is not None)
+    return MappingProxyType(
+        {
+            index: "".join(text for position, text in deltas if position == index)
+            for index in dict.fromkeys(position for position, _ in deltas)
+        }
+    )
+
+
+def rewrite_text_blocks(frames: Sequence[SseFrame], masked: Mapping[int, str]) -> tuple[bytes, ...]:
+    first_positions: Final = {
+        delta[0]: position
+        for position, delta in reversed(tuple((position, _text_delta(frame)) for position, frame in enumerate(frames)))
+        if delta is not None and delta[0] in masked
+    }
+    return tuple(
+        _emitted_frame(position, frame, first_positions, masked)
+        for position, frame in enumerate(frames)
+        if (delta := _text_delta(frame)) is None or delta[0] not in masked or position == first_positions[delta[0]]
+    )
+
+
+def _emitted_frame(
+    position: int, frame: SseFrame, first_positions: Mapping[int, int], masked: Mapping[int, str]
+) -> bytes:
+    delta: Final = _text_delta(frame)
+    if delta is None or position != first_positions.get(delta[0]):
+        return frame.raw.encode()
+    lines: Final = frame.raw.split("\n")
+    data_position: Final = next(line_number for line_number, line in enumerate(lines) if line.startswith("data:"))
+    event: Final = cast(Mapping[str, object], frame.event)
+    payload: Final = {
+        **event,
+        "delta": {**cast(Mapping[str, object], event["delta"]), "text": masked[delta[0]]},
+    }
+    return "\n".join(
+        (*lines[:data_position], f"data: {json.dumps(payload, ensure_ascii=False)}", *lines[data_position + 1 :])
+    ).encode()

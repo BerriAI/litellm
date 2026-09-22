@@ -1,8 +1,10 @@
 import json
+import re
 import uuid
 from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
 import yaml
 
@@ -11,6 +13,58 @@ from integration._support.database import read_rows
 from integration._support.mcp import mcp_peer, register_mcp, tool_names
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
+
+_CITATION: Final = {
+    "type": "char_location",
+    "cited_text": "x",
+    "document_index": 0,
+    "document_title": "doc",
+    "start_char_index": 0,
+    "end_char_index": 5,
+}
+
+
+def _anthropic_stream(text: str) -> tuple[bytes, ...]:
+    events: Final = (
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_stub",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-5-20250929",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 10, "output_tokens": 1},
+                },
+            },
+        ),
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "", "signature": ""}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Let me recall "}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "the contact record."}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "EqQBCkgIARACClEK"}}),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ("content_block_start", {"type": "content_block_start", "index": 1, "content_block": {"type": "redacted_thinking", "data": "EroBCoYBREDACTED=="}}),
+        ("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        ("content_block_start", {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": text}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 2, "delta": {"type": "citations_delta", "citation": _CITATION}}),
+        ("content_block_stop", {"type": "content_block_stop", "index": 2}),
+        ("content_block_start", {"type": "content_block_start", "index": 3, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 3, "delta": {"type": "input_json_delta", "partial_json": '{"q": "jane"}'}}),
+        ("content_block_stop", {"type": "content_block_stop", "index": 3}),
+        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 42}}),
+        ("message_stop", {"type": "message_stop"}),
+    )
+    return tuple(f"event: {kind}\ndata: {json.dumps(data)}\n\n".encode() for kind, data in events)
+
+
+def _events(body: bytes) -> tuple[dict, ...]:
+    return tuple(
+        json.loads(line[len("data: ") :]) for line in body.decode("utf-8").splitlines() if line.startswith("data: ")
+    )
 
 
 @pytest.mark.covers("other.observability.guardrails.rewrite_reaches_correct_anthropic_positions")
@@ -214,3 +268,156 @@ def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway:
                     assert len(calls) == 1
                     assert calls[0]["body"]["params"]["name"] == tool
                     assert calls[0]["body"]["params"]["arguments"] == arguments
+
+
+@pytest.mark.covers("other.observability.guardrails.presidio_masks_anthropic_stream_without_rewriting_other_frames")
+def test_presidio_output_masking_keeps_anthropic_stream_frames_intact(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "presidio" + uuid.uuid4().hex
+    email: Final = "jane.doe@example.com"
+    pii_text: Final = "Contact Jane Doe at jane.doe@example.com for details."
+    clean_text: Final = "Contact the support team for details."
+
+    def presidio(request: Request) -> Reply:
+        body: Final = json.loads(request.body)
+        text: Final = body.get("text", "")
+        if request.target.endswith("/analyze"):
+            results: Final = [
+                {
+                    "entity_type": "EMAIL_ADDRESS",
+                    "start": match.start(),
+                    "end": match.end(),
+                    "score": 0.99,
+                    "analysis_explanation": None,
+                    "recognition_metadata": None,
+                }
+                for match in re.finditer(re.escape(email), text)
+            ]
+            return Reply(body=json.dumps(results).encode())
+        if request.target.endswith("/anonymize"):
+            masked: Final = text.replace(email, "<EMAIL_ADDRESS>")
+            items: Final = [
+                {
+                    "operator": "replace",
+                    "entity_type": "EMAIL_ADDRESS",
+                    "start": match.start(),
+                    "end": match.end(),
+                    "text": "<EMAIL_ADDRESS>",
+                }
+                for match in re.finditer(re.escape("<EMAIL_ADDRESS>"), masked)
+            ]
+            return Reply(body=json.dumps({"text": masked, "items": items}).encode())
+        return Reply(status=404)
+
+    def provider(request: Request) -> Reply:
+        assert request.target == "/v1/messages"
+        sent: Final = json.loads(request.body)
+        content: Final = sent["messages"][0]["content"]
+        assert content in ("pii control", "clean control"), content
+        frames: Final = _anthropic_stream(pii_text if content == "pii control" else clean_text)
+        return Reply(content_type="text/event-stream", chunks=frames)
+
+    with wire_server(presidio) as policy, wire_server(provider) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["guardrails"] = [
+            {
+                "guardrail_name": identity,
+                "litellm_params": {
+                    "guardrail": "presidio",
+                    "mode": "post_call",
+                    "default_on": True,
+                    "apply_to_output": True,
+                    "presidio_analyzer_api_base": f"{policy.url}/analyzer/",
+                    "presidio_anonymizer_api_base": f"{policy.url}/anonymizer/",
+                },
+            }
+        ]
+        path: Final = tmp_path / "presidio.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(
+                model="anthropic/claude-sonnet-4-5-20250929", api_base=upstream.url, api_key="synthetic-anthropic-key"
+            )
+
+            def messages_request(markers: str) -> httpx.Response:
+                return candidate.request(
+                    "POST",
+                    "/v1/messages",
+                    {"model": model, "stream": True, "max_tokens": 256, "messages": [{"role": "user", "content": markers}]},
+                )
+
+            masked: Final = messages_request("pii control")
+            assert masked.status_code == 200, masked.text
+            body: Final = masked.content
+            decoded: Final = body.decode("utf-8", errors="replace")
+            events: Final = _events(body)
+            assert (
+                "".join(
+                    event["delta"]["text"]
+                    for event in events
+                    if event["type"] == "content_block_delta"
+                    and event["index"] == 2
+                    and event["delta"].get("type") == "text_delta"
+                )
+                == "Contact Jane Doe at <EMAIL_ADDRESS> for details."
+            ), decoded
+            assert email.encode() not in body, decoded
+            assert (
+                "".join(
+                    event["delta"]["thinking"]
+                    for event in events
+                    if event["type"] == "content_block_delta" and event["delta"].get("type") == "thinking_delta"
+                )
+                == "Let me recall the contact record."
+            ), decoded
+            redacted: Final = tuple(
+                event["content_block"] for event in events if event["type"] == "content_block_start" and event["index"] == 1
+            )
+            assert redacted == ({"type": "redacted_thinking", "data": "EroBCoYBREDACTED=="},), decoded
+            signatures: Final = tuple(
+                event["delta"]["signature"]
+                for event in events
+                if event["type"] == "content_block_delta" and event["delta"].get("type") == "signature_delta"
+            )
+            assert signatures == ("EqQBCkgIARACClEK",), decoded
+            citations: Final = tuple(
+                event["delta"]["citation"]
+                for event in events
+                if event["type"] == "content_block_delta" and event["delta"].get("type") == "citations_delta"
+            )
+            assert citations == (_CITATION,), decoded
+            tool_starts: Final = tuple(
+                event["content_block"] for event in events if event["type"] == "content_block_start" and event["index"] == 3
+            )
+            assert tool_starts == ({"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}},), decoded
+            json_parts: Final = tuple(
+                event["delta"]["partial_json"]
+                for event in events
+                if event["type"] == "content_block_delta" and event["delta"].get("type") == "input_json_delta"
+            )
+            assert json_parts == ('{"q": "jane"}',), decoded
+            kinds: Final = tuple(event["type"] for event in events)
+            assert kinds.count("message_start") == 1 and kinds.count("message_delta") == 1 and kinds.count("message_stop") == 1, decoded
+            assert kinds[0] == "message_start" and kinds[-2] == "message_delta" and kinds[-1] == "message_stop", decoded
+            assert events[-2]["delta"]["stop_reason"] == "tool_use", decoded
+
+            clean: Final = messages_request("clean control")
+            assert clean.status_code == 200, clean.text
+
+            def projected(body_bytes: bytes) -> tuple[dict, ...]:
+                return tuple(
+                    {
+                        key: value
+                        for key, value in event.items()
+                        if key in ("type", "index", "delta", "content_block")
+                    }
+                    for event in _events(body_bytes)
+                )
+
+            clean_decoded: Final = clean.content.decode("utf-8", errors="replace")
+            assert projected(clean.content) == projected(b"".join(_anthropic_stream(clean_text))), clean_decoded
+
+            analyzed: Final = tuple(
+                json.loads(item.body)["text"] for item in policy.drain() if item.target.endswith("/analyze")
+            )
+            assert pii_text in analyzed, analyzed
+            assert not any("Let me recall" in text for text in analyzed), analyzed

@@ -2347,6 +2347,121 @@ def _anthropic_text_deltas(chunks: list[bytes]) -> list[tuple[int, str]]:
     return deltas
 
 
+def _anthropic_rich_stream(text: str) -> list[bytes]:
+    return [
+        _anthropic_sse(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-5-20250929",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 10, "output_tokens": 1},
+                },
+            },
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+            },
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": "Let me recall "},
+            },
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": "the contact record."},
+            },
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": "EqQBCkgIARACClEK"},
+            },
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "redacted_thinking", "data": "EroBCoYBREDACTED=="},
+            },
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": text}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 2,
+                "delta": {
+                    "type": "citations_delta",
+                    "citation": {
+                        "type": "char_location",
+                        "cited_text": "x",
+                        "document_index": 0,
+                        "document_title": "doc",
+                        "start_char_index": 0,
+                        "end_char_index": 5,
+                    },
+                },
+            },
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 2}),
+        _anthropic_sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 3,
+                "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}},
+            },
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 3,
+                "delta": {"type": "input_json_delta", "partial_json": '{"q": "jane"}'},
+            },
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 3}),
+        _anthropic_sse(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                "usage": {"output_tokens": 42},
+            },
+        ),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+
 def _chat_delta_chunk(text: str, finish_reason: str | None = None) -> ModelResponseStream:
     return ModelResponseStream(
         id="chatcmpl-out-mask",
@@ -2470,6 +2585,7 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_masks_text_split_ac
     joined = b"".join(collected).decode()
     assert "4111" not in joined
     assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<CREDIT_CARD>"
+    assert _anthropic_text_deltas(collected) == [(0, "<CREDIT_CARD>")]
     assert joined.count("event: message_start") == 1
     assert joined.count("event: message_stop") == 1
 
@@ -2507,6 +2623,136 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_without_pii_are_for
     async def mock_stream():
         for b in byte_chunks:
             yield b
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert collected == byte_chunks
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_rewrites_only_the_masked_text_delta_frame():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "Contact Jane Doe at <EMAIL_ADDRESS> for details."},
+    )
+
+    byte_chunks = _anthropic_rich_stream("Contact Jane Doe at jane.doe@example.com for details.")
+    expected = [
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 2,
+                "delta": {"type": "text_delta", "text": "Contact Jane Doe at <EMAIL_ADDRESS> for details."},
+            },
+        )
+        if "text_delta" in chunk.decode()
+        else chunk
+        for chunk in byte_chunks
+    ]
+
+    async def mock_stream():
+        for chunk in byte_chunks:
+            yield chunk
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert collected == expected
+    assert b"jane.doe@example.com" not in b"".join(collected)
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_leaves_unchanged_text_blocks_verbatim():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "Hello world"},
+    )
+
+    byte_chunks = [
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " world"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "card "}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "4111 1111"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+    expected = [
+        *byte_chunks[:6],
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "Hello world"}},
+        ),
+        *byte_chunks[8:],
+    ]
+
+    async def mock_stream():
+        for chunk in byte_chunks:
+            yield chunk
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert collected == expected
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_non_anthropic_bytes_are_forwarded_unchanged():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "masked"},
+    )
+
+    byte_chunks = [b"data: [DONE]\n\n"]
+
+    async def mock_stream():
+        for chunk in byte_chunks:
+            yield chunk
 
     collected = []
     async for chunk in guardrail.async_post_call_streaming_iterator_hook(

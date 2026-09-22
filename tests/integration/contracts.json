@@ -224,6 +224,9 @@
     "tests/integration/observability/test_guardrail_effects.py::test_guardrail_rewrites_system_and_user_in_actual_anthropic_request": [
       "other.observability.guardrails.rewrite_reaches_correct_anthropic_positions"
     ],
+    "tests/integration/observability/test_guardrail_effects.py::test_presidio_output_masking_keeps_anthropic_stream_frames_intact": [
+      "other.observability.guardrails.presidio_masks_anthropic_stream_without_rewriting_other_frames"
+    ],
     "tests/integration/compatibility/test_a2a_wire_versions.py::test_a2a_versions_and_legacy_casing_preserve_real_wire_and_response": [
       "other.compatibility.a2a.supported_versions_preserve_literal_envelopes"
     ],

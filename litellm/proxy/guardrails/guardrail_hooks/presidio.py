@@ -14,6 +14,7 @@ import threading
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypedDict, cast
 
 import aiohttp
@@ -40,9 +41,9 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.anthropic_sse import (
-    anthropic_sse_chunks_from_response,
-    assemble_anthropic_sse_stream,
-    model_response_text,
+    anthropic_sse_frames,
+    rewrite_text_blocks,
+    text_block_texts,
 )
 from litellm.types.guardrails import (
     GuardrailEventHooks,
@@ -1414,18 +1415,32 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     ) -> tuple[object, ...]:
         rest_chunks: Final = [chunk async for chunk in rest]  # mutable-ok: tuple() cannot consume an async iterator
         chunks: Final = (first_chunk, *rest_chunks)
-        assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True)
-        if assembled is None:
+        frames: Final = anthropic_sse_frames(chunks)
+        if frames is None:
             verbose_proxy_logger.warning(
                 "Presidio apply_to_output: raw SSE stream could not be assembled into a response. "
                 "Output PII masking was skipped for this response."
             )
             return chunks
-        original_text: Final = model_response_text(assembled)
-        await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
-        if model_response_text(assembled) == original_text:
+        presidio_config: Final = self.get_presidio_settings_from_request_data(  # pyright: ignore[reportUnknownMemberType]  # signature takes dict unparameterized
+            request_data or {}
+        )
+        originals: Final = text_block_texts(frames)
+        masked: Final = MappingProxyType(
+            {
+                index: await self.check_pii(  # pyright: ignore[reportUnknownMemberType]  # signature takes dict unparameterized
+                    text=text,
+                    output_parse_pii=False,
+                    presidio_config=presidio_config,
+                    request_data=request_data,
+                )
+                for index, text in originals.items()
+            }
+        )
+        changed: Final = MappingProxyType({index: text for index, text in masked.items() if text != originals[index]})
+        if not changed:
             return chunks
-        return anthropic_sse_chunks_from_response(assembled)
+        return rewrite_text_blocks(frames, changed)
 
     @staticmethod
     def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: dict[str, str]) -> bytes:
