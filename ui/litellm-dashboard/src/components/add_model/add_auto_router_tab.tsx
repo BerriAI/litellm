@@ -28,10 +28,6 @@ import ComplexityRouterConfig, {
   effectiveClassifierType,
   usesLlmClassifier,
   heuristicScoringRole,
-  DEFAULT_ADAPTIVE_WEIGHTS,
-  DEFAULT_SESSION_AFFINITY,
-  DEFAULT_DEPLOYMENT_AFFINITY,
-  DEFAULT_TIER_DISTANCE_PENALTY,
 } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
 import { customDimensionsError } from "./custom_dimensions";
@@ -47,6 +43,9 @@ import {
   buildComplexityRouterConfig,
   getKeywordTierRulesError,
   getClassifierModelError,
+  getHeuristicV2SuccessThresholdError,
+  getReminderMarkersError,
+  getClassifierPluginTimeoutError,
   getClassifierReasoningEffortError,
   getMissingTiersError,
   getPlanModeTierError,
@@ -54,10 +53,15 @@ import {
   getTierLabelsError,
   dryRunRejection,
 } from "./build_complexity_router_config";
+import { builderParamsFromValue } from "./complexity_router_builder_params";
 import { activeTierName, activeTierRows, getCustomTierRowsError, resolveComplexityDefaultModel } from "./tier_rows";
 import { tierRowLabel } from "./complexity_router_tiers";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
-import AutoRouterConnectionTest from "./auto_router_connection_test";
+import { AutoRouterConnectionTestDialog } from "./auto_router_connection_test";
+import {
+  buildAutoRouterRoutingTestRequest,
+  JEV_CONNECTION_TEST_PROMPT,
+} from "./build_auto_router_routing_test_request";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
 import { toast } from "@/lib/toast";
 import {
@@ -146,6 +150,9 @@ export const getSubmitBlockedReason = (
     getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config)) ??
     getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
     getClassifierModelError(config) ??
+    getHeuristicV2SuccessThresholdError(config.heuristic_v2_success_threshold) ??
+    getReminderMarkersError(config.reminder_markers) ??
+    getClassifierPluginTimeoutError(config.classifier_type, config.classifier_plugin_timeout_ms) ??
     (heuristicScoringRole(config) === "decides" ? customDimensionsError(config.custom_dimensions) : null) ??
     getClassifierReasoningEffortError(config, modelInfo) ??
     getReferencedModelsError(referencedModelsParams, availability)
@@ -393,53 +400,25 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   );
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
-    tiers: complexityRouterConfig.tiers,
-    enableNonReasoningTier: complexityRouterConfig.enable_non_reasoning_tier,
-    customTierSet: complexityRouterConfig.custom_tier_set,
-    defaultModel: complexityRouterConfig.default_model,
-    planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
-    classificationPrompt: complexityRouterConfig.classification_prompt,
-    classificationExamples: complexityRouterConfig.classification_examples,
-    heuristicFirstMaxTier: complexityRouterConfig.heuristic_first_max_tier,
-    hybridBoundaryMargin: complexityRouterConfig.hybrid_boundary_margin,
-    classificationMode: complexityRouterConfig.classification_mode,
-    tierLabels: complexityRouterConfig.tier_labels,
-    classifierType: complexityRouterConfig.classifier_type,
-    capabilityClassifierConfig: complexityRouterConfig.capability_classifier_config,
-    llmV2Config: complexityRouterConfig.llm_v2_config,
-    classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
-    classifierContextWindowSize: complexityRouterConfig.classifier_context_window_size,
-    classifierContextBudgetChars: complexityRouterConfig.classifier_context_budget_chars,
-    classifierContextIncludeAssistantTurns: complexityRouterConfig.classifier_context_include_assistant_turns,
-    classifierFallback: complexityRouterConfig.classifier_fallback,
-    sessionAffinity: complexityRouterConfig.session_affinity ?? DEFAULT_SESSION_AFFINITY,
-    modalityRouting: complexityRouterConfig.modality_routing ?? false,
-    modalityPinOverride: complexityRouterConfig.modality_pin_override ?? false,
-    deploymentAffinity: complexityRouterConfig.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
+    ...builderParamsFromValue(complexityRouterConfig),
     customTechnicalKeywords,
     keywordTierRules,
     semanticMatchingEnabled,
     embeddingModel,
     matchThreshold,
     escalationKeywords,
-    stallEscalationEnabled: complexityRouterConfig.stall_escalation_enabled,
-    stallEscalationWindow: complexityRouterConfig.stall_escalation_window,
-    stallEscalationRepeatThreshold: complexityRouterConfig.stall_escalation_repeat_threshold,
-    adaptive: complexityRouterConfig.adaptive ?? false,
-    adaptiveWeights: complexityRouterConfig.adaptive_weights ?? DEFAULT_ADAPTIVE_WEIGHTS,
-    tierDistancePenalty: complexityRouterConfig.tier_distance_penalty ?? DEFAULT_TIER_DISTANCE_PENALTY,
-    adaptiveEligible: complexityRouterConfig.adaptive_eligible ?? "all",
-    returnRawModelName: complexityRouterConfig.return_raw_model_name ?? false,
-    tierModelParams: complexityRouterConfig.tier_model_params,
-    tierBoundaries: complexityRouterConfig.tier_boundaries,
-    tokenThresholds: complexityRouterConfig.token_thresholds,
-    dimensionWeights: complexityRouterConfig.dimension_weights,
-    customDimensions: complexityRouterConfig.custom_dimensions,
-    reasoningOverrideMinScore: complexityRouterConfig.reasoning_override_min_score,
-    enableContextWindowEscalation: complexityRouterConfig.enable_context_window_escalation,
-    contextWindowEscalationBuffer: complexityRouterConfig.context_window_escalation_buffer,
-    sessionAffinityTtlSeconds: complexityRouterConfig.session_affinity_ttl_seconds,
   };
+  const jevRequestParams =
+    effectiveClassifierType(complexityRouterConfig) === "jev"
+      ? {
+          prompt: JEV_CONNECTION_TEST_PROMPT,
+          config: buildComplexityRouterConfig(complexityRouterConfigParams),
+          defaultModel: resolveComplexityDefaultModel(complexityRouterConfig, complexityRouterConfig.default_model),
+          routerName: watchedName,
+          teamId: requiresTeamScope ? watchedTeamId ?? undefined : undefined,
+        }
+      : undefined;
+  const jevRequest = jevRequestParams ? buildAutoRouterRoutingTestRequest(jevRequestParams) : undefined;
 
   const submitRecommendedRouter = async (name: string) => {
     // The one answer the submit button reads, so a disabled button and a refused submit cannot
@@ -839,41 +818,18 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         </DialogContent>
       </Dialog>
 
-      <Dialog
+      <AutoRouterConnectionTestDialog
         open={isTestModalVisible}
-        onOpenChange={(open) => {
-          if (!open) {
-            setIsTestModalVisible(false);
-            setIsTestingConnection(false);
-          }
+        onClose={() => {
+          setIsTestModalVisible(false);
+          setIsTestingConnection(false);
         }}
-      >
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
-          <DialogHeader>
-            <DialogTitle>Connection Test Results</DialogTitle>
-          </DialogHeader>
-          {isTestModalVisible && (
-            <AutoRouterConnectionTest
-              key={connectionTestId}
-              accessToken={accessToken}
-              targets={testTargets}
-              onTestComplete={() => setIsTestingConnection(false)}
-            />
-          )}
-          <DialogFooter>
-            {" "}
-            <Button
-              variant="outline"
-              onClick={() => {
-                setIsTestModalVisible(false);
-                setIsTestingConnection(false);
-              }}
-            >
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        testId={connectionTestId}
+        accessToken={accessToken}
+        targets={testTargets}
+        jevRequest={jevRequest}
+        onTestComplete={() => setIsTestingConnection(false)}
+      />
     </TooltipProvider>
   );
 };

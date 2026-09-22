@@ -2,7 +2,7 @@
 Tests for Gemini Interactions API transformation.
 
 Covers:
-- validate_environment: x-goog-api-key header, Api-Revision schema selection
+- validate_environment: x-goog-api-key header, Api-Revision header
 - get_complete_url: API key excluded from URL
 - get/delete/cancel interaction request URLs
 - transform_request: response_mime_type coalescing, image_config migration
@@ -13,7 +13,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-import litellm
 from litellm.interactions.litellm_responses_transformation.streaming_iterator import (
     LiteLLMResponsesInteractionsStreamingIterator,
 )
@@ -83,21 +82,9 @@ class TestValidateEnvironment:
         assert headers["X-Custom"] == "value"
         assert headers["x-goog-api-key"] == "test-key"
 
-    def test_api_revision_new_schema_by_default(self, config, monkeypatch: pytest.MonkeyPatch):
-        # Default: use_legacy_interactions_schema=False → new steps schema
-        monkeypatch.setattr(litellm, "use_legacy_interactions_schema", False)
-        headers = config.validate_environment(
-            headers={}, model="gemini-2.5-flash", litellm_params=None
-        )
+    def test_sets_api_revision_header(self, config):
+        headers = config.validate_environment(headers={}, model="gemini-2.5-flash", litellm_params=None)
         assert headers["Api-Revision"] == "2026-05-20"
-
-    def test_api_revision_legacy_schema_when_flag_set(self, config, monkeypatch: pytest.MonkeyPatch):
-        # Flag on → legacy outputs schema until June 8, 2026
-        monkeypatch.setattr(litellm, "use_legacy_interactions_schema", True)
-        headers = config.validate_environment(
-            headers={}, model="gemini-2.5-flash", litellm_params=None
-        )
-        assert headers["Api-Revision"] == "2026-05-07"
 
 
 class TestGetCompleteUrl:
@@ -158,9 +145,7 @@ class TestTransformRequest:
         assert request_body["agent"] == "my-custom-slides-agent"
         assert request_body["environment"] == "remote"
         assert request_body["stream"] is False
-        assert request_body["input"] == [
-            {"type": "text", "text": "Create a 5-slide presentation about AI trends."}
-        ]
+        assert request_body["input"] == [{"type": "text", "text": "Create a 5-slide presentation about AI trends."}]
 
     def test_passes_environment_object_to_request_body(self, config):
         environment_config = {
@@ -221,24 +206,15 @@ class TestTransformRequest:
 
 
 class TestStreamingIterator:
-    def _make_iterator(
-        self, use_legacy: bool = False
-    ) -> LiteLLMResponsesInteractionsStreamingIterator:
-        original = litellm.use_legacy_interactions_schema
-        litellm.use_legacy_interactions_schema = use_legacy
-        try:
-            return LiteLLMResponsesInteractionsStreamingIterator(
-                model="gpt-5.4",
-                litellm_custom_stream_wrapper=MagicMock(),
-                request_input="hi",
-                optional_params={},
-            )
-        finally:
-            litellm.use_legacy_interactions_schema = original
+    def _make_iterator(self) -> LiteLLMResponsesInteractionsStreamingIterator:
+        return LiteLLMResponsesInteractionsStreamingIterator(
+            model="gpt-5.4",
+            litellm_custom_stream_wrapper=MagicMock(),
+            request_input="hi",
+            optional_params={},
+        )
 
-    def _make_text_delta(
-        self, text: str, item_id: str = "item_1"
-    ) -> OutputTextDeltaEvent:
+    def _make_text_delta(self, text: str, item_id: str = "item_1") -> OutputTextDeltaEvent:
         event = MagicMock(spec=OutputTextDeltaEvent)
         event.delta = text
         event.item_id = item_id
@@ -251,58 +227,29 @@ class TestStreamingIterator:
 
     def test_step_delta_includes_type_field(self):
         """step.delta events must carry delta.type='text' so the UI can display them."""
-        it = self._make_iterator(use_legacy=False)
+        it = self._make_iterator()
         it.sent_interaction_start = True
         it.sent_content_start = True
 
-        chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_text_delta("Hello")
-        )
+        chunk = it._transform_responses_chunk_to_interactions_chunk(self._make_text_delta("Hello"))
 
         assert chunk is not None
         assert chunk.event_type == "step.delta"
         assert chunk.delta == {"type": "text", "text": "Hello"}
 
-    def test_content_delta_legacy_schema(self):
-        """Legacy schema emits content.delta with type and text fields."""
-        it = self._make_iterator(use_legacy=True)
-        it.sent_interaction_start = True
-        it.sent_content_start = True
-
-        chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_text_delta("Hello")
-        )
-
-        assert chunk is not None
-        assert chunk.event_type == "content.delta"
-        assert chunk.delta == {"type": "text", "text": "Hello"}
-
     def test_response_created_emits_interaction_created(self):
-        it = self._make_iterator(use_legacy=False)
+        it = self._make_iterator()
 
-        chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_response_created()
-        )
+        chunk = it._transform_responses_chunk_to_interactions_chunk(self._make_response_created())
 
         assert chunk is not None
         assert chunk.event_type == "interaction.created"
         assert chunk.id == "resp_123"
         assert it.sent_interaction_start is True
 
-    def test_response_created_emits_interaction_start_legacy(self):
-        it = self._make_iterator(use_legacy=True)
-
-        chunk = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_response_created()
-        )
-
-        assert chunk is not None
-        assert chunk.event_type == "interaction.start"
-        assert chunk.id == "resp_123"
-
-    def test_text_delta_sequence_new_schema(self):
+    def test_text_delta_sequence(self):
         """First chunk yields created + step.start + step.delta; later chunks yield step.delta."""
-        it = self._make_iterator(use_legacy=False)
+        it = self._make_iterator()
 
         first_events = it._events_for_chunk(self._make_text_delta("Hello"))
         assert [e.event_type for e in first_events] == [
@@ -322,24 +269,8 @@ class TestStreamingIterator:
         assert [e.event_type for e in third_events] == ["step.delta"]
         assert third_events[0].delta == {"type": "text", "text": "!"}
 
-    def test_text_delta_sequence_legacy_schema(self):
-        """Legacy: first chunk yields interaction.start + content.start + content.delta."""
-        it = self._make_iterator(use_legacy=True)
-
-        first_events = it._events_for_chunk(self._make_text_delta("Hello"))
-        assert [e.event_type for e in first_events] == [
-            "interaction.start",
-            "content.start",
-            "content.delta",
-        ]
-        assert first_events[-1].delta == {"type": "text", "text": "Hello"}
-
-        second_events = it._events_for_chunk(self._make_text_delta(" World"))
-        assert [e.event_type for e in second_events] == ["content.delta"]
-        assert second_events[0].delta == {"type": "text", "text": " World"}
-
     def test_first_text_delta_without_item_id_uses_fallback_id(self):
-        it = self._make_iterator(use_legacy=False)
+        it = self._make_iterator()
         event = self._make_text_delta("Hi")
         event.item_id = None
 
@@ -350,11 +281,9 @@ class TestStreamingIterator:
 
     def test_first_text_delta_emits_text_via_compat_shim(self):
         """The legacy single-chunk shim must surface the synthetic events AND the delta."""
-        it = self._make_iterator(use_legacy=False)
+        it = self._make_iterator()
 
-        first = it._transform_responses_chunk_to_interactions_chunk(
-            self._make_text_delta("Hello")
-        )
+        first = it._transform_responses_chunk_to_interactions_chunk(self._make_text_delta("Hello"))
         assert first is not None
         assert first.event_type == "interaction.created"
 
@@ -369,7 +298,7 @@ class TestStreamingIterator:
 
     def test_response_created_then_text_delta_emits_step_start_and_delta(self):
         """Realistic flow: response.created arrives first, then text delta."""
-        it = self._make_iterator(use_legacy=False)
+        it = self._make_iterator()
 
         first = it._events_for_chunk(self._make_response_created())
         assert [e.event_type for e in first] == ["interaction.created"]
@@ -380,7 +309,7 @@ class TestStreamingIterator:
 
     def test_no_text_token_is_dropped_during_streaming(self):
         """Concatenated step.delta payloads must equal the upstream text."""
-        it = self._make_iterator(use_legacy=False)
+        it = self._make_iterator()
 
         chunks = ["Hello", " ", "world", "!"]
         emitted_text = ""
@@ -401,17 +330,12 @@ class TestStreamingIterator:
         sync_iter.__iter__ = lambda self: self
         sync_iter.__next__ = MagicMock(side_effect=[text_event, StopIteration])
 
-        original = litellm.use_legacy_interactions_schema
-        litellm.use_legacy_interactions_schema = False
-        try:
-            it = LiteLLMResponsesInteractionsStreamingIterator(
-                model="gpt-5.4",
-                litellm_custom_stream_wrapper=sync_iter,
-                request_input="hi",
-                optional_params={},
-            )
-        finally:
-            litellm.use_legacy_interactions_schema = original
+        it = LiteLLMResponsesInteractionsStreamingIterator(
+            model="gpt-5.4",
+            litellm_custom_stream_wrapper=sync_iter,
+            request_input="hi",
+            optional_params={},
+        )
 
         emitted: list = []
         try:
@@ -450,17 +374,12 @@ class TestStreamingIterator:
         sync_iter.__iter__ = lambda self: self
         sync_iter.__next__ = MagicMock(side_effect=[text_event, completed])
 
-        original = litellm.use_legacy_interactions_schema
-        litellm.use_legacy_interactions_schema = False
-        try:
-            it = LiteLLMResponsesInteractionsStreamingIterator(
-                model="gpt-5.4",
-                litellm_custom_stream_wrapper=sync_iter,
-                request_input="hi",
-                optional_params={},
-            )
-        finally:
-            litellm.use_legacy_interactions_schema = original
+        it = LiteLLMResponsesInteractionsStreamingIterator(
+            model="gpt-5.4",
+            litellm_custom_stream_wrapper=sync_iter,
+            request_input="hi",
+            optional_params={},
+        )
 
         emitted: list = []
         try:
@@ -506,9 +425,7 @@ class TestInteractionOperationUrls:
             ),
         ],
     )
-    def test_url_excludes_key(
-        self, config, method_name, interaction_id, expected_suffix
-    ):
+    def test_url_excludes_key(self, config, method_name, interaction_id, expected_suffix):
         with patch(_PATCH_GET_API_KEY, return_value="secret-key"):
             url, params = getattr(config, method_name)(
                 interaction_id=interaction_id,
@@ -550,8 +467,7 @@ class TestInteractionOperationUrls:
 class TestTransformRequestSchemaCoalescing:
     """Test new-schema request coalescing (Api-Revision: 2026-05-20)."""
 
-    def test_response_mime_type_folded_into_response_format(self, config, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(litellm, "use_legacy_interactions_schema", False)
+    def test_response_mime_type_folded_into_response_format(self, config):
         body = config.transform_request(
             model="gemini/gemini-2.5-flash",
             agent=None,
@@ -571,8 +487,7 @@ class TestTransformRequestSchemaCoalescing:
         assert rf["mime_type"] == "application/json"
         assert "schema" in rf
 
-    def test_image_config_moved_to_response_format(self, config, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(litellm, "use_legacy_interactions_schema", False)
+    def test_image_config_moved_to_response_format(self, config):
         body = config.transform_request(
             model="gemini/gemini-2.5-flash",
             agent=None,
@@ -594,9 +509,8 @@ class TestTransformRequestSchemaCoalescing:
         assert rf["type"] == "image"
         assert rf["aspect_ratio"] == "1:1"
 
-    def test_response_mime_type_skipped_when_response_format_is_list(self, config, monkeypatch: pytest.MonkeyPatch):
+    def test_response_mime_type_skipped_when_response_format_is_list(self, config):
         """Lists are already polymorphic; do not wrap them into schema."""
-        monkeypatch.setattr(litellm, "use_legacy_interactions_schema", False)
         rf_list = [
             {"type": "text", "mime_type": "application/json"},
             {"type": "image", "aspect_ratio": "1:1"},
@@ -619,10 +533,8 @@ class TestTransformRequestSchemaCoalescing:
     def test_image_config_appended_to_response_format_list_without_mutating_input(
         self,
         config,
-        monkeypatch: pytest.MonkeyPatch,
     ):
         """When response_format is already a list, image_config must not mutate optional_params."""
-        monkeypatch.setattr(litellm, "use_legacy_interactions_schema", False)
         text_rf = {"type": "text", "mime_type": "application/json"}
         optional_params = {
             "response_format": [text_rf],
@@ -659,20 +571,3 @@ class TestTransformRequestSchemaCoalescing:
         )
         assert len(optional_params["response_format"]) == 1
         assert body_retry["response_format"] == body["response_format"]
-
-    def test_legacy_schema_passes_fields_unchanged(self, config, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(litellm, "use_legacy_interactions_schema", True)
-        body = config.transform_request(
-            model="gemini/gemini-2.5-flash",
-            agent=None,
-            input="hello",
-            optional_params={
-                "response_mime_type": "application/json",
-                "generation_config": {"image_config": {"aspect_ratio": "16:9"}},
-            },
-            litellm_params=GenericLiteLLMParams(),
-            headers={},
-        )
-
-        assert body["response_mime_type"] == "application/json"
-        assert body["generation_config"]["image_config"]["aspect_ratio"] == "16:9"

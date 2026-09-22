@@ -11,10 +11,11 @@ import asyncio
 import json
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
 from fastapi import HTTPException
+from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -25,11 +26,33 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+
+class _CustomGuardrailKwargs(TypedDict):
+    """Keyword arguments forwarded verbatim to CustomGuardrail.__init__."""
+
+    guardrail_name: NotRequired[ReadOnly[str | None]]
+    event_hook: NotRequired[ReadOnly[GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None]]
+    default_on: NotRequired[ReadOnly[bool]]
+    mask_request_content: NotRequired[ReadOnly[bool]]
+    mask_response_content: NotRequired[ReadOnly[bool]]
+    violation_message_template: NotRequired[ReadOnly[str | None]]
+    end_session_after_n_fails: NotRequired[ReadOnly[int | None]]
+    on_violation: NotRequired[ReadOnly[str | None]]
+    realtime_violation_message: NotRequired[ReadOnly[str | None]]
+    on_sensitive_data: NotRequired[ReadOnly[str | None]]
+    sensitive_data_route_to_model: NotRequired[ReadOnly[str | None]]
+    sticky_session_routing: NotRequired[ReadOnly[bool]]
+    run_in_parallel: NotRequired[ReadOnly[bool]]
+    scan_raw_request: NotRequired[ReadOnly[bool]]
+    only_scan_new_messages: NotRequired[ReadOnly[bool]]
+    supported_event_hooks: NotRequired[ReadOnly[list[GuardrailEventHooks]]]
+
 
 HTTP_PROXY_PATH: Final = "/api/http-proxy"
 AKTO_CONNECTOR_NAME: Final = "litellm"
@@ -66,7 +89,7 @@ class AktoGuardrail(CustomGuardrail):
         akto_vxlan_id: str | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         guardrail_timeout: int | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailKwargs],
     ) -> None:
         """Initialize the Akto guardrail.
 
@@ -96,8 +119,11 @@ class AktoGuardrail(CustomGuardrail):
         self.akto_account_id = akto_account_id or os.environ.get("AKTO_ACCOUNT_ID", "1000000")
         self.akto_vxlan_id = akto_vxlan_id or os.environ.get("AKTO_VXLAN_ID", "0")
 
-        kwargs["supported_event_hooks"] = list(self.get_supported_event_hooks())
-        super().__init__(**kwargs)
+        init_kwargs: Final[_CustomGuardrailKwargs] = {
+            **kwargs,
+            "supported_event_hooks": list(self.get_supported_event_hooks()),
+        }
+        super().__init__(**init_kwargs)
 
         verbose_proxy_logger.debug(
             "Akto guardrail initialized: base_url=%s fallback=%s",
@@ -232,8 +258,7 @@ class AktoGuardrail(CustomGuardrail):
         """
         request_path: Final = self.extract_request_path(request_data)
         request_headers: Final = self.build_request_headers(request_data)
-        request_inputs: Final = GenericGuardrailAPIInputs(model=inputs.get("model")) if include_response else inputs
-        request_body: Final = self.build_request_body(request_inputs, request_data)
+        request_body: Final = self.build_request_body(inputs, request_data)
         tag: Final = self.build_tag_metadata(request_data)
 
         response_payload = json.dumps({})  # Empty body wrapper when no response yet

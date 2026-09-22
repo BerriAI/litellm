@@ -96,6 +96,56 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.queryByText("Classifier Model")).not.toBeInTheDocument();
   });
 
+  it("shows heuristic advanced sections and hides keyword overrides for capability classifiers", () => {
+    const { rerender } = renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+
+    expect(screen.getByText("Advanced: Heuristic Keyword Overrides")).toBeInTheDocument();
+    expect(screen.getByText("Advanced: Housekeeping Routing")).toBeInTheDocument();
+    expect(screen.getByText("Advanced: Reminder Markers")).toBeInTheDocument();
+
+    const capabilityValue = { ...defaultValue, classifier_type: "capability" as const };
+    rerender(<ComplexityRouterConfig {...baseProps} value={capabilityValue} />);
+    expect(screen.queryByText("Advanced: Heuristic Keyword Overrides")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["custom", true],
+    ["heuristic", false],
+  ] as const)("shows plugin timeout only for %s classifiers", (classifierType, visible) => {
+    renderWithProviders(
+      <ComplexityRouterConfig {...baseProps} value={{ ...defaultValue, classifier_type: classifierType }} />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    if (visible) {
+      expect(screen.getByLabelText("Classifier plugin timeout (ms)")).toBeInTheDocument();
+    } else {
+      expect(screen.queryByLabelText("Classifier plugin timeout (ms)")).not.toBeInTheDocument();
+    }
+  });
+
+  it.each([true, false])("shows reminder marker validation only when requested: %s", (showValidationErrors) => {
+    const value = { ...defaultValue, reminder_markers: [{ open: "", close: "x" }] };
+    renderWithProviders(
+      <ComplexityRouterConfig {...baseProps} value={value} showValidationErrors={showValidationErrors} />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Reminder Markers"));
+    const validation = screen.queryByText(/needs both/i);
+    if (showValidationErrors) {
+      expect(validation).toBeInTheDocument();
+    } else {
+      expect(validation).not.toBeInTheDocument();
+    }
+  });
+
+  it("disables housekeeping sentinels when cheapest-tier routing is off", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig {...baseProps} value={{ ...defaultValue, route_housekeeping_to_cheapest_tier: false }} />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Housekeeping Routing"));
+    const sentinelInput = screen.getByRole("combobox", { name: "e.g., conversation title" });
+    expect(sentinelInput).toBeDisabled();
+  });
+
   it("should toggle returning the raw model name", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -151,6 +201,51 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.queryByText("Advanced scoring")).not.toBeInTheDocument();
     expect(screen.getByText(/estimates success probability for all four tiers/)).toBeInTheDocument();
     expect(screen.queryByText(/Score < 0.15/)).not.toBeInTheDocument();
+  });
+
+  it.each<[string, Partial<ComplexityRouterConfigValue>]>([
+    ["heuristic", { classifier_type: "heuristic" }],
+    ["LLM", { classifier_type: "llm" }],
+    ["heuristic first", { classifier_type: "heuristic_first" }],
+    ["hybrid", { classifier_type: "hybrid" }],
+    ["Capability", { classifier_type: "capability" }],
+    ["Fuse v2", { classifier_type: "llm_v2" }],
+    [
+      "custom tiers",
+      {
+        classifier_type: "heuristic_v2",
+        custom_tier_set: {
+          tiers: [{ id: "review", name: "REVIEW", definition: "Review code", models: ["gpt-4"] }],
+          fallback_tier_id: "review",
+        },
+      },
+    ],
+  ])("shows and clears an invalid inactive threshold under %s", (_label, overrides) => {
+    const value = { ...defaultValue, ...overrides, heuristic_v2_success_threshold: Number.NaN };
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={value} onChange={onChange} />);
+    const retained = screen.getByRole("region", { name: "Inactive Heuristic v2 threshold" });
+    expect(within(retained).getByRole("status", { name: "Retained Heuristic v2 threshold" })).toHaveTextContent(
+      "Invalid value",
+    );
+    expect(within(retained).getByRole("alert")).toHaveTextContent("Success threshold must be a number between 0 and 1");
+    fireEvent.click(within(retained).getByRole("button", { name: "Clear Heuristic v2 threshold" }));
+    expect(onChange).toHaveBeenCalledWith({ ...value, heuristic_v2_success_threshold: undefined });
+  });
+
+  it("shows an inactive zero threshold until explicitly cleared and hides the summary for active or absent values", () => {
+    const onChange = vi.fn();
+    const value = { ...defaultValue, heuristic_v2_success_threshold: 0 };
+    const { rerender } = renderWithProviders(
+      <ComplexityRouterConfig {...baseProps} value={value} onChange={onChange} />,
+    );
+    expect(screen.getByRole("status", { name: "Retained Heuristic v2 threshold" })).toHaveTextContent("0");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+    rerender(<ComplexityRouterConfig {...baseProps} value={{ ...value, classifier_type: "heuristic_v2" }} />);
+    expect(screen.queryByRole("region", { name: "Inactive Heuristic v2 threshold" })).not.toBeInTheDocument();
+    rerender(<ComplexityRouterConfig {...baseProps} value={defaultValue} />);
+    expect(screen.queryByRole("region", { name: "Inactive Heuristic v2 threshold" })).not.toBeInTheDocument();
   });
 
   it("should show classifier fields and use the configured values when classifier_type is llm", () => {

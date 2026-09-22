@@ -9,7 +9,11 @@ from fastapi import Request, UploadFile, status
 from typing_extensions import NotRequired, ReadOnly, Required
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import CLIENT_REQUESTED_MODEL_SCOPE_KEY, MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
+from litellm.constants import (
+    AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
+    CLIENT_REQUESTED_MODEL_SCOPE_KEY,
+    MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
+)
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -52,14 +56,18 @@ def _unqualified(annotation: object) -> object:
     return _unqualified(qualified[0])
 
 
+def _union_members(annotation: object) -> tuple[object, ...]:
+    """The non-``None`` members of a union annotation, or the annotation itself when it is not a union."""
+    if get_origin(annotation) not in (Union, UnionType):
+        return (annotation,)
+    members: Final[tuple[object, ...]] = get_args(annotation)
+    return tuple(arg for arg in members if arg is not type(None))
+
+
 def _numeric_form_type(annotation: object) -> type[int] | type[float] | None:
     """The scalar to parse an ``int``/``float``-typed field as, else ``None``."""
     unwrapped: Final = _unqualified(annotation)
-    candidates: Final = (
-        tuple(arg for arg in get_args(unwrapped) if arg is not type(None))
-        if get_origin(unwrapped) in (Union, UnionType)
-        else (unwrapped,)
-    )
+    candidates: Final = _union_members(unwrapped)
     if len(candidates) != 1:
         return None
     if candidates[0] is int:
@@ -212,6 +220,14 @@ async def _read_request_body(request: Request | None) -> dict:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception("Unexpected error reading request body - %s", e)
         return {}
+
+
+def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
+    """Azure Speech bodies (raw audio, multipart uploads) are forwarded byte for byte, so auth must not consume them."""
+    media_type: Final = _normalize_media_type(content_type)
+    return route.startswith(f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/") and (
+        media_type.startswith("audio/") or media_type == "multipart/form-data"
+    )
 
 
 async def read_raw_json_body(request: Request | None) -> bytes | None:

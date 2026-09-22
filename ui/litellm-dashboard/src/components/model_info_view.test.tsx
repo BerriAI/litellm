@@ -432,6 +432,37 @@ describe("ModelInfoView", () => {
     });
   });
 
+  it("shows per-second pricing with resolution tiers instead of $0.00 per 1M tokens for a video model", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            model_name: "veo-3.1-fast",
+            litellm_params: { model: "vertex_ai/veo-3.1-fast-generate-001" },
+            model_info: {
+              ...defaultModelData.model_info,
+              input_cost_per_token: 0,
+              output_cost_per_token: 0,
+              output_cost_per_second: 0.1,
+              output_cost_per_second_1080p: 0.12,
+              output_cost_per_second_4k: 0.3,
+            },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByText("Output: $0.10/s")).toBeInTheDocument();
+    expect(screen.getByText("Output (1080p): $0.12/s")).toBeInTheDocument();
+    expect(screen.getByText("Output (4k): $0.30/s")).toBeInTheDocument();
+    expect(screen.queryByText(/\$0\.00\/1M tokens/)).not.toBeInTheDocument();
+  });
+
   it("should display edit settings button when user can edit model", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {
@@ -624,7 +655,7 @@ describe("ModelInfoView", () => {
     });
 
     const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
-    expect(updatePayload.litellm_params.litellm_credential_name).toBe("selected-credential");
+    expect(updatePayload.litellm_params).not.toHaveProperty("litellm_credential_name");
     expect(updatePayload.litellm_params.litellm_credential_name).not.toBe("from-json");
   });
 
@@ -1509,6 +1540,23 @@ describe("ModelInfoView", () => {
       expect(await screen.findByRole("button", { name: /save changes/i })).toBeInTheDocument();
     };
 
+    const openSelect = async (user: ReturnType<typeof userEvent.setup>, triggerText: string) => {
+      await user.click(await screen.findByText(triggerText));
+      await screen.findByRole("combobox", { expanded: true });
+    };
+
+    const openCredentialSelect = async (user: ReturnType<typeof userEvent.setup>, triggerText?: string) => {
+      const trigger = screen
+        .getAllByRole("combobox")
+        .filter((element) => element.getAttribute("data-slot") === "select-trigger")
+        .find((element) => triggerText === undefined || element.textContent?.includes(triggerText));
+      if (trigger === undefined) {
+        throw new Error(`Could not find credential selector${triggerText ? ` with ${triggerText}` : ""}`);
+      }
+      await user.click(trigger);
+      await screen.findByRole("combobox", { expanded: true });
+    };
+
     const save = async (user: ReturnType<typeof userEvent.setup>) => {
       await user.click(screen.getByRole("button", { name: /save changes/i }));
       await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalled());
@@ -1530,7 +1578,6 @@ describe("ModelInfoView", () => {
           model: "gpt-4",
           api_base: "https://api.openai.com/v1",
           custom_llm_provider: "openai",
-          litellm_credential_name: "selected-credential",
           tags: [],
           guardrails: [],
         },
@@ -1642,6 +1689,97 @@ describe("ModelInfoView", () => {
       expect(payload.model_info).toMatchObject({ team_id: "team-7" });
     });
 
+    it("sends the team picked in the Team ID selector", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-1", team_alias: "alpha" },
+          { team_id: "team-2", team_alias: "beta" },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const teamModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openSelect(user, "alpha (team-1)");
+      await user.click(await screen.findByText("beta (team-2)"));
+
+      const payload = await save(user);
+
+      expect(payload.model_info.team_id).toBe("team-2");
+    });
+
+    it("shows the picked team in read mode right after saving", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-1", team_alias: "alpha" },
+          { team_id: "team-2", team_alias: "beta" },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const teamModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openSelect(user, "alpha (team-1)");
+      await user.click(await screen.findByText("beta (team-2)"));
+      await save(user);
+
+      expect(await screen.findByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      expect(screen.getByText("beta (team-2)")).toBeInTheDocument();
+      expect(screen.queryByText("alpha (team-1)")).not.toBeInTheDocument();
+    });
+
+    it("shows the Team ID placeholder for a model with no team", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [{ team_id: "team-1", team_alias: "alpha" }],
+        isLoading: false,
+        error: null,
+      });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      expect(screen.getByText("Select a team")).toBeInTheDocument();
+    });
+
+    it.each(["Internal User", "Org Admin"])("only offers a %s the teams they administer", async (userRole) => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-1", team_alias: "alpha", members_with_roles: [{ user_id: "123", role: "admin" }] },
+          { team_id: "team-2", team_alias: "beta", members_with_roles: [{ user_id: "123", role: "user" }] },
+          { team_id: "team-3", team_alias: "gamma", members_with_roles: [{ user_id: "123", role: "admin" }] },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const teamModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole={userRole} />, { wrapper });
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      await user.click(await screen.findByText("alpha (team-1)"));
+
+      expect(await screen.findByRole("option", { name: "gamma (team-3)" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "beta (team-2)" })).not.toBeInTheDocument();
+    });
+
     it("sends the edited LiteLLM extra params", async () => {
       const user = userEvent.setup();
       await enterEditMode(user);
@@ -1670,12 +1808,110 @@ describe("ModelInfoView", () => {
       const user = userEvent.setup();
       await enterEditMode(user);
 
-      await user.click(await screen.findByText("selected-credential"));
+      await openSelect(user, "selected-credential");
       await user.click(await screen.findByText("other-credential"));
 
       const payload = await save(user);
 
       expect(payload.litellm_params.litellm_credential_name).toBe("other-credential");
+    });
+
+    it("sends explicit null when None is picked for a model with a stored credential", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "None" }));
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params.litellm_credential_name).toBeNull();
+      expect("litellm_credential_name" in payload.litellm_params).toBe(true);
+    });
+
+    it("omits the credential when it is cleared and then restored before saving", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "None" }));
+      await openCredentialSelect(user);
+      await user.click(await screen.findByRole("option", { name: "selected-credential" }));
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params).not.toHaveProperty("litellm_credential_name");
+    });
+
+    it("omits the credential when None is picked for a model that never had one", async () => {
+      const { litellm_credential_name: _storedCredential, ...litellmParamsWithoutCredential } =
+        defaultModelData.litellm_params;
+      const modelWithoutCredential = {
+        ...defaultModelData,
+        litellm_params: litellmParamsWithoutCredential,
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [modelWithoutCredential] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [modelWithoutCredential] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user);
+      await user.click(await screen.findByRole("option", { name: "None" }));
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params).not.toHaveProperty("litellm_credential_name");
+      expect(payload.litellm_params.litellm_credential_name).not.toBe("");
+    });
+
+    it("restores the stored credential in the selector after cancel", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "None" }));
+      await user.click(screen.getByRole("button", { name: /cancel/i }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      const credentialTrigger: HTMLElement = screen
+        .getAllByRole("combobox")
+        .filter((element) => element.getAttribute("data-slot") === "select-trigger")
+        .at(0) as HTMLElement;
+      expect(credentialTrigger).toHaveTextContent("selected-credential");
+    });
+
+    it("shows Manual in read mode after saving None", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "None" }));
+      await save(user);
+
+      expect(await screen.findByText("Manual")).toBeInTheDocument();
+      expect(screen.queryByText("selected-credential")).not.toBeInTheDocument();
+    });
+
+    it("keeps showing the stored credential in read mode after an untouched save", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      await save(user);
+
+      expect(await screen.findByText("selected-credential")).toBeInTheDocument();
+    });
+
+    it("keeps the form open and surfaces the error when the backend rejects the detach", async () => {
+      mockModelPatchUpdateCall.mockRejectedValueOnce(new Error("403 Only a proxy admin can detach"));
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "None" }));
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(mockToast.fromError).toHaveBeenCalled());
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+      expect(mockToast.success).not.toHaveBeenCalledWith("Model settings updated successfully");
     });
 
     it("sends the vector stores picked in the knowledge base selector", async () => {
@@ -1706,7 +1942,7 @@ describe("ModelInfoView", () => {
       const user = userEvent.setup();
       await enterEditMode(user);
 
-      await user.click(screen.getByText("Select existing health check model"));
+      await openSelect(user, "Select existing health check model");
       await user.click(await screen.findByText("openai/gpt-4o"));
 
       const payload = await save(user);

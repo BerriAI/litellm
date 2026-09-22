@@ -29,6 +29,7 @@ import {
   toRoutingGroupFormValues,
 } from "./routingGroupPayload";
 import type { RoutingGroup } from "./types";
+import { modelConflictError } from "./modelOwnership";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 
@@ -40,6 +41,7 @@ interface RoutingGroupModalProps {
   strategyDescriptions: Record<string, string>;
   modelOptions: string[];
   existingGroupNames: string[];
+  groupNameByModel: Record<string, string>;
   onClose: () => void;
   onSubmit: (group: RoutingGroup) => Promise<void> | void;
   saving?: boolean;
@@ -57,6 +59,7 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
   strategyDescriptions,
   modelOptions,
   existingGroupNames,
+  groupNameByModel,
   onClose,
   onSubmit,
   saving,
@@ -77,12 +80,20 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
         .min(1, "Group name is required")
         .max(GROUP_NAME_MAX_LENGTH, `Must be ${GROUP_NAME_MAX_LENGTH} characters or fewer`)
         .refine((value) => !reservedNames.has(value.toLowerCase()), "A group with this name already exists"),
-      models: z.array(z.string()).min(1, "Select at least one model"),
+      models: z
+        .array(z.string())
+        .min(1, "Select at least one model")
+        .superRefine((models, ctx) => {
+          const conflict = modelConflictError(models, groupNameByModel);
+          if (conflict !== null) {
+            ctx.addIssue({ code: "custom", message: conflict });
+          }
+        }),
       routing_strategy: z.string().min(1, "Strategy is required"),
       routing_strategy_args: z.string(),
     };
     return z.object(shape);
-  }, [reservedNames]);
+  }, [reservedNames, groupNameByModel]);
 
   const form = useZodForm(schema, { defaultValues: toRoutingGroupFormValues(initialValue, availableStrategies) });
 
@@ -124,7 +135,7 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
               control={form.control}
               name="models"
               label="Models"
-              description="Models from your model list that this group routes between."
+              description="Models from your model list that this group routes between. A model can only be in one group."
             >
               {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
                 <Combobox multiple items={modelOptions} value={value} onValueChange={onChange}>

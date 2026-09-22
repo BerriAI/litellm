@@ -2,7 +2,9 @@
 
 These tests exercise a running gateway, PostgreSQL and Redis with an owned local upstream. CircleCI owns this suite. Tests are grouped by behavior, with no automatic test retries or fallback to paid provider calls
 
-Use `tests/integration/run.py management`, `accounting`, `database`, `providers`, `extensions` or `sdk` to run a selected group. Set `INTEGRATION_PROXY_URL`, `INTEGRATION_UPSTREAM_URL`, `INTEGRATION_MASTER_KEY` and `DATABASE_URL` to an isolated test deployment. The runner selects the new domain directories explicitly; the legacy OCI and sandbox selections remain separate
+The `cost` group is driven by `cost_tracking_cases.json`, which contains the cost map, literal requests, literal provider responses and expected accounting values. Each case has a name, contract ID, cost-map model, optional deployment overrides, request body, tagged response and exact or recount expectations. Request bodies use `$MODEL` for the registered proxy model, while responses use `$REQUEST_ID` for the per-run scenario ID. To add a case, add a cost-map entry when the model is new, add the request body and exact provider response data, add hand-computed expected values and register the node ID in `contracts.json`. The upstream serves each stored response for any path under `/<scenario_id>`, while the test-owned cost map is served over loopback through `LITELLM_MODEL_COST_MAP_URL`
+
+Use `tests/integration/run.py management`, `accounting`, `database`, `providers`, `extensions`, `sdk` or `cost` to run a selected group. Set `INTEGRATION_PROXY_URL`, `INTEGRATION_UPSTREAM_URL`, `INTEGRATION_MASTER_KEY` and `DATABASE_URL` to an isolated test deployment. The runner selects the new domain directories explicitly; the legacy OCI and sandbox selections remain separate
 
 Management also requires `INTEGRATION_PEER_URL`, `REDIS_HOST` and `REDIS_PORT`. CircleCI starts two directly addressed proxy processes sharing only that job's stores. The test-only CLI wrapper supplies enterprise route entitlement, following the existing behavior suite's convention. It does not qualify license validation; run it with one worker and no reload
 

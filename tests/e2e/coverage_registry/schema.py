@@ -58,11 +58,13 @@ LlmRoute = Literal[
     "openai",
     "together_ai",
     "vertex",
+    "xiaomi_mimo",
 ]
 
 LlmCapability = Literal[
     "assume_role",
     "basic",
+    "batch_deployment",
     "count_tokens",
     "govcloud_partition",
     "input_validation",

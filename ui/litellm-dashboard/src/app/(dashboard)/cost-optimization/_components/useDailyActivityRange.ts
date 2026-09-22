@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import { userDailyActivityAggregatedCall, userDailyActivityCall } from "@/components/networking";
+import { ApiKeyTruncation, getApiKeyTruncation } from "@/components/EntityUsageExport/exportBlockedReason";
 import { DailyData } from "@/components/UsagePage/types";
 import { spendScopeUserId } from "@/utils/roles";
 import { usePaginatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity";
@@ -22,6 +23,7 @@ export interface DailyActivityRange {
   cancelled: boolean;
   failed: boolean;
   cancel: () => void;
+  apiKeyTruncation?: ApiKeyTruncation;
 }
 
 /**
@@ -65,19 +67,22 @@ export const useScopedDailyActivityRange = (
     args: [accessToken, startTime, endTime, userId, true, apiKey],
     enabled: !!accessToken && !!startTime && !!endTime,
   };
-  const { data, loading, isFetchingMore, progress, cancelled, failed, cancel } =
+  const { data, loading, isFetchingMore, progress, cancelled, failed, coversRange, cancel } =
     usePaginatedDailyActivity(activityQueryOptions);
+  const readUnavailable = failed || cancelled;
+  const waitingForRange = activityQueryOptions.enabled && !coversRange && !readUnavailable;
 
   return {
     dateValue,
     onDateChange,
     results: data.results as DailyData[],
-    loading,
+    loading: loading || waitingForRange,
     isFetchingMore,
     progress,
     cancelled,
     failed,
     cancel,
+    apiKeyTruncation: getApiKeyTruncation(data.metadata?.api_key_limit, data.metadata?.total_api_keys),
   };
 };
 

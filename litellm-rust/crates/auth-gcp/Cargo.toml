@@ -5,8 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+google-sdk = ["dep:google-cloud-auth", "dep:http"]
+
 [dependencies]
-litellm-auth.workspace = true
+litellm-auth-types.workspace = true
 
 moka.workspace = true
 serde_json.workspace = true
@@ -14,3 +17,5 @@ sha2.workspace = true
 tokio.workspace = true
 
 gcp_auth = "0.12.7"
+google-cloud-auth = { workspace = true, optional = true }
+http = { workspace = true, optional = true }

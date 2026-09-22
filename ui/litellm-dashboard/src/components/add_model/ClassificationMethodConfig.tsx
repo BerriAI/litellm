@@ -1,10 +1,12 @@
 import { transitionClassifierType } from "./classifier_type_transition";
+import JevClassifierConfig from "./JevClassifierConfig";
 import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -17,6 +19,9 @@ import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import ClassifierReasoningEffortSelect from "./ClassifierReasoningEffortSelect";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import ClassifierVisionConfig from "./ClassifierVisionConfig";
+import { getHeuristicV2SuccessThresholdError } from "./build_complexity_router_config";
+import ClassifierPluginTimeoutField from "./ClassifierPluginTimeoutField";
+import ClassifierTypeRadios from "./ClassifierTypeRadios";
 import type { ReasoningEffort } from "./complexity_router_tiers";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
@@ -37,6 +42,7 @@ import {
   effectiveTierLabel,
   heuristicScoringRole,
   usesLlmClassifier,
+  usesClassifierContext,
   DEFAULT_HYBRID_BOUNDARY_MARGIN,
   HEURISTIC_FIRST_MAX_TIER_KEYS,
   effectiveClassifierType,
@@ -48,13 +54,15 @@ const DEFAULT_SCORING_EXPLANATION =
   "The weighted score determines the tier:";
 
 const HEURISTIC_V2_EXPLANATION =
-  "The router estimates success probability for all four tiers with the bundled calibrated model, then selects " +
-  "the first tier that meets its trained threshold. It runs locally with no classifier API call.";
+  "The router estimates success probability for all four tiers with its calibrated model, then selects " +
+  "the first tier that meets the success threshold. If none qualify, it selects Reasoning. " +
+  "It runs locally with no classifier API call.";
 
 const CLASSIFIER_TIMEOUT_ID = "classifier-timeout-ms";
 const CLASSIFIER_CONTEXT_WINDOW_SIZE_ID = "classifier-context-window-size";
 const CLASSIFIER_CONTEXT_BUDGET_CHARS_ID = "classifier-context-budget-chars";
 const HYBRID_BOUNDARY_MARGIN_ID = "hybrid-boundary-margin";
+const HEURISTIC_V2_SUCCESS_THRESHOLD_ID = "heuristic-v2-success-threshold";
 
 const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
   "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
@@ -165,74 +173,36 @@ interface ClassificationMethodConfigProps {
   defaultModel?: string;
 }
 
-const ClassifierTypeRadios: React.FC<{
-  value: ComplexityRouterConfigValue;
-  classifierType: ClassifierType;
-  onTypeChange: (classifierType: ClassifierType) => void;
-}> = ({ value, classifierType, onTypeChange }) => {
-  const scorerLocked = Boolean(value.custom_tier_set);
-  const scorerLockedReason = restrictedBy(value, "heuristicClassifier")?.reason;
+export const InactiveHeuristicV2Threshold: React.FC<Pick<ClassificationMethodConfigProps, "value" | "onChange">> = ({
+  value,
+  onChange,
+}) => {
+  const threshold = value.heuristic_v2_success_threshold;
+  if (effectiveClassifierType(value) === "heuristic_v2" || threshold === undefined) return null;
+  const error = getHeuristicV2SuccessThresholdError(threshold);
   return (
-    <RadioGroup
-      value={classifierType}
-      onValueChange={(classifierType: unknown) => onTypeChange(classifierType as ClassifierType)}
-      className="w-full"
-    >
-      <div className="flex w-full flex-col items-start gap-2">
-        <SimpleTooltip content={scorerLockedReason}>
-          <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
-            <RadioGroupItem value="heuristic" className="mt-0.5" disabled={scorerLocked} />
-            <span>
-              <strong className="font-semibold">Heuristic</strong>{" "}
-              <span className="text-muted-foreground">
-                (default), rule-based scoring with no API calls and &lt;1ms latency
-              </span>
-            </span>
-          </Label>
-        </SimpleTooltip>
-        <SimpleTooltip content={scorerLockedReason}>
-          <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
-            <RadioGroupItem value="heuristic_v2" className="mt-0.5" disabled={scorerLocked} />
-            <span>
-              <strong className="font-semibold">Heuristic v2</strong>{" "}
-              <span className="text-muted-foreground">
-                uses bundled calibrated four-tier probabilities with no API call
-              </span>
-            </span>
-          </Label>
-        </SimpleTooltip>
-        <Label className="items-start font-normal leading-normal">
-          <RadioGroupItem value="llm" className="mt-0.5" />
-          <span>
-            <strong className="font-semibold">LLM Classifier</strong>{" "}
-            <span className="text-muted-foreground">calls a model to decide the tier (e.g. a small/fast model)</span>
-          </span>
-        </Label>
-        <SimpleTooltip content={scorerLockedReason}>
-          <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
-            <RadioGroupItem value="heuristic_first" className="mt-0.5" disabled={scorerLocked} />
-            <span>
-              <strong className="font-semibold">Heuristic first</strong>{" "}
-              <span className="text-muted-foreground">
-                scores locally, and only pays for the classifier when the score does not confidently land a cheap tier
-              </span>
-            </span>
-          </Label>
-        </SimpleTooltip>
-        <SimpleTooltip content={scorerLockedReason}>
-          <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
-            <RadioGroupItem value="hybrid" className="mt-0.5" disabled={scorerLocked} />
-            <span>
-              <strong className="font-semibold">Hybrid</strong>{" "}
-              <span className="text-muted-foreground">
-                keeps the local score at any tier, and only pays for the classifier when that score lands near a tier
-                boundary
-              </span>
-            </span>
-          </Label>
-        </SimpleTooltip>
-      </div>
-    </RadioGroup>
+    <section aria-label="Inactive Heuristic v2 threshold" className="mb-4 space-y-2 rounded-md border p-3">
+      <p className="text-sm font-medium">
+        Heuristic v2 success threshold (inactive):{" "}
+        <output aria-label="Retained Heuristic v2 threshold">
+          {Number.isFinite(threshold) ? threshold : "Invalid value"}
+        </output>
+      </p>
+      <p className="text-sm text-muted-foreground">Only used when Heuristic v2 is selected</p>
+      {error && (
+        <p className="text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => onChange({ ...value, heuristic_v2_success_threshold: undefined })}
+      >
+        Clear Heuristic v2 threshold
+      </Button>
+    </section>
   );
 };
 
@@ -259,6 +229,12 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const classifierModel = value.classifier_llm_config?.model ?? "";
   const classifierReasoningEffort = value.classifier_llm_config?.reasoning_effort;
   const explicitlySupportedClassifierEfforts = effortOptionsByModel[classifierModel];
+  const successThresholdError = getHeuristicV2SuccessThresholdError(value.heuristic_v2_success_threshold);
+  const successThresholdDraft =
+    draft?.id === HEURISTIC_V2_SUCCESS_THRESHOLD_ID &&
+    Object.is(value.heuristic_v2_success_threshold, draft.raw.trim() === "" ? undefined : Number(draft.raw))
+      ? draft.raw
+      : null;
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
     onChange(transitionClassifierType(value, classifierType));
@@ -273,6 +249,14 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     const parsed = Number(raw);
     if (raw.trim() === "" || !Number.isFinite(parsed)) return;
     onChange({ ...value, hybrid_boundary_margin: Math.min(1, Math.max(0, parsed)) });
+  };
+
+  const handleSuccessThresholdChange = (raw: string) => {
+    setDraft({ id: HEURISTIC_V2_SUCCESS_THRESHOLD_ID, raw });
+    onChange({
+      ...value,
+      heuristic_v2_success_threshold: raw.trim() === "" ? undefined : Number(raw),
+    });
   };
 
   // One write for everything the prompt dialog owns. The rubric arrives here rather than through the
@@ -407,6 +391,40 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     <>
       <ClassifierTypeRadios value={value} classifierType={classifierType} onTypeChange={handleClassifierTypeChange} />
 
+      {classifierType === "custom" && (
+        <ClassifierPluginTimeoutField value={value} onChange={onChange} showValidationErrors={showValidationErrors} />
+      )}
+
+      {classifierType === "heuristic_v2" && (
+        <div className="mt-4 space-y-2">
+          <Label htmlFor={HEURISTIC_V2_SUCCESS_THRESHOLD_ID} className="block font-semibold">
+            Success threshold
+          </Label>
+          <Input
+            id={HEURISTIC_V2_SUCCESS_THRESHOLD_ID}
+            type="text"
+            inputMode="decimal"
+            placeholder="Artifact default"
+            value={successThresholdDraft ?? value.heuristic_v2_success_threshold?.toString() ?? ""}
+            onChange={(event) => handleSuccessThresholdChange(event.target.value)}
+            onBlur={() => {
+              if (!successThresholdError) setDraft(null);
+            }}
+            aria-invalid={Boolean(successThresholdError)}
+            aria-describedby={`${HEURISTIC_V2_SUCCESS_THRESHOLD_ID}-help${successThresholdError ? ` ${HEURISTIC_V2_SUCCESS_THRESHOLD_ID}-error` : ""}`}
+          />
+          <p id={`${HEURISTIC_V2_SUCCESS_THRESHOLD_ID}-help`} className="text-sm text-muted-foreground">
+            Minimum predicted success probability, from 0 to 1. Higher values favor more capable tiers. Leave blank to
+            use the artifact default
+          </p>
+          {successThresholdError && (
+            <p id={`${HEURISTIC_V2_SUCCESS_THRESHOLD_ID}-error`} className="text-sm text-destructive" role="alert">
+              {successThresholdError}
+            </p>
+          )}
+        </div>
+      )}
+
       {classifierType === "heuristic_first" && (
         <div className="mt-4 space-y-2">
           <strong className="block font-semibold">Decide locally up to</strong>
@@ -499,6 +517,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </p>
       </div>
 
+      {classifierType === "jev" && <JevClassifierConfig value={value} onChange={onChange} />}
       {usesLlmClassifier(classifierType) && (
         <div className="mt-4 space-y-3">
           <div>
@@ -591,6 +610,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               />
             )}
           </div>
+        </div>
+      )}
+      {usesClassifierContext(classifierType) && (
+        <div className="mt-4 space-y-3">
           <RestrictedSection heading="If the classifier fails" by={restrictedBy(value, "classifierFallback")}>
             <RadioGroup
               value={value.classifier_fallback ?? DEFAULT_CLASSIFIER_FALLBACK}
@@ -652,9 +675,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               className="w-full"
             />
             <span className="text-xs text-muted-foreground">
-              Number of prior user turns (tool output and harness reminders excluded) sent to the classifier as context,
-              so a referring follow-up like &quot;now do the same for the streaming path&quot; is classified against
-              what it refers to. Set to 0 to send only the current message.
+              Number of prior user turns sent to the classifier provider, excluding tool output and harness reminders.
+              LLM and JEV default to 3 turns; JEV sends them to the configured TypeSafe endpoint. Set to 0 to omit
+              conversation history. The current message and selected system text are still sent.
             </span>
           </div>
           <div>

@@ -79,6 +79,8 @@ from models import (
     ModelUpdateBody,
     OcrBody,
     OcrResponse,
+    RerankBody,
+    RerankResponse,
     RouterCurrentValues,
     RouterSettingsResponse,
     SpendLogRow,
@@ -89,6 +91,7 @@ from models import (
     TeamDeleteBody,
     TeamNewBody,
     TeamNewResponse,
+    TeamUpdateBody,
     ToolsetCreateBody,
     ToolsetRow,
     ToolsetUpdateBody,
@@ -871,6 +874,16 @@ class ProxyClient:
             )
         ).team_id
 
+    def update_team(self, body: TeamUpdateBody) -> None:
+        unwrap(
+            self.transport.post(
+                "/team/update",
+                headers=self.transport.master,
+                json=body,
+                response_type=NoBody,
+            )
+        )
+
     def delete_team(self, team_id: str) -> None:
         result = self.transport.post(
             "/team/delete",
@@ -927,6 +940,16 @@ class ProxyClient:
             json=body,
             response_type=OcrResponse,
             timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
+        )
+
+    def rerank(self, key: str, body: RerankBody) -> Result[RerankResponse]:
+        """POST /v1/rerank (Cohere-format). No official OpenAI/Anthropic SDK
+        covers this route, so it stays on the shared typed transport."""
+        return self.transport.post(
+            "/v1/rerank",
+            headers=self.transport.bearer(key),
+            json=body,
+            response_type=RerankResponse,
         )
 
     def count_tokens(self, key: str, body: CountTokensBody) -> Result[CountTokensResponse]:

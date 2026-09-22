@@ -150,7 +150,11 @@ def get_default_headers() -> dict:
     if user_agent is not None:
         return {"User-Agent": user_agent}
 
-    return {"User-Agent": f"litellm/{version}"}
+    return {"User-Agent": default_user_agent()}
+
+
+def default_user_agent() -> str:
+    return f"litellm/{version}"
 
 
 # Initialize headers (User-Agent)
@@ -473,6 +477,11 @@ def _safe_get_response_text(response: httpx.Response) -> str:
         return response.text
     except Exception:
         return ""
+
+
+def header_value(headers: Mapping[str, str], name: str) -> str | None:
+    """Read one header as ``str | None``; ``httpx.Headers.get`` itself is typed ``Any``."""
+    return headers.get(name)
 
 
 async def _safe_aread_response(response: httpx.Response, timeout: float | None = None) -> bytes:

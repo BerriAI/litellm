@@ -1,17 +1,22 @@
+mod cache;
+mod coercion;
 mod credentials;
 mod diagnostics;
 mod errors;
+mod http;
 mod marshal;
+mod python_settings;
 mod routes;
 mod token_counter;
 
 #[pymodule(gil_used = true)]
 mod _native {
+    use crate::cache::{CacheTestHandle, CacheTestResolver, ResolvedCache};
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
     #[pymodule_export]
-    use crate::diagnostics::gil_stats;
+    use crate::diagnostics::{gil_stats, process_state_started, reserve_process_for_forking};
     #[pymodule_export]
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
     #[pymodule_export]
@@ -28,6 +33,18 @@ mod _native {
     use crate::routes::responses::ResponsesWebSocketConnection;
     #[pymodule_export]
     use crate::token_counter::TokenCounter;
+    #[pymodule_export]
+    use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
+    use pyo3::{prelude::*, types::PyModule};
+
+    #[pymodule_init]
+    fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        let py = module.py();
+        let dict = module.dict();
+        dict.set_item("_CacheTestHandle", py.get_type::<CacheTestHandle>())?;
+        dict.set_item("_CacheTestResolver", py.get_type::<CacheTestResolver>())?;
+        dict.set_item("_CacheTestBinding", py.get_type::<ResolvedCache>())
+    }
 }
 
 use pyo3::prelude::*;
@@ -48,6 +65,8 @@ mod tests {
             let mut expected = vec![
                 "RustBridgeDeclined",
                 "RustUpstreamError",
+                "ForkedAfterNativeRuntimeStarted",
+                "ProcessReservedForForking",
                 "ocr",
                 "aocr",
                 "transcription",
@@ -60,6 +79,8 @@ mod tests {
                 "ResponsesWebSocketConnection",
                 "TokenCounter",
                 "gil_stats",
+                "process_state_started",
+                "reserve_process_for_forking",
             ];
             expected.sort_unstable();
 

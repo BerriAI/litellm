@@ -56,6 +56,31 @@ def _build(payload: dict | None = None, metadata: dict | None = None):
 
 
 class TestBuildTransaction:
+    @pytest.mark.parametrize(
+        "api_key, user_id, included",
+        [
+            ("hashed-key", "canonical-user", True),
+            ("hashed-key", None, True),
+            ("hashed-key", "", True),
+            ("", "canonical-user", True),
+            ("", None, False),
+            ("", "", False),
+        ],
+    )
+    def test_attribution_uses_the_canonical_user_even_without_a_key(
+        self, api_key: str, user_id: str | None, included: bool
+    ) -> None:
+        transaction: Final = _build(
+            payload=_payload(api_key=api_key, user=user_id),
+            metadata=_metadata(user="client-user", user_api_key_user_id="metadata-user"),
+        )
+        if not included:
+            assert transaction is None
+            return
+        assert transaction is not None
+        assert transaction.api_key == api_key
+        assert transaction.user_id == (user_id or "")
+
     def test_successful_auto_routed_turn_builds_every_field(self):
         transaction = _build(
             metadata=_metadata(
@@ -205,23 +230,43 @@ class TestBuildTransaction:
 
 
 class _FakeDB:
-    def __init__(self, failures: "list[Exception] | None" = None, poison_session: str | None = None):
+    def __init__(
+        self,
+        failures: "list[Exception] | None" = None,
+        poison_session: str | None = None,
+        poison_user: str | None = None,
+        commit_then_error_users: frozenset[str] = frozenset(),
+    ):
         self.calls: list[tuple] = []
+        self.attempts: list[tuple[str, tuple[object, ...]]] = []
         self._failures = list(failures or [])
         self._poison_session = poison_session
+        self._poison_user = poison_user
+        self._commit_then_error_users = commit_then_error_users
 
     async def execute_raw(self, sql: str, *params: object) -> int:
+        self.attempts.append((sql, params))
         if self._poison_session is not None and params[1] == self._poison_session:
+            raise RuntimeError("index row size exceeds btree maximum")
+        if self._poison_user is not None and params[19] == self._poison_user:
             raise RuntimeError("index row size exceeds btree maximum")
         if self._failures:
             raise self._failures.pop(0)
         self.calls.append((sql, params))
+        if params[19] in self._commit_then_error_users:
+            raise RuntimeError("commit succeeded but acknowledgement was lost")
         return 1
 
 
 class _FakeClient:
-    def __init__(self, failures: "list[Exception] | None" = None, poison_session: str | None = None):
-        self.db = _FakeDB(failures, poison_session)
+    def __init__(
+        self,
+        failures: "list[Exception] | None" = None,
+        poison_session: str | None = None,
+        poison_user: str | None = None,
+        commit_then_error_users: frozenset[str] = frozenset(),
+    ):
+        self.db = _FakeDB(failures, poison_session, poison_user, commit_then_error_users)
 
 
 def _transaction(
@@ -229,9 +274,11 @@ def _transaction(
     at: datetime = datetime(2026, 8, 1, 12, 0, 0),
     tier: str | None = "medium",
     baseline_model: str | None = "anthropic/claude-opus-5",
+    api_key: str = "k1",
+    user_id: str = "",
 ) -> AutoRouterTurnTransaction:
     return AutoRouterTurnTransaction(
-        api_key="k1",
+        api_key=api_key,
         session_id=session_id,
         router_name="live-auto",
         router_type="complexity",
@@ -247,6 +294,7 @@ def _transaction(
         cache_touched=False,
         tier=tier,
         baseline_model=baseline_model,
+        user_id=user_id,
     )
 
 
@@ -261,7 +309,7 @@ class TestFlush:
 
     def test_params_marshal_in_statement_order(self):
         client = _FakeClient()
-        asyncio.run(flush_autorouter_turn_transactions(client, [_transaction()]))
+        asyncio.run(flush_autorouter_turn_transactions(client, [_transaction(user_id="canonical-user")]))
         sql, params = client.db.calls[0]
         assert sql == UPSERT_AUTOROUTER_SESSION_SQL
         assert params == (
@@ -281,7 +329,67 @@ class TestFlush:
             0,
             "medium",
             "anthropic/claude-opus-5",
+            0,
+            0.0,
+            0.0,
+            "canonical-user",
         )
+
+    def test_a_keys_turns_stay_chronological_when_its_canonical_user_changes(self) -> None:
+        client: Final = _FakeClient()
+        earlier: Final = _transaction(user_id="z-user", at=datetime(2026, 8, 1, 12, 0, 0))
+        later: Final = _transaction(user_id="a-user", at=datetime(2026, 8, 1, 12, 0, 10))
+        asyncio.run(flush_autorouter_turn_transactions(client, [later, earlier]))
+        assert [(params[5], params[19]) for _, params in client.db.calls] == [
+            ("2026-08-01T12:00:00", "z-user"),
+            ("2026-08-01T12:00:10", "a-user"),
+        ]
+
+    def test_one_keyless_users_failed_session_does_not_drop_another_users_turn(self) -> None:
+        client: Final = _FakeClient(poison_user="a-user")
+        failed: Final = _transaction(api_key="", user_id="a-user")
+        other: Final = _transaction(api_key="", user_id="b-user", at=datetime(2026, 8, 1, 12, 0, 10))
+        asyncio.run(flush_autorouter_turn_transactions(client, [other, failed]))
+        assert [(params[0], params[1], params[19]) for _, params in client.db.calls] == [("", "s1", "b-user")]
+
+    def test_uncertain_commits_quarantine_only_the_key_and_each_failed_user(self) -> None:
+        client: Final = _FakeClient(commit_then_error_users=frozenset({"a-failed", "c-failed"}))
+        turns: Final = tuple(
+            _transaction(user_id=user, at=datetime(2026, 8, 1, 12, 0, second), api_key=key)
+            for user, second, key in (
+                ("b-healthy", 0, "k1"),
+                ("a-failed", 1, "k1"),
+                ("b-healthy", 2, "k1"),
+                ("c-failed", 3, "k1"),
+                ("b-healthy", 4, "k1"),
+                ("d-healthy", 5, "k1"),
+                ("c-failed", 6, "k1"),
+                ("d-healthy", 7, "k1"),
+                ("a-failed", 8, "k1"),
+                ("", 9, "k1"),
+                ("z-other", 10, "k2"),
+            )
+        )
+        asyncio.run(flush_autorouter_turn_transactions(client, tuple(reversed(turns))))
+
+        assert client.db.attempts == client.db.calls
+        assert [
+            (params[0], params[19], params[5])
+            for sql, params in client.db.calls
+            if sql == UPSERT_AUTOROUTER_SESSION_SQL
+        ] == [
+            ("k1", "b-healthy", "2026-08-01T12:00:00"),
+            ("k1", "a-failed", "2026-08-01T12:00:01"),
+            ("k2", "z-other", "2026-08-01T12:00:10"),
+        ]
+        assert [params[19] for _, params in client.db.attempts].count("a-failed") == 1
+        assert [params[19] for _, params in client.db.attempts].count("c-failed") == 1
+        for user, seconds in (("b-healthy", (2, 4)), ("c-failed", (3,)), ("d-healthy", (5, 7))):
+            assert [
+                (params[0], params[5])
+                for sql, params in client.db.calls
+                if sql != UPSERT_AUTOROUTER_SESSION_SQL and params[19] == user
+            ] == [("k1", f"2026-08-01T12:00:{second:02d}") for second in seconds]
 
     def test_a_connect_error_retries_the_same_statement(self):
         client = _FakeClient(failures=[httpx.ConnectError("boom")])
@@ -307,7 +415,20 @@ class TestFlush:
 class TestEnqueueSeam:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("classifier_cost", [0.005, 0.0, None])
-    async def test_update_database_seam_enqueues_only_auto_routed_success(self, classifier_cost: float | None):
+    @pytest.mark.parametrize("estimate, covered, saved", [
+        ({"version": 1, "status": "estimated"}, 1, -0.003),
+        ({"version": 1, "status": "estimated"}, 1, 0.0),
+        ({"version": 2, "status": "estimated"}, 1, 0.0),
+        ({"version": 3, "status": "estimated"}, 1, -0.003),
+        ({"version": 1, "status": "unknown"}, 0, 0.0),
+        ({"version": 0, "status": "estimated"}, 0, 0.0),
+        ({"version": 4, "status": "estimated"}, 0, 0.0),
+        ({"version": True, "status": "estimated"}, 0, 0.0),
+        (None, 0, -0.003),
+    ])
+    async def test_update_database_seam_enqueues_only_auto_routed_success(
+        self, classifier_cost: float | None, estimate: dict[str, object] | None, covered: int, saved: float,
+    ) -> None:
         from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 
         writer: Final = DBSpendUpdateWriter()
@@ -315,7 +436,8 @@ class TestEnqueueSeam:
             _autorouter_turn_transactions_lock=asyncio.Lock(), autorouter_turn_transactions=[]
         )
         metadata: Final = _metadata(
-            routing_decision={**ROUTING_DECISION, "classifier_cost": classifier_cost}, autorouter_savings=-0.003
+            routing_decision={**ROUTING_DECISION, "classifier_cost": classifier_cost},
+            autorouter_savings=saved if covered else -0.003, autorouter_savings_estimate=estimate,
         )
         for payload in (
             _payload(metadata=json.dumps(metadata)),
@@ -330,7 +452,10 @@ class TestEnqueueSeam:
         assert transaction.router_name == "live-auto"
         assert transaction.spend == pytest.approx(0.01 + (classifier_cost or 0.0))
         assert transaction.classifier_cost == (classifier_cost or 0.0)
-        assert transaction.saved_spend == -0.003
+        assert transaction.saved_spend == saved
+        assert transaction.savings_estimated_turns == covered
+        assert transaction.savings_estimated_actual_spend == pytest.approx(transaction.spend if covered else 0.0)
+        assert transaction.savings_estimated_saved_spend == (saved if covered else 0.0)
 
 
 def test_every_drain_trigger_reads_the_one_queue_census_owner():

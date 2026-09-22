@@ -132,6 +132,74 @@ describe("EditAutoRouterModal keyword matching", () => {
     expect(await screen.findByText(/Keyword\/Semantic Matching/i)).toBeInTheDocument();
   });
 
+  it.each(["0", ""])("hydrates the saved threshold and saves an edit to '%s'", async (raw) => {
+    const user = userEvent.setup();
+    renderModal({
+      modelData: {
+        ...MODEL_DATA,
+        litellm_params: {
+          ...MODEL_DATA.litellm_params,
+          complexity_router_config: {
+            ...STORED_CONFIG,
+            classifier_type: "heuristic_v2",
+            heuristic_v2_success_threshold: 0.91,
+          },
+        },
+      },
+    });
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    const threshold = screen.getByRole("textbox", { name: "Success threshold" });
+    expect(threshold).toHaveValue("0.91");
+    fireEvent.change(threshold, { target: { value: raw } });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
+    if (raw === "") expect(savedConfig()).not.toHaveProperty("heuristic_v2_success_threshold");
+    else expect(savedConfig().heuristic_v2_success_threshold).toBe(0);
+  });
+
+  it("blocks an invalid threshold edit and retains a corrected value when switching classifiers", async () => {
+    const user = userEvent.setup();
+    renderModal({
+      modelData: {
+        ...MODEL_DATA,
+        litellm_params: {
+          ...MODEL_DATA.litellm_params,
+          complexity_router_config: {
+            ...STORED_CONFIG,
+            classifier_type: "heuristic_v2",
+            heuristic_v2_success_threshold: 0.91,
+          },
+        },
+      },
+    });
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "-0.1" } });
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "0.88" } });
+    await user.click(screen.getByRole("radio", { name: /^Heuristic \(default\)/ }));
+    expect(screen.queryByRole("textbox", { name: "Success threshold" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
+    expect(savedConfig()).toMatchObject({ classifier_type: "heuristic", heuristic_v2_success_threshold: 0.88 });
+  });
+
+  it("clears an invalid inactive threshold before saving the router", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(screen.getByRole("radio", { name: /^Heuristic v2/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "1.1" } });
+    await user.click(screen.getByRole("radio", { name: /^Heuristic \(default\)/ }));
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Clear Heuristic v2 threshold" }));
+    expect(screen.queryByRole("region", { name: "Inactive Heuristic v2 threshold" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
+    expect(savedConfig()).not.toHaveProperty("heuristic_v2_success_threshold");
+  });
+
   // These keys are rewritten from form state on save, so if the modal renders the controls
   // without hydrating them, an untouched save silently wipes the stored configuration. This
   // drives the real component; a test of the payload builder alone cannot see that bug.
@@ -276,6 +344,77 @@ describe("EditAutoRouterModal keyword matching", () => {
 
     expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled();
     expect(screen.queryByText("At least one keyword is required")).not.toBeInTheDocument();
+  });
+});
+
+describe("EditAutoRouterModal advanced field round trips", () => {
+  const storedAdvancedConfig = {
+    ...STORED_CONFIG,
+    route_housekeeping_to_cheapest_tier: false,
+    housekeeping_patterns: ["conversation title"],
+    reminder_markers: [{ open: "<a>", close: "</a>" }],
+    max_tokens_from_tier_model: false,
+  };
+
+  const renderAdvancedModal = (props: Partial<React.ComponentProps<typeof EditAutoRouterModal>> = {}) =>
+    renderModal({
+      modelData: {
+        ...MODEL_DATA,
+        litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config: storedAdvancedConfig },
+      },
+      ...props,
+    });
+
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  it("hydrates housekeeping and reminder fields, then omits the default max-token value after editing", async () => {
+    const user = userEvent.setup();
+    renderAdvancedModal();
+
+    await user.click(await screen.findByText("Advanced: Housekeeping Routing"));
+    expect(screen.getByRole("switch", { name: "Route housekeeping calls to the cheapest tier" })).not.toBeChecked();
+    expect(screen.getByRole("combobox", { name: "e.g., conversation title" })).toHaveValue("");
+
+    await user.click(screen.getByText("Advanced: Reminder Markers"));
+    expect(screen.getByLabelText("Opening delimiter")).toHaveValue("<a>");
+    expect(screen.getByLabelText("Closing delimiter")).toHaveValue("</a>");
+
+    await user.click(screen.getByText("Advanced: Response Format"));
+    const maxTokensSwitch = screen.getByRole("switch", { name: "Cap max_tokens at the tier model's output ceiling" });
+    await user.click(maxTokensSwitch);
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
+
+    expect(savedConfig()).not.toHaveProperty("max_tokens_from_tier_model");
+    expect(savedConfig()).toMatchObject({
+      route_housekeeping_to_cheapest_tier: false,
+      housekeeping_patterns: ["conversation title"],
+      reminder_markers: [{ open: "<a>", close: "</a>" }],
+    });
+  });
+
+  it("does not PATCH when the edit is cancelled", async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    renderAdvancedModal({ onCancel });
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
+  });
+
+  it("preserves all stored advanced fields through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderAdvancedModal();
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
+    expect(savedConfig()).toMatchObject({
+      route_housekeeping_to_cheapest_tier: false,
+      housekeeping_patterns: ["conversation title"],
+      reminder_markers: [{ open: "<a>", close: "</a>" }],
+      max_tokens_from_tier_model: false,
+    });
   });
 });
 

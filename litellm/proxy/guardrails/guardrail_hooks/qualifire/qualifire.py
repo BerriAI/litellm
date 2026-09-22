@@ -383,7 +383,7 @@ class QualifireGuardrail(CustomGuardrail):
             result: Final = response.json()
 
             # Extract response info for logging
-            qualifire_response: Final = {
+            qualifire_response: Final[dict[str, object]] = {
                 "score": result.get("score"),
                 "status": result.get("status"),
             }
@@ -452,7 +452,7 @@ class QualifireGuardrail(CustomGuardrail):
         dynamic_params: Final = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
 
         # Extract messages from structured_messages or request_data
-        messages: list[AllMessageValues] | None = inputs.get("structured_messages") if input_type == "request" else None
+        messages: list[AllMessageValues] | None = inputs.get("structured_messages")
         if not messages:
             messages = request_data.get("messages")
 

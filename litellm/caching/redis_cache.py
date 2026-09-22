@@ -80,6 +80,8 @@ class _AsyncRedisCommands(Protocol):
 
     def ttl(self, name: str) -> Awaitable[int]: ...
 
+    def expire(self, name: str, time: int) -> Awaitable[bool]: ...
+
     def rpush(self, name: str, *values: str | bytes | float) -> Awaitable[int]: ...
 
     def lpop(self, name: str, count: int | None = None) -> Awaitable[object]: ...
@@ -979,7 +981,7 @@ class RedisCache(BaseCache):
             client: object = None,
         ) -> object:
             async def execute() -> object:
-                executor: Callable[..., Awaitable[Any]] | None = litellm.in_memory_llm_clients_cache.get_cache(
+                executor: Callable[..., Awaitable[object]] | None = litellm.in_memory_llm_clients_cache.get_cache(
                     key=script_cache_key
                 )
                 if executor is None:
@@ -991,7 +993,7 @@ class RedisCache(BaseCache):
 
         return run_script
 
-    def _register_script_for_current_loop(self, script: str) -> Callable[..., Awaitable[Any]]:
+    def _register_script_for_current_loop(self, script: str) -> Callable[..., Awaitable[object]]:
         """
         Register the script against the current event loop's Redis client.
 
@@ -1949,6 +1951,14 @@ class RedisCache(BaseCache):
             return None
 
     @_redis_circuit_breaker_guard
+    async def async_refresh_ttl(self, key: str, ttl: int | None = None) -> bool:
+        """EXPIRE an existing key without touching its value. False when the key is absent."""
+        _used_ttl: Final = self.get_ttl(ttl=ttl)
+        if _used_ttl is None:
+            return False
+        return await self._async_commands().expire(self.check_and_fix_namespace(key=key), _used_ttl)
+
+    @_redis_circuit_breaker_guard
     async def async_rpush(
         self,
         key: str,
@@ -1997,6 +2007,51 @@ class RedisCache(BaseCache):
                 )
             )
             log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Redis Cache RPUSH: - Got exception from REDIS", e)
+            raise e
+
+    @_redis_circuit_breaker_guard
+    async def async_rpush_and_trim(
+        self,
+        key: str,
+        values: Sequence[str | bytes | int | float],
+        max_len: int,
+    ) -> int:
+        """Append values and keep only the newest ``max_len`` entries in one MULTI/EXEC.
+
+        Returns the list length right after the push, so callers can tell how many
+        of the oldest entries the trim dropped.
+        """
+        _redis_client: Final = self._async_commands()
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
+        start_time: Final = time.time()
+        try:
+            async with _redis_client.pipeline(transaction=True) as pipe:
+                pipe.rpush(namespaced_key, *values)
+                pipe.ltrim(namespaced_key, -max_len, -1)
+                results: Final = await pipe.execute()
+            for r in results:
+                if isinstance(r, Exception):
+                    raise r
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    call_type=f"async_rpush_and_trim <- {_get_call_stack_info()}",
+                )
+            )
+            return int(results[0])
+        except Exception as e:
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    error=e,
+                    call_type=f"async_rpush_and_trim <- {_get_call_stack_info()}",
+                )
+            )
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Redis Cache RPUSH+LTRIM: - Got exception from REDIS", e
+            )
             raise e
 
     async def _pipeline_rpush_helper(

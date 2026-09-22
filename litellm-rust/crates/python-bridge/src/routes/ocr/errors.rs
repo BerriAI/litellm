@@ -1,6 +1,8 @@
-use litellm_core::ocr::Error;
-use pyo3::exceptions::{PyFileNotFoundError, PyOSError};
-use pyo3::prelude::*;
+use litellm_llms::base_llm::ocr::error::Error;
+use pyo3::{
+    exceptions::{PyFileNotFoundError, PyOSError},
+    prelude::*,
+};
 
 use crate::errors::{RustUpstreamError, core_error_to_pyerr};
 
@@ -13,7 +15,7 @@ pub(super) fn to_pyerr(error: Error) -> PyErr {
                 body,
                 headers,
             } => upstream_error(py, status, body, headers)?,
-            Error::Transport(litellm_core::transport::Error::Http { status, body }) => {
+            Error::Transport(litellm_http::transport::Error::Http { status, body }) => {
                 upstream_error(py, status, body, Vec::new())?
             }
             Error::RequestFormat => {
@@ -59,8 +61,9 @@ fn attach_status(error: PyErr, status: Option<u16>) -> PyErr {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pyo3::exceptions::PyValueError;
+
+    use super::*;
 
     #[test]
     fn preserves_python_validation_and_provider_details() {

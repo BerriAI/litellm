@@ -3,10 +3,12 @@
 
 use litellm_auth::{ResolvedCredential, SecretValue};
 use litellm_host_python::wrap_failure;
-use pyo3::exceptions::PyTypeError;
-use pyo3::gc::{PyTraverseError, PyVisit};
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyString};
+use pyo3::{
+    exceptions::PyTypeError,
+    gc::{PyTraverseError, PyVisit},
+    prelude::*,
+    types::{PyDict, PyString},
+};
 
 const NOT_CALLABLE: &str = "Azure AD token provider must be callable";
 const NOT_A_STRING: &str = "Azure AD token must be a string, got {}";

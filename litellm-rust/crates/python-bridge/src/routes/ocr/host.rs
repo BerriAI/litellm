@@ -1,13 +1,18 @@
 use litellm_auth::ResolvedCredential;
-use litellm_core::ocr::{LiteLLMOcrResponse, Ocr, OcrOp, OcrOpResult};
-use litellm_host_python::{RouteHost, missing_state, to_py};
-use pyo3::exceptions::PyBaseException;
-use pyo3::gc::{PyTraverseError, PyVisit};
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use litellm_core::ocr::route::{Ocr, OcrOp, OcrOpResult};
+use litellm_host_python::{InvokeError, RouteHost, missing_state, to_py};
+use litellm_llms::base_llm::ocr::{error::Error, transformation::LiteLLMOcrResponse};
+use pyo3::{
+    exceptions::{PyBaseException, PyException},
+    gc::{PyTraverseError, PyVisit},
+    prelude::*,
+    types::PyDict,
+};
 
-use super::errors::to_pyerr as ocr_error_to_pyerr;
-use super::project::{OcrHostHandles, project_request};
+use super::{
+    errors::to_pyerr as ocr_error_to_pyerr,
+    project::{OcrHostHandles, project_request},
+};
 
 enum OcrHostData {
     Unprojected,
@@ -37,7 +42,7 @@ impl OcrRouteHost {
         }
     }
 
-    fn read_document(&self, py: Python<'_>) -> PyResult<litellm_core::ocr::OcrFileContent> {
+    fn read_document(&self, py: Python<'_>) -> PyResult<litellm_core::ocr::types::OcrFileContent> {
         self.handles()?
             .reader
             .as_ref()
@@ -52,12 +57,8 @@ impl OcrRouteHost {
             .ok_or_else(missing_state)?
             .acquire(py)
     }
-}
 
-impl RouteHost for OcrRouteHost {
-    type Route = Ocr;
-
-    fn invoke(
+    fn answer(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
@@ -83,6 +84,40 @@ impl RouteHost for OcrRouteHost {
         }
     }
 
+    fn map_failure(&self, py: Python<'_>, error: PyErr) -> PyErr {
+        if !error.is_instance_of::<PyException>(py) {
+            return error;
+        }
+        let provider = match &self.data {
+            OcrHostData::Projected(handles) => handles.provider,
+            _ => "",
+        };
+        let mapped = py
+            .import("litellm.rust_bridge.ocr.route_host")
+            .and_then(|module| module.getattr("map_failure"))
+            .and_then(|map| map.call1((error.value(py), self.request.bind(py), provider)))
+            .and_then(|mapped| mapped.extract::<Py<PyBaseException>>().map_err(PyErr::from));
+        match mapped {
+            Ok(mapped) => PyErr::from_value(mapped.into_bound(py).into_any()),
+            Err(_) => error,
+        }
+    }
+}
+
+impl RouteHost for OcrRouteHost {
+    type Route = Ocr;
+    type Failure = PyErr;
+
+    fn invoke(
+        &mut self,
+        py: Python<'_>,
+        arguments: &Bound<'_, PyDict>,
+        op: OcrOp,
+    ) -> Result<OcrOpResult, InvokeError<Error>> {
+        self.answer(py, arguments, op)
+            .map_err(|error| InvokeError::Python(self.map_failure(py, error)))
+    }
+
     fn complete(&mut self, py: Python<'_>, response: LiteLLMOcrResponse) -> PyResult<Py<PyAny>> {
         py.import("litellm.rust_bridge.ocr.route_host")?
             .getattr("response")?
@@ -90,25 +125,16 @@ impl RouteHost for OcrRouteHost {
             .map(Bound::unbind)
     }
 
-    fn native_error(error: litellm_core::ocr::Error) -> PyErr {
-        ocr_error_to_pyerr(error)
+    fn chunk(&mut self, _: Python<'_>, chunk: std::convert::Infallible) -> PyResult<Py<PyAny>> {
+        match chunk {}
     }
 
-    fn host_error(error: &PyErr) -> litellm_core::ocr::Error {
-        litellm_core::ocr::Error::InvalidRequest(error.to_string())
+    fn classify(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
+        Ok(self.map_failure(py, ocr_error_to_pyerr(error)))
     }
 
-    fn map_failure(&self, py: Python<'_>, error: &PyErr) -> PyResult<PyErr> {
-        let provider = match &self.data {
-            OcrHostData::Projected(handles) => handles.provider,
-            _ => "",
-        };
-        let mapped: Py<PyBaseException> = py
-            .import("litellm.rust_bridge.ocr.route_host")?
-            .getattr("map_failure")?
-            .call1((error.value(py), self.request.bind(py), provider))?
-            .extract()?;
-        Ok(PyErr::from_value(mapped.into_bound(py).into_any()))
+    fn host_error(error: &PyErr) -> Error {
+        Error::InvalidRequest(error.to_string())
     }
 
     fn close(&mut self, _: Python<'_>) {

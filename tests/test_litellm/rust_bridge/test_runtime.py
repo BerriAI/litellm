@@ -157,7 +157,6 @@ def test_context_outside_rule_stays_on_python() -> None:
     (
         Context(Route.CHAT_COMPLETIONS, provider="anthropic"),
         Context(Route.CHAT_COMPLETIONS, provider="bedrock"),
-        Context(Route.MESSAGES, provider="anthropic"),
         Context(Route.RESPONSES, provider="openai"),
         Context(Route.TRANSCRIPTION, provider="openai"),
     ),
