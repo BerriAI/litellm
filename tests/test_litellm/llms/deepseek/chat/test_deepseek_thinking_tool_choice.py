@@ -88,8 +88,9 @@ async def test_transform_request_rejects_forced_tool_choice_without_drop_params(
         "headers": {},
     }
 
-    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params=True"):
-        if is_async:
+    if is_async:
+        with pytest.raises(litellm.UnsupportedParamsError, match="drop_params=True"):
             await config.async_transform_request(**request)
-        else:
+    else:
+        with pytest.raises(litellm.UnsupportedParamsError, match="drop_params=True"):
             config.transform_request(**request)
