@@ -1,10 +1,12 @@
 from collections.abc import Iterator, Mapping
 from typing import Final
 from pathlib import Path
+import json
 import uuid
 
 import pytest
 import yaml
+from pydantic import JsonValue
 
 from tests.integration._support.client import Gateway, eventually, object_value, string_value
 from tests.integration._support.database import read_rows
@@ -101,6 +103,45 @@ def test_default_prices_survive_nullable_sibling_and_reload(gateway: Gateway) ->
                 assert rows[0]["prompt_tokens"] == 20
                 assert rows[0]["completion_tokens"] == 20
                 assert float(rows[0]["spend"]) == pytest.approx(expected, rel=1e-6)
+
+
+COST_MAP_DISPLAY_PRICING_KEYS: Final = frozenset(
+    {
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cache_read_input_token_cost",
+        "cache_creation_input_token_cost",
+    }
+)
+
+
+def persisted_model_info(identity: str) -> dict[str, JsonValue]:
+    rows: Final = read_rows('SELECT model_info FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,))
+    assert len(rows) == 1, f"Deployment {identity} has {len(rows)} rows"
+    stored: Final = rows[0]["model_info"]
+    return object_value(json.loads(stored) if isinstance(stored, str) else stored)
+
+
+@pytest.mark.covers("pricing.model_update.echoed_cost_map_price_is_not_persisted_as_override")
+def test_saving_echoed_model_info_does_not_freeze_cost_map_price_into_deployment(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        entries: Final = gateway.get("/model/info")["data"]
+        assert isinstance(entries, list)
+        target: Final = next(object_value(entry) for entry in entries if object_value(entry)["model_name"] == model)
+        displayed: Final = object_value(target["model_info"])
+        identity: Final = string_value(displayed["id"])
+        assert isinstance(displayed["input_cost_per_token"], float), displayed
+        assert isinstance(displayed["output_cost_per_token"], float), displayed
+        fresh: Final = persisted_model_info(identity)
+        assert {key: value for key, value in fresh.items() if key in COST_MAP_DISPLAY_PRICING_KEYS} == {}, fresh
+        saved: Final = gateway.request(
+            "PATCH", f"/model/{identity}/update", {"model_info": {**displayed, "description": "echoed ui save"}}
+        )
+        assert saved.status_code == 200, saved.text
+        stored: Final = persisted_model_info(identity)
+        assert stored["description"] == "echoed ui save", stored
+        assert {key: value for key, value in stored.items() if key in COST_MAP_DISPLAY_PRICING_KEYS} == {}, stored
 
 
 @pytest.mark.covers("quota_management.spend_tracking.default_prices.loaded_router_preserves_cached_defaults")
