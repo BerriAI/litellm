@@ -125,7 +125,7 @@ const MAX_LINKED_PULL_REQUESTS = 50;
 const MAX_LINKED_ISSUES = 10;
 const SWEEP_PAGE_SIZE = 100;
 const CLOSE_PAUSE_MS = 1000;
-const RELEASE_LINE = /^(release|stable)\/|stable/;
+const isReleaseLine = (base: string): boolean => base.startsWith("release/") || base.includes("stable");
 
 const CLOSURE_FRAGMENT = `fragment Closure on Issue {
   state
@@ -307,7 +307,7 @@ export function closeVerdict(pullRequest: LinkedPullRequest, config: FixedConfig
   if (pullRequest.state !== "OPEN") {
     return skip(`is ${pullRequest.state.toLowerCase()}`);
   }
-  if (RELEASE_LINE.test(pullRequest.baseRefName)) {
+  if (isReleaseLine(pullRequest.baseRefName)) {
     return skip(`targets the release line ${pullRequest.baseRefName}`);
   }
   const { totalCount, nodes: linked } = pullRequest.closingIssuesReferences;
