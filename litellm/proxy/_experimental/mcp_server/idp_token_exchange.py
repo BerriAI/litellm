@@ -196,9 +196,8 @@ def _check_unavailable_description(outage: GatewayOutage) -> str:
 
 
 def _gateway_could_not_verify(denied: Exception) -> GatewayOutage | None:
-    """A database fault anywhere in the chain (``get_user_object`` wraps prisma failures in a
-    bare ``ValueError``) or a 5xx from JWT auth (the IdP's JWKS unreachable with no cached
-    copy) is the gateway failing, not the token. A fault retrying cannot clear (a missing or
+    """A database fault anywhere in the chain or a 5xx from JWT auth (the IdP's JWKS
+    unreachable with no cached copy) is the gateway failing, not the token. A fault retrying cannot clear (a missing or
     version-skewed query engine) is named as such, the way the mint path words it, so the
     client is not told to wait on a deployment that needs repair."""
     fault: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(denied)

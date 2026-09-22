@@ -966,10 +966,11 @@ class MCPRequestHandler:
         on top of these direct grants, each source bounded by ITS OWN org, so a user spanning organizations
         cannot leak one org's servers past another's ceiling.
 
-        Error handling: ``get_user_object`` catches every DB failure and re-raises a bare ``ValueError``, so a
-        missing user and a real outage look identical (the cause survives only as ``__context__``).
-        ``_raise_503_if_db_unavailable`` walks the cause chain so an outage stays a retryable 503 while any
-        other failure fails closed as 401, not an opaque 500; the object-permission load shares that boundary."""
+        Error handling: ``get_user_object`` lets a database outage propagate as-is and re-raises every other
+        DB failure as a bare ``ValueError`` (the cause surviving only as ``__context__``).
+        ``_raise_503_if_db_unavailable`` walks the cause chain so an outage stays a retryable 503 whichever
+        shape it arrives in, while any other failure fails closed as 401, not an opaque 500; the
+        object-permission load shares that boundary."""
         from litellm.proxy.auth.auth_checks import get_object_permission, get_user_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -1116,9 +1117,8 @@ class MCPRequestHandler:
         (401) or surface as an opaque 500; the caller retries. Mirrors ``UserAPIKeyAuthExceptionHandler``,
         which renders a service-unavailable database error as 503 on the standard pipeline.
 
-        Classifies across the ``__cause__``/``__context__`` chain, not just ``e`` itself: ``get_user_object``
-        re-raises every DB failure as a bare ``ValueError``, so a type-based check on the top exception
-        would miss a real outage wrapped inside it."""
+        Classifies across the ``__cause__``/``__context__`` chain, not just ``e`` itself, so an outage a
+        caller re-raised inside a domain exception is still recognized."""
         from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 
         outage: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(e)

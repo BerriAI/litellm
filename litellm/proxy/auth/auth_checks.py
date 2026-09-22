@@ -2697,9 +2697,15 @@ async def get_user_object(
         raise
     except Exception as e:
         _log_budget_lookup_failure("user", e)
-        raise ValueError(
-            f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call. Got error - {e}"
-        )
+        raise _user_read_failure(user_id=user_id, error=e)
+
+
+def _user_read_failure(user_id: str, error: Exception) -> Exception:
+    if PrismaDBExceptionHandler.is_database_service_unavailable_error(error):
+        return error
+    return ValueError(
+        f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call. Got error - {error}"
+    )
 
 
 async def _cache_management_object(
