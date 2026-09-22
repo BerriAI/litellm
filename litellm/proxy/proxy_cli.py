@@ -1306,9 +1306,10 @@ def run_server(
                     sys.exit(1)
             from litellm.secret_managers.main import get_secret
 
-            disable_prepared_statements: Final = db_disable_prepared_statements or token_auth_flag_enabled(
+            env_disable_prepared_statements: Final = token_auth_flag_enabled(
                 os.getenv(DISABLE_PREPARED_STATEMENTS_ENV_VAR), env_var=DISABLE_PREPARED_STATEMENTS_ENV_VAR
             )
+            disable_prepared_statements: Final = db_disable_prepared_statements or env_disable_prepared_statements
             connection_url_params: Final = _build_db_connection_url_params(
                 connection_limit=db_connection_pool_limit,
                 pool_timeout=db_connection_timeout,
