@@ -226,6 +226,9 @@
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_flux_dev_generation_without_deployment_api_base_uses_global_api_base": [
       "other.provider_wire.fal_ai.global_api_base_routes_image_generation"
     ],
+    "tests/integration/providers/test_azure_ai_flux2_image_wire.py::test_azure_flux2_flex_generation_hits_flex_provider_path_not_pro": [
+      "other.provider_wire.azure_ai.flux2_flex_generation_targets_flex_path_with_bfl_body"
+    ],
     "tests/integration/providers/test_xiaomi_mimo_wire.py::test_xiaomi_mimo_nonstream_surfaces_reasoning_and_charges_registry_price[mimo-v2.6-pro]": [
       "other.provider_wire.xiaomi_mimo.reasoning_content_and_registry_pricing"
     ],
