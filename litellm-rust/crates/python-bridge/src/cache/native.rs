@@ -849,8 +849,13 @@ impl NativeResponseCache {
                     .collect();
                 cache.async_store_batch(entries, now).await
             }
-            Self::RedisSemantic { .. } | Self::QdrantSemantic(_) => {
-                Err(Error::UnsupportedOperation)
+            Self::RedisSemantic { .. } => Err(Error::UnsupportedOperation),
+            Self::QdrantSemantic(cache) => {
+                let entries = entries
+                    .into_iter()
+                    .map(|(request, value)| (Self::semantic_request(&request), value))
+                    .collect();
+                cache.async_store_batch(entries, now).await
             }
             Self::Gcs(cache) => {
                 let entries = entries
@@ -922,7 +927,18 @@ impl NativeResponseCache {
                 py,
                 SemanticBody::new(self.clone(), SemanticOperation::StoreBatch(entries.into())),
             ),
-            Self::QdrantSemantic(_) => Err(super::cache_error(Error::UnsupportedOperation)),
+            Self::QdrantSemantic(_) => {
+                let service = self.clone();
+                litellm_host_python::run_async(
+                    py,
+                    async move {
+                        service
+                            .async_store_batch(entries, super::request::now())
+                            .await
+                    },
+                    super::cache_error,
+                )
+            }
         }
     }
 

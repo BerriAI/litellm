@@ -1830,6 +1830,38 @@ async def test_qdrant_semantic_async_parity(
     assert python_value["response"] == {"id": "native"}
 
 
+async def test_qdrant_semantic_async_store_batch_shares_entries(
+    qdrant_url: str, fake_embedding_endpoint: str
+) -> None:
+    del fake_embedding_endpoint
+    collection: Final = f"cache_{uuid4().hex}"
+    facade: Final = qdrant_facade(qdrant_url, collection)
+    handle: Final = _native._CacheTestHandle.qdrant_semantic(
+        qdrant_url,
+        collection_name=collection,
+        similarity_threshold=0.99,
+        vector_size=8,
+    )
+    handle._bind_facade(facade)
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
+    entries: Final = [
+        qdrant_request("batch-one", [{"role": "user", "content": "first batch prompt"}]),
+        qdrant_request("batch-two", [{"role": "user", "content": "second batch prompt"}]),
+    ]
+    await binding.async_store_batch(entries, [{"id": "one"}, {"id": "two"}])
+
+    assert binding.lookup(entries[0]) == {"id": "one"}
+    assert binding.lookup(entries[1]) == {"id": "two"}
+    assert (
+        (await facade.cache.async_get_cache("batch-one", messages=entries[0]["messages"]))["response"]
+        == {"id": "one"}
+    )
+    assert (
+        (await facade.cache.async_get_cache("batch-two", messages=entries[1]["messages"]))["response"]
+        == {"id": "two"}
+    )
+
+
 async def test_qdrant_semantic_malformed_entries_and_unsupported_operations(
     qdrant_url: str, fake_embedding_endpoint: str
 ) -> None:
