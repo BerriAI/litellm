@@ -17,13 +17,14 @@ fails the test; a pricing or token-count drift does not.
 
 import time
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from math import isclose
 from typing import Final
 
 import pytest
 from e2e_http import Success
 from lifecycle import ResourceManager
-from models import LiteLLMParamsBody, SpendLogs, SpendLogsParams
+from models import LiteLLMParamsBody, SpendLogs, SpendLogsDateRangeParams, SpendLogsParams
 from spend_e2e_client import SpendClient, SpendLogRow, is_ok, unique_marker, unwrap
 
 pytestmark = pytest.mark.e2e
@@ -507,6 +508,76 @@ def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
         "/spend/calculate returned 0 for gemini-2.5-flash; "
         "cost map may be missing this model"
     )
+
+
+@pytest.mark.covers("quota_management.spend_tracking.date_range.includes_end_date")
+def test_spend_logs_single_day_range_returns_that_days_spend(
+    client: SpendClient, scoped_key: str
+) -> None:
+    """start_date == end_date on /spend/logs must return the spend logged on that
+    day, both as the daily summary (default) and as the individual rows
+    (summarize=false). The end date is a calendar day, so its rows after
+    midnight belong to the range."""
+    chat = unwrap(
+        client.chat(
+            scoped_key,
+            "gemini-2.5-flash",
+            f"one word {unique_marker()}",
+            max_tokens=16,
+        )
+    )
+    rows = client.poll_logs_for_key(
+        scoped_key, predicate=lambda rs: any((r.spend or 0) > 0 for r in rs)
+    )
+    today = datetime.now(timezone.utc).date().isoformat()
+    window = SpendLogsDateRangeParams(start_date=today, end_date=today, api_key=scoped_key)
+
+    summary = client.proxy.spend_logs_daily(window)
+    assert [r.startTime for r in summary] == [
+        today
+    ], f"single-day window must yield exactly that day: {summary}"
+    assert summary[0].spend > 0, (
+        f"the end day's spend was dropped from the window: {summary}"
+    )
+
+    raw = client.proxy.spend_logs_in_window(window.model_copy(update={"summarize": False}))
+    assert chat.id, f"chat response carried no id: {chat}"
+    assert any(r.request_id == chat.id for r in raw), (
+        f"summarize=false window missing request {chat.id}: "
+        f"{_summarize(raw)}; polled rows {_summarize(rows)}"
+    )
+
+
+@pytest.mark.covers("quota_management.spend_tracking.date_range.includes_end_date")
+def test_spend_logs_multi_day_range_includes_final_day(
+    client: SpendClient, scoped_key: str
+) -> None:
+    """A multi-day window ending today reports today's real spend as its final
+    row, never a zero pad."""
+    _ = unwrap(
+        client.chat(
+            scoped_key,
+            "gemini-2.5-flash",
+            f"one word {unique_marker()}",
+            max_tokens=16,
+        )
+    )
+    _ = client.poll_logs_for_key(
+        scoped_key, predicate=lambda rs: any((r.spend or 0) > 0 for r in rs)
+    )
+    end = datetime.now(timezone.utc).date()
+    start = end - timedelta(days=2)
+
+    summary = client.proxy.spend_logs_daily(
+        SpendLogsDateRangeParams(
+            start_date=start.isoformat(), end_date=end.isoformat(), api_key=scoped_key
+        )
+    )
+    assert summary, "window ending today returned no rows"
+    assert summary[-1].startTime == end.isoformat(), (
+        f"final row is not the end date: {summary}"
+    )
+    assert summary[-1].spend > 0, f"end day reported as zero-spend padding: {summary}"
 
 
 def test_spend_logs_endpoint_returns_spend(

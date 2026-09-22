@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import json
 import re
+import types
 from datetime import timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -4614,7 +4615,7 @@ async def test_view_spend_logs_summarize_groups_by_day_in_sql(client, monkeypatc
         assert not hasattr(mock_prisma_client.db, "group_by")
         assert mock_prisma_client.db.captured_params == (
             "2024-01-01T00:00:00+00:00",
-            "2024-01-03T00:00:00+00:00",
+            "2024-01-04T00:00:00+00:00",
             "hashed::sk-abc",
             "req-123",
             "u1",
@@ -4637,6 +4638,132 @@ async def test_view_spend_logs_summarize_groups_by_day_in_sql(client, monkeypatc
             "users": {},
             "models": {},
         }
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_summarize_includes_rows_on_end_date(client, monkeypatch):
+    stored_row_timestamp = "2024-01-03T12:00:00+00:00"
+    mock_rows = [
+        {
+            "day": "2024-01-03",
+            "api_key": "hashed::sk-abc",
+            "user": "u1",
+            "model": "gpt-4",
+            "spend": 0.25,
+        }
+    ]
+
+    class MockDB:
+        def __init__(self):
+            self.captured_sql = None
+            self.captured_params = None
+
+        async def query_raw(self, sql_query, *params):
+            self.captured_sql = sql_query
+            self.captured_params = params
+            if params[0] <= stored_row_timestamp < params[1]:
+                return mock_rows
+            return []
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+        def hash_token(self, token):
+            return "hashed::" + token
+
+    mock_prisma_client = MockPrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        for params in (
+            {"start_date": "2024-01-01", "end_date": "2024-01-03", "api_key": "sk-abc"},
+            {"start_date": "2024-01-03", "end_date": "2024-01-03", "api_key": "sk-abc"},
+        ):
+            response = client.get(
+                "/spend/logs",
+                params=params,
+                headers={"Authorization": "Bearer sk-test"},
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert len(data) == 1
+            assert data[0]["startTime"] == "2024-01-03"
+            assert data[0]["spend"] == pytest.approx(0.25)
+
+        sql = mock_prisma_client.db.captured_sql
+        assert '"startTime" < ($2' in sql
+        assert '"startTime" <=' not in sql
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_unsummarized_filter_covers_whole_end_date(client, monkeypatch):
+    stored_rows = [
+        {
+            "request_id": "req-end-date",
+            "startTime": "2024-01-03T12:00:00+00:00",
+            "spend": 0.25,
+        }
+    ]
+
+    def _matches_start_time(row, bounds):
+        for op, value in bounds.items():
+            if op == "gte" and not row["startTime"] >= value:
+                return False
+            if op == "gt" and not row["startTime"] > value:
+                return False
+            if op == "lte" and not row["startTime"] <= value:
+                return False
+            if op == "lt" and not row["startTime"] < value:
+                return False
+        return True
+
+    class MockSpendLogsTable:
+        def __init__(self):
+            self.captured_where = None
+
+        async def find_many(self, where, order=None, take=None):
+            self.captured_where = where
+            return [
+                types.SimpleNamespace(**row)
+                for row in stored_rows
+                if _matches_start_time(row, where["startTime"])
+            ]
+
+    class MockDB:
+        def __init__(self):
+            self.litellm_spendlogs = MockSpendLogsTable()
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    mock_prisma_client = MockPrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": "2024-01-03",
+                "end_date": "2024-01-03",
+                "summarize": "false",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert [row["request_id"] for row in data] == ["req-end-date"]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -4712,7 +4839,7 @@ async def test_view_spend_logs_summarize_unhashed_api_key_without_padding(client
         data = response.json()
         assert mock_prisma_client.db.captured_params == (
             "2024-01-01T00:00:00+00:00",
-            "2024-01-01T00:00:00+00:00",
+            "2024-01-02T00:00:00+00:00",
             "plain-key",
         )
         assert data == [

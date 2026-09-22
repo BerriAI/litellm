@@ -85,8 +85,11 @@ from models import (
     RerankResponse,
     RouterCurrentValues,
     RouterSettingsResponse,
+    SpendDailySummary,
+    SpendDailySummaryRow,
     SpendLogRow,
     SpendLogs,
+    SpendLogsDateRangeParams,
     SpendLogsPage,
     SpendLogsPageParams,
     SpendLogsParams,
@@ -1006,6 +1009,28 @@ class ProxyClient:
                 return logs.root
             case _:
                 return []
+
+    def spend_logs_daily(self, params: SpendLogsDateRangeParams) -> list[SpendDailySummaryRow]:
+        """GET /spend/logs with a date window (summarize=true default): one row per day."""
+        return unwrap(
+            self.transport.get(
+                "/spend/logs",
+                headers=self.management_headers(),
+                params=params,
+                response_type=SpendDailySummary,
+            )
+        ).root
+
+    def spend_logs_in_window(self, params: SpendLogsDateRangeParams) -> list[SpendLogRow]:
+        """GET /spend/logs with a date window and summarize=false: the individual rows."""
+        return unwrap(
+            self.transport.get(
+                "/spend/logs",
+                headers=self.management_headers(),
+                params=params,
+                response_type=SpendLogs,
+            )
+        ).root
 
     def spend_logs_window(self, *, start: datetime, end: datetime) -> list[SpendLogRow]:
         def fetch(page: int) -> SpendLogsPage:

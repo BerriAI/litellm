@@ -260,7 +260,7 @@ def _verification_token_table(prisma_client: PrismaClient) -> _VerificationToken
 def _spend_logs_daily_summary_sql(
     *,
     start_date_iso: str,
-    end_date_iso: str,
+    end_exclusive_iso: str,
     api_key: str | None,
     request_id: str | None,
     user_id: str | None,
@@ -286,14 +286,14 @@ SELECT
     model,
     SUM(spend) AS spend
 FROM "LiteLLM_SpendLogs"
-WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC') AND "startTime" <= ($2::timestamptz AT TIME ZONE 'UTC')
+WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC') AND "startTime" < ($2::timestamptz AT TIME ZONE 'UTC')
 {filter_sql}
 GROUP BY 1, 2, 3, 4
 ORDER BY 1
 """
     params: Final[tuple[object, ...]] = (
         start_date_iso,
-        end_date_iso,
+        end_exclusive_iso,
         *(value for _, value in filter_params),
     )
     return sql_query, params
@@ -3424,14 +3424,14 @@ async def view_spend_logs(
 
             # Convert to ISO format strings for Prisma
             start_date_iso: Final = start_date_obj.isoformat()
-            end_date_iso: Final = end_date_obj.isoformat()
+            end_exclusive_iso: Final = (end_date_obj + timedelta(days=1)).isoformat()
 
             filter_query: Final[
                 dict[str, object]
             ] = {  # mutable-ok: legacy filters are extended for optional parameters
                 "startTime": {
-                    "gte": start_date_iso,  # Greater than or equal to Start Date
-                    "lte": end_date_iso,  # Less than or equal to End Date
+                    "gte": start_date_iso,
+                    "lt": end_exclusive_iso,
                 }
             }
 
@@ -3462,7 +3462,7 @@ async def view_spend_logs(
             # Legacy behavior: return summarized data (when summarize=true)
             summary_sql_and_params: Final = _spend_logs_daily_summary_sql(
                 start_date_iso=start_date_iso,
-                end_date_iso=end_date_iso,
+                end_exclusive_iso=end_exclusive_iso,
                 api_key=summary_api_key,
                 request_id=request_id,
                 user_id=user_id,

@@ -824,6 +824,27 @@ class SpendLogsParams(BaseModel):
         return self
 
 
+class SpendLogsDateRangeParams(BaseModel):
+    """Query for legacy /spend/logs with a YYYY-MM-DD window; api_key keeps the
+    read bounded."""
+    start_date: str
+    end_date: str
+    api_key: str
+    summarize: bool | None = None
+
+
+class SpendDailySummaryRow(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    startTime: str
+    spend: float
+    users: dict[str, float]
+    models: dict[str, float]
+
+
+class SpendDailySummary(RootModel[list[SpendDailySummaryRow]]):
+    pass
+
+
 class SpendLogsPageParams(BaseModel):
     """Query for /spend/logs/v2, which requires an explicit date window and
     serves pages of at most 100 rows."""
