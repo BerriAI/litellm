@@ -9,6 +9,7 @@ a batch create through it proves blank means unset, not an empty string.
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -141,3 +142,4 @@ class BedrockEnvGateway:
     def stop(self) -> None:
         if self._child is not None:
             stop_process_group(self._child)
+        shutil.rmtree(self._log_path.parent, ignore_errors=True)
