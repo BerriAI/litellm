@@ -170,6 +170,11 @@ def test_unknown_exception_falls_back_to_status_then_unclassified() -> None:
     assert normalize_error(Exception("x"), "", "x") == "UNCLASSIFIED"
 
 
+def test_budget_exceeded_error_with_custom_wording_is_still_a_budget_error() -> None:
+    exc = litellm.BudgetExceededError(current_cost=2.0, max_budget=1.0, message="Spending cap reached for key")
+    assert StandardLoggingPayloadSetup.get_error_information(exc)["normalized_error"] == "429_BUDGET_EXCEEDED"
+
+
 def test_every_model_access_denied_proxy_type_shares_one_cluster() -> None:
     access_denied_types = tuple(t for t in ProxyErrorTypes if t.value.endswith("_model_access_denied"))
     assert len(access_denied_types) >= 6, access_denied_types
