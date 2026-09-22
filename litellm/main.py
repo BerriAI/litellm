@@ -37,7 +37,6 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
-import tiktoken
 from openai import AsyncStream, Stream
 from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel
