@@ -187,7 +187,9 @@ def test_model_registered_at_runtime_still_labels_other(monkeypatch: pytest.Monk
 
 
 def test_shipped_provider_prefixed_model_labels_as_itself() -> None:
-    shipped: Final = next(key for key in ut._PUBLIC_MODELS if "/" in key)
+    shipped: Final = min(
+        key for key in ut._PUBLIC_MODELS if "/" in key and key.partition("/")[2] not in ut._PUBLIC_MODELS
+    )
     provider, _, model = shipped.partition("/")
     assert ut._public_model_label(model, provider) == shipped
 
