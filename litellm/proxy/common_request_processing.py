@@ -1131,12 +1131,18 @@ async def _aclose_late_response(produced: Response) -> None:
             verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
 
 
-async def _relay_late_response(produced: Response) -> AsyncGenerator[bytes, None]:
+async def _relay_late_response(produced: Response | Mapping[str, Any]) -> AsyncGenerator[bytes, None]:
     """Replay a Response that was built after a keepalive had already opened the wire."""
     if not isinstance(produced, StreamingResponse):
         # The status line is already on the wire, so a non-streaming body, an error
         # body included, can only reach the client as an SSE frame.
-        yield b"data: " + (bytes(produced.body) or b"{}") + b"\n\n"
+        # Some routes (e.g. Anthropic /v1/messages) return a plain dict payload
+        # rather than a FastAPI Response; serialize those without assuming `.body`.
+        if isinstance(produced, Mapping):
+            body = orjson.dumps(dict(produced))
+        else:
+            body = bytes(produced.body) or b""
+        yield b"data: " + (body or b"{}") + b"\n\n"
         yield b"data: [DONE]\n\n"
         return
 
