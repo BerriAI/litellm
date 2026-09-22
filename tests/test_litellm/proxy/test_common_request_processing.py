@@ -35,10 +35,12 @@ from litellm.proxy.common_request_processing import (
     _buffer_first_chunk_honoring_disconnect,
     _cancel_llm_call_on_client_disconnect,
     _ClientDisconnectedBeforeFirstChunk,
+    attach_guardrail_information,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
     CostBreakdownHeaderValues,
     _has_attribute_error_in_chain,
+    include_guardrail_response_requested,
     _is_azure_model_router_request,
     open_sse_before_first_byte,
     resolve_litellm_call_id,
@@ -59,6 +61,132 @@ from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+
+
+def test_attach_guardrail_information_copies_recorded_entries_onto_model_response():
+    recorded = [
+        {"guardrail_name": "first", "guardrail_status": "success"},
+        {"guardrail_name": "second", "guardrail_status": "success"},
+    ]
+    response = litellm.ModelResponse()
+
+    result = attach_guardrail_information(
+        response=response,
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert isinstance(result, litellm.ModelResponse)
+    assert result.model_dump()["guardrail_information"] == recorded
+    assert "guardrail_information" not in response.model_dump()
+
+
+def test_attach_guardrail_information_reports_empty_list_when_nothing_ran():
+    response = litellm.ModelResponse()
+
+    result = attach_guardrail_information(response=response, request_data={})
+
+    assert isinstance(result, litellm.ModelResponse)
+    assert result.model_dump()["guardrail_information"] == []
+    assert "guardrail_information" not in response.model_dump()
+
+
+def test_attach_guardrail_information_sets_key_on_dict_response():
+    recorded = [{"guardrail_name": "first", "guardrail_status": "success"}]
+    response = {"id": "x"}
+
+    result = attach_guardrail_information(
+        response=response,
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert isinstance(result, dict)
+    assert result == {"id": "x", "guardrail_information": recorded}
+    assert response == {"id": "x"}
+
+
+def test_attach_guardrail_information_redacts_matched_content():
+    recorded = [
+        {
+            "guardrail_name": "cf",
+            "guardrail_status": "success",
+            "guardrail_response": [
+                {"type": "blocked_word", "keyword": "secret-word", "action": "MASK"}
+            ],
+            "match_details": [{"snippet": "secret-word", "detection_method": "keyword"}],
+        }
+    ]
+
+    result = attach_guardrail_information(
+        response={"id": "x"},
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert isinstance(result, dict)
+    guardrail_information = result["guardrail_information"]
+    assert isinstance(guardrail_information, list)
+    assert guardrail_information[0]["guardrail_response"][0]["keyword"] == "[REDACTED]"
+    assert guardrail_information[0]["match_details"][0]["snippet"] == "[REDACTED]"
+    assert guardrail_information[0]["match_details"][0]["detection_method"] == "keyword"
+    assert "secret-word" not in json.dumps(result)
+
+
+def test_attach_guardrail_information_leaves_cached_dict_response_untouched():
+    recorded = [{"guardrail_name": "cf", "guardrail_status": "success"}]
+    cached = {"id": "x", "content": []}
+
+    result = attach_guardrail_information(
+        response=cached,
+        request_data={
+            "metadata": {
+                "include_guardrail_response": True,
+                "standard_logging_guardrail_information": recorded,
+            }
+        },
+    )
+
+    assert "guardrail_information" not in cached
+    assert result is not cached
+    assert isinstance(result, dict)
+    assert result["guardrail_information"] == recorded
+
+    original = litellm.ModelResponse()
+    copied = attach_guardrail_information(
+        response=original,
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert "guardrail_information" not in original.model_dump()
+    assert isinstance(copied, litellm.ModelResponse)
+    assert copied.model_dump()["guardrail_information"] == recorded
+
+
+def test_include_guardrail_response_requested_reads_flag_from_metadata_when_router_seeded_litellm_metadata():
+    recorded = [
+        {"guardrail_name": "first", "guardrail_status": "success"},
+        {"guardrail_name": "second", "guardrail_status": "success"},
+    ]
+    request_data = {
+        "metadata": {
+            "include_guardrail_response": True,
+            "standard_logging_guardrail_information": recorded,
+        },
+        "litellm_metadata": {},
+    }
+
+    assert include_guardrail_response_requested(request_data) is True
+
+    response = litellm.ModelResponse()
+    result = attach_guardrail_information(response=response, request_data=request_data)
+
+    assert isinstance(result, litellm.ModelResponse)
+    assert result.model_dump()["guardrail_information"] == recorded
+
+
+def test_include_guardrail_response_requested_is_false_without_exact_true():
+    assert include_guardrail_response_requested(
+        {"metadata": {"include_guardrail_response": "true"}, "litellm_metadata": {}}
+    ) is False
+    assert include_guardrail_response_requested({}) is False
 
 
 class TestProxyBaseLLMRequestProcessing:
@@ -9034,6 +9162,60 @@ class TestDetachedStreamFailureHook:
         assert [call["original_exception"] for call in recorder.calls] == [failure]
 
 
+class TestPostCallMaskedOutputReachesDeferredLogging:
+    @pytest.mark.asyncio
+    async def test_non_streaming_records_the_masked_response_before_deferred_logging_fires(self, monkeypatch):
+        from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "lit-8325-call"
+        logging_obj._defer_async_logging = False
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj.cost_breakdown = None
+        logging_obj.model_call_details = {}
+        recorded_at_enqueue: dict[str, object] = {}
+        logging_obj._enqueue_deferred_logging = lambda: recorded_at_enqueue.update(logging_obj.model_call_details)
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "oa", "litellm_logging_obj": logging_obj})
+
+        def mask(data, user_api_key_dict, response):
+            response.choices[0].message.content = "Card: <CREDIT_CARD>"
+            return response
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_success_hook = AsyncMock(side_effect=mask)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=None)
+
+        async def fake_route_request(**kwargs):
+            async def call():
+                return ModelResponse(
+                    choices=[Choices(index=0, message=Message(content="Card: 4111 1111 1111 1111", role="assistant"))]
+                )
+
+            return call()
+
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", fake_route_request)
+
+        result = await processor.base_process_llm_request(
+            request=Request(scope={"type": "http", "headers": []}),
+            fastapi_response=Response(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=MagicMock(),
+            is_streaming_request=False,
+            skip_pre_call_logic=True,
+        )
+
+        assert result.choices[0].message.content == "Card: <CREDIT_CARD>"
+        assert recorded_at_enqueue[SERVED_OUTPUT_TEXTS_KEY] == ("Card: <CREDIT_CARD>",)
+
+
 class TestStreamingResponseHeadersFollowFallback:
     """LIT-6767: the streaming branch has to publish the deployment that served the stream."""
 
@@ -9407,6 +9589,7 @@ async def test_handle_llm_api_exception_logs_bug_report_for_unmapped_error(
             "proxy_server_request": {"url": "https://example.test/v1/chat/completions?debug=true"},
             "model": "acme-prod-gpt4",
             "custom_llm_provider": "openai",
+            "stream": True,
         }
     )
     proxy_logging_obj = MagicMock()
@@ -9424,6 +9607,7 @@ async def test_handle_llm_api_exception_logs_bug_report_for_unmapped_error(
     issue_url = next(word for word in caplog.text.split() if word.startswith(ISSUE_URL_BASE))
     assert "Endpoint / call: /v1/chat/completions" in unquote_plus(issue_url)
     assert "Provider: openai" in unquote_plus(issue_url)
+    assert "Stream: true" in unquote_plus(issue_url)
     assert "acme-prod-gpt4" not in unquote_plus(issue_url)
     assert "user@example.com" not in unquote_plus(issue_url)
 

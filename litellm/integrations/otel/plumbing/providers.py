@@ -56,6 +56,7 @@ from litellm.integrations.otel.plumbing.context import (
     request_destinations,
     suppressed_backends,
 )
+from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 
 if TYPE_CHECKING:
     from opentelemetry.metrics import Meter
@@ -191,18 +192,24 @@ def _exporter_from_spec(spec: ExporterSpec) -> SpanExporter:
     if kind in _OTLP_HTTP_JSON_KINDS:
         from litellm.integrations.otel.plumbing.otlp_json import OTLPJsonSpanExporter
 
+        tls: Final = resolve_otlp_http_tls("TRACES")
         return OTLPJsonSpanExporter(
             endpoint=spec.traces_endpoint or _otlp_traces_endpoint(spec.endpoint),
             headers=parse_headers(spec.headers),
+            certificate_file=tls.certificate_file,
+            session=tls.session,
         )
     if kind in _OTLP_HTTP_KINDS:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
             OTLPSpanExporter as HTTPExporter,
         )
 
+        http_tls: Final = resolve_otlp_http_tls("TRACES")
         return HTTPExporter(
             endpoint=spec.traces_endpoint or _otlp_traces_endpoint(spec.endpoint),
             headers=parse_headers(spec.headers),
+            certificate_file=http_tls.certificate_file,
+            session=http_tls.session,
         )
     if kind in _OTLP_GRPC_KINDS:
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
@@ -900,9 +907,12 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
             OTLPMetricExporter as HTTPMetricExporter,
         )
 
+        tls: Final = resolve_otlp_http_tls("METRICS")
         exporter: Any = HTTPMetricExporter(
             endpoint=_otlp_metrics_endpoint(config.endpoint),
             headers=parse_headers(config.headers),
+            certificate_file=tls.certificate_file,
+            session=tls.session,
         )
     elif kind in ("otlp_grpc", "grpc"):
         try:
@@ -960,9 +970,12 @@ def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
             OTLPLogExporter as HTTPLogExporter,
         )
 
+        tls: Final = resolve_otlp_http_tls("LOGS")
         return HTTPLogExporter(
             endpoint=_otlp_logs_endpoint(config.endpoint),
             headers=parse_headers(config.headers),
+            certificate_file=tls.certificate_file,
+            session=tls.session,
         )
     if kind in ("otlp_grpc", "grpc"):
         try:

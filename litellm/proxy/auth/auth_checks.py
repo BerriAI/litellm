@@ -4310,7 +4310,10 @@ def _can_object_call_model(
             )
         return True
 
-    potential_models: Final = [model]
+    from litellm.router_strategy.complexity_router.context_compaction import native_compaction_parent
+
+    compaction_parent: Final = native_compaction_parent(model)
+    potential_models: Final = [model, compaction_parent] if compaction_parent is not None else [model]
     if model in litellm.model_alias_map:
         potential_models.append(litellm.model_alias_map[model])
     elif llm_router and model in llm_router.model_group_alias:

@@ -26,7 +26,7 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
 
 import litellm
@@ -49,7 +49,6 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.bug_report import (
     allowlisted,
     bug_report_notice,
-    build_bug_report,
     should_report_bug,
     strip_bug_report_notice,
 )
@@ -57,6 +56,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     independent_snapshot,
     is_expected_client_error,
+    redact_nested_match_and_regex_keys,
 )
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -69,6 +69,10 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.served_output_texts import (
+    record_served_output_texts,
+    served_output_texts,
+)
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
@@ -79,6 +83,7 @@ from litellm.proxy.auth.auth_checks import (
     tag_max_budget_check_for_tags,
 )
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
+from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
@@ -103,6 +108,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
+from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
@@ -1396,6 +1402,42 @@ def _override_openai_response_model(
         )
 
 
+_METADATA_BUCKET_KEYS: Final = ("metadata", "litellm_metadata")
+_RESPONSE_REDACTED_KEYS: Final = ("keyword", "snippet", "match", "regex")
+
+
+def _request_metadata_buckets(request_data: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(bucket for key in _METADATA_BUCKET_KEYS if isinstance(bucket := request_data.get(key), Mapping))
+
+
+def include_guardrail_response_requested(request_data: Mapping[str, object]) -> bool:
+    return any(bucket.get("include_guardrail_response") is True for bucket in _request_metadata_buckets(request_data))
+
+
+def attach_guardrail_information(response: object, request_data: Mapping[str, object]) -> object:
+    recorded: Final[Sequence[object]] = next(
+        (
+            entries
+            for bucket in _request_metadata_buckets(request_data)
+            if isinstance(
+                entries := bucket.get("standard_logging_guardrail_information"),
+                list,
+            )
+        ),
+        (),
+    )
+    guardrail_information: Final = [  # mutable-ok: response list contract
+        redact_nested_match_and_regex_keys(entry, keys=_RESPONSE_REDACTED_KEYS)
+        for entry in recorded
+        if isinstance(entry, dict)
+    ]
+    if isinstance(response, dict):
+        return response | MappingProxyType({"guardrail_information": guardrail_information})
+    if isinstance(response, BaseModel) and response.model_config.get("extra") == "allow":
+        return response.model_copy(update=MappingProxyType({"guardrail_information": guardrail_information}))
+    return response
+
+
 class CostBreakdownHeaderValues(NamedTuple):
     original_cost: float | None = None
     discount_amount: float | None = None
@@ -2555,7 +2597,7 @@ class ProxyBaseLLMRequestProcessing:
             user_model=user_model,
             user_api_key_dict=user_api_key_dict,
         )
-        llm_call_task: Final = asyncio.create_task(llm_call)
+        llm_call_task: Final = asyncio.create_task(with_proxy_compaction_executor(llm_call, request))
         tasks.append(llm_call_task)
 
         llm_responses: Final = asyncio.gather(*tasks)  # run the moderation check in parallel to the actual llm api call
@@ -2802,6 +2844,7 @@ class ProxyBaseLLMRequestProcessing:
                 user_api_key_dict=user_api_key_dict,
                 response=response,
             )
+            record_served_output_texts(logging_obj.model_call_details, served_output_texts(response))
         except Exception:
             _exception_raised = True
             raise
@@ -2891,6 +2934,11 @@ class ProxyBaseLLMRequestProcessing:
 
         if isinstance(response, dict):
             response.pop("_hidden_params", None)
+
+        if include_guardrail_response_requested(self.data):
+            response = attach_guardrail_information(  # rebind-ok: response tail rebinds the copied response
+                response=response, request_data=self.data
+            )
 
         # Call response headers hook for non-streaming success
         callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
@@ -3689,11 +3737,11 @@ class ProxyBaseLLMRequestProcessing:
                 request_path: Final = urlparse(str(request_url)).path if request_url is not None else None
                 verbose_proxy_logger.error(
                     bug_report_notice(
-                        build_bug_report(
+                        build_proxy_bug_report(
                             e,
-                            surface="proxy",
                             call_type=allowlisted(request_path, KNOWN_PROXY_ROUTES),
                             custom_llm_provider=self.data.get("custom_llm_provider"),
+                            stream=self.data.get("stream"),
                         )
                     )
                 )
