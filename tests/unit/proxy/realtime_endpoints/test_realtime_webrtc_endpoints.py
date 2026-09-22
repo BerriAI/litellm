@@ -1121,7 +1121,7 @@ async def test_translation_client_secret_rejects_disallowed_nested_transcription
         ),
     )
 
-    with pytest.raises(Exception, match="Tried to access gpt-live-transcribe"):
+    with pytest.raises(Exception, match=r"gpt-live-transcribe.*not available for this API key"):
         await _prepare_client_secret_session(
             req=req,
             user_api_key_dict=UserAPIKeyAuth(models=["gpt-realtime-translate"]),
