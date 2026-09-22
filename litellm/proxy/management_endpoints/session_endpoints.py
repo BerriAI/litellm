@@ -14,7 +14,7 @@ ownership checks can reject low-privilege roles, and a self-revoke endpoint
 that takes no body cannot be aimed at other keys.
 """
 
-from typing import Final, cast
+from typing import Annotated, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
@@ -101,11 +101,10 @@ async def revoke_ui_session_keys(
 @router.post(
     "/session/logout",
     tags=("UI Session",),
-    dependencies=(Depends(user_api_key_auth),),
 )
 async def session_logout(
     response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> SessionLogoutResponse:
     """
     Revoke the UI session key this request authenticated with.
