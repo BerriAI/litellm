@@ -67,6 +67,7 @@ from litellm.constants import (
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
@@ -6087,6 +6088,107 @@ async def test_organization_budget_check_carries_org_state_on_the_token():
     assert token.org_budget_snapshot == OrgBudgetSnapshot(spend=12.5, max_budget=100.0)
 
 
+@pytest.mark.parametrize("warmed_by_auth_prefetch", [False, True])
+@pytest.mark.asyncio
+async def test_get_org_object_for_request_serves_last_known_org_through_db_outage(warmed_by_auth_prefetch):
+    """A JWT whose team sits in an org resolves the org on every request, and the org row
+    is cached for only DEFAULT_IN_MEMORY_TTL seconds while the team and user rows ride the
+    60s management-object TTL. Without a last-known copy, a DB outage a few seconds old
+    turned that traffic into 503s while the same request through a virtual key kept
+    succeeding on its cached team. The copy must exist whoever filled the short-lived entry:
+    this lookup's own DB read, or the virtual-key auth prefetch warming it for the same org."""
+    from litellm.proxy._types import LiteLLM_OrganizationTable
+    from litellm.proxy.auth.auth_checks import get_org_object_for_request
+
+    org_columns = {
+        "organization_id": "org-1",
+        "organization_alias": "platform-org",
+        "budget_id": "b1",
+        "created_by": "admin",
+        "updated_by": "admin",
+        "litellm_budget_table": {"budget_id": "b1", "max_budget": 50.0, "tpm_limit": 700, "rpm_limit": 7},
+    }
+    org_row = MagicMock()
+    org_row.model_dump = lambda: org_columns
+    db_outage = ConnectionRefusedError("db unavailable")
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_organizationtable.find_unique = AsyncMock(
+        side_effect=[db_outage] if warmed_by_auth_prefetch else [org_row, db_outage]
+    )
+    user_api_key_cache = UserApiKeyCache()
+    if warmed_by_auth_prefetch:
+        await user_api_key_cache.async_set_cache(
+            key="org_id:org-1:with_budget",
+            value=LiteLLM_OrganizationTable.model_validate(org_columns),
+            model_type=LiteLLM_OrganizationTable,
+        )
+
+    async def _lookup():
+        return await get_org_object_for_request(
+            org_id="org-1",
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):  # test-quality-ok: the outage fallback reads this module global; no dependency injection seam exists
+        warm = await _lookup()
+        assert warm is not None and warm.organization_alias == "platform-org"
+        await user_api_key_cache.async_delete_cache("org_id:org-1:with_budget")
+
+        during_outage = await _lookup()
+
+    assert prisma_client.db.litellm_organizationtable.find_unique.await_count == (1 if warmed_by_auth_prefetch else 2)
+    assert during_outage is not None
+    assert during_outage.organization_alias == "platform-org"
+    assert during_outage.litellm_budget_table is not None
+    assert during_outage.litellm_budget_table.rpm_limit == 7
+    assert during_outage.litellm_budget_table.max_budget == 50.0
+
+
+@pytest.mark.asyncio
+async def test_get_org_object_for_request_writes_the_last_known_org_only_when_absent():
+    """The last-known copy is written when this worker holds none, never per request:
+    with Redis attached, a write on every cached org hit would cost one SET per JWT request."""
+    from litellm.proxy._types import LiteLLM_OrganizationTable
+    from litellm.proxy.auth.auth_checks import get_org_object_for_request
+
+    class _WriteRecordingCache(UserApiKeyCache):
+        def __init__(self):
+            super().__init__()
+            self.written_keys = []
+
+        async def async_set_cache(self, key, value, local_only=False, **kwargs):
+            self.written_keys.append(key)
+            return await super().async_set_cache(key=key, value=value, local_only=local_only, **kwargs)
+
+    user_api_key_cache = _WriteRecordingCache()
+    await user_api_key_cache.async_set_cache(
+        key="org_id:org-1:with_budget",
+        value=LiteLLM_OrganizationTable(
+            organization_id="org-1",
+            organization_alias="platform-org",
+            budget_id="b1",
+            created_by="admin",
+            updated_by="admin",
+        ),
+        model_type=LiteLLM_OrganizationTable,
+    )
+
+    for _ in range(3):
+        org = await get_org_object_for_request(
+            org_id="org-1",
+            prisma_client=MagicMock(),
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+        assert org is not None and org.organization_alias == "platform-org"
+
+    assert user_api_key_cache.written_keys.count("org_id:org-1:with_budget:last_known") == 1
+
+
 @pytest.mark.parametrize(
     "max_budget, spend, expect_blocked",
     [
@@ -7198,7 +7300,7 @@ async def test_common_checks_skips_membership_load_when_no_check_reads_it():
 
 
 @pytest.mark.asyncio
-async def test_get_team_membership_db_error_returns_none_and_retries_next_call():
+async def test_get_team_membership_db_error_surfaces_and_retries_next_call():
     from litellm.proxy.auth.auth_checks import get_team_membership
     from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
@@ -7210,12 +7312,13 @@ async def test_get_team_membership_db_error_returns_none_and_retries_next_call()
     )
     cache = UserApiKeyCache()
 
-    failed = await get_team_membership(
-        user_id="u-fail",
-        team_id="t-fail",
-        prisma_client=mock_prisma_client,
-        user_api_key_cache=cache,
-    )
+    with pytest.raises(RuntimeError, match="db down"):
+        await get_team_membership(
+            user_id="u-fail",
+            team_id="t-fail",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=cache,
+        )
     cached_after_failure = await cache.async_get_cache(
         key=team_membership_reservation_cache_key(user_id="u-fail", team_id="t-fail")
     )
@@ -7226,24 +7329,52 @@ async def test_get_team_membership_db_error_returns_none_and_retries_next_call()
         user_api_key_cache=cache,
     )
 
-    assert failed is None
     assert cached_after_failure is None
     assert recovered is not None
     assert recovered.user_id == "u-fail"
     assert mock_prisma_client.db.litellm_teammembership.find_unique.await_count == 2
 
 
-@pytest.mark.asyncio
-async def test_get_team_membership_string_prisma_client_returns_none():
-    from litellm.proxy.auth.auth_checks import get_team_membership
+class _UnreachableMembershipPrisma:
+    class db:
+        class litellm_teammembership:
+            @staticmethod
+            async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
+                raise httpx.ConnectError("All connection attempts failed")
 
-    result = await get_team_membership(
-        user_id="u-str",
-        team_id="t-str",
-        prisma_client="hello-world",
-        user_api_key_cache=UserApiKeyCache(),
-    )
-    assert result is None
+
+def _restricted_member_check_deps() -> dict[str, object]:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    cache = UserApiKeyCache()
+    return {
+        "team_object": LiteLLM_TeamTable(team_id="team-outage", models=["claude-sonnet-5"]),
+        "valid_token": UserAPIKeyAuth(token="hashed-fake", user_id="bob", team_id="team-outage"),
+        "prisma_client": _UnreachableMembershipPrisma(),
+        "user_api_key_cache": cache,
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=cache),
+    }
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_model_access_fails_closed_when_the_membership_read_hits_a_db_outage():
+    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+    from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
+
+    with pytest.raises(httpx.ConnectError) as raised:
+        await _check_team_member_model_access(
+            model="claude-sonnet-5", llm_router=None, **_restricted_member_check_deps()
+        )
+
+    surfaced = _as_proxy_exception(raised.value)
+    assert (surfaced.code, surfaced.type) == ("503", ProxyErrorTypes.no_db_connection)
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_budget_fails_closed_when_the_membership_read_hits_a_db_outage():
+    with pytest.raises(httpx.ConnectError):
+        await _check_team_member_budget(user_object=None, **_restricted_member_check_deps())
 
 
 @pytest.mark.asyncio
@@ -7572,7 +7703,7 @@ async def test_project_allowlist_enforced_when_key_models_empty():
     assert exc_info.value.code == "403"
 
 
-def _project_with_budget(spend: float, max_budget: float):
+def _project_with_budget(spend: float, max_budget: float | None):
     from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_ProjectTableCachedObj
 
     return LiteLLM_ProjectTableCachedObj(
@@ -7592,11 +7723,12 @@ def _project_with_budget(spend: float, max_budget: float):
         pytest.param(4.99, 0.0, 5.0, False, id="counter-under-budget-admits"),
         pytest.param(None, 5.0, 5.0, True, id="no-counter-falls-back-to-persisted-spend"),
         pytest.param(None, 0.0, 5.0, False, id="no-counter-and-no-persisted-spend-admits"),
-        pytest.param(12.5, 12.5, 0.0, False, id="zero-budget-is-unbudgeted"),
-        pytest.param(12.5, 12.5, -1.0, False, id="negative-budget-is-unbudgeted"),
+        pytest.param(None, 0.0, 0.0, True, id="zero-budget-blocks-before-any-spend"),
+        pytest.param(12.5, 12.5, 0.0, True, id="zero-budget-blocks-with-spend"),
+        pytest.param(12.5, 12.5, None, False, id="null-budget-is-unlimited"),
     ],
 )
-async def test_project_max_budget_check_blocks_only_when_live_spend_reaches_a_positive_budget(
+async def test_project_max_budget_check_blocks_when_live_spend_reaches_the_budget(
     counter_spend, db_spend, max_budget, blocks
 ):
     from litellm.caching.dual_cache import DualCache
@@ -7631,7 +7763,7 @@ async def test_project_max_budget_check_blocks_only_when_live_spend_reaches_a_po
 
     assert exc_info.value.entity_type == Litellm_EntityType.PROJECT.value
     assert exc_info.value.entity_id == "p-budget"
-    assert exc_info.value.current_cost == 5.0
+    assert exc_info.value.current_cost == (db_spend if counter_spend is None else counter_spend)
     proxy_logging_obj.budget_alerts.assert_awaited_once()
     assert proxy_logging_obj.budget_alerts.await_args.kwargs["type"] == "project_budget"
 
@@ -8787,6 +8919,8 @@ def test_jwt_team_role_reaches_the_gateway_token_endpoint_by_default():
 def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
     assert route_skips_budget_checks(route="/v1/models") is True
     assert route_skips_budget_checks(route="/spend/logs") is True
+    assert route_skips_budget_checks(route="/utils/model_info") is True
+    assert RouteChecks.is_llm_api_route(route="/utils/model_info") is True
     assert route_skips_budget_checks(route="/health") is False
     assert route_skips_budget_checks(route="/v1/chat/completions") is False
 

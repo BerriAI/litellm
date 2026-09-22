@@ -4,6 +4,7 @@ import ssl
 from collections.abc import AsyncGenerator, AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache
+from itertools import chain
 from types import MappingProxyType, ModuleType
 from typing import (
     TYPE_CHECKING,
@@ -291,6 +292,26 @@ def _has_pre_call_deployment_hook(logging_obj: LiteLLMLoggingObj) -> bool:
         if getattr(cb_func, "__func__", cb_func) is not getattr(base_func, "__func__", base_func):
             return True
     return False
+
+
+def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> bytes | str | dict:
+    """A pre-signed request carries its auth inside its own ``headers`` key, which
+    logging treats as request body (only the top-level headers channel gets masked),
+    so mask it here before the request is handed to ``pre_call``."""
+    if not isinstance(transformed_request, dict):
+        return transformed_request
+    request_headers: Final = transformed_request.get("headers")
+    if not isinstance(request_headers, dict):
+        return transformed_request
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        _get_masked_values,  # pyright: ignore[reportPrivateUsage]  # the shared header-masking helper has no public name
+    )
+
+    return {  # mutable-ok: logging's curl and raw-request builders take dict
+        **transformed_request,
+        "headers": _get_masked_values(request_headers),
+    }
 
 
 def _aws_signing_overrides(optional_params: Mapping[str, Any], litellm_params: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -2143,6 +2164,8 @@ class BaseLLMHTTPHandler:
                     e=e, litellm_params=litellm_params_dict
                 )
                 if should_retry and not hit_max_attempt:
+                    if logging_obj.baseline_cache_context is not None:
+                        await logging_obj.invalidate_baseline_cache_estimate("retried_request")
                     verbose_logger.debug(
                         "Anthropic /v1/messages: invalid thinking signature; "
                         "stripping thinking blocks and retrying (attempt %s/%s).",
@@ -3734,7 +3757,7 @@ class BaseLLMHTTPHandler:
                 "complete_input_dict": (
                     "<streaming media upload>"
                     if isinstance(transformed_request, dict) and "streaming_media_upload" in transformed_request
-                    else transformed_request
+                    else _mask_presigned_request_headers(transformed_request)
                 ),
                 "api_base": api_base,
                 "headers": headers,
@@ -4157,7 +4180,7 @@ class BaseLLMHTTPHandler:
             input="",
             api_key="",
             additional_args={
-                "complete_input_dict": transformed_request,
+                "complete_input_dict": _mask_presigned_request_headers(transformed_request),
                 "api_base": api_base,
                 "headers": headers,
             },
@@ -4236,7 +4259,7 @@ class BaseLLMHTTPHandler:
             input="",
             api_key="",
             additional_args={
-                "complete_input_dict": transformed_request,
+                "complete_input_dict": _mask_presigned_request_headers(transformed_request),
                 "api_base": api_base,
                 "headers": headers,
                 "batch_id": batch_id,
@@ -5591,18 +5614,29 @@ class BaseLLMHTTPHandler:
         }
 
         internal_keys: Final = {"litellm_logging_obj"}
-        kwargs_for_followup: Final = {
-            k: v
-            for k, v in kwargs.items()
-            if not is_interception_internal_key(k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES)
-            and k != "_code_interpreter_interception_converted_stream"
-            and k not in internal_keys
-            and k not in optional_params
-        }
-        kwargs_for_followup.update(patch.kwargs)
-        kwargs_for_followup["_agentic_loop_depth"] = depth + 1
-        kwargs_for_followup["max_agentic_loops"] = max_loops
-        kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
+        kwargs_for_followup: Final = MappingProxyType(
+            {
+                key: value
+                for key, value in chain(
+                    (
+                        (k, v)
+                        for k, v in kwargs.items()
+                        if not is_interception_internal_key(
+                            k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES
+                        )
+                        and k != "_code_interpreter_interception_converted_stream"
+                        and k not in internal_keys
+                        and k not in optional_params
+                    ),
+                    ((k, v) for k, v in patch.kwargs.items() if k not in optional_params),
+                    (
+                        ("_agentic_loop_depth", depth + 1),
+                        ("max_agentic_loops", max_loops),
+                        ("_agentic_loop_fingerprints", fingerprints + [fingerprint]),
+                    ),
+                )
+            }
+        )
 
         try:
             response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
@@ -8859,7 +8893,7 @@ class BaseLLMHTTPHandler:
                     url=url,
                     headers=headers,
                 )
-            return video_status_provider_config.transform_video_status_retrieve_response(
+            return await video_status_provider_config.async_transform_video_status_retrieve_response(
                 raw_response=response,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,

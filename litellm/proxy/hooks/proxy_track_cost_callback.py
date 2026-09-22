@@ -1,8 +1,8 @@
 import asyncio
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -446,17 +446,26 @@ class _ProxyDBLogger(CustomLogger):
                         f"Cost tracking failed for model={model}.\nDebug info - {cost_tracking_failure_debug_info}\nAdd custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
                     )
         except Exception as e:
-            error_msg = f"Error in tracking cost callback - {e}\n Traceback:{traceback.format_exc()}"
-            model = kwargs.get("model", "")
-            metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
-            litellm_metadata: Final = kwargs.get("litellm_params", {}).get("litellm_metadata", {})
-            old_metadata: Final = kwargs.get("litellm_params", {}).get("metadata", {})
-            call_type = kwargs.get("call_type", "")
-            error_msg += f"\n Args to _PROXY_track_cost_callback\n model: {model}\n chosen_metadata: {metadata}\n litellm_metadata: {litellm_metadata}\n old_metadata: {old_metadata}\n call_type: {call_type}\n"
+            failing_model: Final = kwargs.get("model", "")
+            failing_call_type: Final = kwargs.get("call_type", "")
+            error_msg: Final = (
+                f"Error in tracking cost callback - {e}\n Traceback:{traceback.format_exc()}\n"
+                f" Args to _PROXY_track_cost_callback\n model: {failing_model}\n call_type: {failing_call_type}\n"
+            )
+            failing_litellm_params: Final = kwargs.get("litellm_params") or {}
+            verbose_proxy_logger.debug(
+                "Cost tracking callback failed for model=%s call_type=%s;"
+                " chosen_metadata keys=%s litellm_metadata keys=%s old_metadata keys=%s",
+                failing_model,
+                failing_call_type,
+                _metadata_keys(get_litellm_metadata_from_kwargs(kwargs=kwargs)),
+                _metadata_keys(failing_litellm_params.get("litellm_metadata")),
+                _metadata_keys(failing_litellm_params.get("metadata")),
+            )
             asyncio.create_task(
                 proxy_logging_obj.failed_tracking_alert(
                     error_message=error_msg,
-                    failing_model=model,
+                    failing_model=failing_model,
                 )
             )
 
@@ -614,6 +623,12 @@ def _should_track_cost_callback(
     return call_type in _UNATTRIBUTED_TRACKABLE_CALL_TYPES
 
 
+def _metadata_keys(metadata: object) -> tuple[str, ...]:
+    if not isinstance(metadata, Mapping):
+        return ()
+    return tuple(sorted(str(key) for key in metadata))
+
+
 def _get_budget_reservation_from_metadata(metadata: dict) -> dict | None:
     metadata_budget_reservation: Final = metadata.get("user_api_key_budget_reservation")
     if isinstance(metadata_budget_reservation, dict):
@@ -644,18 +659,36 @@ def _get_request_tags_for_cost_tracking(
     return None
 
 
+class _IncrementSpendCounters(Protocol):
+    """The ``increment_spend_counters`` coroutine :func:`_update_database_and_spend_counters` awaits."""
+
+    async def __call__(
+        self,
+        token: str | None,
+        team_id: str | None,
+        user_id: str | None,
+        response_cost: float | None,
+        org_id: str | None = None,
+        budget_reservation: dict[str, object] | None = None,
+        end_user_id: str | None = None,
+        tags: list[str] | None = None,
+        request_started_at: datetime | None = None,
+        model_access_groups: Sequence[str] | None = None,
+    ) -> None: ...
+
+
 async def _update_database_and_spend_counters(
     proxy_logging_obj: "ProxyLogging",
-    increment_spend_counters: Any,
+    increment_spend_counters: _IncrementSpendCounters,
     user_api_key: str | None,
     user_id: str | None,
     end_user_id: str | None,
     team_id: str | None,
     org_id: str | None,
     kwargs: dict,
-    completion_response: litellm.ModelResponse | Any | None,
-    start_time: Any,
-    end_time: Any,
+    completion_response: object,
+    start_time: datetime | None,
+    end_time: datetime | None,
     response_cost: float,
     budget_reservation: dict | None,
     request_tags: list[str] | None = None,

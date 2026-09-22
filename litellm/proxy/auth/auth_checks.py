@@ -845,6 +845,7 @@ MODEL_DISCOVERY_ROUTES: Final = frozenset(
         "/v1/model/info",
         "/v2/model/info",
         "/model_group/info",
+        "/utils/model_info",
     }
 )
 
@@ -2296,23 +2297,19 @@ async def _load_team_membership_on_cache_miss(
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging | None,
 ) -> LiteLLM_TeamMembership | None:
-    try:
-        redis_cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
-        redis_membership: Final = _membership_from_cached_payload(redis_cached)
-        if not isinstance(redis_membership, _TeamMembershipCacheMiss):
-            return redis_membership
+    redis_cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
+    redis_membership: Final = _membership_from_cached_payload(redis_cached)
+    if not isinstance(redis_membership, _TeamMembershipCacheMiss):
+        return redis_membership
 
-        return await _fetch_team_membership_from_db(
-            user_id=user_id,
-            team_id=team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    except Exception:
-        verbose_proxy_logger.exception("Error getting team membership")
-        return None
+    return await _fetch_team_membership_from_db(
+        user_id=user_id,
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
 
 async def get_team_membership(
@@ -4012,6 +4009,64 @@ async def get_org_object(
     return _org_obj
 
 
+def _last_known_org_cache_key(org_id: str) -> str:
+    return f"org_id:{org_id}:with_budget:last_known"
+
+
+async def _keep_last_known_org(
+    org: LiteLLM_OrganizationTable, org_id: str, user_api_key_cache: UserApiKeyCache
+) -> None:
+    cache_key: Final = _last_known_org_cache_key(org_id)
+    held_locally: Final = await user_api_key_cache.async_get_cache(
+        key=cache_key, local_only=True, model_type=LiteLLM_OrganizationTable
+    )
+    if held_locally is not None:
+        return
+    await user_api_key_cache.async_set_cache(
+        key=cache_key,
+        value=org,
+        model_type=LiteLLM_OrganizationTable,
+        ttl=get_management_object_ttl(user_api_key_cache),
+    )
+
+
+async def get_org_object_for_request(
+    org_id: str,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging | None,
+) -> LiteLLM_OrganizationTable | None:
+    try:
+        org: Final = await get_org_object(
+            org_id=org_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            include_budget_table=True,
+        )
+    except OrganizationNotFoundError:
+        return None
+    except Exception as e:  # noqa: BLE001  # only a DB outage may fail auth here, anything else degrades to no org limits
+        if not PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
+            verbose_proxy_logger.debug("org lookup failed, continuing without org limits", exc_info=True)
+            return None
+        last_known_org: Final = await user_api_key_cache.async_get_cache(
+            key=_last_known_org_cache_key(org_id),
+            model_type=LiteLLM_OrganizationTable,
+        )
+        if last_known_org is not None:
+            return last_known_org
+        if PrismaDBExceptionHandler.should_allow_request_on_db_unavailable():
+            return None
+        raise
+    if org is None:
+        return None
+    await _keep_last_known_org(org, org_id, user_api_key_cache)
+    return org
+
+
 async def _get_resources_from_access_groups(
     access_group_ids: Sequence[str],
     resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],
@@ -5680,7 +5735,7 @@ async def _project_max_budget_check(
     if project_object.litellm_budget_table is not None:
         max_budget = project_object.litellm_budget_table.max_budget
 
-    if max_budget is None or max_budget <= 0 or not math.isfinite(max_budget):
+    if max_budget is None or not math.isfinite(max_budget):
         return
 
     from litellm.proxy.proxy_server import get_current_spend

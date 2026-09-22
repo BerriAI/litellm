@@ -1552,7 +1552,7 @@ async def test_anthropic_post_uses_prebuilt_body_without_redumping():
     provider_config = Mock()
     provider_config.max_retry_on_anthropic_messages_http_error = 2
 
-    logging_obj = Mock()
+    logging_obj: Final = Mock(baseline_cache_context=None)
     logging_obj.model_call_details = {}
 
     out = await handler._async_post_anthropic_messages_with_http_error_retry(
@@ -1592,7 +1592,7 @@ async def test_anthropic_post_falls_back_to_json_dumps_when_unsigned_none():
 
     provider_config = Mock()
     provider_config.max_retry_on_anthropic_messages_http_error = 1
-    logging_obj = Mock()
+    logging_obj: Final = Mock(baseline_cache_context=None)
     logging_obj.model_call_details = {}
 
     await handler._async_post_anthropic_messages_with_http_error_retry(
@@ -1640,7 +1640,7 @@ async def test_anthropic_post_retry_reserializes_mutated_body():
     # Re-sign returns no signed body (native anthropic path) -> must re-dump.
     provider_config.sign_request = Mock(return_value=({}, None))
 
-    logging_obj = Mock()
+    logging_obj: Final = Mock(baseline_cache_context=None)
     logging_obj.model_call_details = {}
 
     await handler._async_post_anthropic_messages_with_http_error_retry(
@@ -2579,7 +2579,7 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
             posts.append({"headers": dict(headers), "data": data})
             return invalid_signature_response if len(posts) == 1 else ok_response
 
-    logging_obj = Mock()
+    logging_obj: Final = Mock(baseline_cache_context=None)
     logging_obj.model_call_details = {}
 
     response = await handler._async_post_anthropic_messages_with_http_error_retry(
@@ -2851,6 +2851,68 @@ def test_direct_vector_store_search_debug_log_omits_stored_credentials(caplog, i
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert "sup3r-s3cret-valkey-pw" not in logged
     assert "sk-embedding-s3cret" not in logged
+
+
+@pytest.mark.asyncio
+async def test_async_retrieve_batch_masks_presigned_auth_header_in_raw_request_log():
+    """Regression: a pre-signed retrieve-batch request (Mistral, Bedrock) embeds its auth
+    header inside the transformed request, which pre_call logs verbatim as the raw request
+    body, so the provider key landed unmasked in raw_request_typed_dict and every
+    raw-request callback."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+    from litellm.llms.mistral.batches.transformation import MistralBatchesConfig
+
+    provider_key = "mistral-s3cret-provider-key-123456"
+    job_payload = {
+        "id": "batch-1",
+        "input_files": ["file-1"],
+        "endpoint": "/v1/ocr",
+        "model": "mistral-ocr-latest",
+        "status": "SUCCESS",
+        "created_at": 1_757_400_000,
+    }
+    sent_requests = []
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        sent_requests.append(request)
+        return httpx.Response(200, json=job_payload)
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(_capture))
+
+    logging_obj = LitellmLogging(
+        model="mistral/mistral-ocr-latest",
+        messages=[],
+        stream=False,
+        call_type="batch_retrieve",
+        start_time=time.time(),
+        litellm_call_id="batch-retrieve-call-id",
+        function_id="batch-retrieve-function-id",
+        log_raw_request_response=True,
+    )
+    logging_obj.update_environment_variables(
+        model="mistral/mistral-ocr-latest",
+        optional_params={},
+        litellm_params={"litellm_call_id": "batch-retrieve-call-id", "metadata": {}},
+    )
+
+    result = await BaseLLMHTTPHandler().retrieve_batch(
+        batch_id="batch-1",
+        litellm_params={"api_key": provider_key},
+        provider_config=MistralBatchesConfig(),
+        headers={},
+        api_base=None,
+        api_key=provider_key,
+        logging_obj=logging_obj,
+        _is_async=True,
+        client=client,
+        model="mistral/mistral-ocr-latest",
+    )
+
+    assert result.id == "batch-1"
+    assert sent_requests[0].headers["Authorization"] == f"Bearer {provider_key}"
+    raw_request_body = logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_body"]
+    assert provider_key not in json.dumps(raw_request_body)
 
 
 @pytest.mark.asyncio
@@ -3945,3 +4007,47 @@ async def test_async_realtime_bridges_a_transcription_session_through_the_provid
     assert events[6]["usage"] == {"type": "duration", "seconds": 2.0}
     assert speech_client.requests[0].streaming_config.config.model == "chirp_3"
     assert [bytes(request.audio) for request in speech_client.requests[1:]] == [b"\x00\x01" * 800, b"\x00\x01" * 800]
+
+
+@pytest.mark.asyncio
+async def test_responses_agentic_followup_does_not_repeat_request_params_from_plan_kwargs(monkeypatch):
+    """A plan whose kwargs repeat a request param must not crash the Responses follow-up with a duplicate keyword"""
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
+
+    followup_calls: list[dict[str, object]] = []
+
+    async def fake_aresponses(**kwargs: object) -> str:
+        followup_calls.append(kwargs)
+        return "followup-response"
+
+    monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+    request_kwargs: Final = {"prompt_cache_key": "thread-1", "metadata": {"user": "u1"}}
+    plan: Final = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(
+            model="gpt-5",
+            messages=[{"role": "user", "content": "x"}],
+            optional_params={"prompt_cache_key": "thread-1"},
+            kwargs=dict(request_kwargs),
+        ),
+    )
+
+    response: Final = await BaseLLMHTTPHandler()._execute_responses_agentic_plan(
+        plan=plan,
+        model="gpt-5",
+        response_api_optional_request_params={"prompt_cache_key": "thread-1"},
+        logging_obj=Mock(litellm_call_id="call-1"),
+        kwargs=dict(request_kwargs),
+        depth=0,
+        max_loops=3,
+        fingerprints=[],
+        fingerprint="fp",
+        callback=CustomLogger(),
+    )
+
+    assert response == "followup-response"
+    assert len(followup_calls) == 1
+    assert followup_calls[0]["prompt_cache_key"] == "thread-1"
+    assert followup_calls[0]["metadata"] == {"user": "u1"}
+    assert followup_calls[0]["_agentic_loop_depth"] == 1

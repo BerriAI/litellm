@@ -53,7 +53,9 @@ _PYTHON_AOCR: Final = cast(  # cast-ok: forward the original call shape through 
 
 
 def _context(request: LiteLLMOcrRequest) -> Context:
-    return Context(Route.OCR, provider=request.custom_llm_provider, model=request.model)
+    prefix, separator, _ = request.model.partition("/")
+    provider: Final = request.custom_llm_provider or (prefix if separator else None)
+    return Context(Route.OCR, provider=provider, model=request.model)
 
 
 _DISPATCH: Final = PublicDispatch(

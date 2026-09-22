@@ -4,6 +4,8 @@ Tests for router settings management endpoints.
 Tests the GET endpoints for router settings and router fields.
 """
 
+from collections.abc import Mapping
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,10 +17,21 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     get_router_settings,
 )
+from litellm.proxy.config_resolvers import SettingsStore
 from litellm.proxy.proxy_server import app
 from litellm.router import Router
 
 client = TestClient(app)
+
+
+class _StubProxyConfig:
+    def __init__(self, router_settings: SettingsStore, config_router_settings: Mapping[str, Any]) -> None:
+        self.router_settings: Final = router_settings
+        self._config_router_settings: Final = dict(config_router_settings)
+
+    async def get_config(self, config_file_path: str | None = None) -> dict[str, Any]:
+        del config_file_path
+        return {"router_settings": dict(self._config_router_settings)}
 
 
 class TestRouterSettingsEndpoints:
@@ -76,6 +89,31 @@ class TestRouterSettingsEndpoints:
         assert len(routing_strategy_field["options"]) > 0
 
     @pytest.mark.asyncio
+    async def test_get_router_settings_reports_sources(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        store = SettingsStore("router_settings")
+        store.load_yaml({"routing_strategy": "simple-shuffle"})
+        store.apply_db_row("router_settings", {"num_retries": 3})
+        monkeypatch.setattr(
+            proxy_server,
+            "proxy_config",
+            _StubProxyConfig(
+                store,
+                {"routing_strategy": "simple-shuffle", "num_retries": 3},
+            ),
+        )
+        monkeypatch.setattr(proxy_server, "llm_router", None)
+
+        admin_user = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-x"
+        )
+        response = await get_router_settings(user_api_key_dict=admin_user)
+
+        assert response.source["routing_strategy"] == "config"
+        assert response.source["num_retries"] == "db"
+
+    @pytest.mark.asyncio
     async def test_get_router_settings_includes_routing_groups_from_live_router(
         self, monkeypatch
     ):
@@ -102,12 +140,10 @@ class TestRouterSettingsEndpoints:
         )
 
         monkeypatch.setattr(proxy_server, "llm_router", llm_router)
-
-        async def fake_get_config(self, config_file_path=None):
-            return {}
-
         monkeypatch.setattr(
-            proxy_server.ProxyConfig, "get_config", fake_get_config, raising=True
+            proxy_server,
+            "proxy_config",
+            _StubProxyConfig(SettingsStore("router_settings"), {}),
         )
 
         admin_user = UserAPIKeyAuth(
@@ -116,6 +152,8 @@ class TestRouterSettingsEndpoints:
         response = await get_router_settings(user_api_key_dict=admin_user)
 
         assert response.current_values.get("routing_groups") == groups
+        assert response.current_values["timeout"] is not None
+        assert response.source["timeout"] == "default"
 
         rg_field = next(f for f in response.fields if f.field_name == "routing_groups")
         assert rg_field.field_value == groups

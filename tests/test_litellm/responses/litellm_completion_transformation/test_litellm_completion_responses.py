@@ -1248,6 +1248,55 @@ class TestFunctionCallTransformation:
         assert "tool_choice" not in result
         assert "tools" not in result
 
+    def test_safety_identifier_forwarded_to_chat_completion_request(self) -> None:
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="bedrock/global.openai.gpt-5.6-luna",
+            input="hi",
+            responses_api_request={"safety_identifier": "user-7f3a"},
+            custom_llm_provider="bedrock",
+        )
+
+        assert result["safety_identifier"] == "user-7f3a"
+
+    def test_parallel_tool_calls_dropped_when_no_chat_tools_remain(self) -> None:
+        transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request
+        codex_tool_search: Final = {
+            "type": "tool_search",
+            "execution": "client",
+            "description": "Searches over deferred tool metadata with BM25.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        }
+        function_tool: Final = {
+            "type": "function",
+            "name": "get_goal",
+            "description": "Returns the current goal.",
+            "parameters": {"type": "object", "properties": {}},
+            "strict": True,
+        }
+
+        empty_tools_result: Final = transform(
+            model="azure/gpt-5.4-mini",
+            input="Reply with just the word pong.",
+            responses_api_request={"tools": [], "parallel_tool_calls": True},
+            custom_llm_provider="azure",
+        )
+        hosted_only_result: Final = transform(
+            model="azure/gpt-5.4-mini",
+            input="Reply with just the word pong.",
+            responses_api_request={"tools": [codex_tool_search], "parallel_tool_calls": True},
+            custom_llm_provider="azure",
+        )
+        function_tools_result: Final = transform(
+            model="azure/gpt-5.4-mini",
+            input="Reply with just the word pong.",
+            responses_api_request={"tools": [function_tool], "parallel_tool_calls": True},
+            custom_llm_provider="azure",
+        )
+
+        assert "parallel_tool_calls" not in empty_tools_result
+        assert "parallel_tool_calls" not in hosted_only_result
+        assert function_tools_result["parallel_tool_calls"] is True
+
     def test_function_call_without_call_id_fallback_to_id(self):
         """Test that function_call items can use 'id' field when 'call_id' is missing"""
         function_call_item = {
@@ -1657,6 +1706,82 @@ class TestToolTransformation:
 
         # Assert - computer_use has no Chat Completions equivalent, so it is dropped
         assert len(result_tools) == 0
+        assert web_search_options is None
+
+    def test_transform_codex_tools_drops_hosted_tool_search(self) -> None:
+        codex_tools: Final = [
+            {
+                "type": "function",
+                "name": "exec_command",
+                "description": "Runs a command in a PTY.",
+                "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]},
+                "strict": True,
+            },
+            {
+                "type": "function",
+                "name": "write_stdin",
+                "description": "Writes characters to an existing session's stdin.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"session_id": {"type": "number"}, "chars": {"type": "string"}},
+                    "required": ["session_id", "chars"],
+                },
+                "strict": True,
+            },
+            {
+                "type": "custom",
+                "name": "apply_patch",
+                "description": "The `apply_patch` tool can be used to edit files.",
+                "format": {
+                    "type": "grammar",
+                    "syntax": "lark",
+                    "definition": 'start: begin_patch hunk+ end_patch\nbegin_patch: "*** Begin Patch" LF\n',
+                },
+            },
+            {
+                "type": "tool_search",
+                "execution": "client",
+                "description": (
+                    "# Tool discovery\n\nSearches over deferred tool metadata with BM25 and exposes matching tools "
+                    "for the next model call.\n\nYou have access to tools from the following sources:\n"
+                    "- Multi-agent tools: Spawn and manage sub-agents.\nSome of the tools may not have been provided "
+                    "to you upfront, and you should use this tool (`tool_search`) to search for the required tools. "
+                    "For MCP tool discovery, always use `tool_search` instead of `list_mcp_resources` or "
+                    "`list_mcp_resource_templates`."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "number", "description": "Maximum number of tools to return. Defaults to 8."},
+                        "query": {"type": "string", "description": "Search query for deferred tools."},
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            },
+            {"type": "web_search", "external_web_access": False, "search_content_types": ["text", "image"]},
+        ]
+        function_and_custom_count: Final = sum(1 for tool in codex_tools if tool["type"] in ("function", "custom"))
+
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=codex_tools)
+
+        assert not any(tool.get("type") == "tool_search" for tool in result_tools)
+        assert all(tool.get("type") == "function" for tool in result_tools)
+        assert len(result_tools) == function_and_custom_count
+        assert web_search_options is not None
+
+    def test_transform_local_shell_tools_dropped(self) -> None:
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[{"type": "local_shell"}]
+        )
+
+        assert result_tools == []
         assert web_search_options is None
 
     def test_transform_custom_tools_to_function_tools(self):
@@ -5033,3 +5158,17 @@ def test_transform_chat_completion_response_incomplete_details():
     assert result_existing.status == "incomplete"
     assert result_existing.incomplete_details == existing_details
 
+
+@pytest.mark.parametrize("stream", [True, False])
+async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.aresponses(
+            model="anthropic/claude-haiku-4-5",
+            input="Which fruit is red?",
+            tools=[{"type": "function", "name": "lookup_fruit", "parameters": {"type": "object"}}],
+            tool_choice={"type": "file_search"},
+            stream=stream,
+            api_key="sk-unused",
+        )
+    assert exc_info.value.status_code == 400
+    assert "tool_choice={'type': 'file_search'}" in str(exc_info.value)

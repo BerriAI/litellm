@@ -1,33 +1,62 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
 class HttpSettings:
-    ssl_verify: bool | str
-    ssl_certificate: str | None
-    ssl_security_level: str | None
-    ssl_ecdh_curve: str | None
-    force_ipv4: bool
-    http2: bool
-    aiohttp_trust_env: bool
-    disable_aiohttp_trust_env: bool
-    disable_aiohttp_transport: bool
+    ssl_verify: object
+    ssl_certificate: object
+    ssl_security_level: object
+    ssl_ecdh_curve: object
+    force_ipv4: object
+    http2: object
+    aiohttp_trust_env: object
+    disable_aiohttp_trust_env: object
+    disable_aiohttp_transport: object
     user_agent: str
 
 
 @dataclass(frozen=True, slots=True)
 class UrlPolicy:
-    user_url_validation: bool
-    user_url_allowed_hosts: Sequence[str]
+    user_url_validation: object
+    user_url_allowed_hosts: object
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderDefaults:
+    vertex_project: object
+    vertex_location: object
+    enable_azure_ad_token_refresh: object
+
+
+@dataclass(frozen=True, slots=True)
+class SecretManager:
+    readable: bool
 
 
 def warn(message: str) -> None:
     from litellm._logging import verbose_logger
 
     verbose_logger.warning("%s", message)
+
+
+def secret_manager() -> SecretManager:
+    from litellm.secret_managers.main import (
+        _should_read_secret_from_secret_manager,  # pyright: ignore[reportPrivateUsage]  # canonical resolver is private
+    )
+
+    return SecretManager(readable=_should_read_secret_from_secret_manager())
+
+
+def provider_defaults() -> ProviderDefaults:
+    import litellm
+
+    return ProviderDefaults(
+        vertex_project=litellm.vertex_project,
+        vertex_location=litellm.vertex_location,
+        enable_azure_ad_token_refresh=litellm.enable_azure_ad_token_refresh,
+    )
 
 
 def url_policy() -> UrlPolicy:
