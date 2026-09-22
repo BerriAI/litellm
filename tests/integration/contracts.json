@@ -238,6 +238,9 @@
     "tests/integration/providers/test_fal_ai_chat_wire.py::test_fal_moondream3_chat_rejects_non_string_reasoning_effort_before_the_wire": [
       "other.provider_wire.fal_ai.chat_non_string_reasoning_effort_rejected_before_wire"
     ],
+    "tests/integration/providers/test_bedrock_mantle_responses_wire.py::test_codex_agent_message_compaction_and_local_shell_items_are_rewritten_for_mantle": [
+      "providers.bedrock_mantle.codex_history_items_reach_the_wire_as_supported_input_items"
+    ],
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_flux_dev_generation_without_deployment_api_base_uses_global_api_base": [
       "other.provider_wire.fal_ai.global_api_base_routes_image_generation"
     ],
