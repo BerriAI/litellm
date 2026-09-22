@@ -522,7 +522,11 @@ def test_pre_call_rejection_row_attributes_provider_and_model_id(
         f"the second call on an rpm_limit=1 key must be rejected with 429 before routing, got {rejected}"
     )
 
-    rows = client.poll_logs_for_key(key, predicate=lambda rs: any(r.status == "failure" for r in rs))
+    rows = client.poll_logs_for_key(
+        key,
+        min_rows=2,
+        predicate=lambda rs: {r.status for r in rs} >= {"success", "failure"},
+    )
     success_row = _require_row(rows, lambda r: r.status == "success", "for the served call")
     failure_row = _require_row(rows, lambda r: r.status == "failure", "for the rate-limited call")
 
