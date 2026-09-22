@@ -893,7 +893,7 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
-from fastapi.routing import APIRoute, APIRouter
+from fastapi.routing import APIRouter
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
@@ -1962,15 +1962,12 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
         raise exc
     verbose_proxy_logger.exception("Unhandled exception in request: %s", type(exc).__name__)
     if should_report_bug(exc):
-        matched_route: Final = request.scope.get("route")
         verbose_proxy_logger.error(
             bug_report_notice(
                 build_bug_report(
                     exc,
                     surface="proxy",
-                    call_type=allowlisted(matched_route.path, KNOWN_PROXY_ROUTES)
-                    if isinstance(matched_route, APIRoute)
-                    else None,
+                    call_type=allowlisted(request.url.path, KNOWN_PROXY_ROUTES),
                 )
             )
         )
