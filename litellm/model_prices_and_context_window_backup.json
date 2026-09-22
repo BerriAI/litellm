@@ -65287,6 +65287,7 @@
         ],
         "supports_function_calling": true,
         "supports_native_streaming": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -65307,9 +65308,10 @@
         ],
         "supports_function_calling": true,
         "supports_native_streaming": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "coralbricks/glm-5.3-fp4": {
         "cache_creation_input_token_cost": 1.68e-06,
@@ -65327,6 +65329,7 @@
         ],
         "supports_function_calling": true,
         "supports_native_streaming": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
@@ -65347,6 +65350,7 @@
         ],
         "supports_function_calling": true,
         "supports_native_streaming": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false

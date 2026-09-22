@@ -604,6 +604,30 @@ class TestCoralBricksPricing:
             assert row["cache_creation_input_token_cost"] == self.CACHE_WRITE[model]
             assert row["mode"] == "chat"
 
+    def test_capability_flags_match_the_served_models(self):
+        """Vision and reasoning flags track what /v1/models reports.
+
+        DeepSeek V4.1 Flash shipped text-only and gained image input on
+        2026-09-21; the row said supports_vision: false until this was
+        checked against a live request.
+        """
+        prices_path = os.path.join(
+            workspace_path, "model_prices_and_context_window.json"
+        )
+        with open(prices_path) as fh:
+            prices = json.load(fh)
+        vision = {
+            "coralbricks/glm-5.3-fp4": False,
+            "coralbricks/glm-5.3-flash-fp4": True,
+            "coralbricks/deepseek-v4.1-flash-fast-fp4": True,
+            "coralbricks/gpt-oss-120b": False,
+        }
+        for model, expected in vision.items():
+            assert prices[model]["supports_vision"] is expected, model
+            # Every model CoralBricks serves reasons; on DeepSeek it is opt-in
+            # (reasoning_effort), on the others it is on by default.
+            assert prices[model]["supports_reasoning"] is True, model
+
     def test_completion_cost_with_free_cached_reads(self):
         """completion_cost prices cached input tokens at zero for coralbricks."""
         from litellm import ModelResponse, Usage, completion_cost
