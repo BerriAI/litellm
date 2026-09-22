@@ -22,7 +22,7 @@ class CacheFacade(Protocol):
     @property
     def semantic_cache_scope(self) -> str: ...
 
-    def get_cache_key(self, **kwargs: object) -> str: ...
+    def get_cache_key(self, **kwargs: object) -> str: ...  # kwargs-ok: mirrors the legacy cache facade contract
 
 
 class NativeCacheKey(TypedDict):
@@ -47,8 +47,10 @@ class NativeResponseCacheRuntime(Protocol):
 
     def lookup(self, request: NativeCacheRequest) -> object: ...
     def store(self, request: NativeCacheRequest, response: object) -> None: ...
+    def lookup_batch(self, requests: Sequence[NativeCacheRequest]) -> object: ...
     def async_lookup(self, request: NativeCacheRequest) -> Awaitable[object]: ...
     def async_store(self, request: NativeCacheRequest, response: object) -> Awaitable[None]: ...
+    def async_lookup_batch(self, requests: Sequence[NativeCacheRequest]) -> Awaitable[object]: ...
     def async_store_batch(
         self,
         requests: Sequence[NativeCacheRequest],
@@ -109,11 +111,17 @@ class ResponseCacheRuntime:
     def store(self, request: NativeCacheRequest, response: object) -> None:
         self.native.store(request, response)
 
+    def lookup_batch(self, requests: Sequence[NativeCacheRequest]) -> object:
+        return self.native.lookup_batch(requests)
+
     async def async_lookup(self, request: NativeCacheRequest) -> object:
         return await self.native.async_lookup(request)
 
     async def async_store(self, request: NativeCacheRequest, response: object) -> None:
         await self.native.async_store(request, response)
+
+    async def async_lookup_batch(self, requests: Sequence[NativeCacheRequest]) -> object:
+        return await self.native.async_lookup_batch(requests)
 
     async def async_store_batch(
         self,
@@ -124,6 +132,9 @@ class ResponseCacheRuntime:
 
     async def ping(self) -> object:
         return await self.native.ping()
+
+    async def async_flush(self) -> None:
+        await self.native.async_flush()
 
 
 def resolve_response_cache(

@@ -219,6 +219,18 @@ async def test_catalog_constructs_native_runtime_from_public_cache_configuration
     assert await runtime.async_lookup(async_request) == {"answer": 2}
     assert await facade.cache.async_get_cache("async") is None
 
+    requests: Final = (sync_request, async_request)
+    expected: Final = {
+        "values": [{"answer": 1}, {"answer": 2}],
+        "missing_indices": [],
+    }
+    assert runtime.lookup_batch(requests) == expected
+    assert await runtime.async_lookup_batch(requests) == expected
+
+    await runtime.async_flush()
+    assert runtime.lookup(sync_request) is None
+    assert await runtime.async_lookup(async_request) is None
+
 
 def test_existing_global_lifecycle_remains_the_resolver_source_of_truth() -> None:
     resolver: Final = _CacheTestResolver(litellm)
