@@ -88,6 +88,24 @@ pub(super) struct GcsCacheConfig {
     pub(super) path_service_account: Option<String>,
 }
 
+pub(super) struct AzureBlobCacheConfig {
+    pub(super) account_url: String,
+    pub(super) container: String,
+}
+
+#[allow(
+    dead_code,
+    reason = "embedding settings are projected so drift falls back to Python"
+)]
+pub(super) struct RedisSemanticCacheConfig {
+    pub(super) redis_url: String,
+    pub(super) index_name: String,
+    pub(super) similarity_threshold: f64,
+    pub(super) embedding_model: String,
+    pub(super) embedding_max_input_tokens: Option<u64>,
+    pub(super) embedding_timeout: Option<f64>,
+}
+
 struct RedisClientProjection<'py> {
     topology: RedisTopology,
     host: String,
@@ -107,11 +125,6 @@ pub(super) struct ValkeySemanticCacheConfig {
     pub(super) connection: RedisConnectionConfig,
 }
 
-pub(super) struct AzureBlobCacheConfig {
-    pub(super) account_url: String,
-    pub(super) container: String,
-}
-
 pub(super) enum CacheBackendConfig {
     Memory(MemoryCacheConfig),
     Redis(Box<RedisCacheConfig>),
@@ -120,6 +133,7 @@ pub(super) enum CacheBackendConfig {
     ValkeySemantic(Box<ValkeySemanticCacheConfig>),
     Disk(DiskCacheConfig),
     AzureBlob(AzureBlobCacheConfig),
+    RedisSemantic(Box<RedisSemanticCacheConfig>),
 }
 
 #[allow(dead_code, reason = "consumed by the cache activation follow-up")]
@@ -230,9 +244,15 @@ impl NativeCacheConfig {
                     backend: CacheBackendConfig::AzureBlob(backend),
                 }))
             }),
-            Some(CacheType::RedisSemantic | CacheType::QdrantSemantic) | None => Ok(
-                CacheConfigProjection::Unsupported(UnsupportedCacheConfig::Backend),
-            ),
+            Some(CacheType::RedisSemantic) => project_redis_semantic(&backend).map(|backend| {
+                CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::RedisSemantic(Box::new(backend)),
+                }))
+            }),
+            Some(CacheType::QdrantSemantic) | None => Ok(CacheConfigProjection::Unsupported(
+                UnsupportedCacheConfig::Backend,
+            )),
         }
     }
 
@@ -244,7 +264,8 @@ impl NativeCacheConfig {
             CacheBackendConfig::ValkeySemantic(_) => Some(Duration::ZERO),
             CacheBackendConfig::Disk(_)
             | CacheBackendConfig::AzureBlob(_)
-            | CacheBackendConfig::Gcs(_) => None,
+            | CacheBackendConfig::Gcs(_)
+            | CacheBackendConfig::RedisSemantic(_) => None,
         };
         if !matches!(self.backend, CacheBackendConfig::ValkeySemantic(_))
             && service.default_ttl() != default_ttl
@@ -343,6 +364,20 @@ impl NativeCacheConfig {
                 let facade = std::fs::canonicalize(&config.directory).ok();
                 (native != facade).then_some("facade and native backend directories must match")
             }
+            CacheBackendConfig::RedisSemantic(_) if service.kind() != "redis_semantic" => {
+                Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::RedisSemantic(config)
+                if service.index_name() != Some(config.index_name.as_str()) =>
+            {
+                Some("facade and native backend index names must match")
+            }
+            CacheBackendConfig::RedisSemantic(config)
+                if service.similarity_threshold() != Some(config.similarity_threshold as f32) =>
+            {
+                Some("facade and native backend similarity thresholds must match")
+            }
+            CacheBackendConfig::RedisSemantic(_) => None,
             CacheBackendConfig::AzureBlob(config) => match service.azure_blob_identity() {
                 None => Some("facade and native backend types must match"),
                 Some((account_url, container))
@@ -368,6 +403,27 @@ fn project_azure_blob(backend: &Bound<'_, PyAny>) -> PyResult<AzureBlobCacheConf
     Ok(AzureBlobCacheConfig {
         account_url: account_url.to_string(),
         container,
+    })
+}
+
+#[inline(never)]
+pub(super) fn project_redis_semantic(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<RedisSemanticCacheConfig> {
+    Ok(RedisSemanticCacheConfig {
+        redis_url: backend.getattr("_redis_url")?.extract::<String>()?,
+        index_name: backend
+            .getattr("_index_name")?
+            .extract::<Option<String>>()?
+            .unwrap_or_else(|| "litellm_semantic_cache_index".into()),
+        similarity_threshold: backend.getattr("similarity_threshold")?.extract::<f64>()?,
+        embedding_model: backend.getattr("embedding_model")?.extract::<String>()?,
+        embedding_max_input_tokens: backend
+            .getattr("embedding_max_input_tokens")?
+            .extract::<Option<u64>>()?,
+        embedding_timeout: backend
+            .getattr("embedding_timeout")?
+            .extract::<Option<f64>>()?,
     })
 }
 
