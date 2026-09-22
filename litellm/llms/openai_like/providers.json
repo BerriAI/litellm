@@ -200,5 +200,10 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "hefu": {
+    "base_url": "https://api.hefu.hk/v1",
+    "api_key_env": "HEFU_API_KEY",
+    "api_base_env": "HEFU_API_BASE"
   }
 }
