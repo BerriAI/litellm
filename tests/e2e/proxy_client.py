@@ -665,10 +665,7 @@ class ProxyClient:
         return model_id
 
     def register_models(self, bodies: Sequence[ModelNewBody]) -> tuple[str, ...]:
-        """`register_model` for a batch of proxy-wide deployments: every row is written
-        first, then each is awaited on the data plane, and one propagation wait covers
-        them all, so a suite registering many deployments pays the reload budget once.
-        A failure anywhere deletes every deployment the batch already created."""
+        """`register_model` for a batch, paying the propagation wait once; a failure deletes the whole batch."""
         results: Final = tuple(self._write_model(body) for body in bodies)
         written_at = time.monotonic()
         model_ids: Final = tuple(result.data.model_id for result in results if isinstance(result, Success))

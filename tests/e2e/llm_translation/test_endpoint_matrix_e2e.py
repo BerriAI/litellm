@@ -1,29 +1,10 @@
-"""One scenario per non-management inference endpoint, run over every catalog
-provider that serves it and every way the proxy can hold that provider's secret.
-
-A cell is (endpoint case, provider, auth mode). The case knows how to call the
-endpoint and what a meaningful answer looks like; the provider knows its backend
-model and credential fields; the auth mode decides whether the deployment carries
-`os.environ/` references, literal values, or a `litellm_credential_name`. The
-same scenario therefore hits `/v1/messages`, `/v1/responses`, `/chat/completions`
-and the rest identically, so a translation bug fixed on one endpoint but not
-another shows up as one red cell next to green ones.
-
-Every cell calls the proxy the way a customer does: the OpenAI SDK for the
-OpenAI-compatible surface and the Anthropic SDK for `/v1/messages`, each holding
-a fresh virtual key. OpenAI and Anthropic cells are edge-wired and replayable;
-every other provider runs live in every fixture mode. Streaming cases only assert
-grammar and content, never provider timing, so replay stays fast.
-
-The selected cells' deployments are registered as one batch before the first cell
-runs, so the module pays the data-plane reload budget once instead of once per
-cell; each cell still calls through its own fresh virtual key.
-"""
+"""Live e2e: one scenario per inference endpoint over every catalog provider and auth mode."""
 
 from __future__ import annotations
 
 import base64
 from collections.abc import Callable, Iterator, Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -41,6 +22,7 @@ from endpoint_matrix import (
     Streaming,
     credential_values,
     deployment_params,
+    missing_credentials,
     selected_auth_modes,
     selected_providers,
 )
@@ -291,8 +273,6 @@ def _param(cell: MatrixCell) -> ParameterSet:
 
 
 def _selected_cells(session: pytest.Session) -> tuple[MatrixCell, ...]:
-    """The cells pytest will actually run from this module, after -m / -k deselection,
-    so replay registers no deployment for a provider it holds no credential for."""
     return tuple(
         cell
         for item in session.items
@@ -314,12 +294,13 @@ def _deployment_body(key: DeploymentKey, provider: Provider, credential_name: st
     )
 
 
+def _registrable(cell: MatrixCell) -> bool:
+    return cell.auth_mode == "env_ref" or not missing_credentials(cell.provider)
+
+
 @pytest.fixture(scope="module")
 def deployments(request: pytest.FixtureRequest, proxy: ProxyClient) -> Iterator[Mapping[DeploymentKey, str]]:
-    """One deployment per (provider, endpoint, auth mode) among the selected cells, written
-    as a single batch, plus one stored credential per provider that any selected cell
-    references by name. Yields deployment key -> model alias; tears everything down."""
-    cells: Final = _selected_cells(request.session)
+    cells: Final = tuple(cell for cell in _selected_cells(request.session) if _registrable(cell))
     providers: Final[Mapping[LlmRoute, Provider]] = MappingProxyType(
         {cell.provider.route: cell.provider for cell in cells}
     )
@@ -329,25 +310,20 @@ def deployments(request: pytest.FixtureRequest, proxy: ProxyClient) -> Iterator[
     credentials: Final[Mapping[LlmRoute, str]] = MappingProxyType(
         {route: f"e2e-matrix-cred-{unique_marker()}" for route in stored}
     )
-    for route, name in credentials.items():
-        proxy.create_credential(
-            CredentialCreateBody(credential_name=name, credential_values=dict(credential_values(providers[route])))
-        )
-    try:
+    with ExitStack() as teardown:
+        for route, name in credentials.items():
+            proxy.create_credential(
+                CredentialCreateBody(credential_name=name, credential_values=dict(credential_values(providers[route])))
+            )
+            _ = teardown.callback(proxy.delete_credential, name)
         keys: Final = tuple(dict.fromkeys(cell.deployment for cell in cells))
         bodies: Final = tuple(
             _deployment_body(key, providers[key[0]], credentials[key[0]] if key[2] == "stored_credential" else None)
             for key in keys
         )
-        model_ids: Final = proxy.register_models(bodies)
-        try:
-            yield MappingProxyType(dict(zip(keys, (body.model_name for body in bodies), strict=True)))
-        finally:
-            for model_id in model_ids:
-                proxy.delete_model(model_id)
-    finally:
-        for name in credentials.values():
-            proxy.delete_credential(name)
+        for model_id in proxy.register_models(bodies):
+            _ = teardown.callback(proxy.delete_model, model_id)
+        yield MappingProxyType(dict(zip(keys, (body.model_name for body in bodies), strict=True)))
 
 
 class TestEndpointMatrix:
@@ -359,4 +335,9 @@ class TestEndpointMatrix:
         resources: ResourceManager,
         deployments: Mapping[DeploymentKey, str],
     ) -> None:
-        cell.case.run(sdk, resources.key(), deployments[cell.deployment])
+        model: Final = deployments.get(cell.deployment)
+        assert model is not None, (
+            f"{cell.provider.route} {cell.auth_mode} auth needs "
+            f"{', '.join(missing_credentials(cell.provider))} in the test environment"
+        )
+        cell.case.run(sdk, resources.key(), model)

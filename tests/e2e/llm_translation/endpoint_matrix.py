@@ -1,14 +1,4 @@
-"""Provider catalog behind test_endpoint_matrix_e2e.py.
-
-One `Provider` row per route the matrix drives. Adding a provider is adding a row
-here (its credential fields, its backend model per endpoint family, and the edge
-mount when the provider edge can record and replay it) plus the registry cells
-those combinations claim. The test module never names a provider.
-
-`E2E_MATRIX_PROVIDERS` and `E2E_MATRIX_AUTH_MODES` narrow the default of every
-catalog row and every auth mode; an unknown name fails collection instead of
-quietly selecting nothing.
-"""
+"""Provider catalog behind test_endpoint_matrix_e2e.py: one row per route, selectable by env var."""
 
 from __future__ import annotations
 
@@ -174,12 +164,12 @@ def _selection(variable: str, known: tuple[str, ...]) -> tuple[str, ...]:
     return chosen
 
 
+def missing_credentials(provider: Provider) -> tuple[str, ...]:
+    return tuple(env for env in provider.credential.values() if not os.environ.get(env))
+
+
 def credential_values(provider: Provider) -> Mapping[str, str]:
-    """The provider's real secrets as read from this process's environment, for the
-    auth modes that hand the proxy literal values instead of `os.environ/` references.
-    Missing variables fail by name rather than registering a deployment that will
-    fail later with a less specific provider error."""
-    missing: Final = tuple(env for env in provider.credential.values() if not os.environ.get(env))
+    missing: Final = missing_credentials(provider)
     if missing:
         raise RuntimeError(f"{provider.route} inline/stored auth needs {', '.join(missing)} in the test environment")
     return MappingProxyType({field: os.environ[env] for field, env in provider.credential.items()})

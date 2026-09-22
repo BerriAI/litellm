@@ -95,12 +95,17 @@ class ReplayMiss(AssertionError):
 _marker_ordinals: Final[dict[str, int]] = {}
 
 
+def marker_owner() -> str:
+    owner = registration_owner()
+    return current_test_key() if owner == SESSION_TEST_KEY else owner
+
+
 def deterministic_marker() -> str:
     """Stable stand-in for uuid-based unique markers in record and replay modes:
-    the Nth marker of a test is a pure function of the test's node id and N, so a
-    replay run regenerates exactly the model names, prompts, and tags the record
-    run sent and every recorded provider interaction still matches its key."""
-    test_key = current_test_key()
+    the Nth marker of a node is a pure function of its id and N, so a replay run
+    regenerates exactly the model names, prompts, and tags the record run sent and
+    every recorded provider interaction still matches its key."""
+    test_key = marker_owner()
     ordinal = _marker_ordinals.get(test_key, 0)
     _marker_ordinals[test_key] = ordinal + 1
     return hashlib.sha1(f"{test_key}#{ordinal}".encode()).hexdigest()[:12]

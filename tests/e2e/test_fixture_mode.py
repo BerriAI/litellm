@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -26,6 +27,13 @@ from fixture_mode import (
 )
 
 NOW = datetime(2026, 8, 18, 12, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(scope="module")
+def module_marker(request: pytest.FixtureRequest) -> tuple[str, str]:
+    node: Final = request.node  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # pytest: untyped
+    assert isinstance(node, pytest.Module)
+    return node.nodeid, deterministic_marker()
 
 
 def write_manifest(root: Path, recorded_at: datetime) -> None:
@@ -56,6 +64,13 @@ class TestDeterministicMarker:
         key = current_test_key()
         assert deterministic_marker() == hashlib.sha1(f"{key}#0".encode()).hexdigest()[:12]
         assert deterministic_marker() == hashlib.sha1(f"{key}#1".encode()).hexdigest()[:12]
+
+    def test_module_fixture_markers_belong_to_the_module_not_its_first_test(
+        self, module_marker: tuple[str, str]
+    ) -> None:
+        module_id, marker = module_marker
+        assert module_id != current_test_key()
+        assert marker == hashlib.sha1(f"{module_id}#0".encode()).hexdigest()[:12]
 
 
 class TestCurrentTestKey:
