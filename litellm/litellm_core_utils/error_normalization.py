@@ -60,8 +60,6 @@ class _HasProxyErrorType(Protocol):
 
 
 _MESSAGE_PATTERNS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
-    (re.compile(r"no fallback model group found", re.IGNORECASE), ROUTER_NO_FALLBACK),
-    (re.compile(r"error doing the fallback|MidStreamFallbackError", re.IGNORECASE), ROUTER_FALLBACK_FAILURE),
     (
         re.compile(r"budget has been exceeded|max budget|exceeded.*budget|crossed budget", re.IGNORECASE),
         BUDGET_EXCEEDED,
@@ -83,6 +81,11 @@ _MESSAGE_PATTERNS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
         PROVIDER_CONNECTION_ERROR,
     ),
     (re.compile(r"timed? ?out", re.IGNORECASE), UPSTREAM_TIMEOUT),
+)
+
+_ROUTER_WRAPPER_PATTERNS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
+    (re.compile(r"no fallback model group found", re.IGNORECASE), ROUTER_NO_FALLBACK),
+    (re.compile(r"error doing the fallback|MidStreamFallbackError", re.IGNORECASE), ROUTER_FALLBACK_FAILURE),
 )
 
 _PROXY_ERROR_TYPE_MAP: Final[Mapping[str, str]] = MappingProxyType(
@@ -150,8 +153,8 @@ _CLASS_CODE_TABLE: Final[tuple[tuple[tuple[type[BaseException], ...], str], ...]
 )
 
 
-def _classify_by_message(message: str) -> str | None:
-    return next((code for pattern, code in _MESSAGE_PATTERNS if pattern.search(message)), None)
+def _classify_by_message(message: str, patterns: tuple[tuple[re.Pattern[str], str], ...]) -> str | None:
+    return next((code for pattern, code in patterns if pattern.search(message)), None)
 
 
 def _classify_by_class(exc: Exception) -> str | None:
@@ -178,10 +181,13 @@ def normalize_error(exc: Exception | None, status_code: str, message: str) -> st
     by_proxy_type: Final = _PROXY_ERROR_TYPE_MAP.get(proxy_type) if isinstance(proxy_type, str) else None
     if by_proxy_type is not None:
         return by_proxy_type
-    by_message: Final = _classify_by_message(message)
+    by_message: Final = _classify_by_message(message, _MESSAGE_PATTERNS)
     if by_message is not None:
         return by_message
     by_class: Final = _classify_by_class(exc)
     if by_class is not None:
         return by_class
+    by_router_wrapper: Final = _classify_by_message(message, _ROUTER_WRAPPER_PATTERNS)
+    if by_router_wrapper is not None:
+        return by_router_wrapper
     return _STATUS_CODE_MAP.get(status_code, UNCLASSIFIED)

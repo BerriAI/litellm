@@ -169,6 +169,20 @@ def test_provider_budget_routing_wording_clusters_as_budget_exceeded() -> None:
     assert normalize_error(exc, "400", message) == "429_BUDGET_EXCEEDED"
 
 
+def test_router_fallback_wording_does_not_hide_the_wrapped_exception_class() -> None:
+    provider_message = "litellm.AuthenticationError: OpenAIException - Incorrect API key provided"
+    exc = litellm.AuthenticationError(
+        provider_message + "\nNo fallback model group found for lookup_groups=['x']",
+        llm_provider="openai",
+        model="gpt",
+    )
+    assert normalize_error(exc, "401", str(exc)) == "401_AUTHENTICATION_FAILED"
+    wrapped = litellm.AuthenticationError(
+        "Error doing the fallback: " + provider_message, llm_provider="openai", model="gpt"
+    )
+    assert normalize_error(wrapped, "401", str(wrapped)) == "401_AUTHENTICATION_FAILED"
+
+
 def test_parameter_length_error_is_not_a_context_window_error() -> None:
     exc = litellm.BadRequestError("string too long: 'user' max 64 chars", llm_provider="openai", model="gpt")
     assert StandardLoggingPayloadSetup.get_error_information(exc)["normalized_error"] == "400_INVALID_REQUEST"
