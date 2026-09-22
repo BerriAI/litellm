@@ -75,6 +75,8 @@ from litellm.constants import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from prisma.errors import DataError
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
@@ -892,36 +894,80 @@ async def test_get_user_object_upsert_sets_budget_reset_at(monkeypatch, has_budg
         assert "budget_reset_at" not in creation_args
 
 
-@pytest.mark.asyncio
-async def test_get_user_object_wraps_db_outage_as_valueerror_preserving_context():
-    """Pin get_user_object's exception contract: it catches every DB failure in a broad except and
-    re-raises a bare ValueError, so a real outage survives only as __context__ rather than as the
-    exception type. The MCP dcr_bridge admission and refresh paths depend on this to tell a transient
-    outage (retry, 503) from a missing user (fail closed), which is why they classify across the cause
-    chain instead of the top exception's type. If this wrapping ever changes, that classification must
-    change with it, so this test guards the contract the callers rely on."""
-    from unittest.mock import AsyncMock, MagicMock, patch
+def _user_read_raising(error: Exception) -> tuple[MagicMock, MagicMock]:
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=error)
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    return prisma_client, cache
 
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.db = AsyncMock()
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        side_effect=ConnectionError("can't reach database server")
-    )
-    mock_cache = MagicMock()
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outage",
+    [
+        httpx.ConnectError("All connection attempts failed"),
+        httpx.ReadTimeout("timed out"),
+        DataError(
+            data={
+                "user_facing_error": {
+                    "message": "Can't reach database server at `127.0.0.1:41071`",
+                    "error_code": "P1001",
+                }
+            }
+        ),
+    ],
+    ids=["connect_error", "read_timeout", "p1001_as_data_error"],
+)
+async def test_get_user_object_surfaces_a_db_outage_as_503_not_as_a_missing_user(outage):
+    from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
+
+    prisma_client, cache = _user_read_raising(outage)
 
     with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
-        with pytest.raises(ValueError, match="User doesn't exist in db\\.") as exc_info:
+        with pytest.raises(type(outage)) as raised:
             await get_user_object(
-                user_id="outage-contract-probe-user",
-                prisma_client=mock_prisma_client,
-                user_api_key_cache=mock_cache,
+                user_id="outage-probe-user",
+                prisma_client=prisma_client,
+                user_api_key_cache=cache,
                 user_id_upsert=False,
                 proxy_logging_obj=None,
             )
 
-    assert isinstance(exc_info.value.__context__, ConnectionError)
+    assert raised.value is outage
+    assert PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(raised.value) is outage
+    surfaced = _as_proxy_exception(raised.value)
+    assert (surfaced.code, surfaced.type) == ("503", ProxyErrorTypes.no_db_connection)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        DataError(data={"user_facing_error": {"message": "invalid byte sequence for encoding UTF8: 0x00"}}),
+        RuntimeError("row validation failed"),
+    ],
+    ids=["query_level_data_error", "runtime_error"],
+)
+async def test_get_user_object_still_reports_a_non_outage_read_failure_as_a_missing_user(failure):
+    from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
+
+    prisma_client, cache = _user_read_raising(failure)
+
+    with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
+        with pytest.raises(ValueError, match="User doesn't exist in db\\.") as raised:
+            await get_user_object(
+                user_id="data-error-probe-user",
+                prisma_client=prisma_client,
+                user_api_key_cache=cache,
+                user_id_upsert=False,
+                proxy_logging_obj=None,
+            )
+
+    assert raised.value.__context__ is failure
+    surfaced = _as_proxy_exception(raised.value)
+    assert (surfaced.code, surfaced.type) == ("401", ProxyErrorTypes.auth_error)
 
 
 @pytest.mark.asyncio

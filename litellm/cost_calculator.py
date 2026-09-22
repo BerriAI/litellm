@@ -323,12 +323,20 @@ class OCRPricing(TypedDict, total=False):
     annotation_cost_per_page: ReadOnly[float | None]
 
 
+_WALL_CLOCK_PRICED_MODES: Final = frozenset({"chat", "completion", "embedding", "responses"})
+
+
 def _has_token_or_tiered_pricing(model_info: ModelInfoBase) -> bool:
     return (
         (model_info.get("input_cost_per_token") or 0.0) > 0
         or (model_info.get("output_cost_per_token") or 0.0) > 0
         or model_info.get("tiered_pricing") is not None
     )
+
+
+def _bills_wall_clock_seconds(model_info: ModelInfoBase) -> bool:
+    mode: Final = model_info.get("mode")
+    return mode is None or mode in _WALL_CLOCK_PRICED_MODES
 
 
 def _per_second_pricing_cost(
@@ -340,7 +348,7 @@ def _per_second_pricing_cost(
         model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
         return None
-    if _has_token_or_tiered_pricing(model_info):
+    if _has_token_or_tiered_pricing(model_info) or not _bills_wall_clock_seconds(model_info):
         return None
     input_cost_per_second: Final = model_info.get("input_cost_per_second")
     output_cost_per_second: Final = model_info.get("output_cost_per_second")

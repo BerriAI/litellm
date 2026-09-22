@@ -39,8 +39,19 @@ pub(super) struct TiktokenCounter {
 
 impl TiktokenCounter {
     pub(super) fn from_ranks(split: SplitPattern, rank_file: &str) -> Result<Self, Error> {
+        Self::new(split, MergeRanks::parse(rank_file)?)
+    }
+
+    pub(super) fn from_pairs<'a>(
+        split: SplitPattern,
+        pairs: impl IntoIterator<Item = (&'a [u8], u32)>,
+    ) -> Result<Self, Error> {
+        Self::new(split, MergeRanks::from_pairs(pairs)?)
+    }
+
+    fn new(split: SplitPattern, ranks: MergeRanks) -> Result<Self, Error> {
         Ok(Self {
-            ranks: MergeRanks::parse(rank_file)?,
+            ranks,
             piece_len: split.piece_len(),
             unicode_classes: UnicodeClasses::get().ok_or(Error::UnicodeClasses)?,
         })

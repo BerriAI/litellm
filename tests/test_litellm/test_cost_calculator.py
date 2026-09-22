@@ -30,6 +30,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+from litellm.types.videos.main import VideoObject
 
 
 @pytest.fixture
@@ -3168,6 +3169,48 @@ def test_completion_cost_per_second_deployment_bills_the_call_duration(
     assert cost == pytest.approx((0.02 + 0.04) * expected_seconds)
 
 
+@pytest.mark.parametrize("mode", ["audio_transcription", "audio_speech", "video_generation", "realtime"])
+def test_cost_per_token_leaves_media_second_rates_to_their_dedicated_paths(monkeypatch, mode: str):
+    """
+    A media-mode entry's per-second rates price audio or video seconds, which the dedicated
+    transcription, speech, video, and realtime paths bill from the media itself, so a call that
+    reaches the generic path with only a wall-clock duration must not bill them.
+    """
+    model = f"test-media-per-second-{mode}"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_second": 0.02, "output_cost_per_second": 0.4, "litellm_provider": "openai", "mode": mode},
+    )
+
+    assert cost_per_token(model=model, custom_llm_provider="openai", response_time_ms=2000.0) == (0.0, 0.0)
+
+
+def test_completion_cost_video_status_poll_bills_nothing_on_a_per_second_video_model(monkeypatch):
+    """
+    Polling a video job returns a ``VideoObject`` with no stamped duration, so the cost path falls
+    back to the logging object's call window; on a video model priced per output second that
+    window must not be billed, or every status poll would charge for the seconds it took to answer.
+    """
+    model = "test-veo-per-second-poll"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"output_cost_per_second": 0.4, "litellm_provider": "vertex_ai", "mode": "video_generation"},
+    )
+    video = VideoObject(id="video_1", object="video", status="completed", model=model, progress=100)
+
+    cost = completion_cost(
+        completion_response=video,
+        model=model,
+        custom_llm_provider="vertex_ai",
+        call_type=CallTypes.video_retrieve.value,
+        litellm_logging_obj=_logging_obj_with_call_window(2000.0),
+    )
+
+    assert cost == 0.0
+
+
 def _batch_cache_usage() -> Usage:
     return Usage(
         prompt_tokens=11000,
@@ -3670,6 +3713,45 @@ def test_completion_cost_mantle_native_messages_prices_haiku_from_the_mantle_row
             model=model,
             custom_llm_provider="bedrock_mantle",
         ) == pytest.approx(expected), model
+
+
+def test_completion_cost_legacy_mantle_route_prices_after_router_registration(local_model_cost_map):
+    """The proxy registers every deployment under its provider-prefixed key at boot. A
+    bedrock/mantle/<model> deployment must resolve to the bare Bedrock row there, otherwise the boot
+    entry is a cost-less capability rule that shadows the priced row and every call on the deployment,
+    /v1/chat/completions and /v1/messages alike, bills $0."""
+    from litellm import Router
+
+    Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-5",
+                "litellm_params": {
+                    "model": "bedrock/mantle/anthropic.claude-sonnet-5",
+                    "aws_region_name": "us-east-1",
+                },
+            }
+        ]
+    )
+    assert "bedrock/mantle/anthropic.claude-sonnet-5" not in litellm.model_cost
+
+    response = litellm.ModelResponse(
+        id="msg_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="claude-sonnet-5",
+        usage={"prompt_tokens": 16, "completion_tokens": 4, "total_tokens": 20},
+    )
+    row = litellm.model_cost["anthropic.claude-sonnet-5"]
+    expected = 16 * row["input_cost_per_token"] + 4 * row["output_cost_per_token"]
+    assert expected > 0
+
+    for call_type in ("completion", "anthropic_messages"):
+        assert litellm.completion_cost(
+            completion_response=response,
+            model="mantle/anthropic.claude-sonnet-5",
+            custom_llm_provider="bedrock",
+            call_type=call_type,
+        ) == pytest.approx(expected), call_type
 
 
 def test_select_model_name_keeps_base_model_free_of_region(_local_model_cost_map):

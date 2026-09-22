@@ -182,22 +182,22 @@ from litellm.utils import (
 def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
 ) -> bool:
-    from litellm.rust_bridge.catalog import Context, Delivery, Route, decision
+    from litellm.rust_bridge.catalog import Delivery, Route, RouteContext, decision
     from litellm.rust_bridge.configuration import Decision
 
-    context: Final = Context(Route.RESPONSES, provider=custom_llm_provider, delivery=Delivery.WEBSOCKET)
+    context: Final = RouteContext(Route.RESPONSES, provider=custom_llm_provider, delivery=Delivery.WEBSOCKET)
     return decision(context) is not Decision.PYTHON
 
 
 from .http_handler import get_shared_realtime_ssl_context
 
 if TYPE_CHECKING:
-    import tiktoken
     from aiohttp import ClientSession
     from websockets.asyncio.client import ClientConnection
 
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
         FakeAnthropicMessagesStreamIterator,
     )
@@ -493,7 +493,7 @@ class BaseLLMHTTPHandler:
         messages: list,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         client: AsyncHTTPHandler | None = None,
         json_mode: bool = False,
@@ -559,7 +559,7 @@ class BaseLLMHTTPHandler:
         api_base: str | None,
         custom_llm_provider: str,
         model_response: ModelResponse,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         timeout: float | httpx.Timeout,
