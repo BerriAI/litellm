@@ -14,7 +14,9 @@ from litellm.proxy.hooks.responses_id_security import (
     _is_responses_api_create_route,
 )
 from litellm.types.llms.openai import (
+    GenericEvent,
     ResponseCompletedEvent,
+    ResponseCreatedEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
@@ -691,6 +693,126 @@ class TestAsyncPostCallStreamingIteratorHook:
         assert not responses_id_security._is_encrypted_response_id(streamed_id)
 
 
+class TestStreamedGenericEventIdEncryption:
+    """A background stream carries event types with no typed model, which arrive as
+    GenericEvent holding a plain dict. Those used to skip encryption while their typed
+    siblings were encrypted, so one stream advertised two ids and the unencrypted one
+    skipped the ownership check. Asserts the property rather than one event type: every
+    id a client can see is the same encrypted id, and the raw one appears in no frame."""
+
+    RAW_ID = "resp_rawprovider123"
+
+    @staticmethod
+    async def _agen(chunks):
+        for chunk in chunks:
+            yield chunk
+
+    @classmethod
+    def _typed_event(cls, event_type):
+        return {
+            ResponsesAPIStreamEvents.RESPONSE_CREATED: ResponseCreatedEvent,
+            ResponsesAPIStreamEvents.RESPONSE_COMPLETED: ResponseCompletedEvent,
+        }[event_type](
+            type=event_type,
+            response=ResponsesAPIResponse(
+                id=cls.RAW_ID,
+                created_at=0,
+                model="gpt-5.1",
+                object="response",
+                output=[],
+                parallel_tool_calls=False,
+                tool_choice="auto",
+                tools=[],
+            ),
+        )
+
+    @classmethod
+    def _background_stream(cls):
+        return [
+            cls._typed_event(ResponsesAPIStreamEvents.RESPONSE_CREATED),
+            GenericEvent(
+                type="response.queued",
+                response={"id": cls.RAW_ID, "status": "queued"},
+            ),
+            GenericEvent(type="keepalive"),
+            GenericEvent(
+                type="response.some_event_openai_adds_later",
+                response={"id": cls.RAW_ID, "status": "in_progress"},
+            ),
+            cls._typed_event(ResponsesAPIStreamEvents.RESPONSE_COMPLETED),
+        ]
+
+    @staticmethod
+    def _advertised_ids(events):
+        nested = (getattr(event, "response", None) for event in events)
+        return [
+            payload["id"] if isinstance(payload, dict) else payload.id
+            for payload in nested
+            if payload is not None
+        ] + [
+            event.id for event in events if isinstance(getattr(event, "id", None), str)
+        ]
+
+    async def _drain(self, responses_id_security, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-abcdefghij")
+
+        mock_auth = MagicMock()
+        mock_auth.user_id = "user-a"
+        mock_auth.team_id = "team-a"
+        mock_auth.request_route = "/v1/responses"
+
+        return [
+            out
+            async for out in responses_id_security.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=mock_auth,
+                response=self._agen(self._background_stream()),
+                request_data={},
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_every_event_advertises_the_same_encrypted_id(
+        self, responses_id_security, monkeypatch
+    ):
+        events = await self._drain(responses_id_security, monkeypatch)
+        advertised = self._advertised_ids(events)
+
+        assert len(advertised) == 4
+        assert len(set(advertised)) == 1
+
+        streamed_id = advertised[0]
+        assert streamed_id != self.RAW_ID
+        assert responses_id_security._is_encrypted_response_id(streamed_id)
+        assert responses_id_security._decrypt_response_id(streamed_id) == (
+            self.RAW_ID,
+            "user-a",
+            "team-a",
+        )
+
+    @pytest.mark.asyncio
+    async def test_raw_provider_id_never_reaches_the_client(
+        self, responses_id_security, monkeypatch
+    ):
+        events = await self._drain(responses_id_security, monkeypatch)
+
+        assert [self.RAW_ID in event.model_dump_json() for event in events] == [
+            False
+        ] * len(events)
+
+    @pytest.mark.asyncio
+    async def test_sibling_fields_survive_the_rewrite(
+        self, responses_id_security, monkeypatch
+    ):
+        _, queued, keepalive, later, _ = await self._drain(
+            responses_id_security, monkeypatch
+        )
+
+        assert queued.response["status"] == "queued"
+        assert later.response["status"] == "in_progress"
+        assert keepalive.type == "keepalive"
+        assert getattr(keepalive, "response", None) is None
+
+
 class TestAsyncPostCallSuccessHook:
     """Test async_post_call_success_hook function"""
 
@@ -733,3 +855,242 @@ class TestAsyncPostCallSuccessHook:
         )
 
         assert result == mock_response
+
+
+
+_FABRICATED_PROVIDER_RESPONSE_ID = "resp_fabricatedprovideridaaaaaaaaaaaaaaaa"
+_FABRICATED_UNMANAGED_ID = "resp_fabricatedunmanagedidbbbbbbbbbbbbbbbb"
+_UNIT_TEST_SALT_KEY = "lit6837-unit-test-salt-key"
+_ADDRESSED_ID_FIELD_BY_CALL_TYPE = {
+    "aresponses": "previous_response_id",
+    "aget_responses": "response_id",
+    "adelete_responses": "response_id",
+    "acancel_responses": "response_id",
+    "alist_input_items": "response_id",
+}
+
+
+@pytest.fixture
+def salt_key_env(monkeypatch):
+    """Give the encrypt/decrypt helpers a real salt key so ids round-trip for real."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", _UNIT_TEST_SALT_KEY)
+    return _UNIT_TEST_SALT_KEY
+
+
+def _hook(general_settings=None, signing_key=_UNIT_TEST_SALT_KEY):
+    settings = general_settings if general_settings is not None else {}
+    return ResponsesIDSecurity(
+        general_settings_reader=lambda: settings,
+        signing_key_reader=lambda: signing_key,
+    )
+
+
+def _auth(user_id="owner-user", team_id="owner-team", user_role=None):
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    return UserAPIKeyAuth(user_id=user_id, team_id=team_id, user_role=user_role)
+
+
+def _issue_managed_id(hook, owner, provider_response_id=_FABRICATED_PROVIDER_RESPONSE_ID):
+    """Mint an id exactly the way the proxy hands one to a client on create."""
+    issued = hook._encrypt_response_id(
+        ResponsesAPIResponse(
+            id=provider_response_id, created_at=1234567890, output=[], status="completed"
+        ),
+        owner,
+    )
+    return issued.id
+
+
+class TestUnrecognizedResponseIdIsRejected:
+    """An id this proxy never issued carries no owner, so it must not reach the provider."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call_type", sorted(_ADDRESSED_ID_FIELD_BY_CALL_TYPE))
+    async def test_unmanaged_id_is_rejected_and_not_forwarded(self, mock_cache, salt_key_env, call_type):
+        field = _ADDRESSED_ID_FIELD_BY_CALL_TYPE[call_type]
+        data = {field: _FABRICATED_UNMANAGED_ID}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _hook().async_pre_call_hook(
+                user_api_key_dict=_auth(),
+                cache=mock_cache,
+                data=data,
+                call_type=call_type,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "allow_unmanaged_response_ids" in exc_info.value.detail
+        assert data[field] == _FABRICATED_UNMANAGED_ID
+
+    @pytest.mark.asyncio
+    async def test_owner_can_still_address_the_id_the_proxy_issued_it(self, mock_cache, salt_key_env):
+        hook = _hook()
+        owner = _auth()
+        data = {"response_id": _issue_managed_id(hook, owner)}
+
+        result = await hook.async_pre_call_hook(
+            user_api_key_dict=owner,
+            cache=mock_cache,
+            data=data,
+            call_type="aget_responses",
+        )
+
+        assert result["response_id"] == _FABRICATED_PROVIDER_RESPONSE_ID
+
+    @pytest.mark.asyncio
+    async def test_stranger_cannot_address_an_id_issued_to_someone_else(self, mock_cache, salt_key_env):
+        hook = _hook()
+        issued_id = _issue_managed_id(hook, _auth())
+        data = {"response_id": issued_id}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await hook.async_pre_call_hook(
+                user_api_key_dict=_auth(user_id="stranger-user", team_id="stranger-team"),
+                cache=mock_cache,
+                data=data,
+                call_type="aget_responses",
+            )
+
+        assert exc_info.value.status_code == 403
+        assert data["response_id"] == issued_id
+
+    @pytest.mark.asyncio
+    async def test_unmanaged_previous_response_id_cannot_seed_a_new_response(self, mock_cache, salt_key_env):
+        data = {"model": "gpt-fake", "previous_response_id": _FABRICATED_UNMANAGED_ID}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _hook().async_pre_call_hook(
+                user_api_key_dict=_auth(),
+                cache=mock_cache,
+                data=data,
+                call_type="aresponses",
+            )
+
+        assert exc_info.value.status_code == 403
+        assert data["previous_response_id"] == _FABRICATED_UNMANAGED_ID
+
+    @pytest.mark.asyncio
+    async def test_re_entering_the_hook_on_the_same_request_does_not_reject(self, mock_cache, salt_key_env):
+        """The rate-limit fallback retry runs pre-call twice over one already-rewritten dict."""
+        hook = _hook()
+        owner = _auth()
+        data = {"model": "gpt-fake", "previous_response_id": _issue_managed_id(hook, owner)}
+
+        first = await hook.async_pre_call_hook(
+            user_api_key_dict=owner, cache=mock_cache, data=data, call_type="aresponses"
+        )
+        second = await hook.async_pre_call_hook(
+            user_api_key_dict=owner, cache=mock_cache, data=first, call_type="aresponses"
+        )
+
+        assert second["previous_response_id"] == _FABRICATED_PROVIDER_RESPONSE_ID
+
+
+class TestUnmanagedResponseIdEscapeHatches:
+    """Deployments that pass provider ids through on purpose must keep working."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "general_settings",
+        [{"allow_unmanaged_response_ids": True}, {"disable_responses_id_security": True}],
+    )
+    async def test_opted_in_settings_forward_the_id_untouched(self, mock_cache, salt_key_env, general_settings):
+        data = {"response_id": _FABRICATED_UNMANAGED_ID}
+
+        result = await _hook(general_settings=general_settings).async_pre_call_hook(
+            user_api_key_dict=_auth(),
+            cache=mock_cache,
+            data=data,
+            call_type="aget_responses",
+        )
+
+        assert result["response_id"] == _FABRICATED_UNMANAGED_ID
+
+    @pytest.mark.asyncio
+    async def test_proxy_without_a_signing_key_forwards_the_id_untouched(self, mock_cache, monkeypatch):
+        monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+        data = {"response_id": _FABRICATED_UNMANAGED_ID}
+
+        result = await _hook(signing_key=None).async_pre_call_hook(
+            user_api_key_dict=_auth(),
+            cache=mock_cache,
+            data=data,
+            call_type="aget_responses",
+        )
+
+        assert result["response_id"] == _FABRICATED_UNMANAGED_ID
+
+    @pytest.mark.asyncio
+    async def test_proxy_admin_may_address_an_unmanaged_id(self, mock_cache, salt_key_env):
+        from litellm.proxy._types import LitellmUserRoles
+
+        data = {"response_id": _FABRICATED_UNMANAGED_ID}
+
+        result = await _hook().async_pre_call_hook(
+            user_api_key_dict=_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            cache=mock_cache,
+            data=data,
+            call_type="aget_responses",
+        )
+
+        assert result["response_id"] == _FABRICATED_UNMANAGED_ID
+
+
+class TestClientSuppliedRetainedIdCannotBypassAuthorization:
+    """The retained-id key travels in the request body, so it is re-authorized, never trusted."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call_type", sorted(_ADDRESSED_ID_FIELD_BY_CALL_TYPE))
+    async def test_forged_retained_id_is_still_authorized(self, mock_cache, salt_key_env, call_type):
+        field = _ADDRESSED_ID_FIELD_BY_CALL_TYPE[call_type]
+        data = {
+            field: _FABRICATED_UNMANAGED_ID,
+            "_litellm_addressed_response_id": _FABRICATED_UNMANAGED_ID,
+        }
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _hook().async_pre_call_hook(
+                user_api_key_dict=_auth(),
+                cache=mock_cache,
+                data=data,
+                call_type=call_type,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert data[field] == _FABRICATED_UNMANAGED_ID
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("forged", [{"nested": "value"}, ["list"], 42, "", None])
+    async def test_non_string_retained_id_falls_back_to_the_addressed_field(self, mock_cache, salt_key_env, forged):
+        data = {"response_id": _FABRICATED_UNMANAGED_ID, "_litellm_addressed_response_id": forged}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _hook().async_pre_call_hook(
+                user_api_key_dict=_auth(),
+                cache=mock_cache,
+                data=data,
+                call_type="aget_responses",
+            )
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_stranger_forging_their_own_id_never_reaches_someone_elses_response(
+        self, mock_cache, salt_key_env
+    ):
+        hook = _hook()
+        stranger = _auth(user_id="stranger-user", team_id="stranger-team")
+        stranger_id = _issue_managed_id(hook, stranger, provider_response_id="resp_strangerownprovideridcccccccc")
+        victim_provider_id = "resp_victimprovideriddddddddddddddddddddd"
+        data = {"response_id": victim_provider_id, "_litellm_addressed_response_id": stranger_id}
+
+        result = await hook.async_pre_call_hook(
+            user_api_key_dict=stranger,
+            cache=mock_cache,
+            data=data,
+            call_type="aget_responses",
+        )
+
+        assert result["response_id"] == "resp_strangerownprovideridcccccccc"
+        assert result["response_id"] != victim_provider_id

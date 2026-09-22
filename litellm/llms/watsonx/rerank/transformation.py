@@ -5,8 +5,8 @@ Docs - https://cloud.ibm.com/apidocs/watsonx-ai#text-rerank
 """
 
 import uuid
-from collections.abc import Mapping
-from typing import Any, Final, cast
+from collections.abc import Mapping, Sequence
+from typing import Final, cast
 
 import httpx
 
@@ -96,7 +96,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: Sequence[str | Mapping[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
@@ -178,7 +178,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         transformed_results: Final = []
 
         for result in _results:
-            transformed_result: dict[str, Any] = {
+            transformed_result: dict[str, object] = {
                 "index": result["index"],
                 "relevance_score": result["score"],
             }
@@ -191,7 +191,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
 
             transformed_results.append(transformed_result)
 
-        response_id: Final = raw_response_json.get("id") or raw_response_json.get("model_id") or str(uuid.uuid4())
+        response_id: Final = raw_response_json.get("id") or str(uuid.uuid4())
 
         # Extract usage information
         _tokens: Final = RerankTokens(

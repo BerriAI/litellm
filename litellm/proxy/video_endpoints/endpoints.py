@@ -1,6 +1,6 @@
 #### Video Endpoints #####
 
-from typing import Any, Final
+from typing import Final
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
@@ -89,7 +89,7 @@ async def video_generation(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        generated: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -114,6 +114,8 @@ async def video_generation(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return generated
 
 
 @router.get(
@@ -161,7 +163,7 @@ async def video_list(
 
     # Read query parameters
     query_params: Final = dict(request.query_params)
-    data: Final[dict[str, Any]] = {"query_params": query_params}
+    data: Final[dict[str, object]] = {"query_params": query_params}
 
     # Extract custom_llm_provider from headers, query params, or body
     custom_llm_provider: Final = (
@@ -174,7 +176,7 @@ async def video_list(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        listed: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -199,6 +201,8 @@ async def video_list(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return listed
 
 
 @router.get(
@@ -246,7 +250,7 @@ async def video_status(
     )
 
     # Create data with video_id
-    data: Final[dict[str, Any]] = {"video_id": video_id}
+    data: Final[dict[str, object]] = {"video_id": video_id}
 
     decoded: Final = decode_video_id_with_provider(video_id)
     provider_from_id: Final = decoded.get("custom_llm_provider")
@@ -272,7 +276,7 @@ async def video_status(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        status: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -297,6 +301,8 @@ async def video_status(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return status
 
 
 @router.get(
@@ -345,7 +351,7 @@ async def video_content(
     )
 
     # Create data with video_id
-    data: Final[dict[str, Any]] = {"video_id": video_id}
+    data: Final[dict[str, object]] = {"video_id": video_id}
 
     decoded: Final = decode_video_id_with_provider(video_id)
     provider_from_id: Final = decoded.get("custom_llm_provider")
@@ -478,7 +484,7 @@ async def video_remix(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        remixed: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -503,6 +509,8 @@ async def video_remix(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return remixed
 
 
 @router.post(
@@ -571,7 +579,7 @@ async def video_create_character(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -653,7 +661,7 @@ async def video_get_character(
     )
 
     original_requested_character_id: Final = character_id
-    data: Final[dict[str, Any]] = {"character_id": character_id}
+    data: Final[dict[str, object]] = {"character_id": character_id}
 
     decoded: Final = decode_character_id_with_provider(character_id)
     provider_from_id: Final = decoded.get("custom_llm_provider")
@@ -678,7 +686,7 @@ async def video_get_character(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -789,7 +797,7 @@ async def video_edit(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        edited: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -814,6 +822,8 @@ async def video_edit(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return edited
 
 
 @router.post(
@@ -884,7 +894,7 @@ async def video_extension(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        extended: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -909,3 +919,5 @@ async def video_extension(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return extended

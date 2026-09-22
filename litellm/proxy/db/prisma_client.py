@@ -13,9 +13,10 @@ import urllib
 import urllib.parse
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.db.db_url_settings import add_missing_query_params, token_refresh_params_from_url
 from litellm.proxy.db.token_auth import (
     DEFAULT_POSTGRES_PORT,
     DatabaseTokenAuth,
@@ -26,6 +27,9 @@ from litellm.proxy.db.token_auth import (
     parse_iam_endpoint_from_url,
 )
 from litellm.secret_managers.main import str_to_bool
+
+if TYPE_CHECKING:
+    from prisma import Prisma
 
 __all__ = (
     "IAMEndpoint",
@@ -242,7 +246,7 @@ class PrismaWrapper:
     def _write_engine(prisma_client: _PrismaClient, engine: _PrismaEngine) -> None:
         prisma_client._Prisma__engine = engine
 
-    def _instrument_prisma_client(self, prisma_client: _PrismaClient) -> _PrismaDrainTracker | None:
+    def _instrument_prisma_client(self, prisma_client: "Prisma | _PrismaClient") -> _PrismaDrainTracker | None:
         from prisma.errors import ClientNotConnectedError
 
         try:
@@ -255,7 +259,7 @@ class PrismaWrapper:
         self._write_engine(prisma_client, _TrackedPrismaEngine(engine, tracker))
         return tracker
 
-    def _get_engine_pid(self, prisma_client: _PrismaClient | None = None) -> int:
+    def _get_engine_pid(self, prisma_client: "Prisma | _PrismaClient | None" = None) -> int:
         """Get the PID of the current Prisma engine subprocess, or 0 if unavailable.
 
         Must never raise: it runs inside the reconnect path, where the client
@@ -438,7 +442,10 @@ class PrismaWrapper:
             return None
 
         endpoint: Final = self._iam_endpoint if self._iam_endpoint is not None else self._endpoint_from_env()
-        db_url: Final = endpoint.build_url(mint_database_token(auth, endpoint))
+        db_url: Final = add_missing_query_params(
+            endpoint.build_url(mint_database_token(auth, endpoint)),
+            token_refresh_params_from_url(os.environ.get(self._db_url_env_var, "")),
+        )
         os.environ[self._db_url_env_var] = db_url
         return db_url
 
@@ -503,7 +510,7 @@ class PrismaWrapper:
     async def recreate_prisma_client(
         self,
         new_db_url: str,
-        http_client: Any | None = None,
+        http_client: object | None = None,
         *,
         expected_generation: int | None = None,
     ) -> bool:
@@ -541,7 +548,7 @@ class PrismaWrapper:
     async def _recreate_prisma_client_locked(
         self,
         new_db_url: str,
-        http_client: Any | None = None,
+        http_client: object | None = None,
         *,
         expected_generation: int | None = None,
     ) -> bool:
@@ -937,9 +944,17 @@ class PrismaManager:
                         use_v2_resolver=use_v2_resolver,
                     )
                 else:
+                    try:
+                        from litellm_proxy_extras.prisma_toolchain import (
+                            prisma_command_timeout,
+                            run_prisma,
+                        )
+                    except ImportError as e:
+                        verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
+                        return False
+
                     PrismaManager._raise_if_partitioned_spend_logs()
-                    # Use prisma db push with increased timeout
-                    subprocess.run(
+                    run_prisma(
                         [
                             "prisma",
                             "db",
@@ -947,13 +962,15 @@ class PrismaManager:
                             "--accept-data-loss",
                             "--skip-generate",
                         ],
-                        timeout=60,
-                        check=True,
+                        timeout=prisma_command_timeout(),
+                        env=os.environ.copy(),
+                        stdout=None,
+                        stderr=None,
                     )
                     PrismaManager._apply_replica_identity_full_if_requested()
                     return True
-            except subprocess.TimeoutExpired:
-                verbose_proxy_logger.warning("Attempt %s timed out", attempt + 1)
+            except subprocess.TimeoutExpired as e:
+                verbose_proxy_logger.warning("Attempt %s timed out after %.0fs", attempt + 1, e.timeout)
                 time.sleep(random.randrange(5, 15))
             except subprocess.CalledProcessError as e:
                 attempts_left = 3 - attempt

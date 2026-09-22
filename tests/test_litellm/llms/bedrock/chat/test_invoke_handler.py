@@ -324,18 +324,18 @@ CONVERSE_METADATA_EVENT = {
 }
 
 
-def _converse_stream_wrapper(events):
+def _converse_stream_wrapper(events, model=CONVERSE_MODEL):
     async def bedrock_stream():
-        decoder = AWSEventStreamDecoder(model=CONVERSE_MODEL)
+        decoder = AWSEventStreamDecoder(model=model)
         for event in events:
             yield decoder._chunk_parser(chunk_data=event)
 
     return CustomStreamWrapper(
         completion_stream=bedrock_stream(),
-        model=CONVERSE_MODEL,
+        model=model,
         custom_llm_provider="bedrock",
         logging_obj=LiteLLMLoggingObj(
-            model=CONVERSE_MODEL,
+            model=model,
             messages=[{"role": "user", "content": "hi"}],
             stream=True,
             call_type="completion",
@@ -428,6 +428,46 @@ async def test_converse_stream_ends_on_finish_reason_chunk(events, expected_fini
 
 
 @pytest.mark.asyncio
+async def test_nova_invoke_stream_reports_bedrock_usage_and_finish_reason():
+    """InvokeModel Nova wraps every Converse event under its event-type key and reports usage
+    without ``totalTokens``; the stream must end on Bedrock's finish reason and surface the
+    cached tokens instead of a token-count estimate."""
+    events = (
+        {"messageStart": {"role": "assistant"}},
+        {"contentBlockDelta": {"delta": {"text": "OK"}, "contentBlockIndex": 0}},
+        {"contentBlockDelta": {"delta": {"text": "."}, "contentBlockIndex": 0}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        {"messageStop": {"stopReason": "end_turn"}},
+        {
+            "metadata": {
+                "usage": {
+                    "inputTokens": 5,
+                    "outputTokens": 3,
+                    "cacheReadInputTokenCount": 12262,
+                    "cacheWriteInputTokenCount": 0,
+                },
+                "metrics": {},
+                "trace": {},
+            }
+        },
+    )
+    wrapper = _converse_stream_wrapper(events, model="bedrock/invoke/us.amazon.nova-pro-v1:0")
+
+    chunks = [chunk async for chunk in wrapper]
+
+    assert "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices) == "OK."
+    finish_reasons = [choice.finish_reason for chunk in chunks for choice in chunk.choices if choice.finish_reason]
+    assert finish_reasons == ["stop"]
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    usages = [chunk.usage for chunk in wrapper.chunks if getattr(chunk, "usage", None) is not None]
+    assert len(usages) == 1
+    assert usages[0].prompt_tokens == 12267
+    assert usages[0].prompt_tokens_details.cached_tokens == 12262
+    assert usages[0].completion_tokens == 3
+    assert usages[0].total_tokens == 12270
+
+
+@pytest.mark.asyncio
 async def test_converse_stream_still_emits_guardrail_trace_after_finish_reason():
     """Guardrail metadata events carry a trace payload alongside usage; that chunk must still reach the caller
     after the finish_reason chunk, as it did before the regression."""
@@ -496,3 +536,171 @@ async def test_async_invoke_streaming_forwards_bedrock_response_headers():
 
     assert stream._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-987"
 
+
+def _bedrock_stream_error_response(status_code: int, request_id: str) -> httpx.Response:
+    return httpx.Response(
+        status_code=status_code,
+        headers={
+            "x-amzn-RequestId": request_id,
+            "x-amzn-ErrorType": "InternalServerException",
+        },
+        text='{"message":"Amazon Bedrock is unable to process your request."}',
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+
+
+def test_invoke_streaming_error_forwards_bedrock_response_headers():
+    error_response = _bedrock_stream_error_response(500, "req-stream-err-1")
+    client = HTTPHandler()
+    client.post = MagicMock(
+        side_effect=httpx.HTTPStatusError(
+            "server error",
+            request=error_response.request,
+            response=error_response,
+        )
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        litellm.completion(
+            model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-stream-err-1"
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_streaming_error_forwards_bedrock_response_headers():
+    error_response = _bedrock_stream_error_response(500, "req-stream-err-2")
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError(
+            "server error",
+            request=error_response.request,
+            response=error_response,
+        )
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        await litellm.acompletion(
+            model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-stream-err-2"
+
+
+def _unread_bedrock_stream_error_response(status_code: int, request_id: str) -> httpx.Response:
+    return httpx.Response(
+        status_code=status_code,
+        headers={
+            "x-amzn-RequestId": request_id,
+            "x-amzn-ErrorType": "InternalServerException",
+        },
+        stream=httpx.ByteStream(b'{"message":"Amazon Bedrock is unable to process your request."}'),
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+
+
+def test_invoke_streaming_error_forwards_headers_when_body_was_never_read():
+    """A retried streamed request raises HTTPStatusError over a body nobody read, so
+    reading it for the error message throws and loses the request id (LIT-5428)."""
+    error_response = _unread_bedrock_stream_error_response(500, "req-unread-sync")
+    client = HTTPHandler()
+    client.post = MagicMock(
+        side_effect=httpx.HTTPStatusError(
+            "server error",
+            request=error_response.request,
+            response=error_response,
+        )
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        litellm.completion(
+            model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-unread-sync"
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_streaming_error_forwards_headers_when_body_was_never_read():
+    error_response = _unread_bedrock_stream_error_response(500, "req-unread-async")
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError(
+            "server error",
+            request=error_response.request,
+            response=error_response,
+        )
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        await litellm.acompletion(
+            model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-unread-async"
+
+
+def test_invoke_streaming_non_200_forwards_bedrock_response_headers():
+    """A caller-supplied client that returns a failure instead of raising still reaches the
+    provider's headers, and reading the streamed body for the message must not throw (LIT-5428)."""
+    error_response = _unread_bedrock_stream_error_response(500, "req-non200-sync")
+    client = HTTPHandler()
+    client.post = MagicMock(return_value=error_response)
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        litellm.completion(
+            model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-non200-sync"
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_streaming_non_200_forwards_bedrock_response_headers():
+    error_response = _unread_bedrock_stream_error_response(500, "req-non200-async")
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=error_response)
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        await litellm.acompletion(
+            model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-non200-async"

@@ -5,6 +5,7 @@ import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event"
 import { renderWithProviders } from "@/../tests/test-utils";
 import * as networking from "@/components/networking";
 import PolicyTestPanel from "./policy_test_panel";
+import { chooseSelectOption } from "../../../../../tests/test-utils";
 
 vi.mock("@/components/networking");
 
@@ -24,8 +25,7 @@ const setup = () => {
 };
 
 const pickOption = async (user: ReturnType<typeof userEvent.setup>, label: string, option: string) => {
-  await user.click(screen.getByLabelText(label));
-  await user.click(await screen.findByTitle(option));
+  await chooseSelectOption(user, screen.getByLabelText(label), option);
 };
 
 const simulate = async (user: ReturnType<typeof userEvent.setup>) => {

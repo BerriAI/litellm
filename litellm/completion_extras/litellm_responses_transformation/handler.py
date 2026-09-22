@@ -2,7 +2,7 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from collections.abc import Coroutine
+from collections.abc import AsyncIterable, Coroutine, Iterable
 from typing import TYPE_CHECKING, Any, Final, Union
 
 from typing_extensions import TypedDict
@@ -45,14 +45,14 @@ class ResponsesToCompletionBridgeHandler:
         return bool(stream)
 
     @staticmethod
-    def _is_preformatted_cached_chat_stream(result: Any) -> bool:
+    def _is_preformatted_cached_chat_stream(result: object) -> bool:
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
         return isinstance(result, CustomStreamWrapper) and result.custom_llm_provider == "cached_response"
 
     @staticmethod
     def _coerce_response_object(
-        response_obj: Any,
+        response_obj: object,
         hidden_params: dict | None,
     ) -> "ResponsesAPIResponse":
         if isinstance(response_obj, ResponsesAPIResponse):
@@ -74,12 +74,12 @@ class ResponsesToCompletionBridgeHandler:
                     existing.setdefault(key, value)
         return response
 
-    def _collect_response_from_stream(self, stream_iter: Any) -> "ResponsesAPIResponse":
+    def _collect_response_from_stream(self, stream_iter: Iterable[object]) -> "ResponsesAPIResponse":
         for _ in stream_iter:
             pass
 
-        completed: Final = getattr(stream_iter, "completed_response", None)
-        response_obj: Final = getattr(completed, "response", None) if completed else None
+        completed: Final[object] = getattr(stream_iter, "completed_response", None)
+        response_obj: Final[object] = getattr(completed, "response", None) if completed else None
         if response_obj is None:
             raise ValueError("Stream ended without a completed response")
 
@@ -89,12 +89,12 @@ class ResponsesToCompletionBridgeHandler:
             raise ValueError("Stream completed response is invalid")
         return response
 
-    async def _collect_response_from_stream_async(self, stream_iter: Any) -> "ResponsesAPIResponse":
+    async def _collect_response_from_stream_async(self, stream_iter: AsyncIterable[object]) -> "ResponsesAPIResponse":
         async for _ in stream_iter:
             pass
 
-        completed: Final = getattr(stream_iter, "completed_response", None)
-        response_obj: Final = getattr(completed, "response", None) if completed else None
+        completed: Final[object] = getattr(stream_iter, "completed_response", None)
+        response_obj: Final[object] = getattr(completed, "response", None) if completed else None
         if response_obj is None:
             raise ValueError("Stream ended without a completed response")
 
@@ -157,7 +157,7 @@ class ResponsesToCompletionBridgeHandler:
     def completion(
         self, *args, **kwargs
     ) -> Union[
-        Coroutine[Any, Any, Union["ModelResponse", "CustomStreamWrapper"]],
+        Coroutine[None, None, Union["ModelResponse", "CustomStreamWrapper"]],
         "ModelResponse",
         "CustomStreamWrapper",
     ]:

@@ -58,9 +58,9 @@ class GoogleAIStudioTokenCounter:
         self,
         api_base: str | None = None,
         api_key: str | None = None,
-        headers: dict[str, Any] | None = None,
+        headers: dict[str, object] | None = None,
         model: str = "",
-        litellm_params: dict[str, Any] | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> tuple[dict[str, Any], str]:
         """
         Returns a Tuple of headers and url for the Google Gen AI Studio countTokens endpoint.
@@ -84,7 +84,7 @@ class GoogleAIStudioTokenCounter:
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> dict[str, Any]:
         """
         Count tokens using Google Gen AI Studio countTokens endpoint.

@@ -182,7 +182,6 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             else None
         )
 
-        # Generation config with proper structure for image editing
         generation_config: Final[dict[str, object]] = {
             key: value for key, value in (("response_modalities", ["IMAGE"]), ("image_config", image_config)) if value
         }

@@ -8,9 +8,11 @@ then we poll until the result is ready.
 
 import asyncio
 import time
-from typing import Any, Final
+from collections.abc import Coroutine, Mapping
+from typing import Final, Protocol
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -33,6 +35,42 @@ from ..common_utils import (
 from .transformation import BlackForestLabsImageEditConfig
 
 
+class _BFLSubmitBody(TypedDict, total=False):
+    """Decoded body of the BFL submit response, which hands back a polling URL."""
+
+    errors: ReadOnly[object]
+    polling_url: ReadOnly[str]
+
+
+class _BFLPollBody(TypedDict, total=False):
+    """Decoded body of a BFL polling response."""
+
+    status: ReadOnly[str]
+
+
+class _BFLSubmitResponse(Protocol):
+    """The submit call's HTTP response, read for its status, body text and decoded body."""
+
+    @property
+    def status_code(self) -> int: ...
+
+    @property
+    def text(self) -> str: ...
+
+    def json(self) -> _BFLSubmitBody: ...
+
+
+class _BFLPollResponse(Protocol):
+    """A polling call's HTTP response, read only for the task status it carries."""
+
+    def json(self) -> _BFLPollBody: ...
+
+
+def _poll_status(response: _BFLPollResponse) -> str | None:
+    """Read the task status out of a BFL polling response body."""
+    return response.json().get("status")
+
+
 class BlackForestLabsImageEdit:
     """
     Black Forest Labs Image Edit handler.
@@ -53,10 +91,10 @@ class BlackForestLabsImageEdit:
         litellm_params: GenericLiteLLMParams | dict,
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout | None,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: Mapping[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         aimage_edit: bool = False,
-    ) -> ImageResponse | Any:
+    ) -> ImageResponse | Coroutine[object, object, ImageResponse]:
         """
         Main entry point for image edit requests.
 
@@ -185,7 +223,7 @@ class BlackForestLabsImageEdit:
         litellm_params: GenericLiteLLMParams | dict,
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout | None,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: Mapping[str, object] | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> ImageResponse:
         """
@@ -281,7 +319,7 @@ class BlackForestLabsImageEdit:
 
     def _poll_for_result_sync(
         self,
-        initial_response: httpx.Response,
+        initial_response: _BFLSubmitResponse,
         headers: dict,
         sync_client: HTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
@@ -356,8 +394,7 @@ class BlackForestLabsImageEdit:
                     message=f"Polling failed: {response.text}",
                 )
 
-            data = response.json()
-            status = data.get("status")
+            status = _poll_status(response)
 
             verbose_logger.debug("BFL poll status: %s", status)
 
@@ -383,7 +420,7 @@ class BlackForestLabsImageEdit:
 
     async def _poll_for_result_async(
         self,
-        initial_response: httpx.Response,
+        initial_response: _BFLSubmitResponse,
         headers: dict,
         async_client: AsyncHTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
@@ -447,8 +484,7 @@ class BlackForestLabsImageEdit:
                     message=f"Polling failed: {response.text}",
                 )
 
-            data = response.json()
-            status = data.get("status")
+            status = _poll_status(response)
 
             verbose_logger.debug("BFL poll status: %s", status)
 

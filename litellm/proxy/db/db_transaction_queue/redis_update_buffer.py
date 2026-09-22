@@ -7,6 +7,7 @@ This is to prevent deadlocks and improve reliability
 import asyncio
 import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from functools import reduce
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
@@ -22,6 +23,8 @@ from litellm.constants import (
     REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
     REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
     REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
+    REDIS_SPEND_LOGS_BUFFER_KEY,
+    REDIS_SPEND_LOGS_BUFFER_MAX_ROWS,
     REDIS_UPDATE_BUFFER_KEY,
     REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
 )
@@ -46,7 +49,9 @@ from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdate
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     WindowSpendTransaction,
     WindowSpendUpdateQueue,
+    to_wire_payload,
 )
+from litellm.proxy.db.spend_log_batching import SpendLogRow
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.caching import (
     RedisPipelineLpopOperation,
@@ -68,6 +73,8 @@ _SpendTransactionField: TypeAlias = Literal[
     "team_list_transactions",
     "team_member_list_transactions",
     "org_list_transactions",
+    "org_member_list_transactions",
+    "project_list_transactions",
     "tag_list_transactions",
     "agent_list_transactions",
     "model_access_group_list_transactions",
@@ -80,12 +87,27 @@ _SPEND_TRANSACTION_FIELDS: Final[tuple[_SpendTransactionField, ...]] = (
     "team_list_transactions",
     "team_member_list_transactions",
     "org_list_transactions",
+    "org_member_list_transactions",
+    "project_list_transactions",
     "tag_list_transactions",
     "agent_list_transactions",
     "model_access_group_list_transactions",
 )
 
 _ValueT = TypeVar("_ValueT")
+
+
+def _spend_log_json_default(value: object) -> str:
+    return value.isoformat() if isinstance(value, datetime) else str(value)
+
+
+def _encode_spend_log_row(row: SpendLogRow) -> str:
+    return json.dumps(row, default=_spend_log_json_default)
+
+
+def _decode_spend_log_row(encoded: str) -> dict[str, object] | None:
+    decoded: Final = json.loads(encoded)
+    return decoded if isinstance(decoded, dict) else None
 
 
 def _accumulated_spend(totals: Mapping[str, float], entities: Mapping[str, float]) -> dict[str, float]:
@@ -298,7 +320,7 @@ class RedisUpdateBuffer:
                 ServiceTypes.REDIS_DAILY_AGENT_SPEND_UPDATE_QUEUE,
             ),
             (
-                window_spend_update_transactions,
+                tuple(map(to_wire_payload, window_spend_update_transactions)),
                 REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
                 ServiceTypes.REDIS_WINDOW_SPEND_UPDATE_QUEUE,
             ),
@@ -412,6 +434,14 @@ class RedisUpdateBuffer:
                     db_spend_update_transactions.get("org_list_transactions"),
                 ),
                 (
+                    Litellm_EntityType.ORGANIZATION_MEMBER,
+                    db_spend_update_transactions.get("org_member_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.PROJECT,
+                    db_spend_update_transactions.get("project_list_transactions"),
+                ),
+                (
                     Litellm_EntityType.TAG,
                     db_spend_update_transactions.get("tag_list_transactions"),
                 ),
@@ -484,7 +514,12 @@ class RedisUpdateBuffer:
             (daily_end_user_spend_update_transactions, REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY),
             (daily_agent_spend_update_transactions, REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY),
             (daily_tag_spend_update_transactions, REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY),
-            (window_spend_update_transactions, REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY),
+            (
+                None
+                if window_spend_update_transactions is None
+                else tuple(map(to_wire_payload, window_spend_update_transactions)),
+                REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
+            ),
         )
 
         rpush_list: Final = tuple(
@@ -507,6 +542,49 @@ class RedisUpdateBuffer:
                 "These spend updates are lost. Error: %s",
                 str(e),
             )
+
+    async def store_spend_logs_in_redis(
+        self,
+        rows: Sequence[SpendLogRow],
+        max_rows: int = REDIS_SPEND_LOGS_BUFFER_MAX_ROWS,
+    ) -> bool:
+        """Park spend-log rows in Redis so they outlive this pod, dropping the oldest past ``max_rows``."""
+        if self.redis_cache is None or len(rows) == 0 or not self._should_commit_spend_updates_to_redis():
+            return False
+        try:
+            buffer_size: Final = await self.redis_cache.async_rpush_and_trim(
+                key=REDIS_SPEND_LOGS_BUFFER_KEY,
+                values=tuple(_encode_spend_log_row(row) for row in rows),
+                max_len=max_rows,
+            )
+            overflow: Final = buffer_size - max_rows
+            if overflow > 0:
+                verbose_proxy_logger.error(
+                    "Spend tracking - Redis spend log buffer is at its %d row cap; dropped the %d oldest spend logs",
+                    max_rows,
+                    overflow,
+                )
+        except Exception as e:  # noqa: BLE001  # the caller falls back to the in-memory queue on any Redis fault
+            verbose_proxy_logger.error(
+                "Spend tracking - failed to park %d spend log rows in Redis. Error: %s", len(rows), str(e)
+            )
+            return False
+        verbose_proxy_logger.info("Spend tracking - parked %d spend log rows in Redis for a later flush", len(rows))
+        return True
+
+    async def get_spend_logs_from_redis_buffer(self, limit: int) -> tuple[dict[str, object], ...]:
+        """Atomically take up to ``limit`` parked spend-log rows out of Redis."""
+        if self.redis_cache is None or not self._should_commit_spend_updates_to_redis():
+            return ()
+        popped: Final[str | list[str] | None] = await self.redis_cache.async_lpop(
+            key=REDIS_SPEND_LOGS_BUFFER_KEY,
+            count=limit,
+        )
+        if popped is None:
+            return ()
+        encoded_rows: Final = tuple(popped) if isinstance(popped, list) else (popped,)
+        decoded_rows: Final = (_decode_spend_log_row(encoded) for encoded in encoded_rows)
+        return tuple(row for row in decoded_rows if row is not None)
 
     @staticmethod
     def _number_of_transactions_to_store_in_redis(
@@ -870,6 +948,10 @@ class RedisUpdateBuffer:
                 list_of_transactions, "team_member_list_transactions"
             ),
             org_list_transactions=_merged_entity_transactions(list_of_transactions, "org_list_transactions"),
+            org_member_list_transactions=_merged_entity_transactions(
+                list_of_transactions, "org_member_list_transactions"
+            ),
+            project_list_transactions=_merged_entity_transactions(list_of_transactions, "project_list_transactions"),
             tag_list_transactions=_merged_entity_transactions(list_of_transactions, "tag_list_transactions"),
             agent_list_transactions=_merged_entity_transactions(list_of_transactions, "agent_list_transactions"),
             model_access_group_list_transactions=_merged_entity_transactions(

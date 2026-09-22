@@ -2,7 +2,7 @@ import re
 from collections.abc import Iterator, Mapping
 from typing import Any, Final
 
-from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, StandardCallbackDynamicParams
+from litellm.types.utils import OTEL_SPAN_SCOPES, TRUSTED_CALLBACK_VARS_FIELD, StandardCallbackDynamicParams
 
 _CLIENT_CALLBACK_METADATA_SLOTS: Final[tuple[str, ...]] = ("litellm_metadata", "metadata")
 
@@ -60,6 +60,11 @@ def validate_langfuse_environment_value(value: str) -> None:
             "alphanumerics/hyphens/underscores and must not start with "
             f"'langfuse' (pattern {LANGFUSE_ENVIRONMENT_PATTERN})"
         )
+
+
+def validate_langfuse_span_scope_value(value: str) -> None:
+    if value not in OTEL_SPAN_SCOPES:
+        raise ValueError(f"Invalid langfuse_span_scope {value!r}: must be one of {sorted(OTEL_SPAN_SCOPES)}")
 
 
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict

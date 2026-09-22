@@ -22,6 +22,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -89,6 +90,36 @@ def _visibility_filter(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object
         # Caller has neither user_id nor team_id — match nothing.
         return {"memory_id": "__no_match__"}
     return {"OR": ors}
+
+
+class _StartsWith(TypedDict):
+    startsWith: ReadOnly[str]
+
+
+class _MemoryKeyWhere(TypedDict):
+    key: ReadOnly[str | _StartsWith]
+
+
+class _MemoryIdWhere(TypedDict):
+    memory_id: ReadOnly[str]
+
+
+class _MemorySearchWhere(TypedDict):
+    OR: ReadOnly[tuple[_MemoryKeyWhere, _MemoryIdWhere]]
+
+
+def _key_filter(search: str | None, key_prefix: str | None, key: str | None) -> Mapping[str, object] | None:
+    """`search` matches a key prefix or an exact memory_id; otherwise `key_prefix` wins over `key`."""
+    if search is not None:
+        search_where: Final[_MemorySearchWhere] = {"OR": ({"key": {"startsWith": search}}, {"memory_id": search})}
+        return search_where
+    if key_prefix is not None:
+        prefix_where: Final[_MemoryKeyWhere] = {"key": {"startsWith": key_prefix}}
+        return prefix_where
+    if key is not None:
+        exact_where: Final[_MemoryKeyWhere] = {"key": key}
+        return exact_where
+    return None
 
 
 def _row_to_model(row: "prisma_models.LiteLLM_MemoryTable") -> LiteLLM_MemoryRow:
@@ -326,6 +357,13 @@ async def list_memory(
             "Mutually exclusive with `key`; if both are provided, `key_prefix` wins."
         ),
     ),
+    search: str | None = Query(
+        None,
+        description=(
+            "Match entries whose key starts with this value or whose memory_id equals it. "
+            "Takes precedence over `key_prefix` and `key` when provided."
+        ),
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -333,22 +371,16 @@ async def list_memory(
     """List memory entries visible to the caller."""
     prisma_client: Final = _require_prisma()
 
-    # Build the key filter first (prefix wins if both `key` and `key_prefix`
-    # are passed). Then AND it with the visibility filter via an explicit
-    # top-level "AND" — safer than `dict.update` since future visibility
-    # filters could grow an "OR" key that would clobber this one if merged
-    # by key.
-    key_filter: Final[dict[str, object]] = {}
-    if key_prefix is not None:
-        key_filter["key"] = {"startsWith": key_prefix}
-    elif key is not None:
-        key_filter["key"] = key
+    # AND the key filter with the visibility filter via an explicit top-level
+    # "AND": both sides can carry an "OR" key (`search`, non-admin visibility),
+    # so merging them by key would let one clobber the other and leak rows.
+    key_filter: Final = _key_filter(search=search, key_prefix=key_prefix, key=key)
 
     vis: Final = _visibility_filter(user_api_key_dict)
-    where: Mapping[str, object]
+    where: Mapping[str, object] | None
     if vis is None:
         where = key_filter
-    elif not key_filter:
+    elif key_filter is None:
         where = vis
     else:
         where = {"AND": [key_filter, vis]}
