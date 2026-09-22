@@ -75143,6 +75143,7 @@
         "supports_web_search": false
     },
     "openrouter/nex-agi/nex-n2.5-mini:free": {
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
@@ -75162,6 +75163,7 @@
         "supports_web_search": false
     },
     "openrouter/nex-agi/nex-n2.5-pro:free": {
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
