@@ -238,6 +238,9 @@ LOGS_GUARDRAIL_INFORMATION_MARKER: Final = "_litellm_logs_guardrail_information"
 # llm_provider stamped on proxy-side rate limit errors when the model resolves to no deployment
 PROXY_LLM_PROVIDER_FALLBACK: Final = "litellm_proxy"
 
+# litellm_params flag on failure logs for requests the proxy rejected before routing to a deployment
+PROXY_REJECTED_BEFORE_ROUTING_KEY: Final = "proxy_rejected_before_routing"
+
 # Generic fallback for unknown models
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET", 128)

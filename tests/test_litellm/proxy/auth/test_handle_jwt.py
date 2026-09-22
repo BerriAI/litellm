@@ -7045,7 +7045,9 @@ async def test_resolve_team_from_header_denies_aliases_of_teams_the_jwt_does_not
     """An alias that exists but names a team outside the JWT's allowed teams is
     refused with the same 403 as an unknown value, and the detail names only
     what the caller sent, so the response reveals neither that the alias exists
-    nor which team id it maps to."""
+    nor which team id it maps to. Because the id and the alias lookups both ran
+    before the denial, the detail says the value resolved to neither form and
+    lists the team ids the JWT does allow."""
     aliases = {"alias_a": "team_a", "alias_b": "team_b"}
 
     with pytest.raises(HTTPException) as other_team:
@@ -7057,6 +7059,10 @@ async def test_resolve_team_from_header_denies_aliases_of_teams_the_jwt_does_not
     assert unknown.value.status_code == 403
     assert "team_b" not in other_team.value.detail
     assert other_team.value.detail.replace("alias_b", "<value>") == unknown.value.detail.replace("no_such", "<value>")
+    assert unknown.value.detail == (
+        "x-litellm-team-id 'no_such' does not resolve to a team id or a unique team alias in your JWT's allowed "
+        "teams. Allowed team ids: ['team_a']"
+    )
 
 
 @pytest.mark.asyncio
@@ -7080,7 +7086,9 @@ async def test_resolve_team_from_header_under_db_fallback_tries_the_id_before_th
     with pytest.raises(HTTPException) as neither:
         await _resolve_header("ghost", set(), True, _teams_by_id(known_ids), _teams_by_alias(aliases))
     assert neither.value.status_code == 403
-    assert neither.value.detail == ("Team 'ghost' (from x-litellm-team-id header) is not in your team memberships.")
+    assert neither.value.detail == (
+        "x-litellm-team-id 'ghost' does not resolve to a team id or a unique team alias among your team memberships."
+    )
 
 
 @pytest.mark.asyncio
@@ -7112,15 +7120,20 @@ async def test_resolve_team_from_header_under_db_fallback_never_aliases_a_team_i
         )
 
     assert unreadable.value.status_code == 403
-    assert unreadable.value.detail == ("Team 'team_a' (from x-litellm-team-id header) is not in your team memberships.")
+    assert unreadable.value.detail == (
+        "x-litellm-team-id 'team_a' does not resolve to a team id or a unique team alias among your team memberships."
+    )
     lookups_by_alias.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_resolve_team_from_header_treats_a_duplicate_alias_as_no_match_but_surfaces_lookup_errors():
-    """An alias two teams share cannot name one team, so it is refused like an
-    unknown value (a 4xx from the lookup is a miss), while a lookup failure
-    (5xx) is not disguised as a denial and propagates as is."""
+async def test_resolve_team_from_header_denies_a_duplicate_alias_like_an_unknown_value_but_surfaces_lookup_errors():
+    """An alias two teams share resolves to no single team, so it is denied with
+    the very 403 an unknown value gets, under claims and under the DB fallback
+    alike: the caller cannot be checked against either team, so telling it the
+    alias is shared would let any JWT probe which aliases exist. The detail says
+    the value resolved to no team id or unique alias, which is true for both.
+    A lookup failure (5xx) is not disguised as a denial and propagates as is."""
 
     async def duplicate_alias(team_alias, **kwargs):
         raise HTTPException(status_code=400, detail={"error": f"Multiple teams found with alias '{team_alias}'."})
@@ -7130,8 +7143,26 @@ async def test_resolve_team_from_header_treats_a_duplicate_alias_as_no_match_but
 
     with pytest.raises(HTTPException) as duplicate:
         await _resolve_header("shared_alias", {"team_a"}, False, _team_lookup_404, duplicate_alias)
+    with pytest.raises(HTTPException) as unknown:
+        await _resolve_header("shared_alias", {"team_a"}, False, _team_lookup_404, _team_alias_lookup_404)
     assert duplicate.value.status_code == 403
-    assert "Multiple teams" not in str(duplicate.value.detail)
+    assert duplicate.value.detail == unknown.value.detail
+    assert duplicate.value.detail == (
+        "x-litellm-team-id 'shared_alias' does not resolve to a team id or a unique team alias in your JWT's "
+        "allowed teams. Allowed team ids: ['team_a']"
+    )
+
+    known_ids = frozenset({"team_a"})
+    with pytest.raises(HTTPException) as duplicate_under_fallback:
+        await _resolve_header("shared_alias", set(), True, _teams_by_id(known_ids), duplicate_alias)
+    with pytest.raises(HTTPException) as unknown_under_fallback:
+        await _resolve_header("shared_alias", set(), True, _teams_by_id(known_ids), _team_alias_lookup_404)
+    assert duplicate_under_fallback.value.status_code == 403
+    assert duplicate_under_fallback.value.detail == unknown_under_fallback.value.detail
+    assert duplicate_under_fallback.value.detail == (
+        "x-litellm-team-id 'shared_alias' does not resolve to a team id or a unique team alias among your team "
+        "memberships."
+    )
 
     with pytest.raises(HTTPException) as failure:
         await _resolve_header("alias_a", {"team_a"}, False, _team_lookup_404, db_down)
