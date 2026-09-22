@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def _get_config_value(litellm_params: Any, optional_params: Any, attribute_name: str) -> Any | None:
+def _get_config_value(litellm_params: "LitellmParams", optional_params: object, attribute_name: str) -> Any | None:
     if optional_params is not None:
         value: Final = (
             optional_params.get(attribute_name)

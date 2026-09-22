@@ -2,6 +2,7 @@ import { Search, X } from "lucide-react";
 import React, { useMemo, useState } from "react";
 
 import { ActivityMetrics } from "@/components/activity_metrics";
+import type { ApiKeyTruncation } from "@/components/EntityUsageExport/exportBlockedReason";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 
 import { filterKeyActivity } from "../keyActivityFilter";
@@ -10,9 +11,14 @@ import type { ModelActivityData } from "../types";
 interface KeyActivityPanelProps {
   keyMetrics: Record<string, ModelActivityData>;
   hidePromptCachingMetrics?: boolean;
+  apiKeyTruncation?: ApiKeyTruncation;
 }
 
-const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({ keyMetrics, hidePromptCachingMetrics = false }) => {
+const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
+  keyMetrics,
+  hidePromptCachingMetrics = false,
+  apiKeyTruncation,
+}) => {
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => filterKeyActivity(keyMetrics, query), [keyMetrics, query]);
   const totalKeys = Object.keys(keyMetrics).length;
@@ -43,6 +49,12 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({ keyMetrics, hidePro
         <span className="text-sm text-muted-foreground">
           Showing {shownKeys.toLocaleString()} of {totalKeys.toLocaleString()} keys
         </span>
+        {apiKeyTruncation !== undefined && (
+          <span className="text-sm text-muted-foreground" role="note">
+            Only the {apiKeyTruncation.limit.toLocaleString()} highest-spend keys of{" "}
+            {apiKeyTruncation.total.toLocaleString()} are loaded
+          </span>
+        )}
       </div>
       {isFiltering && totalKeys > 0 && shownKeys === 0 ? (
         <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">

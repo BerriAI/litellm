@@ -10,7 +10,6 @@ import re
 import typing
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping, MutableSequence, Sequence
 from collections.abc import Set as AbstractSet
-from types import MappingProxyType
 from typing import Any, Final, Protocol
 from urllib.parse import quote
 
@@ -19,7 +18,6 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if typing.TYPE_CHECKING:
     from fastapi import Request
-    from mcp.types import CallToolResult, EmbeddedResource, ImageContent, TextContent
 
 
 class _McpServerLike(Protocol):
@@ -149,17 +147,6 @@ def is_mcp_available() -> bool:
         return True
     except ImportError:
         return False
-
-
-def apply_post_call_hook_content(
-    result: "CallToolResult",
-    hook_content: "Sequence[TextContent | ImageContent | EmbeddedResource]",
-) -> "CallToolResult":
-    original_content: Final = result.content.copy()
-    updated_content: Final = list(hook_content)  # mutable-ok: CallToolResult content requires a concrete list
-    if updated_content == original_content:
-        return result
-    return result.model_copy(update=MappingProxyType({"content": updated_content, "structuredContent": None}))
 
 
 def normalize_server_name(server_name: str) -> str:
@@ -549,7 +536,11 @@ def extract_mcp_tool_result_error_message(result: object) -> str | None:
     Accepts both ``mcp.types.CallToolResult`` objects and their dict
     equivalents, duck-typed so the ``mcp`` package is not required.
     """
-    is_error: Final[object] = result.get("isError") if isinstance(result, Mapping) else getattr(result, "isError", None)
+    is_error: Final[object] = (
+        (result.get("isError") if result.get("isError") is not None else result.get("is_error"))
+        if isinstance(result, Mapping)
+        else getattr(result, "is_error", None)
+    )
     if is_error is not True:
         return None
     content: Final[object] = result.get("content") if isinstance(result, Mapping) else getattr(result, "content", None)
@@ -883,8 +874,9 @@ def json_unrewritable_labels(value: object, path_depth: int = 0) -> tuple[str, .
 def mcp_tool_result_structured_content(result: object) -> object:
     """The ``structuredContent`` of an MCP tool result, or ``None`` when it has none."""
     if isinstance(result, Mapping):
-        return result.get("structuredContent")
-    return getattr(result, "structuredContent", None)
+        structured: Final = result.get("structuredContent")
+        return structured if structured is not None else result.get("structured_content")
+    return getattr(result, "structured_content", None)
 
 
 def set_mcp_tool_result_structured_content(result: object, value: object) -> bool:
@@ -895,12 +887,12 @@ def set_mcp_tool_result_structured_content(result: object, value: object) -> boo
     unmasked value in the spend log and the OTel span.
     """
     if isinstance(result, MutableMapping):
-        result["structuredContent"] = value
+        result["structured_content" if "structured_content" in result else "structuredContent"] = value
         return True
-    if not hasattr(result, "structuredContent"):
+    if not hasattr(result, "structured_content"):
         return False
     try:
-        setattr(result, "structuredContent", value)  # attribute name is fixed by the MCP result shape
+        setattr(result, "structured_content", value)  # attribute name is fixed by the MCP result shape
         return True
     except (AttributeError, TypeError, ValueError):
         return False

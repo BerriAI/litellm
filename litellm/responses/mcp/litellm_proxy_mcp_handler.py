@@ -11,13 +11,12 @@ from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._experimental.mcp_server.utils import (
-    apply_post_call_hook_content,
     iter_known_server_prefixes,
     logging_safe_mcp_headers,
     split_server_prefix_from_name,
     strip_known_server_prefix,
 )
-from litellm.responses.main import aresponses
+from litellm.responses.main import aresponses  # noqa: TID251  # inner call must skip the MCP gateway that invoked it
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -692,6 +691,7 @@ class LiteLLM_Proxy_MCP_Handler:
         litellm_call_id: str | None = None,
         litellm_trace_id: str | None = None,
         request_tags: list[str] | None = None,
+        guardrail_context: Mapping[str, object] | None = None,
     ) -> list[MCPToolResult]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -855,10 +855,11 @@ class LiteLLM_Proxy_MCP_Handler:
                     raw_headers=raw_headers,
                     proxy_logging_obj=proxy_logging_obj,
                     litellm_logging_obj=litellm_logging_obj,
+                    guardrail_context=guardrail_context,
                 )
 
-                proxy_hooked_result = (
-                    await proxy_logging_obj.post_mcp_call_hook(
+                if proxy_logging_obj:
+                    result = await proxy_logging_obj.post_mcp_call_hook(
                         response=result,
                         request_data=(
                             litellm_logging_obj.model_call_details
@@ -867,31 +868,21 @@ class LiteLLM_Proxy_MCP_Handler:
                         ),
                         user_api_key_dict=typed_user_api_key_auth,
                     )
-                    if proxy_logging_obj
-                    else result
-                )
 
-                async def _get_hooked_result() -> "CallToolResult":
-                    if litellm_logging_obj is None:
-                        return proxy_hooked_result
+                if litellm_logging_obj:
                     try:
-                        litellm_logging_obj.post_call(original_response=proxy_hooked_result)
-                        hook_content = await litellm_logging_obj.async_post_mcp_tool_call_hook(
+                        litellm_logging_obj.post_call(original_response=result)
+                        result = await litellm_logging_obj.async_post_mcp_tool_call_hook(
                             kwargs=litellm_logging_obj.model_call_details,
-                            response_obj=proxy_hooked_result,
+                            response_obj=result,
                             start_time=start_time,
                             end_time=datetime.now(),
                         )
-                        return apply_post_call_hook_content(proxy_hooked_result, hook_content)
                     except Exception:
                         verbose_logger.exception("Failed to run post-call logging for MCP tool call %s", tool_name)
-                        return proxy_hooked_result
-
-                hooked_result = await _get_hooked_result()
-                if litellm_logging_obj:
                     try:
                         await litellm_logging_obj.async_success_handler(
-                            result=hooked_result,
+                            result=result,
                             start_time=start_time,
                             end_time=datetime.now(),
                         )
@@ -899,7 +890,7 @@ class LiteLLM_Proxy_MCP_Handler:
                         verbose_logger.exception("Failed to log MCP tool call success for %s", tool_name)
 
                 # Format result for inclusion in response
-                result_text = LiteLLM_Proxy_MCP_Handler._parse_mcp_result(hooked_result)
+                result_text = LiteLLM_Proxy_MCP_Handler._parse_mcp_result(result)
                 tool_results.append(
                     {
                         "tool_call_id": tool_call_id,
@@ -1277,14 +1268,14 @@ class LiteLLM_Proxy_MCP_Handler:
         return tool_execution_events
 
     @staticmethod
-    def _prepare_initial_call_params(call_params: dict[str, Any], should_auto_execute: bool) -> dict[str, Any]:
+    def _prepare_initial_call_params(call_params: Mapping[str, object], should_auto_execute: bool) -> dict[str, Any]:
         """
         Prepare call parameters for the initial LLM call.
 
         For auto-execute scenarios, we need to disable streaming for the initial call
         so we can process the tool calls before streaming the final response.
         """
-        initial_params: Final = call_params.copy()
+        initial_params: Final = dict(call_params)
 
         if should_auto_execute:
             # Disable streaming for initial call when auto-executing tools
@@ -1293,14 +1284,16 @@ class LiteLLM_Proxy_MCP_Handler:
         return initial_params
 
     @staticmethod
-    def _prepare_follow_up_call_params(call_params: dict[str, Any], original_stream_setting: bool) -> dict[str, Any]:
+    def _prepare_follow_up_call_params(
+        call_params: Mapping[str, object], original_stream_setting: bool
+    ) -> dict[str, Any]:
         """
         Prepare call parameters for the follow-up LLM call after tool execution.
 
         Restores the original streaming setting and removes tool_choice since
         we're now providing tool results, not requesting tool calls.
         """
-        follow_up_params: Final = call_params.copy()
+        follow_up_params: Final = dict(call_params)
 
         # Restore original streaming setting for follow-up call
         follow_up_params["stream"] = original_stream_setting

@@ -10,7 +10,7 @@ const renderForm = (editableFields: ReadonlySet<string>, overrides: { isSaving?:
   const onCancel = vi.fn();
   renderWithProviders(
     <TeamAdminSettingsForm
-      initialValues={{ tpm_limit: 1000 }}
+      initialValues={{ tpm_limit: 1000, rpm_limit: 50, max_budget: 20 }}
       editableFields={editableFields}
       isSaving={overrides.isSaving ?? false}
       onCancel={onCancel}
@@ -21,16 +21,20 @@ const renderForm = (editableFields: ReadonlySet<string>, overrides: { isSaving?:
 };
 
 describe("TeamAdminSettingsForm", () => {
-  it("shows the team's current TPM limit when the proxy lets team admins edit it", () => {
-    renderForm(new Set(["tpm_limit"]));
+  it("shows the team's current values for every field the proxy lets team admins edit", () => {
+    renderForm(new Set(["tpm_limit", "rpm_limit", "max_budget"]));
 
     expect(screen.getByLabelText("Tokens per minute Limit (TPM)")).toHaveValue(1000);
+    expect(screen.getByLabelText("Requests per minute Limit (RPM)")).toHaveValue(50);
+    expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue(20);
   });
 
-  it("hides the TPM limit when the proxy has not enabled it for team admins", () => {
-    renderForm(new Set(["max_budget"]));
+  it("hides the fields the proxy has not enabled for team admins", () => {
+    renderForm(new Set(["rpm_limit"]));
 
+    expect(screen.getByLabelText("Requests per minute Limit (RPM)")).toBeInTheDocument();
     expect(screen.queryByLabelText("Tokens per minute Limit (TPM)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Max Budget (USD)")).not.toBeInTheDocument();
   });
 
   it("saves the new TPM limit and nothing else", async () => {
@@ -41,6 +45,17 @@ describe("TeamAdminSettingsForm", () => {
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({ tpm_limit: 5000 }));
+  });
+
+  it("saves a lowered budget and a new RPM limit without resending the unchanged TPM limit", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm(new Set(["tpm_limit", "rpm_limit", "max_budget"]));
+
+    fireEvent.change(screen.getByLabelText("Requests per minute Limit (RPM)"), { target: { value: "80" } });
+    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "12.5" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ rpm_limit: 80, max_budget: 12.5 }));
   });
 
   it("saves a cleared TPM limit as no limit", async () => {

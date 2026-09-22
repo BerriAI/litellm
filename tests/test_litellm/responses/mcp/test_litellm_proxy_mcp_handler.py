@@ -516,7 +516,7 @@ async def test_execute_tool_calls_applies_post_call_hook_content(monkeypatch):
 
     logging_obj = MagicMock()
     logging_obj.model_call_details = {}
-    logging_obj.async_post_mcp_tool_call_hook = AsyncMock(return_value=[TextContent(type="text", text="[REDACTED]")])
+    logging_obj.async_post_mcp_tool_call_hook = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="[REDACTED]")], is_error=True))
     logging_obj.async_success_handler = AsyncMock()
     handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
     monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (logging_obj, None))
@@ -530,7 +530,7 @@ async def test_execute_tool_calls_applies_post_call_hook_content(monkeypatch):
 
     assert results == [{"tool_call_id": "call-1", "result": "[REDACTED]", "name": tool_name}]
     assert logging_obj.async_success_handler.await_args.kwargs["result"].content[0].text == "[REDACTED]"
-    assert logging_obj.async_success_handler.await_args.kwargs["result"].structuredContent is None
+    assert logging_obj.async_success_handler.await_args.kwargs["result"].structured_content is None
 
 
 @pytest.mark.asyncio
@@ -587,7 +587,7 @@ async def test_execute_tool_calls_passes_logging_details_to_proxy_hook(monkeypat
     )
     logging_obj = MagicMock()
     logging_obj.model_call_details = {"request_id": "request-1"}
-    logging_obj.async_post_mcp_tool_call_hook = AsyncMock(return_value=result.content)
+    logging_obj.async_post_mcp_tool_call_hook = AsyncMock(return_value=result)
     logging_obj.async_success_handler = AsyncMock()
     handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
     monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (logging_obj, None))
@@ -626,7 +626,7 @@ async def test_execute_tool_calls_continues_when_post_call_logging_fails(monkeyp
     logging_obj.post_call = MagicMock()
     logging_obj.async_post_mcp_tool_call_hook = AsyncMock(
         side_effect=RuntimeError("hook failed") if failure_stage == "post_call_hook" else None,
-        return_value=result.content,
+        return_value=result,
     )
     logging_obj.async_success_handler = AsyncMock(
         side_effect=RuntimeError("success logging failed") if failure_stage == "success_handler" else None
@@ -1229,6 +1229,8 @@ async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
         return ([], {"foo": "litellm_proxy"})
 
     async def fake_execute(**kwargs: Any) -> list[dict[str, Any]]:
+        assert kwargs["guardrail_context"]["metadata"]["guardrails"] == ("block-all",)
+        assert kwargs["guardrail_context"]["model"] == "gpt-5"
         return [{"tool_call_id": "call-1", "name": "foo", "result": "done"}]
 
     monkeypatch.setattr(responses_main, "aresponses", fake_aresponses)
@@ -1242,6 +1244,7 @@ async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
         input="hi",
         model="gpt-5",
         tools=[{"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}],
+        litellm_metadata={"guardrails": ["block-all"]},
         store=store,
         previous_response_id=caller_previous_response_id,
     )

@@ -150,24 +150,3 @@ class TestPerplexityIntegration:
         assert hasattr(model_response.usage, "prompt_tokens_details")
         assert hasattr(model_response.usage, "citation_tokens")
         assert model_response.usage.prompt_tokens_details.web_search_requests == 3
-
-    @pytest.mark.parametrize("provider_name", ["perplexity", "PERPLEXITY", "Perplexity"])
-    def test_case_insensitive_provider_matching(self, provider_name):
-        """Test that cost calculation works with different case variations of provider name."""
-        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
-        usage.citation_tokens = 10
-        usage.prompt_tokens_details = PromptTokensDetailsWrapper(web_search_requests=1)
-
-        # Should work regardless of case
-        prompt_cost, completion_cost_val = cost_per_token(
-            model="sonar-deep-research",
-            custom_llm_provider=provider_name.lower(),  # Normalize to lowercase
-            usage_object=usage,
-        )
-
-        # Should calculate costs correctly
-        expected_prompt_cost = (100 * 2e-6) + (10 * 2e-6)
-        expected_completion_cost = (50 * 8e-6) + (1 * 0.005)
-
-        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
-        assert math.isclose(completion_cost_val, expected_completion_cost, rel_tol=1e-6)

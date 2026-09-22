@@ -340,6 +340,36 @@ def test_maybe_raise_for_response_failed_event_with_dict_error():
     assert exc_info.value.status_code == 429
 
 
+@pytest.mark.parametrize("code", [429, "429"])
+def test_response_failed_numeric_code_maps_to_its_http_status(code: int | str):
+    iterator = _make_iterator()
+    mock_response_obj = Mock()
+    mock_response_obj.error = {"code": code, "message": "throttled"}
+    chunk = Mock()
+    chunk.type = "response.failed"
+    chunk.response = mock_response_obj
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        iterator._maybe_raise_for_error_event(chunk)
+    assert exc_info.value.status_code == 429
+    assert isinstance(exc_info.value.original_exception, litellm.RateLimitError)
+
+
+def test_response_failed_unknown_code_keeps_upstream_code_and_message_on_mapped_exception():
+    iterator = _make_iterator()
+    upstream_message = "This content was flagged for possible cybersecurity risk."
+    mock_response_obj = Mock()
+    mock_response_obj.error = {"code": "cyber_policy", "message": upstream_message}
+    chunk = Mock()
+    chunk.type = "response.failed"
+    chunk.response = mock_response_obj
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        iterator._maybe_raise_for_error_event(chunk)
+    mapped = exc_info.value.original_exception
+    assert isinstance(mapped, litellm.InternalServerError)
+    assert mapped.code == "cyber_policy"
+    assert mapped.body == {"message": upstream_message, "type": None, "code": "cyber_policy"}
+
+
 def test_maybe_raise_for_error_event_null_error_obj():
     """error chunk with no error field: message and code default; wrapped as 500."""
     iterator = _make_iterator()
@@ -523,6 +553,9 @@ def test_every_openai_sdk_response_error_code_has_explicit_status_mapping():
         ("failed_to_download_image", 400),
         ("image_file_not_found", 400),
         ("totally_unknown_future_code", 500),
+        ("429", 429),
+        ("503", 503),
+        ("200", 500),
     ],
 )
 def test_status_code_for_documented_response_error_codes(code: str, expected_status: int):
