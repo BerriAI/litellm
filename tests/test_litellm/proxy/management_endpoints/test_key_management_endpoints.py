@@ -20972,8 +20972,11 @@ class TestTeamAdminMemberKeyBudgetUpdate:
             {"team_admin_editable_team_fields": editable_fields},
         )
         monkeypatch.setattr(
-            "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
-            AsyncMock(return_value=None),
+            "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks",
+            SimpleNamespace(
+                can_team_member_execute_key_management_endpoint=AsyncMock(return_value=None),
+                enforce_member_can_assign_access_groups=MagicMock(return_value=None),
+            ),
         )
         monkeypatch.setattr(
             "litellm.proxy.management_endpoints.key_management_endpoints._check_team_key_limits",
