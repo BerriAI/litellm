@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import DynamicForm from "./dynamic_form";
@@ -274,7 +274,7 @@ describe("DynamicForm config.yaml owned fields", () => {
     const toggle = screen.getByRole("switch");
     expect(toggle).not.toHaveAttribute("data-disabled");
 
-    await user.type(screen.getByDisplayValue("us-east"), "Z");
+    fireEvent.change(screen.getByDisplayValue("us-east"), { target: { value: "us-eastZ" } });
     await user.click(toggle);
     await submit(user);
 
@@ -293,7 +293,7 @@ describe("DynamicForm config.yaml owned fields", () => {
     expect(screen.getByDisplayValue("us-east")).toBeDisabled();
     expect(screen.getByDisplayValue("12")).toBeEnabled();
 
-    await user.type(screen.getByDisplayValue("12"), "7");
+    fireEvent.change(screen.getByDisplayValue("12"), { target: { value: "127" } });
     await submit(user);
 
     expect(handleSubmit).toHaveBeenCalledWith({ daily_report_frequency: "127" });
