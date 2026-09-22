@@ -94,7 +94,9 @@ class ResponsesWebSocketConnection:
     def close(self) -> Future[None]: ...
 
 @final
-class _CacheTestBinding:
+class _ResponseCacheRuntime:
+    @staticmethod
+    def from_cache(cache: object) -> _ResponseCacheRuntime: ...
     @property
     def kind(self) -> str: ...
     def lookup(
@@ -218,7 +220,7 @@ class _CacheTestHandle:
 @final
 class _CacheTestResolver:
     def __new__(cls, namespace: object) -> _CacheTestResolver: ...
-    def resolve(self) -> _CacheTestBinding: ...
+    def resolve(self) -> _ResponseCacheRuntime: ...
 
 @final
 class TokenCounter:
