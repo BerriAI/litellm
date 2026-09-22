@@ -2,6 +2,7 @@
 
 mod error;
 mod handler;
+mod native;
 mod oidc;
 mod resolver;
 pub mod source;
@@ -12,6 +13,7 @@ pub use handler::{ExternalSecretManager, SecretManager, get_secret_from_manager}
 pub use litellm_secrets_types::{
     AccessMode, KeyManagementSettings, KeyManagementSystem, Secret, SecretValue,
 };
+pub use native::load_native_manager;
 pub use oidc::{OidcProvider, OidcReference, OidcResolver};
 pub use resolver::{FailurePolicy, SecretResolver};
 pub use state::{SecretManagerState, secret_manager_would_be_consulted};

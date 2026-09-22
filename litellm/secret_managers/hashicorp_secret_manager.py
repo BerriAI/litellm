@@ -129,6 +129,34 @@ class HashicorpSecretManager(BaseSecretManager):
         _refresh_interval = int(_refresh_interval) if _refresh_interval else SECRET_MANAGER_REFRESH_INTERVAL
         self.cache = InMemoryCache(default_ttl=_refresh_interval)  # store in memory for 1 day
 
+        from litellm.rust_bridge.secret_manager import register_native_secret_manager
+
+        register_native_secret_manager(
+            self,
+            KeyManagementSystem.HASHICORP_VAULT,
+            HashicorpSecretManager,
+            enterprise_enabled=True,
+            methods=("sync_read_secret", "async_read_secret"),
+            environment_attributes=MappingProxyType(
+                {
+                    "HCP_VAULT_ADDR": "vault_addr",
+                    "HCP_VAULT_TOKEN": "vault_token",
+                    "HCP_VAULT_NAMESPACE": "vault_namespace",
+                    "HCP_VAULT_LOGIN_NAMESPACE": "login_namespace_override",
+                    "HCP_VAULT_SECRET_NAMESPACE": "secret_namespace_override",
+                    "HCP_VAULT_MOUNT_NAME": "vault_mount_name",
+                    "HCP_VAULT_PATH_PREFIX": "vault_path_prefix",
+                    "HCP_VAULT_CLIENT_CERT": "tls_cert_path",
+                    "HCP_VAULT_CLIENT_KEY": "tls_key_path",
+                    "HCP_VAULT_CERT_ROLE": "vault_cert_role",
+                    "HCP_VAULT_APPROLE_ROLE_ID": "approle_role_id",
+                    "HCP_VAULT_APPROLE_SECRET_ID": "approle_secret_id",
+                    "HCP_VAULT_APPROLE_MOUNT_PATH": "approle_mount_path",
+                    "HCP_VAULT_REFRESH_INTERVAL": "cache.default_ttl",
+                }
+            ),
+        )
+
     def _verify_required_credentials_exist(self) -> None:
         """
         Validate that at least one authentication method is configured.

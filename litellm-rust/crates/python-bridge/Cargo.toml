@@ -42,7 +42,7 @@ litellm-core-utils.workspace = true
 litellm-auth-gcp.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
-litellm-secrets = { workspace = true, features = ["aws"] }
+litellm-secrets = { workspace = true, features = ["aws", "azure", "google", "hashicorp", "cyberark"] }
 litellm-secrets-types.workspace = true
 litellm-types.workspace = true
 litellm-host-python.workspace = true

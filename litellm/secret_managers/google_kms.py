@@ -35,5 +35,11 @@ def load_google_kms(use_google_kms: bool | None):
         litellm.secret_manager_client = client
         litellm._key_management_system = KeyManagementSystem.GOOGLE_KMS
         litellm._google_kms_resource_name = os.getenv("GOOGLE_KMS_RESOURCE_NAME")
+
+        from litellm.rust_bridge.secret_manager import register_native_secret_manager
+
+        register_native_secret_manager(
+            client, KeyManagementSystem.GOOGLE_KMS, kms_v1.KeyManagementServiceClient, methods=("decrypt",)
+        )
     except Exception as e:
         raise e

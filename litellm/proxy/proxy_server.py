@@ -2661,6 +2661,12 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 
         litellm.secret_manager_client = client
         litellm._key_management_system = KeyManagementSystem.AZURE_KEY_VAULT
+
+        from litellm.rust_bridge.secret_manager import register_native_secret_manager
+
+        register_native_secret_manager(
+            client, KeyManagementSystem.AZURE_KEY_VAULT, SecretClient, methods=("get_secret",)
+        )
     except Exception as e:
         _error_str: Final = str(e)
         verbose_proxy_logger.exception(

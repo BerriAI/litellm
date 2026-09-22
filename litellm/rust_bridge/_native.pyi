@@ -354,3 +354,19 @@ __all__ = [
     "reserve_process_for_forking",
     "transcription",
 ]
+
+@final
+class _SecretManagerRuntime:
+    @staticmethod
+    def from_config(
+        system: str,
+        environment: Mapping[str, str],
+        settings_json: str | None = None,
+        enterprise_enabled: bool = False,
+    ) -> _SecretManagerRuntime: ...
+    @staticmethod
+    def from_client(client: object) -> _SecretManagerRuntime | None: ...
+    @property
+    def system(self) -> str: ...
+    def read_secret(self, name: str, settings_json: str | None = None) -> str | None: ...
+    def async_read_secret(self, name: str, settings_json: str | None = None) -> Future[str | None]: ...

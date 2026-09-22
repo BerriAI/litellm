@@ -1,5 +1,6 @@
 import base64
 import os
+from types import MappingProxyType
 from typing import Any, Final
 from urllib.parse import quote
 
@@ -56,6 +57,28 @@ class CyberArkSecretManager(BaseSecretManager):
             raise ValueError(
                 f"CyberArk secret manager is only available for premium users. {CommonProxyErrors.not_premium_user.value}"
             )
+
+        from litellm.rust_bridge.secret_manager import register_native_secret_manager
+
+        register_native_secret_manager(
+            self,
+            KeyManagementSystem.CYBERARK,
+            CyberArkSecretManager,
+            enterprise_enabled=True,
+            methods=("sync_read_secret", "async_read_secret"),
+            environment_attributes=MappingProxyType(
+                {
+                    "CYBERARK_API_BASE": "conjur_addr",
+                    "CYBERARK_ACCOUNT": "conjur_account",
+                    "CYBERARK_USERNAME": "conjur_username",
+                    "CYBERARK_API_KEY": "conjur_api_key",
+                    "CYBERARK_CLIENT_CERT": "tls_cert_path",
+                    "CYBERARK_CLIENT_KEY": "tls_key_path",
+                    "CYBERARK_SSL_VERIFY": "ssl_verify",
+                    "CYBERARK_REFRESH_INTERVAL": "cache.default_ttl",
+                }
+            ),
+        )
 
         if not self.ssl_verify:
             verbose_logger.warning(

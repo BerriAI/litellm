@@ -95,6 +95,14 @@ def get_secret_from_manager(
         ValueError: If the secret cannot be retrieved or required parameters are missing
         Exception: For other errors during secret retrieval
     """
+    from litellm.rust_bridge.secret_manager import resolve_native_secret_manager
+
+    native_runtime: Final = resolve_native_secret_manager(client, key_manager)
+    if native_runtime is not None:
+        return native_runtime.read_secret(
+            secret_name, key_management_settings.model_dump_json() if key_management_settings is not None else None
+        )
+
     secret = None
     raw_view: Final[_SecretManagerClientView[object]] = {"client": client}
     client_object: Final = raw_view["client"]

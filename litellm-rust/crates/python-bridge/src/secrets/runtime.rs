@@ -1,0 +1,306 @@
+use std::{collections::BTreeMap, sync::Arc};
+
+use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
+use litellm_host_python::{from_py, run_async_value, run_sync_value};
+use litellm_secrets::{
+    KeyManagementSettings, KeyManagementSystem, SecretManager, get_secret_from_manager,
+    load_native_manager,
+};
+use pyo3::{
+    exceptions::{PyAttributeError, PyRuntimeError, PyValueError},
+    prelude::*,
+};
+
+#[derive(Clone, PartialEq)]
+struct Configuration {
+    system: KeyManagementSystem,
+    settings: KeyManagementSettings,
+    environment: BTreeMap<String, String>,
+    enterprise_enabled: bool,
+}
+
+#[pyclass(frozen, name = "_SecretManagerRuntime")]
+pub(crate) struct NativeSecretManager {
+    backend: SecretManager,
+    configuration: Configuration,
+    pid: u32,
+}
+
+impl NativeSecretManager {
+    pub(super) fn backend(&self) -> PyResult<SecretManager> {
+        if self.pid != std::process::id() {
+            return Err(PyRuntimeError::new_err(
+                "native secret manager must be recreated after fork",
+            ));
+        }
+        Ok(self.backend.clone())
+    }
+
+    fn build(py: Python<'_>, configuration: Configuration) -> PyResult<Self> {
+        let values = configuration.environment.clone();
+        let environment: Arc<dyn Lookup + Send + Sync> =
+            Arc::new(move |name: &str| values.get(name).cloned());
+        let system = configuration.system;
+        let settings = configuration.settings.clone();
+        let enterprise_enabled = configuration.enterprise_enabled;
+        let backend = run_sync_value(py, async move {
+            load_native_manager(system, settings, environment, enterprise_enabled)
+                .await
+                .map_err(|error| PyValueError::new_err(error.to_string()))
+        })?;
+        Ok(Self {
+            backend,
+            configuration,
+            pid: std::process::id(),
+        })
+    }
+}
+
+#[pymethods]
+impl NativeSecretManager {
+    #[staticmethod]
+    #[pyo3(signature = (system, environment, settings_json=None, enterprise_enabled=false))]
+    fn from_config(
+        py: Python<'_>,
+        system: &str,
+        environment: BTreeMap<String, String>,
+        settings_json: Option<&str>,
+        enterprise_enabled: bool,
+    ) -> PyResult<Self> {
+        let system = serde_json::from_value(serde_json::Value::String(system.to_owned()))
+            .map_err(|_| PyValueError::new_err("unknown secret manager system"))?;
+        let settings = parse_settings(settings_json)?;
+        Self::build(
+            py,
+            Configuration {
+                system,
+                settings,
+                environment,
+                enterprise_enabled,
+            },
+        )
+    }
+
+    #[staticmethod]
+    pub(super) fn from_client(client: &Bound<'_, PyAny>) -> PyResult<Option<Py<Self>>> {
+        let py = client.py();
+        if let Ok(native) = client.extract::<Py<Self>>() {
+            native.borrow(py).backend()?;
+            return Ok(Some(native));
+        }
+        let Some(config) = optional_attribute(client, "_litellm_native_secret_config")? else {
+            reject_unregistered_builtin(client)?;
+            return Ok(None);
+        };
+        if !config.getattr("owner_type")?.is(client.get_type()) {
+            return Ok(None);
+        }
+        let methods = config
+            .getattr("methods")?
+            .extract::<Vec<(String, Py<PyAny>)>>()?;
+        for (name, original) in methods {
+            let current = client.getattr(name.as_str())?;
+            let implementation = optional_attribute(&current, "__func__")?.unwrap_or(current);
+            if !implementation.is(original.bind(py)) {
+                return Ok(None);
+            }
+        }
+        let environment_attributes: BTreeMap<String, String> = config
+            .getattr("environment_attributes")?
+            .extract::<Vec<(String, String)>>()?
+            .into_iter()
+            .collect();
+        let captured = config
+            .getattr("environment")?
+            .extract::<Vec<(String, String)>>()?;
+        let overrides = environment_attributes
+            .iter()
+            .map(|(key, attribute)| {
+                let value = attribute_path(client, attribute)?;
+                Ok((
+                    key.clone(),
+                    if value.is_none() {
+                        None
+                    } else {
+                        Some(value.str()?.extract::<String>()?)
+                    },
+                ))
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        let settings = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+            &config.getattr("settings_json")?.extract::<String>()?,
+        )
+        .map_err(|_| PyValueError::new_err("invalid secret manager settings"))?;
+        let attributes = config
+            .getattr("settings_attributes")?
+            .extract::<Vec<String>>()?;
+        let setting_overrides = attributes
+            .into_iter()
+            .map(|name| {
+                let value = from_py::<serde_json::Value>(&client.getattr(name.as_str())?)?;
+                Ok((name, value))
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        let configuration = Configuration {
+            system: serde_json::from_value(serde_json::Value::String(
+                config.getattr("system")?.extract()?,
+            ))
+            .map_err(|_| PyValueError::new_err("unknown secret manager system"))?,
+            settings: serde_json::from_value(serde_json::Value::Object(
+                settings.into_iter().chain(setting_overrides).collect(),
+            ))
+            .map_err(|_| PyValueError::new_err("invalid secret manager settings"))?,
+            environment: captured
+                .into_iter()
+                .filter(|(key, _)| !environment_attributes.contains_key(key))
+                .chain(
+                    overrides
+                        .into_iter()
+                        .filter_map(|(key, value)| value.map(|value| (key, value))),
+                )
+                .collect(),
+            enterprise_enabled: config.getattr("enterprise_enabled")?.extract()?,
+        };
+        if let Some(native) = cached(client, &configuration)? {
+            return Ok(Some(native));
+        }
+        let runtime = Self::build(py, configuration)?;
+        if let Some(native) = cached(client, &runtime.configuration)? {
+            return Ok(Some(native));
+        }
+        let native = Py::new(py, runtime)?;
+        client.setattr("_litellm_native_secret_manager", native.bind(py))?;
+        Ok(Some(native))
+    }
+
+    #[getter]
+    fn system(&self) -> String {
+        serde_json::to_value(self.configuration.system)
+            .expect("serializable system")
+            .as_str()
+            .expect("string system")
+            .to_owned()
+    }
+
+    #[pyo3(signature = (name, settings_json=None))]
+    fn read_secret(
+        &self,
+        py: Python<'_>,
+        name: String,
+        settings_json: Option<&str>,
+    ) -> PyResult<Option<String>> {
+        let backend = self.backend()?;
+        let settings = settings_json
+            .map(|value| parse_settings(Some(value)))
+            .transpose()?
+            .unwrap_or_else(|| self.configuration.settings.clone());
+        run_sync_value(py, async move {
+            get_secret_from_manager(&backend, &name, &settings, &ProcessEnvironment)
+                .await
+                .map(|value| value.and_then(|secret| secret.as_str().map(str::to_owned)))
+                .map_err(|error| PyValueError::new_err(error.to_string()))
+        })
+    }
+    #[pyo3(signature = (name, settings_json=None))]
+    fn async_read_secret<'py>(
+        &self,
+        py: Python<'py>,
+        name: String,
+        settings_json: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let backend = self.backend()?;
+        let settings = settings_json
+            .map(|value| parse_settings(Some(value)))
+            .transpose()?
+            .unwrap_or_else(|| self.configuration.settings.clone());
+        run_async_value(py, async move {
+            get_secret_from_manager(&backend, &name, &settings, &ProcessEnvironment)
+                .await
+                .map(|value| value.and_then(|secret| secret.as_str().map(str::to_owned)))
+                .map_err(|error| PyValueError::new_err(error.to_string()))
+        })
+    }
+}
+
+fn optional_attribute<'py>(
+    object: &Bound<'py, PyAny>,
+    name: &str,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    match object.getattr(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.is_instance_of::<PyAttributeError>(object.py()) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn attribute_path<'py>(object: &Bound<'py, PyAny>, path: &str) -> PyResult<Bound<'py, PyAny>> {
+    match path.split_once('.') {
+        Some((head, tail)) => attribute_path(&object.getattr(head)?, tail),
+        None => object.getattr(path),
+    }
+}
+
+fn cached(
+    client: &Bound<'_, PyAny>,
+    configuration: &Configuration,
+) -> PyResult<Option<Py<NativeSecretManager>>> {
+    let Some(value) = optional_attribute(client, "_litellm_native_secret_manager")? else {
+        return Ok(None);
+    };
+    let native = value.extract::<Py<NativeSecretManager>>()?;
+    let same_configuration = native.borrow(client.py()).pid == std::process::id()
+        && &native.borrow(client.py()).configuration == configuration;
+    Ok(same_configuration.then_some(native))
+}
+
+fn parse_settings(value: Option<&str>) -> PyResult<KeyManagementSettings> {
+    value
+        .map(|value| {
+            serde_json::from_str(value)
+                .map_err(|_| PyValueError::new_err("invalid secret manager settings"))
+        })
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
+fn reject_unregistered_builtin(client: &Bound<'_, PyAny>) -> PyResult<()> {
+    let class = client.get_type();
+    let module = class.getattr("__module__")?.extract::<String>()?;
+    let name = class.getattr("__name__")?.extract::<String>()?;
+    let known = matches!(
+        (module.as_str(), name.as_str()),
+        (
+            "litellm.secret_managers.aws_secret_manager_v2",
+            "AWSSecretsManagerV2"
+        ) | (
+            "litellm.secret_managers.hashicorp_secret_manager",
+            "HashicorpSecretManager"
+        ) | (
+            "litellm.secret_managers.google_secret_manager",
+            "GoogleSecretManager"
+        ) | (
+            "litellm.secret_managers.cyberark_secret_manager",
+            "CyberArkSecretManager"
+        ) | ("azure.keyvault.secrets._client", "SecretClient")
+            | (
+                "google.cloud.kms_v1.services.key_management_service.client",
+                "KeyManagementServiceClient"
+            )
+    );
+    let canonical = if known {
+        let modules = client.py().import("sys")?.getattr("modules")?;
+        modules
+            .get_item(module.as_str())
+            .ok()
+            .and_then(|module| module.getattr(name.as_str()).ok())
+            .is_some_and(|expected| expected.is(&class))
+    } else {
+        module == "botocore.client" && name == "KMS"
+    };
+    if canonical {
+        return Err(crate::errors::RustBridgeDeclined::new_err(
+            "built-in secret manager needs native configuration; use its LiteLLM loader or an explicit native handle",
+        ));
+    }
+    Ok(())
+}

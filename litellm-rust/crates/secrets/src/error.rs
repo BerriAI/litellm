@@ -1,5 +1,7 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("native secret backend is unavailable for this system")]
+    NativeBackendUnavailable,
     #[error("encrypted environment value is missing")]
     MissingCiphertext,
     #[error("ciphertext is not valid base64 for the configured manager")]

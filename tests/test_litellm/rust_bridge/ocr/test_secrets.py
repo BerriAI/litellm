@@ -401,3 +401,41 @@ async def test_custom_system_with_a_foreign_client_falls_back_to_the_environment
         await ocr(server.base_url)
 
     assert server.requests[0].headers["authorization"] == "Bearer environment-key"
+
+
+async def test_native_backend_supplies_ocr_credentials_without_a_python_reader(
+    monkeypatch: pytest.MonkeyPatch, rust_ocr: Ocr
+) -> None:
+    from litellm.secret_managers import main as secret_manager_main
+    from litellm.secret_managers import secret_manager_handler
+    from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
+
+    def reject_python_read(
+        client: object,
+        key_manager: str,
+        secret_name: str,
+        key_management_settings: KeyManagementSettings | None = None,
+    ) -> str | None:
+        raise AssertionError("Rust must read the native backend directly")
+
+    monkeypatch.setattr(secret_manager_handler, "get_secret_from_manager", reject_python_read)
+    monkeypatch.setattr(secret_manager_main, "get_secret_from_manager", reject_python_read)
+    with recording_service() as secrets, _mistral_service(expected_requests=2) as provider:
+        secrets.default_response = ResponseSpec(body={"SecretString": "native-key"})
+        secrets.expected_requests = None
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "native-access")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "native-secret")
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", secrets.base_url)
+        monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+        manager: Final = AWSSecretsManagerV2(aws_region_name="us-east-1")
+        monkeypatch.setattr(litellm, "secret_manager_client", manager)
+        monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.AWS_SECRET_MANAGER)
+        monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(hosted_keys=["MISTRAL_API_KEY"]))
+        monkeypatch.setattr(settings, "secret_manager", lambda: settings.SecretManager(readable=True, native=True))
+        await rust_ocr(provider.base_url)
+        await rust_ocr(provider.base_url)
+
+        assert len(secrets.requests) == 2, [(request.path, request.body) for request in secrets.requests]
+        assert all(request.headers["authorization"] == "Bearer native-key" for request in provider.requests)
+        assert all("Credential=native-access/" in request.headers["authorization"] for request in secrets.requests)
+        assert native._SecretManagerRuntime.from_client(manager) is getattr(manager, "_litellm_native_secret_manager")

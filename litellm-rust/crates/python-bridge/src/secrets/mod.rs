@@ -2,6 +2,7 @@ pub(crate) mod callback;
 pub(crate) mod config;
 mod error;
 pub(crate) mod resolved;
+pub(crate) mod runtime;
 
 use std::sync::Arc;
 
