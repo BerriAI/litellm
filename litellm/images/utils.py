@@ -54,24 +54,26 @@ def _webp_dimensions(head: bytes) -> tuple[int, int] | None:
 
 
 def _jpeg_sof_dimensions(stream: IO[bytes], start: int, offset: int, segments_left: int) -> tuple[int, int] | None:
-    if segments_left == 0:
-        return None
-    stream.seek(start + offset)
-    marker: Final = stream.read(4)
-    if len(marker) < 4 or marker[0] != 0xFF:
-        return None
-    if marker[1] == 0xFF:
-        return _jpeg_sof_dimensions(stream, start, offset + 1, segments_left - 1)
-    if marker[1] in _JPEG_SOF_MARKERS:
-        sof: Final = stream.read(_JPEG_SOF_PAYLOAD_SIZE)
-        if len(sof) < _JPEG_SOF_PAYLOAD_SIZE:
+    segment_offset = offset  # rebind-ok: advanced one JPEG segment per hop
+    for _ in range(segments_left):
+        stream.seek(start + segment_offset)
+        marker = stream.read(4)
+        if len(marker) < 4 or marker[0] != 0xFF:
             return None
-        _precision, height, width = struct.unpack(">BHH", sof)
-        return width, height
-    segment_length: Final = int.from_bytes(marker[2:4], "big")
-    if segment_length < 2:
-        return None
-    return _jpeg_sof_dimensions(stream, start, offset + 2 + segment_length, segments_left - 1)
+        if marker[1] == 0xFF:
+            segment_offset += 1
+            continue
+        if marker[1] in _JPEG_SOF_MARKERS:
+            sof = stream.read(_JPEG_SOF_PAYLOAD_SIZE)
+            if len(sof) < _JPEG_SOF_PAYLOAD_SIZE:
+                return None
+            _precision, height, width = struct.unpack(">BHH", sof)
+            return width, height
+        segment_length = int.from_bytes(marker[2:4], "big")
+        if segment_length < 2:
+            return None
+        segment_offset += 2 + segment_length
+    return None
 
 
 def _header_dimensions(stream: IO[bytes], position: int) -> tuple[int, int] | None:
