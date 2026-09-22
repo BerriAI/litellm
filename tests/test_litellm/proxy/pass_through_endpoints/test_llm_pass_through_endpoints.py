@@ -7420,6 +7420,28 @@ class TestTinyFishProxyRoute:
         assert response.status_code == 403
         assert "not an allowed TinyFish Agent passthrough endpoint" in response.json()["detail"]
 
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/tinyfish/v1/automation/run/",
+            "/tinyfish/v1/automation/run-async/",
+            "/tinyfish/v1/automation/run-sse/",
+            "/tinyfish/v1//automation/run-async",
+        ],
+    )
+    def test_submit_paths_with_extra_slashes_are_rejected_before_forwarding(
+        self, tinyfish_client: TestClient, path: str
+    ) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__regex=r"https://agent\.tinyfish\.ai/.*").mock(
+                return_value=httpx.Response(200, json={"run_id": "run-slash", "status": "PENDING"})
+            )
+            response = tinyfish_client.post(path, json=self.RUN_BODY)
+
+        assert response.status_code == 403
+        assert "not an allowed TinyFish Agent passthrough endpoint" in response.json()["detail"]
+        assert upstream.calls.call_count == 0
+
     def test_rejects_authenticated_run_fields_by_default(self, tinyfish_client: TestClient) -> None:
         with respx.mock:
             response = tinyfish_client.post("/tinyfish/v1/automation/run", json={**self.RUN_BODY, "use_vault": True})

@@ -44,8 +44,8 @@ class TinyfishRun(TypedDict, total=False):
 
 def is_allowed_tinyfish_endpoint(method: str, path: str) -> bool:
     """The host also serves vault/wallet/profile management under the same key, so only run endpoints forward."""
-    segments: Final = tuple(part for part in path.split("/") if part)
-    if any(segment in (".", "..") for segment in segments):
+    segments: Final = tuple(path.split("/")[1:])
+    if not path.startswith("/") or any(segment in ("", ".", "..") for segment in segments):
         return False
     if method == "POST" and segments in _RUN_SUBMIT_PATHS:
         return True

@@ -388,6 +388,12 @@ class TestEndpointAllowlist:
             ("POST", "/v1/runs", False),
             ("GET", "/v1/runs/..", False),
             ("POST", "/v1/runs/../automation/run/cancel", False),
+            ("POST", "/v1/automation/run/", False),
+            ("POST", "/v1/automation/run-async/", False),
+            ("POST", "/v1/automation/run-sse/", False),
+            ("POST", "/v1//automation/run-async", False),
+            ("GET", "/v1/runs/run-abc-123/", False),
+            ("POST", "/v1/runs/run-abc-123/cancel/", False),
         ],
     )
     def test_allowlist(self, method, path, expected):
