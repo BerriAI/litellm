@@ -172,8 +172,21 @@ class RealtimeResponse(BaseModel):
     session_model: str | None = None
 
 
+class ResponsesWebSocketResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    content_type: Literal["application/x-responses-websocket"]
+    events: tuple[dict[str, JsonValue], ...]
+
+
 StoredResponse: TypeAlias = Annotated[
-    JsonResponse | SseResponse | EventStreamResponse | BinaryResponse | RoutedResponse | RealtimeResponse,
+    JsonResponse
+    | SseResponse
+    | EventStreamResponse
+    | BinaryResponse
+    | RoutedResponse
+    | RealtimeResponse
+    | ResponsesWebSocketResponse,
     Field(discriminator="content_type"),
 ]
 

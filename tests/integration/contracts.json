@@ -1764,6 +1764,9 @@
     ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[bearer]": [
       "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
+    ],
+    "tests/integration/spend/test_responses_websocket_spend.py::test_native_responses_websocket_session_records_summed_usage_and_spend": [
+      "spend.responses_websocket.native_session_usage_is_billed"
     ]
   },
   "browser": {

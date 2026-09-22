@@ -24,6 +24,7 @@ from integration.cost_calculation.cost_tracking_case import (
     EventStreamResponse,
     JsonResponse,
     RealtimeResponse,
+    ResponsesWebSocketResponse,
     RoutedResponse,
     SseResponse,
     StoredResponse,
@@ -261,6 +262,28 @@ class Provider:
             )
             await websocket.send_json(rendered)
 
+    async def responses_websocket(self, websocket: WebSocket) -> None:
+        scenario_id: Final = websocket.headers.get("authorization", "").removeprefix("Bearer ")
+        response: Final = self.scenario_store.get(scenario_id)
+        if not isinstance(response, ResponsesWebSocketResponse):
+            await websocket.close(code=4404)
+            return
+        await websocket.accept()
+        event_index: Final = iter(response.events)
+        async for message in websocket.iter_json():
+            payload: Final = JSON_OBJECT.validate_python(message)
+            if payload.get("type") != "response.create":
+                continue
+            event: Final = next(event_index, None)
+            if event is None:
+                continue
+            rendered: Final = JSON_OBJECT.validate_json(
+                json.dumps(event, separators=(",", ":"))
+                .replace("$REQUEST_ID", scenario_id)
+                .replace("$UNIQUE_ID", f"{scenario_id}-{uuid.uuid4().hex[:8]}")
+            )
+            await websocket.send_json(rendered)
+
     @staticmethod
     def _response(response: StoredResponse, scenario_id: str) -> Response:
         unique_id: Final = f"{scenario_id}-{uuid.uuid4().hex[:8]}"
@@ -323,6 +346,8 @@ class Provider:
                     _aws_event_frame(event.event_type, event.payload, scenario_id, unique_id) for event in events
                 )
                 return Response(content=event_body, media_type=response.content_type)
+            case RealtimeResponse() | ResponsesWebSocketResponse():
+                return JSONResponse({"error": "not an HTTP scenario"}, status_code=400)
 
     def app(self) -> Starlette:
         return Starlette(
@@ -341,6 +366,7 @@ class Provider:
                 Route("/{path:path}", self.scripted, methods=["POST"]),
                 Route("/{path:path}", self.scripted, methods=["GET"]),
                 WebSocketRoute("/v1/realtime", self.realtime),
+                WebSocketRoute("/v1/responses", self.responses_websocket),
             ]
         )
 

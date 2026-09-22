@@ -6714,11 +6714,13 @@ class BaseLLMHTTPHandler:
                 ws_url = urlunparse(_parsed._replace(query=urlencode({k: v[0] for k, v in _qs.items()})))
 
         try:
-            ssl_context = get_shared_realtime_ssl_context()
-            if ws_url.startswith("wss://") and ssl_context is False:
-                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_NONE
+            ssl_context = None
+            if ws_url.startswith("wss://"):
+                ssl_context = get_shared_realtime_ssl_context()
+                if ssl_context is False:
+                    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                    ssl_context.check_hostname = False
+                    ssl_context.verify_mode = ssl.CERT_NONE
 
             logging_obj.pre_call(
                 input=None,
