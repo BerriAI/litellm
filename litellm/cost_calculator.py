@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _get_service_tier_cost_key,
     calculate_cost_component,
     generic_cost_per_token,
+    get_batch_cost_rates,
     get_billable_input_tokens,
     get_token_type_cost_breakdown,
     parse_prompt_tokens_details,
@@ -115,6 +116,7 @@ from litellm.types.utils import (
     LlmProviders,
     LlmProvidersSet,
     ModelInfo,
+    ModelInfoBase,
     PromptTokensDetailsWrapper,
     ServiceTier,
     StandardBuiltInToolsParams,
@@ -322,6 +324,48 @@ class OCRPricing(TypedDict, total=False):
     annotation_cost_per_page: ReadOnly[float | None]
 
 
+_WALL_CLOCK_PRICED_MODES: Final = frozenset({"chat", "completion", "embedding", "responses"})
+
+
+def _has_token_or_tiered_pricing(model_info: ModelInfoBase) -> bool:
+    return (
+        (model_info.get("input_cost_per_token") or 0.0) > 0
+        or (model_info.get("output_cost_per_token") or 0.0) > 0
+        or model_info.get("tiered_pricing") is not None
+    )
+
+
+def _bills_wall_clock_seconds(model_info: ModelInfoBase) -> bool:
+    mode: Final = model_info.get("mode")
+    return mode is None or mode in _WALL_CLOCK_PRICED_MODES
+
+
+def _per_second_pricing_cost(
+    model: str,
+    custom_llm_provider: str | None,
+    response_time_ms: float | None,
+) -> tuple[float, float] | None:
+    try:
+        model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
+        return None
+    if _has_token_or_tiered_pricing(model_info) or not _bills_wall_clock_seconds(model_info):
+        return None
+    input_cost_per_second: Final = model_info.get("input_cost_per_second")
+    output_cost_per_second: Final = model_info.get("output_cost_per_second")
+    if input_cost_per_second is None and output_cost_per_second is None:
+        return None
+    seconds: Final = (response_time_ms or 0.0) / 1000
+    verbose_logger.debug(
+        "For model=%s - input_cost_per_second: %s; output_cost_per_second: %s; response time: %s",
+        model,
+        input_cost_per_second,
+        output_cost_per_second,
+        response_time_ms,
+    )
+    return (input_cost_per_second or 0.0) * seconds, (output_cost_per_second or 0.0) * seconds
+
+
 def cost_per_token(
     model: str = "",
     prompt_tokens: int = 0,
@@ -448,9 +492,6 @@ def cost_per_token(
     if response_cost is not None:
         return response_cost[0], response_cost[1]
 
-    # given
-    prompt_tokens_cost_usd_dollar: float = 0
-    completion_tokens_cost_usd_dollar: float = 0
     model_cost_ref: Final = litellm.model_cost
     # Only callers that explicitly pass `custom_llm_provider` get the
     # dedup/prefix-join treatment. When provider is omitted, preserve legacy
@@ -611,6 +652,14 @@ def cost_per_token(
             number_of_queries=number_of_queries or 1,
             optional_params=(getattr(response, "_hidden_params", None) if response else None),
         )
+    elif (
+        per_second_cost := _per_second_pricing_cost(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            response_time_ms=response_time_ms,
+        )
+    ) is not None:
+        return per_second_cost
     elif custom_llm_provider == "vertex_ai":
         cost_router: Final = google_cost_router(
             model=model_without_prefix,
@@ -685,12 +734,7 @@ def cost_per_token(
         )
     else:
         model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
-
-        if (
-            (model_info.get("input_cost_per_token") or 0.0) > 0
-            or (model_info.get("output_cost_per_token") or 0.0) > 0
-            or model_info.get("tiered_pricing") is not None
-        ):
+        if _has_token_or_tiered_pricing(model_info):
             return generic_cost_per_token(
                 model=model,
                 usage=usage_block,
@@ -698,36 +742,8 @@ def cost_per_token(
                 service_tier=service_tier,
                 data_residency=data_residency,
             )
-
-        input_cost_per_second: Final = model_info.get("input_cost_per_second")
-        if input_cost_per_second is not None and response_time_ms is not None:
-            verbose_logger.debug(
-                "For model=%s - input_cost_per_second: %s; response time: %s",
-                model,
-                input_cost_per_second,
-                response_time_ms,
-            )
-            ## COST PER SECOND ##
-            prompt_tokens_cost_usd_dollar = input_cost_per_second * response_time_ms / 1000
-
-        output_cost_per_second: Final = model_info.get("output_cost_per_second")
-        if output_cost_per_second is not None and response_time_ms is not None:
-            verbose_logger.debug(
-                "For model=%s - output_cost_per_second: %s; response time: %s",
-                model,
-                output_cost_per_second,
-                response_time_ms,
-            )
-            ## COST PER SECOND ##
-            completion_tokens_cost_usd_dollar = output_cost_per_second * response_time_ms / 1000
-
-        verbose_logger.debug(
-            "Returned custom cost for model=%s - prompt_tokens_cost_usd_dollar: %s, completion_tokens_cost_usd_dollar: %s",
-            model,
-            prompt_tokens_cost_usd_dollar,
-            completion_tokens_cost_usd_dollar,
-        )
-        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+        verbose_logger.debug("No per-token, tiered, or per-second pricing for model=%s; cost is 0", model)
+        return 0.0, 0.0
 
 
 def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
@@ -1222,6 +1238,21 @@ def _split_responses_ws_logging_object_by_service_tier(
     )
 
 
+def _response_time_ms_for_cost(
+    completion_response: object,
+    litellm_logging_obj: LitellmLoggingObject | None,
+    total_time: float | None,
+) -> float:
+    stamped: Final = getattr(completion_response, "_response_ms", None)
+    if isinstance(stamped, (int, float)):
+        return float(stamped)
+    if total_time:
+        return total_time
+    if litellm_logging_obj is not None:
+        return litellm_logging_obj.get_response_ms()
+    return 0.0
+
+
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
@@ -1442,8 +1473,6 @@ def completion_cost(
                     ):
                         prompt_tokens_details = _usage.get("prompt_tokens_details") or {}
                         cache_read_input_tokens = prompt_tokens_details.get("cached_tokens", 0)
-
-                    total_time = getattr(completion_response, "_response_ms", 0)
 
                     hidden_params = getattr(completion_response, "_hidden_params", None)
                     if hidden_params is not None:
@@ -1676,6 +1705,11 @@ def completion_cost(
                     )
 
                     return MCPCostCalculator.calculate_mcp_tool_call_cost(litellm_logging_obj=litellm_logging_obj)
+                response_time_ms = _response_time_ms_for_cost(
+                    completion_response=completion_response,
+                    litellm_logging_obj=litellm_logging_obj,
+                    total_time=total_time,
+                )
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai"
@@ -1686,7 +1720,7 @@ def completion_cost(
                 # see https://replicate.com/pricing
                 elif (model in litellm.replicate_models or "replicate" in model) and model not in litellm.model_cost:
                     # for unmapped replicate model, default to replicate's time tracking logic
-                    return get_replicate_completion_pricing(completion_response, total_time)
+                    return get_replicate_completion_pricing(completion_response, response_time_ms)
 
                 if model is None:
                     raise ValueError(
@@ -1718,7 +1752,7 @@ def completion_cost(
                     prompt_tokens=prompt_tokens or 0,
                     completion_tokens=completion_tokens or 0,
                     custom_llm_provider=custom_llm_provider,
-                    response_time_ms=total_time,
+                    response_time_ms=response_time_ms,
                     region_name=None if explicit_pricing else region_name,
                     custom_cost_per_second=custom_cost_per_second,
                     custom_cost_per_token=custom_cost_per_token,
@@ -2524,35 +2558,14 @@ def batch_cost_calculator(
     if not model_info:
         return 0.0, 0.0
 
-    input_cost_per_token_batches: Final = model_info.get("input_cost_per_token_batches")
+    batch_rates: Final = get_batch_cost_rates(model_info, usage, custom_llm_provider)
     input_cost_per_token: Final = model_info.get("input_cost_per_token")
-    output_cost_per_token_batches: Final = model_info.get("output_cost_per_token_batches")
     output_cost_per_token: Final = model_info.get("output_cost_per_token")
     total_prompt_cost = 0.0
     total_completion_cost = 0.0
-    if input_cost_per_token_batches is not None:
-        batch_details: Final = parse_prompt_tokens_details(usage)
-        audio_tokens, image_tokens, video_tokens = (
-            batch_details["audio_tokens"],
-            batch_details["image_tokens"],
-            batch_details["video_tokens"],
-        )
-        modality_rates: Final = (
-            _batch_rate(model_info, "input_cost_per_audio_token_batches", input_cost_per_token_batches),
-            _batch_rate(model_info, "input_cost_per_image_token_batches", input_cost_per_token_batches),
-            _batch_rate(model_info, "input_cost_per_video_token_batches", input_cost_per_token_batches),
-        )
-        total_prompt_cost = sum(
-            tokens * rate
-            for tokens, rate in zip(
-                (
-                    max((usage.prompt_tokens or 0) - audio_tokens - image_tokens - video_tokens, 0),
-                    audio_tokens,
-                    image_tokens,
-                    video_tokens,
-                ),
-                (input_cost_per_token_batches, *modality_rates),
-            )
+    if batch_rates.input is not None:
+        total_prompt_cost = _batch_prompt_cost(
+            usage, model_info, batch_rates.input, batch_rates.cache_read, batch_rates.cache_creation
         )
     elif input_cost_per_token:
         details: Final = parse_prompt_tokens_details(usage)
@@ -2572,8 +2585,8 @@ def batch_cost_calculator(
 
         cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
         total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
-    if output_cost_per_token_batches is not None:
-        total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
+    if batch_rates.output is not None:
+        total_completion_cost = usage.completion_tokens * batch_rates.output
     elif output_cost_per_token:
         total_completion_cost = (
             usage.completion_tokens * (output_cost_per_token) / 2
@@ -2585,6 +2598,34 @@ def batch_cost_calculator(
         total_completion_cost *= uplift
 
     return total_prompt_cost, total_completion_cost
+
+
+def _batch_prompt_cost(
+    usage: Usage,
+    model_info: ModelInfo,
+    input_rate: float,
+    cache_read_rate: float | None,
+    cache_creation_rate: float | None,
+) -> float:
+    details: Final = parse_prompt_tokens_details(usage)
+    cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
+    written_tokens: Final = details["cache_creation_tokens"] if cache_creation_rate is not None else 0
+    audio_tokens, image_tokens, video_tokens = (
+        details["audio_tokens"],
+        details["image_tokens"],
+        details["video_tokens"],
+    )
+    text_tokens: Final = max(
+        (usage.prompt_tokens or 0) - audio_tokens - image_tokens - video_tokens - cached_tokens - written_tokens, 0
+    )
+    return (
+        text_tokens * input_rate
+        + audio_tokens * _batch_rate(model_info, "input_cost_per_audio_token_batches", input_rate)
+        + image_tokens * _batch_rate(model_info, "input_cost_per_image_token_batches", input_rate)
+        + video_tokens * _batch_rate(model_info, "input_cost_per_video_token_batches", input_rate)
+        + cached_tokens * (cache_read_rate or 0.0)
+        + written_tokens * (cache_creation_rate or 0.0)
+    )
 
 
 def _attribute_value(obj: object, name: str) -> object:

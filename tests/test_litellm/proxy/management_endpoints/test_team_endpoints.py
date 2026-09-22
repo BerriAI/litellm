@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -42,6 +43,8 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _STRIP_DELETED_TEAM_FROM_USERS_SQL,
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
+    _build_team_list_where_conditions,
+    _get_org_admin_org_ids,
     _persist_deleted_team_records,
     _save_deleted_team_records,
     _transform_teams_to_deleted_records,
@@ -16569,3 +16572,81 @@ def test_team_member_update_request_rejects_unusable_temp_budget_increase(increa
         TeamMemberUpdateRequest(
             team_id="team-1", user_id="user-1", temp_budget_increase=increase, temp_budget_expiry="2030-01-01T00:00:00Z"
         )
+
+
+_DB_OUTAGE_503_BODY: Final = {
+    "error": {
+        "message": "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
+        "type": "no_db_connection",
+        "param": "None",
+        "code": "503",
+    }
+}
+
+
+def _user_read_raising(error: Exception) -> tuple[MagicMock, MagicMock]:
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=error)
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    return prisma_client, cache
+
+
+def _db_unavailable_fallback_identity(route: str) -> UserAPIKeyAuth:
+    from litellm.proxy.auth.auth_exception_handler import DB_UNAVAILABLE_FALLBACK_USER_ID
+
+    return UserAPIKeyAuth(
+        key_name="failed-to-connect-to-db",
+        token="failed-to-connect-to-db",
+        user_id=DB_UNAVAILABLE_FALLBACK_USER_ID,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        request_route=route,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_org_admin_org_ids_propagates_a_db_outage_instead_of_answering_not_an_org_admin():
+    prisma_client, cache = _user_read_raising(httpx.ConnectError("All connection attempts failed"))
+
+    with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
+        with pytest.raises(httpx.ConnectError):
+            await _get_org_admin_org_ids(
+                user_id="outage-probe-user",
+                prisma_client=prisma_client,
+                user_api_key_cache=cache,
+                proxy_logging_obj=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_build_team_list_where_conditions_propagates_a_db_outage_instead_of_answering_user_not_found():
+    prisma_client, cache = _user_read_raising(httpx.ConnectError("All connection attempts failed"))
+
+    with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
+        with pytest.raises(httpx.ConnectError):
+            await _build_team_list_where_conditions(
+                prisma_client=prisma_client,
+                team_id=None,
+                team_alias=None,
+                organization_id=None,
+                user_id="outage-probe-user",
+                use_deleted_table=False,
+                user_api_key_cache=cache,
+                proxy_logging_obj=None,
+            )
+
+
+def test_list_team_v2_answers_503_no_db_connection_when_the_callers_user_read_hits_a_db_outage(monkeypatch):
+    prisma_client, cache = _user_read_raising(httpx.ConnectError("All connection attempts failed"))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    app.dependency_overrides[user_api_key_auth] = lambda: _db_unavailable_fallback_identity("/v2/team/list")
+    try:
+        with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
+            response = TestClient(app, raise_server_exceptions=False).get("/v2/team/list")
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+    assert response.status_code == 503, response.text
+    assert response.json() == _DB_OUTAGE_503_BODY

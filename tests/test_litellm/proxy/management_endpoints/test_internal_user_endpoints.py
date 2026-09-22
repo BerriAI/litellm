@@ -1,8 +1,10 @@
 import hashlib
 import json
+import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -17,12 +19,15 @@ from litellm.proxy._types import (
     LiteLLM_UserTableFiltered,
     LitellmUserRoles,
     NewUserRequest,
+    ProxyErrorTypes,
     ProxyException,
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     LiteLLM_UserTableWithKeyCount,
+    _authorize_user_list_request,
+    _resolve_org_filter_for_user_search,
     _resolve_user_email_metadata,
     _update_internal_user_params,
     get_user_key_counts,
@@ -4653,3 +4658,124 @@ async def test_delete_user_evicts_cached_user_rows(mocker: MockerFixture) -> Non
     assert await cache.async_get_cache(key=deleted.user_id, model_type=LiteLLM_UserTable) is None
     assert await cache.async_get_cache(key=survivor.user_id, model_type=LiteLLM_UserTable) == survivor
     broadcast.assert_awaited_once_with(cache_key=deleted.user_id)
+
+
+_DB_OUTAGE_503_BODY: Final = {
+    "error": {
+        "message": "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
+        "type": "no_db_connection",
+        "param": "None",
+        "code": "503",
+    }
+}
+
+
+def _user_read_raising(mocker: MockerFixture, error: Exception) -> tuple[MagicMock, MagicMock]:
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=error)
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    mocker.patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True)
+    return prisma_client, cache
+
+
+def _db_unavailable_fallback_identity(route: str) -> UserAPIKeyAuth:
+    from litellm.proxy.auth.auth_exception_handler import DB_UNAVAILABLE_FALLBACK_USER_ID
+
+    return UserAPIKeyAuth(
+        key_name="failed-to-connect-to-db",
+        token="failed-to-connect-to-db",
+        user_id=DB_UNAVAILABLE_FALLBACK_USER_ID,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        request_route=route,
+    )
+
+
+@pytest.mark.asyncio
+async def test_authorize_user_list_request_propagates_a_db_outage_instead_of_answering_403(mocker):
+    prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
+
+    with pytest.raises(httpx.ConnectError):
+        await _authorize_user_list_request(
+            user_api_key_dict=_db_unavailable_fallback_identity("/user/list"),
+            organization_ids=None,
+            prisma_client=prisma_client,
+            user_api_key_cache=cache,
+            proxy_logging_obj=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_resolve_org_filter_for_user_search_propagates_a_db_outage_instead_of_answering_403(mocker):
+    prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
+    mocker.patch(
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
+        return_value={"scope_user_search_to_org": True},
+    )
+
+    with pytest.raises(httpx.ConnectError):
+        await _resolve_org_filter_for_user_search(
+            user_api_key_dict=_db_unavailable_fallback_identity("/user/filter/ui"),
+            team_id=None,
+            prisma_client=prisma_client,
+            user_api_key_cache=cache,
+            proxy_logging_obj=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_ui_view_users_answers_a_db_outage_as_503_no_db_connection_not_as_its_own_500(mocker, caplog):
+    prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
+    mocker.patch(
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
+        return_value={"scope_user_search_to_org": True},
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"), pytest.raises(ProxyException) as raised:
+        await ui_view_users(
+            user_api_key_dict=_db_unavailable_fallback_identity("/user/filter/ui"),
+            user_id=None,
+            user_email="lit",
+            team_id=None,
+            page=1,
+            page_size=50,
+        )
+
+    assert raised.value.code == "503"
+    assert raised.value.type == ProxyErrorTypes.no_db_connection
+    assert isinstance(raised.value.__cause__, httpx.ConnectError)
+    outage_logs: Final = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and "ConnectError" in r.getMessage()]
+    assert outage_logs == ["Database unavailable during user search: ConnectError"]
+
+
+@pytest.mark.parametrize(
+    ("route", "params"),
+    [("/user/list", {}), ("/user/filter/ui", {"user_email": "lit"})],
+    ids=["user_list", "user_filter_ui"],
+)
+def test_user_routes_answer_503_no_db_connection_when_the_callers_user_read_hits_a_db_outage(
+    mocker, route: str, params: dict[str, str]
+):
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))
+    mocker.patch(
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
+        return_value={"scope_user_search_to_org": True},
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    app.dependency_overrides[user_api_key_auth] = lambda: _db_unavailable_fallback_identity(route)
+    try:
+        response = TestClient(app, raise_server_exceptions=False).get(route, params=params)
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+    assert response.status_code == 503, response.text
+    assert response.json() == _DB_OUTAGE_503_BODY
