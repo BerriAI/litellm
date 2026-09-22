@@ -27,14 +27,14 @@ def _chat_dict(*texts: str) -> dict[str, object]:
     }
 
 
-def _choice_texts(response: object) -> tuple[str, ...]:
+def _choice_texts(response: object) -> tuple[str | None, ...]:
     texts = served_output_texts(response)
     assert texts is not None, response
     return texts
 
 
-def _stream_chunk(text: str) -> ModelResponseStream:
-    return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=text))])
+def _stream_chunk(text: str, index: int = 0) -> ModelResponseStream:
+    return ModelResponseStream(choices=[StreamingChoices(index=index, delta=Delta(content=text))])
 
 
 def test_served_output_texts_reads_each_response_shape():
@@ -74,6 +74,20 @@ def test_served_stream_output_texts_joins_chat_chunks_and_reads_anthropic_sse():
     assert served_stream_output_texts([b"not sse"]) is None
 
 
+def test_served_stream_output_texts_keeps_every_choice_index_when_chunks_carry_one_choice_each():
+    chunks = [_stream_chunk("first ", 0), _stream_chunk(MASKED, 1), _stream_chunk("choice", 0)]
+    assert served_stream_output_texts(chunks) == ("first choice", MASKED)
+
+
+def test_blanked_output_is_served_as_empty_text_and_overlaid():
+    assert served_output_texts(_chat_response("")) == ("",)
+    assert served_output_texts({"type": "message", "role": "assistant", "content": [{"type": "text", "text": ""}]}) == (
+        "",
+    )
+    assert served_stream_output_texts([_stream_chunk("")]) == ("",)
+    assert _choice_texts(overlay_served_output_texts(_chat_dict(RAW), ("",))) == ("",)
+
+
 def test_overlay_replaces_logged_choice_text_with_served_text():
     logged = _chat_dict(RAW, RAW)
     overlaid = overlay_served_output_texts(logged, (MASKED,))
@@ -87,7 +101,7 @@ def test_overlay_leaves_unreadable_inputs_untouched():
     logged = _chat_dict(RAW)
     assert overlay_served_output_texts(logged, None) is logged
     assert overlay_served_output_texts(logged, "not a tuple") is logged
-    assert overlay_served_output_texts(logged, ("",)) == logged
+    assert overlay_served_output_texts(logged, (None,)) == logged
     assert overlay_served_output_texts("text", (MASKED,)) == "text"
     assert overlay_served_output_texts({"data": []}, (MASKED,)) == {"data": []}
 

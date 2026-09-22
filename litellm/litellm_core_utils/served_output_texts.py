@@ -14,7 +14,9 @@ SERVED_OUTPUT_TEXTS_KEY: Final = "served_output_texts"
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_LIST: Final = TypeAdapter(list[object])
-_TEXTS: Final = TypeAdapter(tuple[str, ...])
+_TEXTS: Final = TypeAdapter(tuple[str | None, ...])
+
+ServedTexts = tuple[str | None, ...]
 
 
 class _TextBlock(BaseModel):
@@ -50,15 +52,15 @@ def _as_json_object(response: object) -> dict[str, object] | None:
 
 
 def _joined_block_texts(blocks: Sequence[_TextBlock], *, text_type: str) -> str | None:
-    texts: Final = tuple(block.text for block in blocks if block.type == text_type and block.text)
+    texts: Final = tuple(block.text for block in blocks if block.type == text_type and block.text is not None)
     return "".join(texts) if texts else None
 
 
-def _chat_texts(response: ModelResponse) -> tuple[str, ...] | None:
+def _chat_texts(response: ModelResponse) -> ServedTexts | None:
     texts: Final = tuple(
-        choice.message.content if isinstance(choice.message.content, str) else "" for choice in response.choices
+        choice.message.content if isinstance(choice.message.content, str) else None for choice in response.choices
     )
-    return texts if any(texts) else None
+    return texts if any(text is not None for text in texts) else None
 
 
 def _anthropic_message_text(response: dict[str, object]) -> str | None:
@@ -82,7 +84,7 @@ def _responses_api_text(response: dict[str, object]) -> str | None:
     return "".join(texts) if texts else None
 
 
-def _chat_dict_texts(response: dict[str, object]) -> tuple[str, ...] | None:
+def _chat_dict_texts(response: dict[str, object]) -> ServedTexts | None:
     try:
         _ChatChoices.model_validate(response)
         return _chat_texts(ModelResponse(**response))
@@ -90,7 +92,7 @@ def _chat_dict_texts(response: dict[str, object]) -> tuple[str, ...] | None:
         return None
 
 
-def served_output_texts(response: object) -> tuple[str, ...] | None:
+def served_output_texts(response: object) -> ServedTexts | None:
     if isinstance(response, ModelResponse):
         return _chat_texts(response)
     mapping: Final = _as_json_object(response)
@@ -99,11 +101,12 @@ def served_output_texts(response: object) -> tuple[str, ...] | None:
     chat_texts: Final = _chat_dict_texts(mapping)
     if chat_texts is not None:
         return chat_texts
-    text: Final = _anthropic_message_text(mapping) or _responses_api_text(mapping)
+    anthropic_text: Final = _anthropic_message_text(mapping)
+    text: Final = anthropic_text if anthropic_text is not None else _responses_api_text(mapping)
     return (text,) if text is not None else None
 
 
-def served_stream_output_texts(chunks: Sequence[object]) -> tuple[str, ...] | None:
+def served_stream_output_texts(chunks: Sequence[object]) -> ServedTexts | None:
     if chunks and all(isinstance(chunk, ModelResponseStream) for chunk in chunks):
         return _chat_stream_texts(tuple(chunk for chunk in chunks if isinstance(chunk, ModelResponseStream)))
     from litellm.proxy.guardrails.anthropic_sse import assemble_anthropic_sse_stream, is_anthropic_sse_stream
@@ -114,23 +117,26 @@ def served_stream_output_texts(chunks: Sequence[object]) -> tuple[str, ...] | No
     return _chat_texts(assembled) if assembled is not None else None
 
 
-def _chat_stream_texts(chunks: Sequence[ModelResponseStream]) -> tuple[str, ...] | None:
-    choice_count: Final = max((len(chunk.choices) for chunk in chunks), default=0)
-    texts: Final = tuple(
-        "".join(
-            content
-            for chunk in chunks
-            for choice in chunk.choices
-            if choice.index == index and isinstance(content := choice.delta.content, str)
-        )
-        for index in range(choice_count)
+def _chat_stream_choice_text(chunks: Sequence[ModelResponseStream], index: int) -> str | None:
+    contents: Final = tuple(
+        content
+        for chunk in chunks
+        for choice in chunk.choices
+        if choice.index == index and isinstance(content := choice.delta.content, str)
     )
-    return texts if any(texts) else None
+    return "".join(contents) if contents else None
 
 
-def record_served_output_texts(model_call_details: dict[str, object], texts: tuple[str, ...] | None) -> None:
-    if texts is not None:
-        model_call_details[SERVED_OUTPUT_TEXTS_KEY] = texts
+def _chat_stream_texts(chunks: Sequence[ModelResponseStream]) -> ServedTexts | None:
+    choice_count: Final = max((choice.index + 1 for chunk in chunks for choice in chunk.choices), default=0)
+    texts: Final = tuple(_chat_stream_choice_text(chunks, index) for index in range(choice_count))
+    return texts if any(text is not None for text in texts) else None
+
+
+def record_served_output_texts(model_call_details: dict[str, object], texts: ServedTexts | None) -> None:
+    if texts is None:
+        return
+    model_call_details[SERVED_OUTPUT_TEXTS_KEY] = texts  # rebind-ok: model_call_details is the shared kwargs bag
 
 
 def overlay_served_output_texts(
@@ -155,9 +161,9 @@ def overlay_served_output_texts(
     }
 
 
-def _choice_with_text(choice: object, text: str) -> object:
+def _choice_with_text(choice: object, text: str | None) -> object:
     choice_obj: Final = _as_json_object(choice)
-    if choice_obj is None or not text:
+    if choice_obj is None or text is None:
         return choice
     message: Final = _as_json_object(choice_obj.get("message"))
     if message is None or message.get("content") == text:

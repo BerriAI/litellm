@@ -375,6 +375,33 @@ async def test_post_call_stream_records_masked_text_for_deferred_logging(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_post_call_stream_records_the_served_text_when_the_client_disconnects(monkeypatch):
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    monkeypatch.setattr(litellm, "callbacks", [_content_filter_guardrail("MASK")])
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    logging_obj = _streaming_logging_obj()
+
+    async def fake_stream():
+        yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="the zebra runs"))])
+        yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=" far"))])
+
+    stream = proxy_logging.async_post_call_streaming_iterator_hook(
+        response=fake_stream(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/chat/completions"),
+        request_data={"model": "gpt-4o-mini", "metadata": {}, "litellm_logging_obj": logging_obj},
+    )
+    first = await stream.__anext__()
+    await stream.aclose()
+
+    delivered_text = "".join(choice.delta.content or "" for choice in first.choices)
+    assert "zebra" not in delivered_text
+    assert logging_obj.model_call_details[SERVED_OUTPUT_TEXTS_KEY] == (delivered_text,)
+
+
+@pytest.mark.asyncio
 async def test_unified_guardrail_iterator_accepts_explicit_guardrail():
     """
     The dispatch passes each guardrail explicitly instead of through a shared

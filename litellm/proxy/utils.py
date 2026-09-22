@@ -3819,8 +3819,10 @@ class ProxyLogging:
                 served_chunks.append(chunk)
                 yield chunk
         except (GeneratorExit, asyncio.CancelledError):
+            ProxyLogging._record_served_stream_output(request_data, served_chunks)
             raise
         except Exception as e:
+            ProxyLogging._record_served_stream_output(request_data, served_chunks)
             if not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
                 ProxyLogging._fire_deferred_stream_logging(request_data)
             raise

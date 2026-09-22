@@ -565,7 +565,9 @@ class TestPresidioSpendLogStoresMaskedOutput:
             resources,
             scoped_key,
             name=f"e2e-presidio-log-card-chat-{unique_marker()}",
-            fetch=lambda prompt, guardrail: client.chat_raw(scoped_key, MODEL, prompt, guardrails=[guardrail], max_tokens=512),
+            fetch=lambda prompt, guardrail: client.chat_raw(
+                scoped_key, MODEL, prompt, guardrails=[guardrail], max_tokens=512
+            ),
         )
 
     @pytest.mark.covers(_CELL, exercised_on=["chat_completions_stream"])
@@ -577,7 +579,9 @@ class TestPresidioSpendLogStoresMaskedOutput:
             resources,
             scoped_key,
             name=f"e2e-presidio-log-card-chat-stream-{unique_marker()}",
-            fetch=lambda prompt, guardrail: client.chat_stream_raw(scoped_key, MODEL, prompt, guardrails=[guardrail], max_tokens=512),
+            fetch=lambda prompt, guardrail: client.chat_stream_raw(
+                scoped_key, MODEL, prompt, guardrails=[guardrail], max_tokens=512
+            ),
         )
 
     @pytest.mark.covers(_CELL, exercised_on=["messages"])
@@ -589,7 +593,9 @@ class TestPresidioSpendLogStoresMaskedOutput:
             resources,
             scoped_key,
             name=f"e2e-presidio-log-card-messages-{unique_marker()}",
-            fetch=lambda prompt, guardrail: client.messages_raw(scoped_key, MODEL, prompt, guardrails=[guardrail], max_tokens=512),
+            fetch=lambda prompt, guardrail: client.messages_raw(
+                scoped_key, MODEL, prompt, guardrails=[guardrail], max_tokens=512
+            ),
         )
 
     @pytest.mark.covers(_CELL, exercised_on=["anthropic_messages_stream"])
