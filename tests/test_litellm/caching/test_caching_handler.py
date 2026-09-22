@@ -789,11 +789,11 @@ async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_ord
     from litellm.caching.caching import Cache
     from litellm.types.utils import Embedding, EmbeddingResponse
 
-    provider_inputs: list[list[str]] = []
-
     class RecordingEmbedder(CustomLLM):
+        provider_inputs: tuple[tuple[str, ...], ...] = ()
+
         async def aembedding(self, model, input, model_response, **kwargs) -> EmbeddingResponse:
-            provider_inputs.append(list(input))
+            self.provider_inputs = (*self.provider_inputs, tuple(input))
             return EmbeddingResponse(
                 model=model,
                 data=[
@@ -802,9 +802,8 @@ async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_ord
                 ],
             )
 
-    monkeypatch.setattr(
-        litellm, "custom_provider_map", [{"provider": "recording-embedder", "custom_handler": RecordingEmbedder()}]
-    )
+    embedder = RecordingEmbedder()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "recording-embedder", "custom_handler": embedder}])
     monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "recording-embedder"])
     monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "recording-embedder"])
     monkeypatch.setattr(litellm, "cache", Cache(type="local"))
@@ -813,6 +812,11 @@ async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_ord
     mixed_input = ["c", "aa", "ddd", "bbbb", "eeeee"]
     response = await litellm.aembedding(model="recording-embedder/m", input=mixed_input)
 
-    assert provider_inputs == [["aa", "bbbb"], ["c", "ddd", "eeeee"]], provider_inputs
+    assert embedder.provider_inputs == (("aa", "bbbb"), ("c", "ddd", "eeeee")), embedder.provider_inputs
     assert [item["index"] for item in response.data] == [0, 1, 2, 3, 4]
     assert [item["embedding"] for item in response.data] == [[float(len(text))] for text in mixed_input]
+
+    repeat = await litellm.aembedding(model="recording-embedder/m", input=mixed_input)
+
+    assert len(embedder.provider_inputs) == 2, embedder.provider_inputs
+    assert [item["embedding"] for item in repeat.data] == [[float(len(text))] for text in mixed_input]
