@@ -16638,8 +16638,6 @@ async def test_build_team_list_where_conditions_propagates_a_db_outage_instead_o
 
 
 def test_list_team_v2_answers_503_no_db_connection_when_the_callers_user_read_hits_a_db_outage(monkeypatch):
-    """Under allow_requests_on_db_unavailable the fallback identity's own user read fails on the
-    outage; the route answers auth's 503 body instead of a bare 500 or a permission verdict."""
     prisma_client, cache = _user_read_raising(httpx.ConnectError("All connection attempts failed"))
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)

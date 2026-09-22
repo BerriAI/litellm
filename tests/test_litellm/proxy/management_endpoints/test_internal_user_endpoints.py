@@ -4762,8 +4762,6 @@ async def test_ui_view_users_answers_a_db_outage_as_503_no_db_connection_not_as_
 def test_user_routes_answer_503_no_db_connection_when_the_callers_user_read_hits_a_db_outage(
     mocker, route: str, params: dict[str, str]
 ):
-    """Under allow_requests_on_db_unavailable the fallback identity's own user read fails on the
-    outage; each route answers auth's 503 body instead of a bare 500 or a permission verdict."""
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
     prisma_client, cache = _user_read_raising(mocker, httpx.ConnectError("All connection attempts failed"))

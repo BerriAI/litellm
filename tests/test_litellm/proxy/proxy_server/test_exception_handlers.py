@@ -393,8 +393,6 @@ def _raised_from(outer: Exception, cause: Exception) -> Exception:
     ids=["raw_connect_error", "connect_error_as_cause"],
 )
 async def test_otel_unhandled_exception_handler_answers_a_db_outage_with_503_no_db_connection(exc):
-    """A management route that lets the outage propagate answers the same 503 body auth gives,
-    never the bare 500 (the fallback identity's user read under allow_requests_on_db_unavailable)."""
     response = await otel_unhandled_exception_handler(request=_make_request(path="/v2/team/list"), exc=exc)
 
     assert response.status_code == 503

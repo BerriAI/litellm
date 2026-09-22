@@ -381,8 +381,6 @@ class PrismaDBExceptionHandler:
 
     @staticmethod
     def service_unavailable_proxy_exception(e: Exception) -> ProxyException:
-        """The one 503 ``no_db_connection`` answer every route gives for a
-        database outage, so auth and the management routes agree on the body."""
         return ProxyException(
             message=PrismaDBExceptionHandler.database_unavailable_message(e),
             type=ProxyErrorTypes.no_db_connection,
