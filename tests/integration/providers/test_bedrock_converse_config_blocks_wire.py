@@ -2,7 +2,6 @@ import json
 from typing import Final
 
 import pytest
-
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from integration.providers.test_bedrock_auth_wire import MODEL, RESPONSE, TOKEN

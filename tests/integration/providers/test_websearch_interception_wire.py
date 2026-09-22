@@ -1,4 +1,4 @@
-json
+import json
 from pathlib import Path
 from typing import Final
 
@@ -169,7 +169,8 @@ def test_streamed_web_search_turn_capped_by_max_agentic_loops_ends_turn_with_sni
             ], response.text
             assert "litellm_web_search" not in response.text, response.text
             assert [request.target for request in wire.drain()] == [INVOKE_TARGET, SEARCH_TARGET, INVOKE_TARGET]
-import json
+
+
 import threading
 import uuid
 from collections.abc import Iterator
@@ -180,7 +181,6 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 from integration._support.client import Gateway, eventually
-from integration._support.wire import Reply, Request, wire_server
 
 _QUERY: Final = "integration capped search"
 _TEXT_BLOCK: Final = {"type": "text", "text": "searching once more"}
