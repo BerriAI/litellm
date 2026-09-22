@@ -17,28 +17,20 @@ use pyo3::{
 };
 
 use crate::{
+    coercion::FieldSpec,
     http,
-    python_settings::{Adapter, PythonSettings, SettingSpec, Snapshot},
+    python_settings::{PythonSettings, Snapshot},
     secrets,
 };
 
-const fn provider_default(name: &'static str, adapter: Adapter) -> SettingSpec {
-    SettingSpec::new(PythonSettings::ProviderDefaults, name, adapter)
-}
-
-pub(crate) const VERTEX_PROJECT: SettingSpec =
-    provider_default("vertex_project", Adapter::FalsyOptionalString).sensitive();
-pub(crate) const VERTEX_LOCATION: SettingSpec =
-    provider_default("vertex_location", Adapter::FalsyOptionalString).sensitive();
-pub(crate) const ENABLE_AZURE_AD_TOKEN_REFRESH: SettingSpec =
-    provider_default("enable_azure_ad_token_refresh", Adapter::ExactTrue);
-
-#[cfg(test)]
-pub(crate) const PROVIDER_DEFAULT_SPECS: &[SettingSpec] = &[
-    VERTEX_PROJECT,
-    VERTEX_LOCATION,
-    ENABLE_AZURE_AD_TOKEN_REFRESH,
-];
+const VERTEX_PROJECT: FieldSpec<Option<String>> =
+    FieldSpec::new("vertex_project", |field| field.falsy_optional_string());
+const VERTEX_LOCATION: FieldSpec<Option<String>> =
+    FieldSpec::new("vertex_location", |field| field.falsy_optional_string());
+const ENABLE_AZURE_AD_TOKEN_REFRESH: FieldSpec<bool> =
+    FieldSpec::new("enable_azure_ad_token_refresh", |field| {
+        Ok(field.exact_true())
+    });
 
 const SURFACE: LegacySurface = LegacySurface {
     call_type: "ocr",
@@ -87,12 +79,9 @@ fn ocr_settings(py: Python<'_>) -> PyResult<OcrSettings> {
 
 fn project_provider_defaults(snapshot: &Snapshot<'_>) -> PyResult<OcrSettings> {
     Ok(OcrSettings {
-        vertex_project: snapshot.field(&VERTEX_PROJECT)?.falsy_optional_string()?.0,
-        vertex_location: snapshot.field(&VERTEX_LOCATION)?.falsy_optional_string()?.0,
-        enable_azure_ad_token_refresh: snapshot
-            .field(&ENABLE_AZURE_AD_TOKEN_REFRESH)?
-            .exact_true()
-            .0,
+        vertex_project: snapshot.read(&VERTEX_PROJECT)?,
+        vertex_location: snapshot.read(&VERTEX_LOCATION)?,
+        enable_azure_ad_token_refresh: snapshot.read(&ENABLE_AZURE_AD_TOKEN_REFRESH)?,
         ..OcrSettings::from_environment(&ProcessEnvironment)
     })
 }

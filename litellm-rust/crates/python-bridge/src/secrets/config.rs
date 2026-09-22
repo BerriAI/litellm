@@ -7,67 +7,53 @@ use serde_json::Value;
 
 use super::callback::PythonSecretManager;
 use crate::{
-    coercion::{Field, ProjectionError},
-    python_settings::{Adapter, PythonSettings, SettingSpec, Snapshot},
+    coercion::{Field, FieldSpec, ProjectionError},
+    python_settings::{PythonSettings, Snapshot},
 };
 
-const fn secret_manager(name: &'static str, adapter: Adapter) -> SettingSpec {
-    SettingSpec::new(PythonSettings::SecretManager, name, adapter)
-}
-
-const fn aws(name: &'static str) -> SettingSpec {
-    secret_manager(name, Adapter::FalsyOptionalString)
-}
-
-pub(crate) const SYSTEM: SettingSpec = secret_manager("system", Adapter::FalsyOptionalString);
-pub(crate) const ACCESS_MODE: SettingSpec = secret_manager("access_mode", Adapter::StrictString);
-pub(crate) const HOSTED_KEYS: SettingSpec =
-    secret_manager("hosted_keys", Adapter::StringCollection).shapes(&["none", "list"]);
-pub(crate) const PRIMARY_SECRET_NAME: SettingSpec =
-    secret_manager("primary_secret_name", Adapter::FalsyOptionalString);
-pub(crate) const STORE_VIRTUAL_KEYS: SettingSpec =
-    secret_manager("store_virtual_keys", Adapter::Truthy);
-pub(crate) const PREFIX_FOR_STORED_VIRTUAL_KEYS: SettingSpec =
-    secret_manager("prefix_for_stored_virtual_keys", Adapter::StrictString);
-pub(crate) const KMS_KEY_ID: SettingSpec =
-    secret_manager("kms_key_id", Adapter::FalsyOptionalString);
-pub(crate) const CUSTOM_SECRET_MANAGER: SettingSpec =
-    secret_manager("custom_secret_manager", Adapter::FalsyOptionalString);
-pub(crate) const AWS_REGION_NAME: SettingSpec = aws("aws_region_name");
-pub(crate) const AWS_ROLE_NAME: SettingSpec = aws("aws_role_name");
-pub(crate) const AWS_SESSION_NAME: SettingSpec = aws("aws_session_name");
-pub(crate) const AWS_EXTERNAL_ID: SettingSpec = aws("aws_external_id").sensitive();
-pub(crate) const AWS_PROFILE_NAME: SettingSpec = aws("aws_profile_name");
-pub(crate) const AWS_WEB_IDENTITY_TOKEN: SettingSpec = aws("aws_web_identity_token").sensitive();
-pub(crate) const AWS_STS_ENDPOINT: SettingSpec = aws("aws_sts_endpoint");
-pub(crate) const REPLICA_REGIONS: SettingSpec =
-    secret_manager("replica_regions", Adapter::StringCollection).shapes(&["none", "list"]);
-pub(crate) const CLIENT: SettingSpec =
-    secret_manager("client", Adapter::PythonBinding).shapes(&["none", "object"]);
-pub(crate) const SETTINGS_OBJECT: SettingSpec =
-    secret_manager("settings_object", Adapter::PythonBinding).shapes(&["none", "object"]);
-
-#[cfg(test)]
-pub(crate) const SECRET_MANAGER_SPECS: &[SettingSpec] = &[
-    SYSTEM,
-    ACCESS_MODE,
-    HOSTED_KEYS,
-    PRIMARY_SECRET_NAME,
-    STORE_VIRTUAL_KEYS,
-    PREFIX_FOR_STORED_VIRTUAL_KEYS,
-    KMS_KEY_ID,
-    CUSTOM_SECRET_MANAGER,
-    AWS_REGION_NAME,
-    AWS_ROLE_NAME,
-    AWS_SESSION_NAME,
-    AWS_EXTERNAL_ID,
-    AWS_PROFILE_NAME,
-    AWS_WEB_IDENTITY_TOKEN,
-    AWS_STS_ENDPOINT,
-    REPLICA_REGIONS,
-    CLIENT,
-    SETTINGS_OBJECT,
-];
+const SYSTEM: FieldSpec<Option<KeyManagementSystem>> =
+    FieldSpec::new("system", parse_optional_system);
+const ACCESS_MODE: FieldSpec<AccessMode> = FieldSpec::new("access_mode", parse_access_mode);
+const HOSTED_KEYS: FieldSpec<Option<Vec<String>>> =
+    FieldSpec::new("hosted_keys", |field| field.optional_string_collection());
+const STORE_VIRTUAL_KEYS: FieldSpec<bool> =
+    FieldSpec::new("store_virtual_keys", |field| field.truthy());
+const PREFIX_FOR_STORED_VIRTUAL_KEYS: FieldSpec<String> =
+    FieldSpec::new("prefix_for_stored_virtual_keys", |field| {
+        field.strict_string()
+    });
+const PRIMARY_SECRET_NAME: FieldSpec<Option<String>> =
+    FieldSpec::new("primary_secret_name", |field| field.falsy_optional_string());
+const KMS_KEY_ID: FieldSpec<Option<String>> =
+    FieldSpec::new("kms_key_id", |field| field.falsy_optional_string());
+const CUSTOM_SECRET_MANAGER: FieldSpec<Option<String>> =
+    FieldSpec::new("custom_secret_manager", |field| {
+        field.falsy_optional_string()
+    });
+const AWS_REGION_NAME: FieldSpec<Option<String>> =
+    FieldSpec::new("aws_region_name", |field| field.falsy_optional_string());
+const AWS_ROLE_NAME: FieldSpec<Option<String>> =
+    FieldSpec::new("aws_role_name", |field| field.falsy_optional_string());
+const AWS_SESSION_NAME: FieldSpec<Option<String>> =
+    FieldSpec::new("aws_session_name", |field| field.falsy_optional_string());
+const AWS_EXTERNAL_ID: FieldSpec<Option<String>> =
+    FieldSpec::new("aws_external_id", |field| field.falsy_optional_string());
+const AWS_PROFILE_NAME: FieldSpec<Option<String>> =
+    FieldSpec::new("aws_profile_name", |field| field.falsy_optional_string());
+const AWS_WEB_IDENTITY_TOKEN: FieldSpec<Option<String>> =
+    FieldSpec::new("aws_web_identity_token", |field| {
+        field.falsy_optional_string()
+    });
+const AWS_STS_ENDPOINT: FieldSpec<Option<String>> =
+    FieldSpec::new("aws_sts_endpoint", |field| field.falsy_optional_string());
+const REPLICA_REGIONS: FieldSpec<Option<Vec<String>>> =
+    FieldSpec::new("replica_regions", |field| {
+        field.optional_string_collection()
+    });
+const CLIENT: FieldSpec<Option<Py<PyAny>>> =
+    FieldSpec::new("client", |field| Ok(field.python_binding()));
+const SETTINGS_OBJECT: FieldSpec<Option<Py<PyAny>>> =
+    FieldSpec::new("settings_object", |field| Ok(field.python_binding()));
 
 /// `litellm.secret_manager_client` as the bridge classifies it.
 #[derive(Debug)]
@@ -112,38 +98,29 @@ pub(crate) fn read(py: Python<'_>) -> PyResult<SecretManagerSnapshot> {
 }
 
 pub(crate) fn project(snapshot: &Snapshot<'_>) -> Result<SecretManagerSnapshot, ProjectionError> {
-    let string = |spec: &SettingSpec| -> Result<Option<String>, ProjectionError> {
-        Ok(snapshot.field(spec)?.falsy_optional_string()?.0)
-    };
-    let collection = |spec: &SettingSpec| -> Result<Option<Vec<String>>, ProjectionError> {
-        Ok(snapshot
-            .field(spec)?
-            .optional_string_collection()?
-            .map(|collection| collection.0))
-    };
-    let system = parse_optional_system(&snapshot.field(&SYSTEM)?)?;
-    let access_mode = parse_access_mode(&snapshot.field(&ACCESS_MODE)?)?;
+    let system = snapshot.read(&SYSTEM)?;
+    let access_mode = snapshot.read(&ACCESS_MODE)?;
     let settings = KeyManagementSettings {
-        hosted_keys: collection(&HOSTED_KEYS)?,
-        store_virtual_keys: Some(snapshot.field(&STORE_VIRTUAL_KEYS)?.truthy()?.0),
-        prefix_for_stored_virtual_keys: snapshot
-            .field(&PREFIX_FOR_STORED_VIRTUAL_KEYS)?
-            .strict_string()?,
+        hosted_keys: snapshot.read(&HOSTED_KEYS)?,
+        store_virtual_keys: Some(snapshot.read(&STORE_VIRTUAL_KEYS)?),
+        prefix_for_stored_virtual_keys: snapshot.read(&PREFIX_FOR_STORED_VIRTUAL_KEYS)?,
         access_mode,
-        primary_secret_name: string(&PRIMARY_SECRET_NAME)?,
-        kms_key_id: string(&KMS_KEY_ID)?,
-        custom_secret_manager: string(&CUSTOM_SECRET_MANAGER)?,
-        aws_region_name: string(&AWS_REGION_NAME)?,
-        aws_role_name: string(&AWS_ROLE_NAME)?,
-        aws_session_name: string(&AWS_SESSION_NAME)?,
-        aws_external_id: string(&AWS_EXTERNAL_ID)?.map(SecretValue::new),
-        aws_profile_name: string(&AWS_PROFILE_NAME)?,
-        aws_web_identity_token: string(&AWS_WEB_IDENTITY_TOKEN)?.map(SecretValue::new),
-        aws_sts_endpoint: string(&AWS_STS_ENDPOINT)?,
-        replica_regions: collection(&REPLICA_REGIONS)?,
+        primary_secret_name: snapshot.read(&PRIMARY_SECRET_NAME)?,
+        kms_key_id: snapshot.read(&KMS_KEY_ID)?,
+        custom_secret_manager: snapshot.read(&CUSTOM_SECRET_MANAGER)?,
+        aws_region_name: snapshot.read(&AWS_REGION_NAME)?,
+        aws_role_name: snapshot.read(&AWS_ROLE_NAME)?,
+        aws_session_name: snapshot.read(&AWS_SESSION_NAME)?,
+        aws_external_id: snapshot.read(&AWS_EXTERNAL_ID)?.map(SecretValue::new),
+        aws_profile_name: snapshot.read(&AWS_PROFILE_NAME)?,
+        aws_web_identity_token: snapshot
+            .read(&AWS_WEB_IDENTITY_TOKEN)?
+            .map(SecretValue::new),
+        aws_sts_endpoint: snapshot.read(&AWS_STS_ENDPOINT)?,
+        replica_regions: snapshot.read(&REPLICA_REGIONS)?,
         ..KeyManagementSettings::default()
     };
-    let client = match snapshot.field(&CLIENT)?.python_binding() {
+    let client = match snapshot.read(&CLIENT)? {
         None => SecretManagerClient::Local,
         Some(client) => SecretManagerClient::PythonCallback(client),
     };
@@ -151,14 +128,14 @@ pub(crate) fn project(snapshot: &Snapshot<'_>) -> Result<SecretManagerSnapshot, 
         client,
         system,
         settings,
-        settings_object: snapshot.field(&SETTINGS_OBJECT)?.python_binding(),
+        settings_object: snapshot.read(&SETTINGS_OBJECT)?,
     })
 }
 
 fn parse_optional_system(
     field: &Field<'_>,
 ) -> Result<Option<KeyManagementSystem>, ProjectionError> {
-    let Some(value) = field.falsy_optional_string()?.0 else {
+    let Some(value) = field.falsy_optional_string()? else {
         return Ok(None);
     };
     serde_json::from_value(Value::String(value))

@@ -1,46 +1,14 @@
-import dataclasses
 import logging
-from pathlib import Path
 from typing import Final
 
 import httpx
 import pytest
-from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.custom_httpx.http_handler import default_user_agent
 from litellm.rust_bridge import settings
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
-
-CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/python-bridge/python_settings.json"
-
-
-class SettingSpec(TypedDict):
-    adapter: ReadOnly[str]
-    required: ReadOnly[bool]
-    precedence: ReadOnly[str]
-    sensitive: ReadOnly[bool]
-    shapes: ReadOnly[list[str]]
-    unsupported_live: ReadOnly[str | None]
-
-
-class SettingsGroup(TypedDict):
-    version: ReadOnly[int]
-    fields: ReadOnly[dict[str, SettingSpec]]
-
-
-def test_the_rust_contract_matches_the_returned_fields() -> None:
-    contract: Final = TypeAdapter(dict[str, SettingsGroup]).validate_json(CONTRACT_PATH.read_text())
-
-    assert {name: tuple(group["fields"]) for name, group in contract.items()} == {
-        "http_settings": tuple(field.name for field in dataclasses.fields(settings.http_settings())),
-        "url_policy": tuple(field.name for field in dataclasses.fields(settings.url_policy())),
-        "provider_defaults": tuple(field.name for field in dataclasses.fields(settings.provider_defaults())),
-        "secret_manager": tuple(field.name for field in dataclasses.fields(settings.secret_manager())),
-    }
-
 
 def test_url_policy_reads_the_litellm_globals(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "user_url_validation", False)

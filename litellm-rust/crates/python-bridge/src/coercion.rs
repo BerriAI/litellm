@@ -1,11 +1,8 @@
-use std::collections::BTreeSet;
-
-use litellm_core_utils::serde_compat::{parse_redis_bool, parse_str_bool};
-use litellm_http::SslVerify;
+use litellm_core_utils::serde_compat::parse_str_bool;
 use pyo3::{
     exceptions::{PyAttributeError, PyRuntimeError, PyValueError},
     prelude::*,
-    types::{PyBool, PyDict, PyInt, PyString},
+    types::{PyBool, PyString},
 };
 
 #[derive(Debug)]
@@ -33,46 +30,26 @@ impl From<ProjectionError> for PyErr {
     }
 }
 
-pub(crate) struct Truthy(pub bool);
-pub(crate) struct ExactTrue(pub bool);
-pub(crate) struct StrBool(pub Option<bool>);
-pub(crate) struct OptionalStrictString(pub Option<String>);
-pub(crate) struct FalsyOptionalString(pub Option<String>);
-pub(crate) struct TuningString(pub Option<String>);
-pub(crate) struct StringCollection(pub Vec<String>);
-pub(crate) struct SslVerifyInput(pub Option<SslVerify>);
-/// `redis-py` Boolean coercion: string tokens use the Redis parser, everything else `bool(value)`.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "cache configuration projection adopts this adapter in a later commit"
-    )
-)]
-pub(crate) struct OptionalRedisBool(pub Option<bool>);
-/// `None` stays absent, an empty string also stays absent, another type is invalid.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "cache configuration projection adopts this adapter in a later commit"
-    )
-)]
-pub(crate) struct NonEmptyOptionalString(pub Option<String>);
+pub(crate) struct FieldSpec<T> {
+    name: &'static str,
+    decode: fn(&Field<'_>) -> Result<T, ProjectionError>,
+}
 
-/// `ssl_cert_reqs` as `redis-py` accepts it: an `ssl` constant or a case-insensitive token.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "cache configuration projection adopts this adapter in a later commit"
-    )
-)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CertificateRequirement {
-    None,
-    Optional,
-    Required,
+impl<T> FieldSpec<T> {
+    pub(crate) const fn new(
+        name: &'static str,
+        decode: fn(&Field<'_>) -> Result<T, ProjectionError>,
+    ) -> Self {
+        Self { name, decode }
+    }
+
+    pub(crate) fn read(
+        &self,
+        snapshot: &Bound<'_, PyAny>,
+        group: &'static str,
+    ) -> Result<T, ProjectionError> {
+        (self.decode)(&Field::read(snapshot, group, self.name)?)
+    }
 }
 
 pub(crate) struct Field<'py> {
@@ -107,42 +84,6 @@ impl<'py> Field<'py> {
         }
     }
 
-    /// Reads `values[key]`; an absent key is `None`, a present `None` value is a field.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "cache configuration projection adopts this adapter in a later commit"
-        )
-    )]
-    pub(crate) fn item(
-        values: &Bound<'py, PyDict>,
-        group: &'static str,
-        key: &'static str,
-    ) -> Result<Option<Self>, ProjectionError> {
-        Ok(values
-            .get_item(key)?
-            .map(|value| Self::new(group, key, value)))
-    }
-
-    /// Reads `values[key]` for a key the consumer requires.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "cache configuration projection adopts this adapter in a later commit"
-        )
-    )]
-    pub(crate) fn required_item(
-        values: &Bound<'py, PyDict>,
-        group: &'static str,
-        key: &'static str,
-    ) -> Result<Self, ProjectionError> {
-        Self::item(values, group, key)?.ok_or_else(|| {
-            ProjectionError::InvalidConfiguration(format!("{group}.{key}: missing required value"))
-        })
-    }
-
     fn missing_field(snapshot: &Bound<'_, PyAny>, name: &str) -> PyResult<bool> {
         let py = snapshot.py();
         let object = py.import("builtins")?.getattr("object")?;
@@ -160,23 +101,12 @@ impl<'py> Field<'py> {
         format!("{}.{}", self.group, self.name)
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "cache configuration projection adopts this adapter in a later commit"
-        )
-    )]
-    pub(crate) fn value(&self) -> &Bound<'py, PyAny> {
-        &self.value
-    }
-
     /// A member of this field's collection, reported under the same path.
     pub(crate) fn member(&self, value: Bound<'py, PyAny>) -> Self {
         Self::new(self.group, self.name, value)
     }
 
-    fn expected(&self, expected: &str) -> Result<String, ProjectionError> {
+    pub(crate) fn expected(&self, expected: &str) -> Result<String, ProjectionError> {
         Ok(format!(
             "{}: expected {expected}, got {}",
             self.path(),
@@ -191,22 +121,16 @@ impl<'py> Field<'py> {
         }
     }
 
-    pub(crate) fn truthy(&self) -> Result<Truthy, ProjectionError> {
-        Ok(Truthy(self.value.is_truthy()?))
+    pub(crate) fn value(&self) -> &Bound<'py, PyAny> {
+        &self.value
     }
 
-    pub(crate) fn exact_true(&self) -> ExactTrue {
-        ExactTrue(self.value.is(PyBool::new(self.value.py(), true)))
+    pub(crate) fn truthy(&self) -> Result<bool, ProjectionError> {
+        Ok(self.value.is_truthy()?)
     }
 
-    #[cfg(test)]
-    pub(crate) fn schema_bool(&self) -> Result<bool, ProjectionError> {
-        if !self.value.is_instance_of::<PyBool>() {
-            return Err(ProjectionError::InternalSchemaFailure(
-                self.expected("a Boolean")?,
-            ));
-        }
-        Ok(self.exact_true().0)
+    pub(crate) fn exact_true(&self) -> bool {
+        self.value.is(PyBool::new(self.value.py(), true))
     }
 
     pub(crate) fn strict_string(&self) -> Result<String, ProjectionError> {
@@ -226,60 +150,42 @@ impl<'py> Field<'py> {
         self.strict_string()
     }
 
-    pub(crate) fn str_bool(&self) -> Result<StrBool, ProjectionError> {
+    pub(crate) fn str_bool(&self) -> Result<Option<bool>, ProjectionError> {
         if self.value.is_none() {
-            return Ok(StrBool(None));
+            return Ok(None);
         }
-        Ok(StrBool(parse_str_bool(&self.strict_string()?)))
+        Ok(parse_str_bool(&self.strict_string()?))
     }
 
-    pub(crate) fn optional_strict_string(&self) -> Result<OptionalStrictString, ProjectionError> {
+    pub(crate) fn optional_strict_string(&self) -> Result<Option<String>, ProjectionError> {
         if self.value.is_none() {
-            return Ok(OptionalStrictString(None));
+            return Ok(None);
         }
-        self.strict_string().map(Some).map(OptionalStrictString)
+        self.strict_string().map(Some)
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "cache configuration projection adopts this adapter in a later commit"
-        )
-    )]
-    pub(crate) fn non_empty_string(&self) -> Result<NonEmptyOptionalString, ProjectionError> {
-        Ok(NonEmptyOptionalString(
-            self.optional_strict_string()?
-                .0
-                .filter(|value| !value.is_empty()),
-        ))
-    }
-
-    pub(crate) fn falsy_optional_string(&self) -> Result<FalsyOptionalString, ProjectionError> {
-        if !self.truthy()?.0 {
-            return Ok(FalsyOptionalString(None));
+    pub(crate) fn falsy_optional_string(&self) -> Result<Option<String>, ProjectionError> {
+        if !self.truthy()? {
+            return Ok(None);
         }
-        self.strict_string().map(Some).map(FalsyOptionalString)
+        self.strict_string().map(Some)
     }
 
-    pub(crate) fn tuning_string(&self) -> Result<TuningString, ProjectionError> {
-        if !self.truthy()?.0 || !self.value.is_instance_of::<PyString>() {
-            return Ok(TuningString(None));
+    pub(crate) fn tuning_string(&self) -> Result<Option<String>, ProjectionError> {
+        if !self.truthy()? || !self.value.is_instance_of::<PyString>() {
+            return Ok(None);
         }
-        self.strict_string().map(Some).map(TuningString)
+        self.strict_string().map(Some)
     }
 
-    pub(crate) fn string_collection(&self) -> Result<StringCollection, ProjectionError> {
-        if !self.truthy()?.0 {
-            return Ok(StringCollection(Vec::new()));
+    pub(crate) fn string_collection(&self) -> Result<Vec<String>, ProjectionError> {
+        if !self.truthy()? {
+            return Ok(Vec::new());
         }
         if self.value.is_instance_of::<PyString>() {
-            return self
-                .strict_string()
-                .map(|value| StringCollection(vec![value]));
+            return self.strict_string().map(|value| vec![value]);
         }
-        let values = self
-            .value
+        self.value
             .try_iter()?
             .filter_map(|item| {
                 let member = match item {
@@ -287,182 +193,25 @@ impl<'py> Field<'py> {
                     Err(error) => return Some(Err(error.into())),
                 };
                 match member.truthy() {
-                    Ok(Truthy(false)) => None,
-                    Ok(Truthy(true)) => Some(member.strict_string()),
+                    Ok(false) => None,
+                    Ok(true) => Some(member.strict_string()),
                     Err(error) => Some(Err(error)),
                 }
             })
-            .collect::<Result<Vec<_>, ProjectionError>>()?;
-        Ok(StringCollection(values))
+            .collect()
     }
 
     pub(crate) fn optional_string_collection(
         &self,
-    ) -> Result<Option<StringCollection>, ProjectionError> {
+    ) -> Result<Option<Vec<String>>, ProjectionError> {
         if self.value.is_none() {
             return Ok(None);
         }
         self.string_collection().map(Some)
     }
 
-    pub(crate) fn host_collection(&self) -> Result<StringCollection, ProjectionError> {
-        let values = self
-            .string_collection()?
-            .0
-            .into_iter()
-            .map(|host| litellm_http::media::normalize_host(&host))
-            .collect::<BTreeSet<_>>();
-        Ok(StringCollection(values.into_iter().collect()))
-    }
-
-    pub(crate) fn ssl_verify(&self) -> Result<SslVerifyInput, ProjectionError> {
-        if self.value.is_none() {
-            return Ok(SslVerifyInput(None));
-        }
-        if self.value.is_instance_of::<PyBool>() {
-            return Ok(SslVerifyInput(Some(if self.exact_true().0 {
-                SslVerify::Enabled
-            } else {
-                SslVerify::Disabled
-            })));
-        }
-        if self.value.is_instance_of::<PyString>() {
-            let parsed = match self.str_bool()?.0 {
-                Some(true) => SslVerify::Enabled,
-                Some(false) => SslVerify::Disabled,
-                None => SslVerify::CaBundle(self.strict_string()?.into()),
-            };
-            return Ok(SslVerifyInput(Some(parsed)));
-        }
-        let context = self.value.py().import("ssl")?.getattr("SSLContext")?;
-        if self.value.is_instance(&context)? {
-            return Err(ProjectionError::UnsupportedLiveObject(self.expected(
-                "a Boolean, Boolean string, CA path, or None; live SSLContext is unsupported",
-            )?));
-        }
-        Err(self.invalid("a Boolean, Boolean string, CA path, or None"))
-    }
-
-    /// A live Python object whose behavior stays in Python; `None` means no binding.
     pub(crate) fn python_binding(&self) -> Option<Py<PyAny>> {
         (!self.value.is_none()).then(|| self.value.clone().unbind())
-    }
-
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "cache configuration projection adopts this adapter in a later commit"
-        )
-    )]
-    pub(crate) fn optional_redis_bool(&self) -> Result<OptionalRedisBool, ProjectionError> {
-        if self.value.is_none() {
-            return Ok(OptionalRedisBool(None));
-        }
-        if self.value.is_instance_of::<PyString>() {
-            return Ok(OptionalRedisBool(Some(parse_redis_bool(
-                &self.strict_string()?,
-            ))));
-        }
-        Ok(OptionalRedisBool(Some(self.truthy()?.0)))
-    }
-
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "cache configuration projection adopts this adapter in a later commit"
-        )
-    )]
-    pub(crate) fn redis_cert_reqs(&self) -> Result<CertificateRequirement, ProjectionError> {
-        if self.value.is_none() {
-            return Ok(CertificateRequirement::Required);
-        }
-        if self.value.is_instance_of::<PyInt>() {
-            return match self.value.extract::<i64>()? {
-                0 => Ok(CertificateRequirement::None),
-                1 => Ok(CertificateRequirement::Optional),
-                2 => Ok(CertificateRequirement::Required),
-                _ => Err(self.invalid("ssl.CERT_NONE, ssl.CERT_OPTIONAL, or ssl.CERT_REQUIRED")),
-            };
-        }
-        let text = self.value.str()?;
-        let text = text.to_str()?;
-        if text.eq_ignore_ascii_case("none") || text.eq_ignore_ascii_case("cert_none") {
-            return Ok(CertificateRequirement::None);
-        }
-        if text.eq_ignore_ascii_case("optional") || text.eq_ignore_ascii_case("cert_optional") {
-            return Ok(CertificateRequirement::Optional);
-        }
-        if text.eq_ignore_ascii_case("required") || text.eq_ignore_ascii_case("cert_required") {
-            return Ok(CertificateRequirement::Required);
-        }
-        Err(self.invalid("a certificate requirement token"))
-    }
-
-    /// `None` stays absent; another value must be a Python `bool`.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "cache configuration projection adopts this adapter in a later commit"
-        )
-    )]
-    pub(crate) fn optional_bool(&self) -> Result<Option<bool>, ProjectionError> {
-        if self.value.is_none() {
-            return Ok(None);
-        }
-        if !self.value.is_instance_of::<PyBool>() {
-            return Err(self.invalid("a Boolean"));
-        }
-        Ok(Some(self.exact_true().0))
-    }
-
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "cache configuration projection adopts this adapter in a later commit"
-        )
-    )]
-    pub(crate) fn optional_i64(&self) -> Result<Option<i64>, ProjectionError> {
-        if self.value.is_none() {
-            return Ok(None);
-        }
-        self.value
-            .extract::<i64>()
-            .map(Some)
-            .map_err(|_| self.invalid("an integer"))
-    }
-
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "cache configuration projection adopts this adapter in a later commit"
-        )
-    )]
-    pub(crate) fn required_i64(&self) -> Result<i64, ProjectionError> {
-        self.value
-            .extract::<i64>()
-            .map_err(|_| self.invalid("an integer"))
-    }
-
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "cache configuration projection adopts this adapter in a later commit"
-        )
-    )]
-    pub(crate) fn optional_f64(&self) -> Result<Option<f64>, ProjectionError> {
-        if self.value.is_none() {
-            return Ok(None);
-        }
-        self.value
-            .extract::<f64>()
-            .map(Some)
-            .map_err(|_| self.invalid("a number"))
     }
 }
 
@@ -503,10 +252,10 @@ mod tests {
         Python::attach(|py| {
             let value = evaluate(py, source);
             let field = Field::new("test", "flag", value.clone());
-            assert_eq!(field.truthy().unwrap().0, truth);
-            assert_eq!(field.exact_true().0, exact);
+            assert_eq!(field.truthy().unwrap(), truth);
+            assert_eq!(field.exact_true(), exact);
             assert_eq!(
-                field.truthy().unwrap().0,
+                field.truthy().unwrap(),
                 py.import("builtins")
                     .unwrap()
                     .getattr("bool")
@@ -544,23 +293,14 @@ mod tests {
             let owned =
                 |expected: Result<Option<&str>, ()>| expected.map(|value| value.map(str::to_owned));
             assert_eq!(
-                field
-                    .optional_strict_string()
-                    .map(|value| value.0)
-                    .map_err(|_| ()),
+                field.optional_strict_string().map_err(|_| ()),
                 owned(strict)
             );
             assert_eq!(
-                field
-                    .falsy_optional_string()
-                    .map(|value| value.0)
-                    .map_err(|_| ()),
+                field.falsy_optional_string().map_err(|_| ()),
                 owned(fallback)
             );
-            assert_eq!(
-                field.tuning_string().map(|value| value.0).map_err(|_| ()),
-                owned(tuning)
-            );
+            assert_eq!(field.tuning_string().map_err(|_| ()), owned(tuning));
         });
     }
 
@@ -580,32 +320,7 @@ mod tests {
             assert_eq!(
                 Field::new("test", "flag", evaluate(py, source))
                     .str_bool()
-                    .unwrap()
-                    .0,
-                expected
-            );
-        });
-    }
-
-    #[rstest]
-    #[case("'EXAMPLE.TEST.'", vec!["example.test"])]
-    #[case("['B.test', '', None, 0, [], 'A.test.', 'b.test']", vec!["a.test", "b.test"])]
-    #[case("('B.test', 'a.test')", vec!["a.test", "b.test"])]
-    #[case("{'B.test', 'a.test'}", vec!["a.test", "b.test"])]
-    #[case("(host for host in ['B.test', 'a.test'])", vec!["a.test", "b.test"])]
-    #[case("None", vec![])]
-    #[case("False", vec![])]
-    fn host_collection_is_owned_normalized_and_deterministic(
-        #[case] source: &str,
-        #[case] expected: Vec<&str>,
-    ) {
-        Python::initialize();
-        Python::attach(|py| {
-            assert_eq!(
-                Field::new("url_policy", "user_url_allowed_hosts", evaluate(py, source))
-                    .host_collection()
-                    .unwrap()
-                    .0,
+                    .unwrap(),
                 expected
             );
         });
@@ -648,7 +363,7 @@ descriptor = Descriptor()
             let values = locals.get_item("values").unwrap().unwrap();
             for value in values.try_iter().unwrap() {
                 let error = Field::new("test", "flag", value.unwrap())
-                    .host_collection()
+                    .string_collection()
                     .err()
                     .unwrap();
                 let error = PyErr::from(error);
@@ -712,14 +427,14 @@ text = Text(' False ')
             )
             .unwrap();
             let hostile = Field::new("test", "flag", locals.get_item("hostile").unwrap().unwrap());
-            assert!(!hostile.exact_true().0);
+            assert!(!hostile.exact_true());
             assert!(matches!(
                 hostile.strict_string(),
                 Err(ProjectionError::InvalidConfiguration(_))
             ));
             let text = Field::new("test", "flag", locals.get_item("text").unwrap().unwrap());
             assert_eq!(text.strict_string().unwrap(), " False ");
-            assert_eq!(text.str_bool().unwrap().0, Some(false));
+            assert_eq!(text.str_bool().unwrap(), Some(false));
         });
     }
 
@@ -788,228 +503,13 @@ intercepted = Intercepted()
                 evaluate(py, "['host.test', 1]"),
             );
             assert!(matches!(
-                hosts.host_collection(),
+                hosts.string_collection(),
                 Err(ProjectionError::InvalidConfiguration(_))
             ));
             assert!(matches!(
                 Field::new("test", "flag", evaluate(py, "1")).str_bool(),
                 Err(ProjectionError::InvalidConfiguration(_))
             ));
-        });
-    }
-
-    #[test]
-    fn projection_releases_the_source_collection() {
-        Python::initialize();
-        Python::attach(|py| {
-            let source = evaluate(py, "['A.test']");
-            let projected = Field::new("test", "hosts", source.clone())
-                .host_collection()
-                .unwrap()
-                .0;
-            source.call_method1("append", ("b.test",)).unwrap();
-            assert_eq!(projected, ["a.test"]);
-            assert_eq!(
-                Field::new("test", "hosts", source)
-                    .host_collection()
-                    .unwrap()
-                    .0,
-                ["a.test", "b.test"]
-            );
-        });
-    }
-
-    #[rstest]
-    #[case("True", Some(true))]
-    #[case("False", Some(false))]
-    #[case("1", None)]
-    #[case("None", None)]
-    #[case("[]", None)]
-    fn accessor_booleans_are_strict_schema_values(
-        #[case] source: &str,
-        #[case] expected: Option<bool>,
-    ) {
-        Python::initialize();
-        Python::attach(|py| {
-            let result =
-                Field::new("secret_manager", "readable", evaluate(py, source)).schema_bool();
-            match expected {
-                Some(expected) => assert_eq!(result.unwrap(), expected),
-                None => {
-                    let error = PyErr::from(result.unwrap_err());
-                    assert!(error.is_instance_of::<PyRuntimeError>(py));
-                    assert!(error.to_string().contains("secret_manager.readable"));
-                }
-            }
-        });
-    }
-
-    #[rstest]
-    #[case("None", None)]
-    #[case("'true'", Some(true))]
-    #[case("'YES'", Some(true))]
-    #[case("'1'", Some(true))]
-    #[case("' true '", Some(false))]
-    #[case("'false'", Some(false))]
-    #[case("'unknown'", Some(false))]
-    #[case("'0'", Some(false))]
-    #[case("True", Some(true))]
-    #[case("1", Some(true))]
-    #[case("0", Some(false))]
-    #[case("[]", Some(false))]
-    #[case("[0]", Some(true))]
-    fn redis_booleans_parse_string_tokens_and_fall_back_to_truthiness(
-        #[case] source: &str,
-        #[case] expected: Option<bool>,
-    ) {
-        Python::initialize();
-        Python::attach(|py| {
-            assert_eq!(
-                Field::new("cache", "retry_on_timeout", evaluate(py, source))
-                    .optional_redis_bool()
-                    .unwrap()
-                    .0,
-                expected
-            );
-        });
-    }
-
-    #[rstest]
-    #[case("None", Some(CertificateRequirement::Required))]
-    #[case("0", Some(CertificateRequirement::None))]
-    #[case("1", Some(CertificateRequirement::Optional))]
-    #[case("2", Some(CertificateRequirement::Required))]
-    #[case("True", Some(CertificateRequirement::Optional))]
-    #[case("3", None)]
-    #[case("'none'", Some(CertificateRequirement::None))]
-    #[case("'CERT_OPTIONAL'", Some(CertificateRequirement::Optional))]
-    #[case("'Required'", Some(CertificateRequirement::Required))]
-    #[case("'bogus'", None)]
-    #[case("__import__('ssl').CERT_NONE", Some(CertificateRequirement::None))]
-    fn certificate_requirements_accept_constants_and_tokens(
-        #[case] source: &str,
-        #[case] expected: Option<CertificateRequirement>,
-    ) {
-        Python::initialize();
-        Python::attach(|py| {
-            let result =
-                Field::new("cache", "ssl_cert_reqs", evaluate(py, source)).redis_cert_reqs();
-            match expected {
-                Some(expected) => assert_eq!(result.unwrap(), expected),
-                None => {
-                    let error = PyErr::from(result.unwrap_err());
-                    assert!(error.is_instance_of::<PyValueError>(py));
-                    assert!(error.to_string().contains("cache.ssl_cert_reqs"));
-                }
-            }
-        });
-    }
-
-    #[test]
-    fn certificate_requirement_stringification_preserves_the_python_exception() {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                c"
-failure = LookupError('str failed')
-class Requirement:
-    def __str__(self): raise failure
-value = Requirement()
-",
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-            let value = locals.get_item("value").unwrap().unwrap();
-            let error = PyErr::from(
-                Field::new("cache", "ssl_cert_reqs", value)
-                    .redis_cert_reqs()
-                    .unwrap_err(),
-            );
-            assert!(
-                error
-                    .value(py)
-                    .is(locals.get_item("failure").unwrap().unwrap())
-            );
-        });
-    }
-
-    #[rstest]
-    #[case("None", Ok(None))]
-    #[case("''", Ok(None))]
-    #[case("'bucket'", Ok(Some("bucket")))]
-    #[case("1", Err(()))]
-    #[case("[]", Err(()))]
-    fn non_empty_strings_treat_empty_as_absent_and_reject_other_types(
-        #[case] source: &str,
-        #[case] expected: Result<Option<&str>, ()>,
-    ) {
-        Python::initialize();
-        Python::attach(|py| {
-            assert_eq!(
-                Field::new("cache", "bucket_name", evaluate(py, source))
-                    .non_empty_string()
-                    .map(|value| value.0)
-                    .map_err(|_| ()),
-                expected.map(|value| value.map(str::to_owned))
-            );
-        });
-    }
-
-    #[rstest]
-    #[case("None", Ok(None))]
-    #[case("True", Ok(Some(true)))]
-    #[case("False", Ok(Some(false)))]
-    #[case("1", Err(()))]
-    #[case("'true'", Err(()))]
-    fn optional_booleans_are_strict(
-        #[case] source: &str,
-        #[case] expected: Result<Option<bool>, ()>,
-    ) {
-        Python::initialize();
-        Python::attach(|py| {
-            assert_eq!(
-                Field::new("cache", "ssl", evaluate(py, source))
-                    .optional_bool()
-                    .map_err(|_| ()),
-                expected
-            );
-        });
-    }
-
-    #[test]
-    fn dictionary_items_distinguish_absent_keys_from_none_values() {
-        Python::initialize();
-        Python::attach(|py| {
-            let values = evaluate(py, "{'present': None, 'port': 6379}")
-                .cast_into::<PyDict>()
-                .unwrap();
-            assert!(Field::item(&values, "cache", "absent").unwrap().is_none());
-            let present = Field::item(&values, "cache", "present").unwrap().unwrap();
-            assert!(present.value().is_none());
-            assert_eq!(present.optional_i64().unwrap(), None);
-            assert_eq!(present.optional_f64().unwrap(), None);
-            assert_eq!(
-                Field::required_item(&values, "cache", "port")
-                    .unwrap()
-                    .optional_f64()
-                    .unwrap(),
-                Some(6379.0)
-            );
-            assert_eq!(
-                Field::required_item(&values, "cache", "port")
-                    .unwrap()
-                    .required_i64()
-                    .unwrap(),
-                6379
-            );
-            let missing = match Field::required_item(&values, "cache", "host") {
-                Ok(_) => panic!("missing key must be an error"),
-                Err(error) => PyErr::from(error),
-            };
-            assert!(missing.is_instance_of::<PyValueError>(py));
-            assert!(missing.to_string().contains("cache.host"));
         });
     }
 }
