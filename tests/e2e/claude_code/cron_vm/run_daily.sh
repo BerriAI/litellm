@@ -413,8 +413,9 @@ log "building ${MATRIX_JSON}"
 # ---------------------------------------------------------------------------
 
 if [[ "${SKIP_PUBLISH}" == "1" ]]; then
-  cp "${MATRIX_JSON}" "${LITELLM_REPO}/compatibility-matrix.json"
-  log "SKIP_PUBLISH=1; matrix written to ${LITELLM_REPO}/compatibility-matrix.json"
+  cp "${MATRIX_JSON}" "${HOME}/compatibility-matrix.json"
+  log "SKIP_PUBLISH=1; matrix saved to ${HOME}/compatibility-matrix.json and printed below"
+  cat "${MATRIX_JSON}"
   exit 0
 fi
 

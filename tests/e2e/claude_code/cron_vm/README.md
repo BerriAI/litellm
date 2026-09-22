@@ -158,6 +158,9 @@ curl -fsS "https://api.render.com/v1/logs?ownerId=${OWNER_ID}&resource=${CRON_ID
 
 # A run that does NOT open a PR (first-time validation, CLI bumps):
 # set SKIP_PUBLISH=1 on the service, trigger a run, then remove it.
+# The matrix JSON is printed at the end of the run's log (nothing on
+# the container's disk outlives the run) and saved to
+# ~/compatibility-matrix.json for a local docker run.
 # PYTEST_K='basic_messaging_non_streaming and anthropic' narrows the
 # run to one cell the same way.
 
