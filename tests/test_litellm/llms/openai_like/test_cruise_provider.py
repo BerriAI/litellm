@@ -26,7 +26,8 @@ class TestCruiseProviderConfig:
         assert "cruise" not in openai_compatible_providers
         assert "cruise" not in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS
 
-    def test_cruise_provider_resolution_keeps_upstream_prefix(self):
+    def test_cruise_provider_resolution_keeps_upstream_prefix(self, monkeypatch):
+        monkeypatch.delenv("CRUISE_API_BASE", raising=False)
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
