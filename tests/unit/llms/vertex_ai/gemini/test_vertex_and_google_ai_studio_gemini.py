@@ -16,6 +16,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    ModelResponseIterator,
     VertexGeminiConfig,
 )
 from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
@@ -6348,9 +6349,7 @@ _GROUNDING_URIS: Final = (
 )
 
 
-def _gemini_stream_iterator() -> "ModelResponseIterator":
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
-
+def _gemini_stream_iterator() -> ModelResponseIterator:
     logging_obj = MagicMock()
     logging_obj.optional_params = {}
     return ModelResponseIterator(streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj)
