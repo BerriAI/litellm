@@ -574,8 +574,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         Useful if you want to modify the standard logging payload after the MCP tool call is made.
 
-        Return a response object with modified ``mcp_tool_call_response`` content
-        to change what the caller sends back to the MCP client. Content rewrites
+        Modify ``mcp_tool_call_response`` in place or return a replacement response
+        object to change what the caller sends back to the MCP client. Content rewrites
         discard stale structured output and mark those results as tool errors.
         Use ``post_mcp_call`` guardrails for schema-preserving structured redaction.
         """

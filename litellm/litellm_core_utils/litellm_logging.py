@@ -1662,7 +1662,11 @@ class Logging(LiteLLMLoggingBaseClass):
                             start_time=start_time,
                             end_time=end_time,
                         )
-                        hook_content = self._parse_post_mcp_call_hook_response(response=response)
+                        hook_content = (
+                            self._parse_post_mcp_call_hook_response(response=response)
+                            if response is not None
+                            else callback_response.mcp_tool_call_response
+                        )
                         if response is not None:
                             hidden_params = response.hidden_params
                     except Exception as e:

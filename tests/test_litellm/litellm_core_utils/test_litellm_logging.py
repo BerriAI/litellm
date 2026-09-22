@@ -124,7 +124,7 @@ async def test_async_post_mcp_tool_call_hook_chains_every_callback(logging_obj):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["replace", "inplace", "empty"])
+@pytest.mark.parametrize("mode", ["replace", "inplace", "empty", "inplace_none", "replace_none"])
 @pytest.mark.parametrize("structured", [False, True])
 async def test_mcp_content_rewrite_never_returns_stale_structured_data(logging_obj, mode, structured):
     from litellm.types.llms.base import HiddenParams
@@ -134,9 +134,12 @@ async def test_mcp_content_rewrite_never_returns_stale_structured_data(logging_o
         async def async_post_mcp_tool_call_hook(self, kwargs, response_obj, start_time, end_time):
             block = response_obj.mcp_tool_call_response[0]
             assert isinstance(block, TextContent)
-            if mode == "inplace":
+            if mode in ("inplace", "inplace_none"):
                 block.text = "[REDACTED]"
-                return response_obj
+                return None if mode == "inplace_none" else response_obj
+            if mode == "replace_none":
+                response_obj.mcp_tool_call_response = [TextContent(type="text", text="[REDACTED]")]
+                return None
             return MCPPostCallResponseObject(
                 mcp_tool_call_response=[] if mode == "empty" else [TextContent(type="text", text="[REDACTED]")],
                 hidden_params=HiddenParams(response_cost=0.25),
