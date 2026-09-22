@@ -1283,6 +1283,7 @@ def run_server(
 
         if os.getenv("DATABASE_URL", None) is not None or os.getenv("DIRECT_URL", None) is not None:
             from litellm.proxy.db.db_url_settings import (
+                DISABLE_PREPARED_STATEMENTS_ENV_VAR,
                 add_missing_query_params,
                 idle_lifetime_params,
                 reader_shareable_params,
@@ -1305,12 +1306,15 @@ def run_server(
                     sys.exit(1)
             from litellm.secret_managers.main import get_secret
 
+            disable_prepared_statements: Final = db_disable_prepared_statements or token_auth_flag_enabled(
+                os.getenv(DISABLE_PREPARED_STATEMENTS_ENV_VAR), env_var=DISABLE_PREPARED_STATEMENTS_ENV_VAR
+            )
             connection_url_params: Final = _build_db_connection_url_params(
                 connection_limit=db_connection_pool_limit,
                 pool_timeout=db_connection_timeout,
                 connect_timeout=db_connect_timeout,
                 socket_timeout=db_socket_timeout,
-                disable_prepared_statements=db_disable_prepared_statements,
+                disable_prepared_statements=disable_prepared_statements,
                 extra_params=db_extra_connection_params,
             )
             lifetime_params: Final = idle_lifetime_params(general_settings.get("database_max_idle_connection_lifetime"))
