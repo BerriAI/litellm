@@ -4,18 +4,19 @@ from typing import Final
 from litellm._logging import verbose_router_logger
 from litellm.types.router import RoutingGroup, RoutingStrategy
 
+VALID_ROUTING_STRATEGIES: Final = ("simple-shuffle", "lar1", *(s.value for s in RoutingStrategy))
+
 
 def validate_routing_strategy(routing_strategy: RoutingStrategy | str | None) -> None:
     if routing_strategy is None:
         return
 
-    valid_strategy_strings: Final = ("simple-shuffle", "lar1", *(s.value for s in RoutingStrategy))
-    is_valid_string: Final = isinstance(routing_strategy, str) and routing_strategy in valid_strategy_strings
+    is_valid_string: Final = isinstance(routing_strategy, str) and routing_strategy in VALID_ROUTING_STRATEGIES
     is_valid_enum: Final = isinstance(routing_strategy, RoutingStrategy)
     if not is_valid_string and not is_valid_enum:
         raise ValueError(
             f"Invalid routing_strategy: '{routing_strategy}'. "
-            f"Valid options: {list(valid_strategy_strings)}. "
+            f"Valid options: {list(VALID_ROUTING_STRATEGIES)}. "
             f"Check 'router_settings.routing_strategy' in your config.yaml "
             f"or the 'routing_strategy' parameter if using the Router SDK directly."
         )

@@ -9407,6 +9407,7 @@ async def test_handle_llm_api_exception_logs_bug_report_for_unmapped_error(
             "proxy_server_request": {"url": "https://example.test/v1/chat/completions?debug=true"},
             "model": "acme-prod-gpt4",
             "custom_llm_provider": "openai",
+            "stream": True,
         }
     )
     proxy_logging_obj = MagicMock()
@@ -9424,6 +9425,7 @@ async def test_handle_llm_api_exception_logs_bug_report_for_unmapped_error(
     issue_url = next(word for word in caplog.text.split() if word.startswith(ISSUE_URL_BASE))
     assert "Endpoint / call: /v1/chat/completions" in unquote_plus(issue_url)
     assert "Provider: openai" in unquote_plus(issue_url)
+    assert "Stream: true" in unquote_plus(issue_url)
     assert "acme-prod-gpt4" not in unquote_plus(issue_url)
     assert "user@example.com" not in unquote_plus(issue_url)
 

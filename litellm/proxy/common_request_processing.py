@@ -49,7 +49,6 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.bug_report import (
     allowlisted,
     bug_report_notice,
-    build_bug_report,
     should_report_bug,
     strip_bug_report_notice,
 )
@@ -79,6 +78,7 @@ from litellm.proxy.auth.auth_checks import (
     tag_max_budget_check_for_tags,
 )
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
+from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
@@ -3689,11 +3689,11 @@ class ProxyBaseLLMRequestProcessing:
                 request_path: Final = urlparse(str(request_url)).path if request_url is not None else None
                 verbose_proxy_logger.error(
                     bug_report_notice(
-                        build_bug_report(
+                        build_proxy_bug_report(
                             e,
-                            surface="proxy",
                             call_type=allowlisted(request_path, KNOWN_PROXY_ROUTES),
                             custom_llm_provider=self.data.get("custom_llm_provider"),
+                            stream=self.data.get("stream"),
                         )
                     )
                 )
