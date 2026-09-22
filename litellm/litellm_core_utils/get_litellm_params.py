@@ -4,6 +4,7 @@ from typing import Final
 
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.types.utils import LITELLM_CONTROL_PARAM_NAMES, LiteLLMControlParams
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     {
@@ -26,7 +27,7 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
 # Keys `completion()` forwards from its own kwargs into `get_litellm_params`,
 # which are otherwise invisible to it because that call site passes explicit
 # named arguments rather than `**kwargs`.
-FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS | frozenset({"stream_chunk_size"})
+FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS | frozenset(LITELLM_CONTROL_PARAM_NAMES)
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -130,6 +131,7 @@ def get_litellm_params(
     api_version: str | None = None,
     max_retries: int | None = None,
     litellm_request_debug: bool | None = None,
+    control: LiteLLMControlParams | None = None,
     **kwargs,
 ) -> dict:
     _litellm_metadata_dict: Final = litellm_metadata if isinstance(litellm_metadata, dict) else None
@@ -192,6 +194,7 @@ def get_litellm_params(
         "max_retries": max_retries,
         "use_litellm_proxy": use_litellm_proxy,
         "litellm_request_debug": litellm_request_debug,
+        "control": control,
     }
 
     # Sparse extraction: only add kwargs keys that are actually present

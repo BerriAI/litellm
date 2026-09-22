@@ -126,6 +126,7 @@ from litellm.types.completion import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
+    LiteLLMControlParams,
     ModelResponseStream,
     RawRequestTypedDict,
     StreamingChoices,
@@ -5177,6 +5178,7 @@ def completion(
         - It supports various optional parameters for customizing the completion behavior.
         - If 'mock_response' is provided, a mock completion response is returned for testing or debugging.
     """
+    control: Final = LiteLLMControlParams.from_kwargs(kwargs)
     ### VALIDATE Request ###
     if model is None:
         raise ValueError("model param not passed in.")
@@ -5644,6 +5646,7 @@ def completion(
             gigachat_scope=kwargs.get("gigachat_scope"),
             gigachat_auth_url=kwargs.get("gigachat_auth_url"),
             gigachat_access_token=kwargs.get("gigachat_access_token"),
+            control=control,
             **{key: kwargs[key] for key in FORWARDED_KWARGS_KEYS if key in kwargs},
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(

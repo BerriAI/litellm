@@ -1120,6 +1120,7 @@ def test_get_sync_custom_stream_wrapper_returns_wrapper():
         messages=[{"role": "user", "content": "hi"}],
         client=mock_client,
         signed_json_body=b'{"chatRequest":{}}',
+        litellm_params={},
     )
 
     assert isinstance(wrapper, OCIStreamWrapper)
@@ -1152,6 +1153,7 @@ async def test_get_async_custom_stream_wrapper_returns_wrapper():
         messages=[{"role": "user", "content": "hi"}],
         client=mock_client,
         signed_json_body=b'{"chatRequest":{}}',
+        litellm_params={},
     )
 
     assert isinstance(wrapper, OCIStreamWrapper)

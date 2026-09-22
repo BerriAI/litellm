@@ -1256,6 +1256,7 @@ class TestOCIStreamingSignedBody:
             logging_obj=mock_logging,
             client=mock_client,
             signed_json_body=signed_bytes,
+            litellm_params={},
         )
 
         assert (
@@ -1295,6 +1296,7 @@ class TestOCIStreamingSignedBody:
             logging_obj=mock_logging,
             client=mock_client,
             signed_json_body=None,
+            litellm_params={},
         )
 
         assert posted_data["data"] == json.dumps(

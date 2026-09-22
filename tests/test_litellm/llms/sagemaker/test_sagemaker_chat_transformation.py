@@ -133,6 +133,7 @@ def test_sync_first_event_emitted_after_a_single_frame():
         data={},
         messages=[],
         client=_FakeSyncClient(response),
+        litellm_params={},
     )
 
     first = next(c for c in wrapper.completion_stream if c is not None and _content_of(c) is not None)
@@ -155,6 +156,7 @@ def test_sync_events_emitted_incrementally_without_bursting():
         data={},
         messages=[],
         client=_FakeSyncClient(response),
+        litellm_params={},
     )
 
     consumed_at_delta = [
@@ -179,6 +181,7 @@ async def test_async_first_event_emitted_after_a_single_frame():
         data={},
         messages=[],
         client=_FakeAsyncClient(response),
+        litellm_params={},
     )
 
     consumed_at_delta = []

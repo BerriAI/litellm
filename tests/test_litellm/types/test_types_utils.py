@@ -861,3 +861,21 @@ def test_text_tokens_without_nested_reasoning_clamps(
         )
         == expected_text_tokens
     )
+
+
+def test_all_litellm_params_contains_every_control_param_field():
+    from dataclasses import fields
+
+    from litellm.types.utils import LiteLLMControlParams
+
+    control_field_names = {f.name for f in fields(LiteLLMControlParams)}
+    assert control_field_names
+    assert control_field_names <= set(all_litellm_params)
+
+
+def test_control_params_from_kwargs_reads_stream_chunk_size():
+    from litellm.types.utils import LiteLLMControlParams
+
+    assert LiteLLMControlParams.from_kwargs({"stream_chunk_size": 64}) == LiteLLMControlParams(stream_chunk_size=64)
+    assert LiteLLMControlParams.from_kwargs({}) == LiteLLMControlParams(stream_chunk_size=None)
+    assert LiteLLMControlParams.from_kwargs({"stream_chunk_size": True}) == LiteLLMControlParams(stream_chunk_size=None)
