@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { act, fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import RouterSettings from "./index";
 
@@ -208,10 +208,24 @@ describe("RouterSettings", () => {
       const { rerender } = renderWithProviders(<RouterSettings {...defaultProps} />);
       expect(await screen.findByRole("button", { name: /save changes/i })).toBeInTheDocument();
 
-      vi.mocked(getRouterSettingsCall).mockReturnValue(new Promise(() => {}));
-      rerender(<RouterSettings {...defaultProps} accessToken="other-token" />);
-
+      let resolveStale: (
+        value: typeof mockRouterSettingsResponse & { source: Record<string, string> },
+      ) => void = () => {};
+      vi.mocked(getRouterSettingsCall).mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveStale = resolve;
+        }),
+      );
+      rerender(<RouterSettings {...defaultProps} accessToken="stale-token" />);
       expect(screen.queryByRole("button", { name: /save changes/i })).not.toBeInTheDocument();
+
+      vi.mocked(getRouterSettingsCall).mockResolvedValueOnce({ ...mockRouterSettingsResponse, source: {} });
+      rerender(<RouterSettings {...defaultProps} accessToken="current-token" />);
+      expect(await screen.findByRole("button", { name: /save changes/i })).toBeInTheDocument();
+
+      resolveStale({ ...mockRouterSettingsResponse, source: {} });
+      await act(async () => {});
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
     });
 
     it("shows an error instead of a blank page when the source request fails", async () => {

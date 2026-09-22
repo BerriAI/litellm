@@ -48,8 +48,10 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
         selectedStrategy: initialStrategy,
       }));
     });
+    let cancelled = false;
     getRouterSettingsCall(accessToken)
       .then((data) => {
+        if (cancelled) return;
         setSourcesState({ sessionKey, sources: data.source ?? {}, failed: false });
         if (data.fields) {
           // Build metadata map for easy lookup
@@ -85,7 +87,12 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
           }
         }
       })
-      .catch(() => setSourcesState({ sessionKey, sources: null, failed: true }));
+      .catch(() => {
+        if (!cancelled) setSourcesState({ sessionKey, sources: null, failed: true });
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [accessToken, userRole, userID, sessionKey]);
 
   const handleSaveChanges = async () => {

@@ -151,9 +151,17 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
       }
       setRouterSettings(router_settings);
     });
+    let cancelled = false;
     getRouterSettingsCall(accessToken)
-      .then((data) => setSourcesState({ sessionKey, sources: data.source ?? {}, failed: false }))
-      .catch(() => setSourcesState({ sessionKey, sources: null, failed: true }));
+      .then((data) => {
+        if (!cancelled) setSourcesState({ sessionKey, sources: data.source ?? {}, failed: false });
+      })
+      .catch(() => {
+        if (!cancelled) setSourcesState({ sessionKey, sources: null, failed: true });
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [accessToken, userRole, userID, sessionKey]);
 
   const handleDeleteClick = (fallbackEntry: FallbackEntry) => {
