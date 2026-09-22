@@ -30,7 +30,11 @@ from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.tools import is_web_search_tool_responses
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, independent_snapshot
-from litellm.litellm_core_utils.internal_call_metadata import sanitized_forwardable_call_metadata
+from litellm.litellm_core_utils.internal_call_metadata import (
+    EvaluationBillingOwner,
+    evaluation_billing_context,
+    sanitized_forwardable_call_metadata,
+)
 from litellm.litellm_core_utils.llm_judge import (
     default_router_provider,
     extract_text_from_content,
@@ -751,6 +755,7 @@ class ActiveShadowEvalJob(BaseModel):
     baseline_model: str | None = None
     shadow_percentage: float
     judge_model: str
+    created_by: str | None = None
     max_turns: int
     max_budget: float | None = None
     ends_at: datetime
@@ -1086,22 +1091,34 @@ class ShadowEvalLogger(CustomLogger):
             if spend >= job.max_budget:
                 self._record_funnel(job.id, "withheld")
                 return
-        for arm_router in job.arm_router_names:
-            await self._run_shadow_arm(
-                prisma=prisma,
-                job=job,
-                arm_router=arm_router,
-                request_id=request_id,
-                messages=messages,
-                real_text=real_text,
-                real_model=real_model,
-                real_cost=real_cost,
-                real_classifier_cost=real_classifier_cost,
-                real_cache_hit=real_cache_hit,
-                control_tier=control_tier,
-                shadow_params=shadow_params,
-                parent_metadata=parent_metadata,
-            )
+        from litellm.proxy.auth.user_api_key_auth import _read_user_model_max_budget
+        from litellm.proxy.proxy_server import litellm_proxy_admin_name, proxy_logging_obj, user_api_key_cache
+
+        creator_id: Final = job.created_by or litellm_proxy_admin_name
+        creator_model_budget: Final = await _read_user_model_max_budget(
+            user_id=creator_id,
+            prisma_client=prisma,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        with evaluation_billing_context(EvaluationBillingOwner(creator_id, creator_model_budget)):
+            for arm_router in job.arm_router_names:
+                await self._run_shadow_arm(
+                    prisma=prisma,
+                    job=job,
+                    arm_router=arm_router,
+                    request_id=request_id,
+                    messages=messages,
+                    real_text=real_text,
+                    real_model=real_model,
+                    real_cost=real_cost,
+                    real_classifier_cost=real_classifier_cost,
+                    real_cache_hit=real_cache_hit,
+                    control_tier=control_tier,
+                    shadow_params=shadow_params,
+                    parent_metadata=parent_metadata,
+                )
 
     async def _run_shadow_arm(
         self,

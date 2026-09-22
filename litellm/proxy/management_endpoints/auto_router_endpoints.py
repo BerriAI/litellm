@@ -1616,10 +1616,10 @@ async def start_shadow_eval(
     eval spend, the shadow and judge calls' own cost, reaches max_budget dollars, the
     job's window ends, or the job is stopped, so one target running out of budget does
     not end sampling for the others; sampling changes propagate to pods within about 10
-    seconds. Shadow and judge calls bill to the sampled request's own identity but are
+    seconds. Shadow and judge calls bill to the admin who started the job and are
     excluded from request counts and auto-router adoption metrics.
     """
-    from litellm.proxy.proxy_server import llm_router, prisma_client
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, llm_router, prisma_client
 
     _require_admin_writer(user_api_key_dict, "start a shadow eval")
     if prisma_client is None:
@@ -1744,7 +1744,7 @@ async def start_shadow_eval(
         "shadow_percentage": data.shadow_percentage,
         "max_turns": SHADOW_EVAL_TURN_VALVE,
         "max_budget": data.max_budget,
-        "created_by": user_api_key_dict.user_id,
+        "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
         "created_at": now,
         "ends_at": ends_at,
     }

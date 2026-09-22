@@ -9,7 +9,7 @@ and ``cost_per_ptu_per_hour`` accrues flat cost of
 ``[ptu_effective_from, ptu_effective_to)`` window (a window opening at 23:00
 charges one hour that day). The amount is written to ``LiteLLM_DailyTeamSpend``
 under a sentinel api_key so the rows are distinguishable from per-request rows
-and share the existing unique constraint.
+and keep their identity across display-name changes.
 """
 
 import asyncio
@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
+from uuid import NAMESPACE_URL, uuid5
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -30,6 +31,7 @@ from litellm.constants import (
     PTU_SENTINEL_API_KEY,
 )
 from litellm.litellm_core_utils.ptu_pricing import ptu_terms
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient, writer_wrapper
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -242,32 +244,27 @@ async def _upsert_ptu_daily_row(
     date_str: str,
     flat_cost: float,
 ) -> None:
-    """Idempotent upsert of a sentinel-api_key row on LiteLLM_DailyTeamSpend.
-
-    ``model`` holds the deployment id because it is part of the table's unique key and a
-    rename must not move the row. ``model_group`` carries the operator-facing name, which
-    is outside the key and is what the usage views display.
-    """
-    where: Final = {  # mutable-ok: prisma upsert filter payload
-        "team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {  # mutable-ok: prisma composite-key filter
-            "team_id": team_id,
-            "date": date_str,
-            "api_key": PTU_SENTINEL_API_KEY,
-            "model": model_id,
-            "custom_llm_provider": "",
-            "mcp_namespaced_tool_name": "",
-            "endpoint": "",
-        }
+    """Upsert one deployment/day charge, retaining legacy IDs and a mutable display name."""
+    natural_key: Final = {  # mutable-ok: prisma filter and create payload
+        "team_id": team_id,
+        "date": date_str,
+        "api_key": PTU_SENTINEL_API_KEY,
+        "model": model_id,
     }
+    table: Final = _DailyTeamSpendRepository(WriterPinnedClient(writer_wrapper(prisma_client.db))).table
+    existing: Final = await table.find_first(where=natural_key)
+    row_id: Final = (
+        existing.id
+        if existing is not None
+        else str(uuid5(NAMESPACE_URL, "litellm:ptu:" + json.dumps(tuple(natural_key.values()), separators=(",", ":"))))
+    )
     now: Final = datetime.now(timezone.utc)
-    await _daily_team_spend_table(prisma_client).upsert(
-        where=where,
+    await table.upsert(
+        where={"id": row_id},
         data={  # mutable-ok: prisma upsert data payload
             "create": {  # mutable-ok: prisma create payload
-                "team_id": team_id,
-                "date": date_str,
-                "api_key": PTU_SENTINEL_API_KEY,
-                "model": model_id,
+                **natural_key,
+                "id": row_id,
                 "model_group": model_name,
                 "custom_llm_provider": "",
                 "mcp_namespaced_tool_name": "",
@@ -291,7 +288,7 @@ async def _upsert_charge_with_retry(
 ) -> bool:
     """Write one charge, retrying transient failures. Returns False once attempts are spent.
 
-    The upsert is idempotent on the sentinel unique key, so a retry can only rewrite the
+    The upsert is idempotent on the stable row ID, so a retry can only rewrite the
     same amount for the same day. Retrying in-run matters because the scheduled job moves
     on to the next date: a write lost here is a day of PTU cost that no later run replays.
     """

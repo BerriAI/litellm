@@ -2,6 +2,7 @@ import asyncio
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import litellm
@@ -13,6 +14,12 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     budget_reservation_from_metadata,
     get_litellm_metadata_from_kwargs,
+)
+from litellm.litellm_core_utils.internal_call_metadata import (
+    EVALUATION_BILLING_OWNER_KEY,
+    get_evaluation_billing_owner,
+    get_evaluation_billing_owner_from_kwargs,
+    project_evaluation_billing_kwargs,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
@@ -107,11 +114,12 @@ class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(
         self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
+        receipt: Final = project_evaluation_billing_kwargs(kwargs)
         if self.spend_event_producer is None or not is_offloadable_success(response_obj):
-            await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
+            await self._PROXY_track_cost_callback(receipt, response_obj, start_time, end_time)
             return
         event: Final = build_spend_event(
-            kwargs,
+            receipt,
             response_obj,
             start_time,
             end_time,
@@ -119,7 +127,7 @@ class _ProxyDBLogger(CustomLogger):
         )
         if isinstance(event, SpendEventBuildError):
             verbose_proxy_logger.warning("collector: tracking cost in-process, event not buildable: %s", event.reason)
-            await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
+            await self._PROXY_track_cost_callback(receipt, response_obj, start_time, end_time)
             return
         await self.spend_event_producer.publish(event)
 
@@ -258,18 +266,23 @@ class _ProxyDBLogger(CustomLogger):
             existing_metadata.get("standard_logging_guardrail_information")
         )
 
+        billing_owner: Final = get_evaluation_billing_owner_from_kwargs(request_data) or get_evaluation_billing_owner()
+        receipt: Final = project_evaluation_billing_kwargs(
+            MappingProxyType({**request_data, EVALUATION_BILLING_OWNER_KEY: billing_owner})
+        )
+
         await self._spend_writer().update_database(
-            token=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
+            token=None if billing_owner is not None else LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
             response_cost=recovered_response_cost,
-            user_id=user_api_key_dict.user_id,
-            end_user_id=user_api_key_dict.end_user_id,
-            team_id=user_api_key_dict.team_id,
-            kwargs=request_data,
+            user_id=billing_owner.user_id if billing_owner is not None else user_api_key_dict.user_id,
+            end_user_id=None if billing_owner is not None else user_api_key_dict.end_user_id,
+            team_id=None if billing_owner is not None else user_api_key_dict.team_id,
+            kwargs=receipt,
             completion_response=original_exception,
             start_time=actual_start_time,
             end_time=datetime.now(),
-            org_id=user_api_key_dict.org_id,
-            project_id=user_api_key_dict.project_id,
+            org_id=None if billing_owner is not None else user_api_key_dict.org_id,
+            project_id=None if billing_owner is not None else user_api_key_dict.project_id,
         )
 
     @log_db_metrics

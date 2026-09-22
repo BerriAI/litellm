@@ -1932,7 +1932,10 @@ async def test_start_shadow_eval_reverse_records_its_arms_and_holds_its_own_slot
 
 
 @pytest.mark.asyncio
-async def test_start_shadow_eval_forward_leaves_the_baseline_column_empty(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize("creator", ("admin", None))
+async def test_start_shadow_eval_forward_leaves_the_baseline_column_empty(
+    monkeypatch: pytest.MonkeyPatch, creator: str | None,
+) -> None:
     import litellm.proxy.proxy_server as proxy_server
 
     _configure_anthropic_sdk_judge(monkeypatch)
@@ -1940,9 +1943,11 @@ async def test_start_shadow_eval_forward_leaves_the_baseline_column_empty(monkey
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
 
-    await start_shadow_eval(_start_request(), ADMIN)
+    monkeypatch.setattr(proxy_server, "litellm_proxy_admin_name", "configured-admin")
+    await start_shadow_eval(_start_request(), ADMIN.model_copy(update={"user_id": creator}))
 
     rows = prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"]
+    assert all(row["created_by"] == (creator or "configured-admin") for row in rows)
     assert rows[0]["direction"] == "forward"
     assert rows[0]["baseline_model"] is None
 

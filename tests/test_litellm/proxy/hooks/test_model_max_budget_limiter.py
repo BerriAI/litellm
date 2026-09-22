@@ -7,6 +7,7 @@ from typing import Final
 import pytest
 
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils import internal_call_metadata as billing
 from litellm.proxy.hooks.model_max_budget_limiter import (
     _PROXY_VirtualKeyModelMaxBudgetLimiter,
 )
@@ -20,6 +21,7 @@ BATCH_COST: Final = 2.925e-05
 CHAT_COST: Final = 0.001
 KEY_SPEND_KEY: Final = f"virtual_key_spend:{KEY_HASH}:{MODEL_GROUP}:1d"
 USER_SPEND_KEY: Final = f"user_model_spend:{USER_ID}:{MODEL_GROUP}:1d"
+TEAM_SPEND_KEY: Final = f"team_model_spend:sampled-team:{MODEL_GROUP}:1d"
 
 
 def _batch(batch_id: str, status: str) -> LiteLLMBatch:
@@ -35,20 +37,25 @@ def _batch(batch_id: str, status: str) -> LiteLLMBatch:
     )
 
 
-def _event(call_type: str, response_cost: float) -> dict[str, object]:
+def _event(call_type: str, response_cost: float, team_budget: bool = False) -> dict[str, object]:
+    budget: Final = {MODEL_GROUP: {"budget_limit": 0.0001, "time_period": "1d"}}
     return {
+        billing.EVALUATION_BILLING_OWNER_KEY: billing.get_evaluation_billing_owner(),
         "call_type": call_type,
         "standard_logging_object": {
             "call_type": call_type,
             "response_cost": response_cost,
             "model": "openai/gpt-5.4-mini",
             "model_group": MODEL_GROUP,
-            "metadata": {"user_api_key_hash": KEY_HASH, "user_api_key_user_id": USER_ID},
+            "metadata": {
+                "user_api_key_hash": KEY_HASH, "user_api_key_user_id": USER_ID, "user_api_key_team_id": "sampled-team",
+            },
         },
         "litellm_params": {
             "metadata": {
-                "user_api_key_model_max_budget": {MODEL_GROUP: {"budget_limit": 0.0001, "time_period": "1d"}},
-                "user_api_key_user_model_max_budget": {MODEL_GROUP: {"budget_limit": 0.0001, "time_period": "1d"}},
+                "user_api_key_model_max_budget": None if team_budget else budget,
+                "user_api_key_user_model_max_budget": budget,
+                "user_api_key_team_model_max_budget": budget,
             }
         },
     }
@@ -60,9 +67,9 @@ async def _poll(limiter: _PROXY_VirtualKeyModelMaxBudgetLimiter, batch: LiteLLMB
     )
 
 
-async def _chat(limiter: _PROXY_VirtualKeyModelMaxBudgetLimiter) -> None:
+async def _chat(limiter: _PROXY_VirtualKeyModelMaxBudgetLimiter, team_budget: bool = False) -> None:
     await limiter.async_log_success_event(
-        _event("acompletion", CHAT_COST), response_obj=None, start_time=None, end_time=None
+        _event("acompletion", CHAT_COST, team_budget), response_obj=None, start_time=None, end_time=None
     )
 
 
@@ -157,16 +164,23 @@ async def test_polls_of_a_finished_batch_charge_each_per_model_budget_once():
 
 
 @pytest.mark.asyncio
-async def test_a_second_batch_and_chat_requests_still_charge_the_budget():
+@pytest.mark.parametrize("evaluation", (False, True))
+@pytest.mark.parametrize("team_budget", (False, True))
+async def test_a_second_batch_and_chat_requests_still_charge_the_budget(evaluation: bool, team_budget: bool) -> None:
     limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
 
     await _poll(limiter, _batch("batch_first", "completed"), response_cost=BATCH_COST)
     await _poll(limiter, _batch("batch_first", "completed"), response_cost=BATCH_COST)
     await _poll(limiter, _batch("batch_second", "completed"), response_cost=BATCH_COST)
-    await _chat(limiter)
-    await _chat(limiter)
+    owner: Final = billing.EvaluationBillingOwner("evaluation-admin") if evaluation else None
+    with billing.evaluation_billing_context(owner):
+        await _chat(limiter, team_budget)
+        await _chat(limiter, team_budget)
 
-    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(2 * BATCH_COST + 2 * CHAT_COST)
+    chat_cost: Final = 0 if evaluation else 2 * CHAT_COST
+    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(2 * BATCH_COST + (0 if team_budget else chat_cost))
+    assert await _spend(limiter, USER_SPEND_KEY) == pytest.approx(2 * BATCH_COST + chat_cost)
+    assert await _spend(limiter, TEAM_SPEND_KEY) == pytest.approx(chat_cost if team_budget else 0)
 
 
 @pytest.mark.asyncio

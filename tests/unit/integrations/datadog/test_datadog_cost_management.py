@@ -1,4 +1,5 @@
 import time
+from typing import Final
 from unittest.mock import AsyncMock
 
 import pytest
@@ -7,6 +8,7 @@ from httpx import Request, Response
 from litellm.integrations.datadog.datadog_cost_management import (
     DatadogCostManagementLogger,
 )
+from litellm.litellm_core_utils import internal_call_metadata as billing
 from litellm.types.utils import StandardLoggingPayload
 
 
@@ -86,14 +88,22 @@ async def test_aggregate_costs(clean_env):
 
 
 @pytest.mark.asyncio
-async def test_async_log_success_event(clean_env):
+@pytest.mark.parametrize("evaluation", (False, True))
+async def test_async_log_success_event(clean_env: None, evaluation: bool) -> None:
     """
     Test that logs are added to queue
     """
     logger = DatadogCostManagementLogger(batch_size=10)
+    payload: Final = StandardLoggingPayload(
+        response_cost=0.01, total_tokens=5,
+        metadata={"user_api_key_user_id": "sampled-user", "user_api_key_alias": "sampled-key"},
+    )
 
     await logger.async_log_success_event(
-        kwargs={"standard_logging_object": {"response_cost": 0.01}},
+        kwargs={
+            "standard_logging_object": payload,
+            billing.EVALUATION_BILLING_OWNER_KEY: billing.EvaluationBillingOwner("admin") if evaluation else None,
+        },
         response_obj={},
         start_time=time.time(),
         end_time=time.time(),
@@ -101,6 +111,12 @@ async def test_async_log_success_event(clean_env):
 
     assert len(logger.log_queue) == 1
     assert logger.log_queue[0]["response_cost"] == 0.01
+    assert logger.log_queue[0]["total_tokens"] == 5
+    entry: Final = logger._aggregate_costs(logger.log_queue)[0]
+    assert entry["BilledCost"] == 0.01
+    assert entry["Tags"] is not None
+    assert entry["Tags"]["user"] == ("admin" if evaluation else "sampled-key")
+    assert payload["metadata"]["user_api_key_user_id"] == "sampled-user"
 
     # Test zero cost ignored
     await logger.async_log_success_event(

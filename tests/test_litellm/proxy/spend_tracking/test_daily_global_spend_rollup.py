@@ -393,7 +393,7 @@ _DAILY_USER_SPEND_DDL: Final = """
         timed_requests BIGINT DEFAULT 0,
         created_at TIMESTAMP DEFAULT now(),
         updated_at TIMESTAMP,
-        UNIQUE (user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint)
+        UNIQUE (user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint, model_group)
     )
 """
 

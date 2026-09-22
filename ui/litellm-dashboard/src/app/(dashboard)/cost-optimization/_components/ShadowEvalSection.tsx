@@ -439,7 +439,7 @@ const PreviousJob: React.FC<{ job: ShadowEvalJob }> = ({ job }) => {
             <p className="text-xs text-muted-foreground">
               {shown.judged_count != null &&
                 `${shown.judged_count.toLocaleString()} judged · ${(shown.error_count ?? 0).toLocaleString()} errored · ${usd(totalSpend(shown))} eval spend · `}
-              {new Date(shown.created_at).toLocaleDateString()}
+              Created {new Date(shown.created_at).toLocaleDateString()}
             </p>
           </div>
         </div>

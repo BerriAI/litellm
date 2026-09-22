@@ -75,7 +75,10 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.internal_call_metadata import (
+    EVALUATION_BILLING_OWNER_KEY,
     MODEL_ACCESS_GROUP_METADATA_KEY,
+    EvaluationBillingOwner,
+    get_evaluation_billing_owner,
     is_unbilled_non_inference_call,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
@@ -607,6 +610,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
         self.litellm_trace_id: str = litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
+        self.evaluation_billing_owner: Final[EvaluationBillingOwner | None] = get_evaluation_billing_owner()
 
         # Capture the pre-call *value* (not a contextvars.Token) so restoration works
         # even if this attempt's own logging ends up dispatched onto a different
@@ -700,6 +704,7 @@ class Logging(LiteLLMLoggingBaseClass):
             "litellm_params": litellm_params,
             "applied_guardrails": applied_guardrails,
             "model": model,
+            EVALUATION_BILLING_OWNER_KEY: self.evaluation_billing_owner,
         }
 
         # Set by proxy request handlers to defer spend-log fire until after
@@ -931,6 +936,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
                 **self.optional_params,
                 **additional_params,
+                EVALUATION_BILLING_OWNER_KEY: self.evaluation_billing_owner,
             }
         )
 

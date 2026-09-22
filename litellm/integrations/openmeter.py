@@ -9,6 +9,10 @@ import httpx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.internal_call_metadata import (
+    get_evaluation_billing_owner_from_kwargs,
+    project_evaluation_billing_kwargs,
+)
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
@@ -49,6 +53,8 @@ class OpenMeterLogger(CustomLogger):
             raise Exception(f"Missing keys={missing_keys} in environment.")
 
     def _common_logic(self, kwargs: dict, response_obj):
+        receipt: Final = project_evaluation_billing_kwargs(kwargs)
+        billing_owner: Final = get_evaluation_billing_owner_from_kwargs(receipt)
         call_id: Final = response_obj.get("id", kwargs.get("litellm_call_id"))
         dt: Final = get_utc_datetime().isoformat()
         cost: Final = kwargs.get("response_cost", None)
@@ -69,7 +75,7 @@ class OpenMeterLogger(CustomLogger):
         # serving multi-tenant traffic enable this to prevent clients from
         # forging attribution by setting `user` in the request body.
         trust_request_user: Final = os.getenv("OPENMETER_TRUST_REQUEST_USER", "true").lower() != "false"
-        user_param = kwargs.get("user", None) if trust_request_user else None
+        user_param = receipt.get("user", None) if trust_request_user or billing_owner is not None else None
 
         # If no user provided directly, try to get it from token user_id
         if user_param is None:

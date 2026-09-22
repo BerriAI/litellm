@@ -53,6 +53,7 @@ from litellm.proxy.common_utils.user_api_key_cache import project_cache_key
 from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
     build_bulk_upsert,
+    conflict_key,
     daily_spend_entity_ids,
     merge_by_conflict_key,
 )
@@ -2788,7 +2789,7 @@ class DBSpendUpdateWriter:
         """
         Add a spend log transaction to the `daily_spend_update_queue`
 
-        Key = @@unique([user_id, date, api_key, model, custom_llm_provider])    )
+        Key matches the daily user spend database identity, including the requested model group.
 
         If key exists, update the transaction with the new spend and usage
         """
@@ -2802,9 +2803,8 @@ class DBSpendUpdateWriter:
         if base_daily_transaction is None:
             return
 
-        endpoint_str: Final = base_daily_transaction.get("endpoint") or ""
-        daily_transaction_key = f"{payload['user']}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
         daily_transaction: Final = DailyUserSpendTransaction(user_id=payload["user"], **base_daily_transaction)
+        daily_transaction_key: Final = json.dumps(conflict_key(DAILY_SPEND_TABLES["user"], daily_transaction))
         await self.daily_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
 
     async def add_spend_log_transaction_to_daily_team_transaction(
@@ -2825,9 +2825,8 @@ class DBSpendUpdateWriter:
             verbose_proxy_logger.debug("team_id is None for request. Skipping incrementing team spend.")
             return
 
-        endpoint_str: Final = base_daily_transaction.get("endpoint") or ""
-        daily_transaction_key = f"{payload['team_id']}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
         daily_transaction: Final = DailyTeamSpendTransaction(team_id=payload["team_id"], **base_daily_transaction)
+        daily_transaction_key: Final = json.dumps(conflict_key(DAILY_SPEND_TABLES["team"], daily_transaction))
         await self.daily_team_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
 
     async def add_spend_log_transaction_to_daily_org_transaction(
@@ -2858,9 +2857,8 @@ class DBSpendUpdateWriter:
         if base_daily_transaction is None:
             return
 
-        endpoint_str: Final = base_daily_transaction.get("endpoint") or ""
-        daily_transaction_key = f"{org_id}_{base_daily_transaction['date']}_{payload_with_org['api_key']}_{payload_with_org['model']}_{payload_with_org['custom_llm_provider']}_{endpoint_str}"
         daily_transaction: Final = DailyOrganizationSpendTransaction(organization_id=org_id, **base_daily_transaction)
+        daily_transaction_key: Final = json.dumps(conflict_key(DAILY_SPEND_TABLES["org"], daily_transaction))
         await self.daily_org_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
 
     async def add_spend_log_transaction_to_daily_end_user_transaction(
@@ -2891,9 +2889,8 @@ class DBSpendUpdateWriter:
         if base_daily_transaction is None:
             return
 
-        endpoint_str: Final = base_daily_transaction.get("endpoint") or ""
-        daily_transaction_key = f"{end_user_id}_{base_daily_transaction['date']}_{payload_with_end_user_id['api_key']}_{payload_with_end_user_id['model']}_{payload_with_end_user_id['custom_llm_provider']}_{endpoint_str}"
         daily_transaction: Final = DailyEndUserSpendTransaction(end_user_id=end_user_id, **base_daily_transaction)
+        daily_transaction_key: Final = json.dumps(conflict_key(DAILY_SPEND_TABLES["end_user"], daily_transaction))
         await self.daily_end_user_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
 
     async def add_spend_log_transaction_to_daily_agent_transaction(
@@ -2918,9 +2915,8 @@ class DBSpendUpdateWriter:
         )
         if base_daily_transaction is None:
             return
-        endpoint_str: Final = base_daily_transaction.get("endpoint") or ""
-        daily_transaction_key = f"{payload['agent_id']}_{base_daily_transaction['date']}_{payload_with_agent_id['api_key']}_{payload_with_agent_id['model']}_{payload_with_agent_id['custom_llm_provider']}_{endpoint_str}"
         daily_transaction: Final = DailyAgentSpendTransaction(agent_id=payload["agent_id"], **base_daily_transaction)
+        daily_transaction_key: Final = json.dumps(conflict_key(DAILY_SPEND_TABLES["agent"], daily_transaction))
         await self.daily_agent_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
 
     async def add_spend_log_transaction_to_daily_tag_transaction(
@@ -2945,10 +2941,9 @@ class DBSpendUpdateWriter:
         for tag in request_tags:
             if tag is None:
                 continue
-            endpoint_str = base_daily_transaction.get("endpoint") or ""
-            daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
             daily_transaction = DailyTagSpendTransaction(
                 tag=tag, **base_daily_transaction, request_id=payload["request_id"]
             )
-
-            await self.daily_tag_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
+            await self.daily_tag_spend_update_queue.add_update(
+                update={json.dumps(conflict_key(DAILY_SPEND_TABLES["tag"], daily_transaction)): daily_transaction}
+            )

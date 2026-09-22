@@ -38,6 +38,7 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
+from litellm.litellm_core_utils.internal_call_metadata import get_evaluation_billing_owner
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
 from litellm.proxy.auth.auth_checks import (
@@ -3105,7 +3106,11 @@ async def _reserve_budget_after_common_checks(
     request: Request | None = None,
 ) -> None:
     user_api_key_auth_obj.budget_reservation = None
-    if not skip_budget_checks and general_settings.get("disable_budget_reservation") is not True:
+    if (
+        not skip_budget_checks
+        and general_settings.get("disable_budget_reservation") is not True
+        and get_evaluation_billing_owner() is None
+    ):
         from litellm.proxy.spend_tracking.budget_reservation import (
             reserve_budget_for_request,
         )

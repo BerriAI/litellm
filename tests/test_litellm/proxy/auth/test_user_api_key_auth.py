@@ -12,6 +12,7 @@ from functools import partial
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 
@@ -21,6 +22,7 @@ from fastapi import HTTPException, status
 import litellm
 import litellm.proxy.proxy_server
 from litellm.caching.dual_cache import DualCache
+from litellm.litellm_core_utils import internal_call_metadata as billing
 from litellm.proxy._types import (
     LiteLLMRoutes,
     LiteLLM_JWTAuth,
@@ -9206,20 +9208,24 @@ async def test_router_settings_model_group_alias_authorizes_target_for_team(monk
 
 
 @pytest.mark.asyncio
-async def test_reserve_budget_after_common_checks_hands_the_reservation_to_the_request_state():
+@pytest.mark.parametrize("evaluation", (False, True))
+async def test_reserve_budget_after_common_checks_hands_the_reservation_to_the_request_state(evaluation: bool) -> None:
     from fastapi import Request
 
     request = Request(scope={"type": "http"})
     user_api_key_auth_obj = UserAPIKeyAuth(token="test_token")
-    reservation = {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+    reservation: Final = None if evaluation else {
+        "reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False,
+    }
+    owner: Final = billing.EvaluationBillingOwner("evaluation-admin") if evaluation else None
 
-    with patch(
+    with billing.evaluation_billing_context(owner), patch(
         "litellm.proxy.spend_tracking.budget_reservation.reserve_budget_for_request",
         new=AsyncMock(return_value=reservation),
-    ):
+    ) as reserve:
         await _reserve_budget_after_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
-            request_data={"model": "gpt-4o"},
+            request_data={"model": "gpt-4o", billing.EVALUATION_BILLING_OWNER_KEY: {"user_id": "forged-admin"}},
             route="/v1/batches/batch_123/cancel",
             llm_router=None,
             team_object=None,
@@ -9232,6 +9238,7 @@ async def test_reserve_budget_after_common_checks_hands_the_reservation_to_the_r
             request=request,
         )
 
+    assert reserve.await_count == (0 if evaluation else 1)
     assert user_api_key_auth_obj.budget_reservation is reservation
     assert request.state.budget_reservation is reservation
     assert request.scope["state"]["budget_reservation"] is reservation
