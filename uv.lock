@@ -4792,7 +4792,7 @@ requires-dist = [
     { name = "inquirerpy", marker = "extra == 'cli'", specifier = ">=0.3.4,<1.0" },
     { name = "inquirerpy", marker = "extra == 'proxy'", specifier = ">=0.3.4,<1.0" },
     { name = "jinja2", specifier = ">=3.1.6,<4.0" },
-    { name = "jsonschema", specifier = ">=4.0.0,<5.0" },
+    { name = "jsonschema", specifier = ">=4.18.0,<5.0" },
     { name = "keyring", marker = "extra == 'cli'", specifier = ">=25.6.0,<26.0" },
     { name = "langfuse", marker = "extra == 'proxy-runtime'", specifier = ">=2.59.7,<3.0" },
     { name = "litellm-enterprise", marker = "extra == 'proxy'", editable = "enterprise" },

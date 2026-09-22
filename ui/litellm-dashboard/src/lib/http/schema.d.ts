@@ -8622,6 +8622,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/liteask/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Liteask Approve */
+        post: operations["liteask_approve_management_v1_liteask_approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/liteask/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Liteask Chat */
+        post: operations["liteask_chat_management_v1_liteask_chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/liteask/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Liteask Config */
+        get: operations["liteask_config_management_v1_liteask_config_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/spend_logs/end_users": {
         parameters: {
             query?: never;
@@ -30188,6 +30239,69 @@ export interface components {
             has_more: boolean;
             /** Next Page */
             next_page?: string | null;
+        };
+        /** LiteAskApprovalRequest */
+        LiteAskApprovalRequest: {
+            /**
+             * Conversation Id
+             * Format: uuid
+             */
+            conversation_id: string;
+            /** Token */
+            token: string;
+        };
+        /** LiteAskChatRequest */
+        LiteAskChatRequest: {
+            /**
+             * Conversation Id
+             * Format: uuid
+             */
+            conversation_id: string;
+            /** Messages */
+            messages: components["schemas"]["LiteAskMessage"][];
+        };
+        /** LiteAskConfig */
+        LiteAskConfig: {
+            /** Can Execute Mutations */
+            can_execute_mutations: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /** Model */
+            model: string | null;
+        };
+        /** LiteAskMessage */
+        LiteAskMessage: {
+            /** Content */
+            content: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "assistant";
+        };
+        /** LiteAskProposal */
+        LiteAskProposal: {
+            /** Arguments */
+            arguments: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Expires At */
+            expires_at: number;
+            /** Title */
+            title: string;
+            /** Token */
+            token: string;
+            /** Tool */
+            tool: string;
+        };
+        /** LiteAskResponse */
+        LiteAskResponse: {
+            /** Generated Key */
+            generated_key?: string | null;
+            /** Message */
+            message: string;
+            proposal?: components["schemas"]["LiteAskProposal"] | null;
+            result?: components["schemas"]["JsonValue"];
         };
         /** LiteLLMFineTuningJobCreate */
         LiteLLMFineTuningJobCreate: {
@@ -53659,6 +53773,92 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListResponse_BudgetListItem_"];
+                };
+            };
+        };
+    };
+    liteask_approve_management_v1_liteask_approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LiteAskApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteAskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    liteask_chat_management_v1_liteask_chat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LiteAskChatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteAskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    liteask_config_management_v1_liteask_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteAskConfig"];
                 };
             };
         };

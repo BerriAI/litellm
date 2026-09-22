@@ -16180,6 +16180,361 @@
       }
     }
   },
+  "liteask": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "JsonValue": {},
+        "LiteAskApprovalRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "conversation_id": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            },
+            "token": {
+              "maxLength": 50000,
+              "minLength": 1,
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "conversation_id",
+            "token"
+          ],
+          "title": "LiteAskApprovalRequest",
+          "type": "object"
+        },
+        "LiteAskChatRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "conversation_id": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            },
+            "messages": {
+              "items": {
+                "$ref": "#/components/schemas/LiteAskMessage"
+              },
+              "maxItems": 40,
+              "minItems": 1,
+              "title": "Messages",
+              "type": "array"
+            }
+          },
+          "required": [
+            "conversation_id",
+            "messages"
+          ],
+          "title": "LiteAskChatRequest",
+          "type": "object"
+        },
+        "LiteAskConfig": {
+          "properties": {
+            "can_execute_mutations": {
+              "title": "Can Execute Mutations",
+              "type": "boolean"
+            },
+            "enabled": {
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            }
+          },
+          "required": [
+            "enabled",
+            "model",
+            "can_execute_mutations"
+          ],
+          "title": "LiteAskConfig",
+          "type": "object"
+        },
+        "LiteAskMessage": {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Content",
+              "type": "string"
+            },
+            "role": {
+              "enum": [
+                "user",
+                "assistant"
+              ],
+              "title": "Role",
+              "type": "string"
+            }
+          },
+          "required": [
+            "role",
+            "content"
+          ],
+          "title": "LiteAskMessage",
+          "type": "object"
+        },
+        "LiteAskProposal": {
+          "properties": {
+            "arguments": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Arguments",
+              "type": "object"
+            },
+            "expires_at": {
+              "title": "Expires At",
+              "type": "integer"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "token": {
+              "title": "Token",
+              "type": "string"
+            },
+            "tool": {
+              "title": "Tool",
+              "type": "string"
+            }
+          },
+          "required": [
+            "token",
+            "tool",
+            "title",
+            "arguments",
+            "expires_at"
+          ],
+          "title": "LiteAskProposal",
+          "type": "object"
+        },
+        "LiteAskResponse": {
+          "properties": {
+            "generated_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Generated Key"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "proposal": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/LiteAskProposal"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "result": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          },
+          "required": [
+            "message"
+          ],
+          "title": "LiteAskResponse",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/management/v1/liteask/approve": {
+        "post": {
+          "operationId": "liteask_approve_management_v1_liteask_approve_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiteAskApprovalRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/LiteAskResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Liteask Approve",
+          "tags": [
+            "liteask"
+          ]
+        }
+      },
+      "/management/v1/liteask/chat": {
+        "post": {
+          "operationId": "liteask_chat_management_v1_liteask_chat_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiteAskChatRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/LiteAskResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Liteask Chat",
+          "tags": [
+            "liteask"
+          ]
+        }
+      },
+      "/management/v1/liteask/config": {
+        "get": {
+          "operationId": "liteask_config_management_v1_liteask_config_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/LiteAskConfig"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Liteask Config",
+          "tags": [
+            "liteask"
+          ]
+        }
+      }
+    }
+  },
   "llm_passthrough": {
     "components": {
       "schemas": {
@@ -19919,7 +20274,7 @@
                   }
                 }
               },
-              "description": "\n    Unified rate-limit error.\n\n    Every rate-limit condition surfaced by litellm \u2014 whether it originated from\n    an upstream LLM provider, a vendor batch endpoint, or one of litellm's own\n    proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,\n    max-iterations, etc.) \u2014 is raised as an instance of this class.\n\n    The :attr:`category` attribute lets callers distinguish the source. See\n    :class:`RateLimitErrorCategory` for the available values.\n    "
+              "description": "\nUnified rate-limit error.\n\nEvery rate-limit condition surfaced by litellm \u2014 whether it originated from\nan upstream LLM provider, a vendor batch endpoint, or one of litellm's own\nproxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,\nmax-iterations, etc.) \u2014 is raised as an instance of this class.\n\nThe :attr:`category` attribute lets callers distinguish the source. See\n:class:`RateLimitErrorCategory` for the available values.\n"
             },
             "500": {
               "content": {

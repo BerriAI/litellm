@@ -3231,7 +3231,6 @@ async def _resolve_request_response_payload(
     "/spend/logs/ui/{request_id}",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
 )
 async def ui_view_request_response_for_request_id(
     request_id: str,
