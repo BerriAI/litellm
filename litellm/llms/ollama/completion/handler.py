@@ -51,23 +51,16 @@ def _prepare_ollama_embedding_payload(
 
 
 def _encode_embedding(embedding: Sequence[float], encoding_format: str | None) -> str | list[float]:
-    """Render a vector in the format the OpenAI embeddings API contract promises.
-
-    Ollama only ever returns float arrays. Clients that request ``base64`` will run a
-    float32 decoder over whatever comes back, so returning a float list there corrupts
-    the vector into a quarter of its true width.
-    """
+    """Ollama only returns float arrays, but a client that asked for base64 will run a
+    float32 decoder over the response, shrinking a float list to a quarter of its width."""
     if encoding_format != "base64":
         return list(embedding)
     return base64.b64encode(struct.pack(f"<{len(embedding)}f", *embedding)).decode("utf-8")
 
 
 def _validate_dimensions(embeddings: Sequence[Sequence[float]], requested_dimensions: int | None) -> None:
-    """Ollama accepts ``dimensions`` but silently ignores it on models that cannot honor it.
-
-    Returning a differently sized vector with a 200 pushes the failure downstream into
-    vector stores, so surface the mismatch here instead.
-    """
+    """Ollama truncates to `dimensions` when it can, but silently returns the model's own
+    width when asked for more, which otherwise surfaces as a rejected vector store write."""
     if requested_dimensions is None:
         return
 

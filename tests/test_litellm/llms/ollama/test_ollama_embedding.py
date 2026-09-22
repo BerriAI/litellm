@@ -112,13 +112,8 @@ def test_prompt_eval_fallback_when_missing(mock_embedding_response, mock_encodin
 
 
 def _embed(returned_vector: list[float], **kwargs) -> tuple[EmbeddingResponse, dict]:
-    """Drive the public ``litellm.embedding`` surface against a stubbed Ollama server.
-
-    Going through the public entrypoint (rather than calling the handler directly) is
-    deliberate: ``encoding_format`` used to be rejected by param mapping long before it
-    reached the handler, so a handler-level test would have passed against a code path
-    real callers cannot reach.
-    """
+    """Goes through the public entrypoint on purpose: param mapping used to drop
+    ``encoding_format`` before the handler saw it, so handler-level tests proved nothing."""
     with patch("litellm.module_level_client.post") as mock_post:
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -148,23 +143,16 @@ def _embed(returned_vector: list[float], **kwargs) -> tuple[EmbeddingResponse, d
 
 @pytest.mark.parametrize("encoding_format", ["float", "base64"])
 def test_encoding_format_is_accepted_without_drop_params(encoding_format):
-    """``encoding_format`` is a standard OpenAI embedding param and must not 500.
-
-    It used to raise ``UnsupportedParamsError`` for ollama unless the caller opted into
-    ``drop_params``, which reported a client-side param problem as a server error.
-    """
+    """Used to raise ``UnsupportedParamsError`` for ollama unless the caller opted into
+    ``drop_params``, reporting a standard OpenAI param as a server error."""
     response, _ = _embed([0.1, 0.2, 0.3], encoding_format=encoding_format)
 
     assert response.data[0]["embedding"] is not None
 
 
 def test_base64_request_returns_decodable_float32():
-    """A caller asking for base64 must get a base64 string of float32s back.
-
-    Regression test for the 768 -> 192 truncation. litellm returned a raw float list
-    regardless of ``encoding_format``; the openai SDK then ran its base64 decoder over
-    that list, reinterpreting each float as one byte and yielding len/4 dimensions.
-    """
+    """Regression test for the 768 -> 192 truncation: litellm returned a raw float list
+    whatever the format, and the openai SDK decoded each float as one byte."""
     vector: Final = [i / 1000 for i in range(768)]
 
     response, _ = _embed(vector, encoding_format="base64")
@@ -197,11 +185,8 @@ def test_omitted_encoding_format_still_returns_plain_list():
 
 @pytest.mark.parametrize("encoding_format", ["float", "base64"])
 def test_encoding_format_is_not_sent_to_ollama(encoding_format):
-    """``encoding_format`` is an OpenAI wire concern; Ollama has no such field.
-
-    Forwarding it would land in Ollama's ``options`` dict, which sets model runtime
-    options rather than selecting a response encoding.
-    """
+    """Forwarding it would land in Ollama's ``options`` dict, which sets model runtime
+    options rather than selecting a response encoding."""
     _, sent = _embed([0.1, 0.2, 0.3], encoding_format=encoding_format)
 
     assert "encoding_format" not in sent
@@ -209,13 +194,8 @@ def test_encoding_format_is_not_sent_to_ollama(encoding_format):
 
 
 def test_dimensions_mismatch_raises_instead_of_returning_wrong_width():
-    """A returned width that disagrees with requested ``dimensions`` must fail loudly.
-
-    Silently returning a differently sized vector is what made the original bug
-    expensive: callers got a 200 and only discovered the corruption downstream.
-    Asking for a width the model cannot produce is a caller error, so it must surface
-    as a 400-class failure rather than an internal server error.
-    """
+    """Callers used to get a 200 and find the wrong width downstream. A width the model
+    cannot produce is a caller error, so it must be 400-class, not an internal error."""
     with pytest.raises(litellm.BadRequestError) as exc_info:
         _embed([0.1, 0.2, 0.3], dimensions=768)
 
