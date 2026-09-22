@@ -422,14 +422,8 @@ async def cohere_proxy_route(
 
 
 def _fal_target(endpoint: str) -> httpx.URL:
-    is_queue: Final = endpoint.startswith("queue/")
-    base_target_url: Final = (
-        (os.getenv("FAL_AI_QUEUE_API_BASE") or "https://queue.fal.run")
-        if is_queue
-        else (os.getenv("FAL_AI_API_BASE") or "https://fal.run")
-    )
-    stripped_endpoint: Final = endpoint.removeprefix("queue/")
-    encoded_endpoint: Final = httpx.URL(stripped_endpoint).path
+    base_target_url: Final = os.getenv("FAL_AI_QUEUE_API_BASE") or "https://queue.fal.run"
+    encoded_endpoint: Final = httpx.URL(endpoint).path
     normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
     base_url: Final = httpx.URL(base_target_url)
     return base_url.copy_with(

@@ -14,7 +14,7 @@ from litellm.types.utils import ImageResponse
 
 pytestmark: Final = pytest.mark.usefixtures("local_model_cost_map")
 
-UPSTREAM_URL: Final = "https://fal.run/fal-ai/trellis-2"
+UPSTREAM_URL: Final = "https://queue.fal.run/fal-ai/trellis-2"
 
 
 def _logging_obj(call_id: str = "call-fal") -> LiteLLMLoggingObj:
@@ -106,7 +106,7 @@ def test_handler_without_url_values_returns_empty_image_response_and_no_cost():
         response_body={"status": "COMPLETED"},
         request_body={},
         logging_obj=_logging_obj(),
-        url_route="https://fal.run/fal-ai/no-such-model",
+        url_route="https://queue.fal.run/fal-ai/no-such-model",
         kwargs={},
     )
 

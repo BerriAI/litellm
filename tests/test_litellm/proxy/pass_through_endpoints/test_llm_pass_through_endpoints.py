@@ -7124,30 +7124,41 @@ class TestFalAIPassthroughRoute:
         from litellm.proxy.proxy_server import app
 
         monkeypatch.setenv("FAL_AI_API_KEY", "fal-test-key")
-        monkeypatch.delenv("FAL_AI_API_BASE", raising=False)
+        monkeypatch.delenv("FAL_AI_QUEUE_API_BASE", raising=False)
         monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         litellm.in_memory_llm_clients_cache.flush_cache()
         monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
         yield TestClient(app)
 
-    def test_forwards_fal_body_and_key_scheme_upstream(self, client: TestClient) -> None:
+    def test_submit_forwards_body_and_key_scheme_to_queue_fal_run(self, client: TestClient) -> None:
         body: Final = {"image_url": "https://example.com/in.png", "resolution": 1536}
         with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.post("https://fal.run/fal-ai/trellis-2").mock(
-                return_value=httpx.Response(200, json={"model_glb": {"url": "https://fal.media/model.glb"}})
+            route = upstream.post("https://queue.fal.run/fal-ai/trellis-2").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1", "status": "IN_QUEUE"})
             )
             response = client.post("/fal_ai/fal-ai/trellis-2", json=body)
 
             assert response.status_code == 200, response.text
-            assert response.json() == {"model_glb": {"url": "https://fal.media/model.glb"}}
+            assert response.json() == {"request_id": "req-1", "status": "IN_QUEUE"}
             sent = route.calls.last.request
             assert sent.headers["authorization"] == "Key fal-test-key"
             assert json.loads(sent.content or b"{}") == body
 
-    def test_honours_fal_ai_api_base_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_status_get_forwards_to_queue_fal_run(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.get("https://queue.fal.run/fal-ai/trellis-2/requests/req-1/status").mock(
+                return_value=httpx.Response(200, json={"status": "COMPLETED"})
+            )
+            response = client.get("/fal_ai/fal-ai/trellis-2/requests/req-1/status")
+
+            assert response.status_code == 200, response.text
+            assert response.json() == {"status": "COMPLETED"}
+            assert route.calls.last.request.headers["authorization"] == "Key fal-test-key"
+
+    def test_honours_fal_ai_queue_api_base_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("FAL_AI_API_KEY", "fal-test-key")
-        monkeypatch.setenv("FAL_AI_API_BASE", "https://fal.example/base")
+        monkeypatch.setenv("FAL_AI_QUEUE_API_BASE", "https://queue.example/base")
         endpoint_func = AsyncMock(return_value={"ok": True})
         create_route = Mock(return_value=endpoint_func)
         monkeypatch.setattr(
@@ -7171,7 +7182,7 @@ class TestFalAIPassthroughRoute:
         assert result == {"ok": True}
         create_route.assert_called_once_with(
             endpoint="fal-ai/trellis",
-            target="https://fal.example/base/fal-ai/trellis",
+            target="https://queue.example/base/fal-ai/trellis",
             custom_headers={"Authorization": "Key fal-test-key"},
             custom_llm_provider="fal_ai",
             is_streaming_request=False,
@@ -7184,61 +7195,16 @@ class TestFalAIPassthroughRoute:
 
 
 class TestFalTargetSelection:
-    def test_queue_endpoint_targets_queue_base_and_strips_prefix(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_endpoint_targets_queue_base(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("FAL_AI_QUEUE_API_BASE", raising=False)
-        assert str(_fal_target("queue/fal-ai/trellis-2")) == "https://queue.fal.run/fal-ai/trellis-2"
+        assert str(_fal_target("fal-ai/trellis-2")) == "https://queue.fal.run/fal-ai/trellis-2"
 
-    def test_queue_status_path_targets_queue_base(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_status_path_targets_queue_base(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("FAL_AI_QUEUE_API_BASE", raising=False)
-        assert str(_fal_target("queue/fal-ai/trellis-2/requests/req-1/status")) == (
+        assert str(_fal_target("fal-ai/trellis-2/requests/req-1/status")) == (
             "https://queue.fal.run/fal-ai/trellis-2/requests/req-1/status"
         )
 
     def test_queue_base_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("FAL_AI_QUEUE_API_BASE", "https://queue.example/base")
-        assert str(_fal_target("queue/fal-ai/trellis-2")) == "https://queue.example/base/fal-ai/trellis-2"
-
-    def test_non_queue_endpoint_uses_sync_base(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("FAL_AI_API_BASE", raising=False)
-        monkeypatch.delenv("FAL_AI_QUEUE_API_BASE", raising=False)
-        assert str(_fal_target("fal-ai/trellis-2")) == "https://fal.run/fal-ai/trellis-2"
-
-
-class TestFalAIQueuePassthroughRoute:
-    @pytest.fixture
-    def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-        from litellm.proxy.proxy_server import app
-
-        monkeypatch.setenv("FAL_AI_API_KEY", "fal-test-key")
-        monkeypatch.delenv("FAL_AI_API_BASE", raising=False)
-        monkeypatch.delenv("FAL_AI_QUEUE_API_BASE", raising=False)
-        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
-        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-        litellm.in_memory_llm_clients_cache.flush_cache()
-        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
-        yield TestClient(app)
-
-    def test_queue_submit_forwards_to_queue_fal_run(self, client: TestClient) -> None:
-        body: Final = {"image_url": "https://example.com/in.png", "resolution": 1536}
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.post("https://queue.fal.run/fal-ai/trellis-2").mock(
-                return_value=httpx.Response(200, json={"request_id": "req-1", "status": "IN_QUEUE"})
-            )
-            response = client.post("/fal_ai/queue/fal-ai/trellis-2", json=body)
-
-            assert response.status_code == 200, response.text
-            assert response.json() == {"request_id": "req-1", "status": "IN_QUEUE"}
-            sent = route.calls.last.request
-            assert sent.headers["authorization"] == "Key fal-test-key"
-            assert json.loads(sent.content or b"{}") == body
-
-    def test_queue_status_get_forwards_to_queue_fal_run(self, client: TestClient) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.get("https://queue.fal.run/fal-ai/trellis-2/requests/req-1/status").mock(
-                return_value=httpx.Response(200, json={"status": "COMPLETED"})
-            )
-            response = client.get("/fal_ai/queue/fal-ai/trellis-2/requests/req-1/status")
-
-            assert response.status_code == 200, response.text
-            assert response.json() == {"status": "COMPLETED"}
-            assert route.calls.last.request.headers["authorization"] == "Key fal-test-key"
+        assert str(_fal_target("fal-ai/trellis-2")) == "https://queue.example/base/fal-ai/trellis-2"

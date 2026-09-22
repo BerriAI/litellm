@@ -175,9 +175,6 @@
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_flux_dev_generation_targets_dev_endpoint_and_charges_per_image": [
       "other.provider_wire.fal_ai.flux_dev_endpoint_and_per_image_pricing"
     ],
-    "tests/integration/providers/test_fal_ai_passthrough_wire.py::test_fal_passthrough_forwards_body_and_charges_resolution_tier": [
-      "other.provider_wire.fal_ai.passthrough_body_forwarding_and_resolution_keyed_spend"
-    ],
     "tests/integration/providers/test_fal_ai_passthrough_wire.py::test_fal_queue_submit_charges_and_polls_pass_through_free": [
       "other.provider_wire.fal_ai.passthrough_queue_submit_charges_and_polls_do_not"
     ],
