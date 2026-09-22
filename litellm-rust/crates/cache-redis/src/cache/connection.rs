@@ -12,7 +12,7 @@ use redis::{
 use super::REDIS_TIMEOUT;
 use crate::topology::RedisNode;
 
-pub(super) struct PooledConnection<C> {
+pub struct PooledConnection<C> {
     pub(super) connection: C,
     pub(super) failed: bool,
 }
@@ -20,7 +20,7 @@ pub(super) struct PooledConnection<C> {
 /// Pools connections without a checkout PING, which would double every operation's round trips.
 /// A timed-out command leaves its reply on the socket while redis still reports the connection
 /// open, so any connection whose operation failed is discarded instead of being reused.
-pub(super) struct ConnectionManager(redis::Client);
+pub struct ConnectionManager(redis::Client);
 
 impl ConnectionManager {
     pub(super) fn open(url: &str) -> Result<Self, Error> {
@@ -54,7 +54,7 @@ impl r2d2::ManageConnection for ConnectionManager {
     }
 }
 
-pub(super) struct ClusterConnectionManager(ClusterClient);
+pub struct ClusterConnectionManager(ClusterClient);
 
 impl ClusterConnectionManager {
     pub(super) fn open(url: &str, startup_nodes: &[RedisNode]) -> Result<Self, Error> {

@@ -46,6 +46,8 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "bucket_name",
             "s3_endpoint_url",
             "s3_region_name",
+            "s3_access_key_id",
+            "s3_secret_access_key",
             "vertex_credentials",
             "vertex_project",
             "vertex_location",

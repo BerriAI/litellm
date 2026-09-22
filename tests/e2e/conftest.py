@@ -30,6 +30,7 @@ from e2e_config import (
     FIXTURE_MODE_RAW,
     MANAGED_FILES_OPT_IN_ENV,
     MCP_OAUTH_LIVE_OPT_IN_ENV,
+    OTEL_V2_OPT_IN_ENV,
     OWNED_GATEWAY_OPT_IN_ENV,
     PROMPT_CACHING_OPT_IN_ENV,
     PROVIDER_EDGE_HOST_OPT_IN_ENV,
@@ -63,6 +64,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
         "provider_edge_host": PROVIDER_EDGE_HOST_OPT_IN_ENV,
         "owned_gateway": OWNED_GATEWAY_OPT_IN_ENV,
+        "otel_v2": OTEL_V2_OPT_IN_ENV,
     }
 )
 
@@ -156,6 +158,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "owned_gateway: boots its own proxy from source against the stack's Postgres, so it needs DATABASE_URL "
         "on the pytest host; deselected unless E2E_OWNED_GATEWAY is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "otel_v2: needs a proxy running with LITELLM_OTEL_V2=true; deselected unless E2E_OTEL_V2 is set",
     )
 
 

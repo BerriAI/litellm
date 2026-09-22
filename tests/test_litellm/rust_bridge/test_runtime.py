@@ -10,7 +10,7 @@ from litellm.exceptions import APIError
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import bindings, configuration, runtime
-from litellm.rust_bridge.catalog import Context, Delivery, Route, Rule
+from litellm.rust_bridge.catalog import Delivery, Route, RouteContext, RouteRule
 from litellm.rust_bridge.configuration import Rollout
 
 
@@ -39,7 +39,7 @@ class NativeFn(Protocol):
     def __call__(self) -> str: ...
 
 
-CONTEXT: Final = Context(Route.MESSAGES, provider="anthropic", model="model")
+CONTEXT: Final = RouteContext(Route.MESSAGES, provider="anthropic", model="model")
 RUST: Final = "rust"
 PYTHON: Final = "python"
 
@@ -50,8 +50,8 @@ def binding(native: NativeFn | None) -> bindings.NativeBinding[NativeFn]:
     return bound
 
 
-def rules(rollout: Rollout) -> tuple[Rule, ...]:
-    return (Rule(Route.MESSAGES, rollout, providers=frozenset({"anthropic"})),)
+def rules(rollout: Rollout) -> tuple[RouteRule, ...]:
+    return (RouteRule(Route.MESSAGES, rollout, providers=frozenset({"anthropic"})),)
 
 
 class Recorder:
@@ -74,7 +74,7 @@ def recorder(native_effect: BaseException | None = None) -> Recorder:
     return Recorder(native_effect)
 
 
-def run(rollout: Rollout, calls: Recorder, *, native_missing: bool = False, context: Context = CONTEXT) -> str:
+def run(rollout: Rollout, calls: Recorder, *, native_missing: bool = False, context: RouteContext = CONTEXT) -> str:
     return runtime.run(
         context,
         binding=binding(None if native_missing else calls.rust),
@@ -146,8 +146,8 @@ def test_context_outside_rule_stays_on_python() -> None:
     calls: Final = recorder()
     configuration.rust(True)
 
-    assert run(Rollout.RUST_REQUIRED, calls, context=Context(Route.MESSAGES, provider="openai")) == "python"
-    assert run(Rollout.RUST_REQUIRED, calls, context=Context(Route.RESPONSES, provider="anthropic")) == "python"
+    assert run(Rollout.RUST_REQUIRED, calls, context=RouteContext(Route.MESSAGES, provider="openai")) == "python"
+    assert run(Rollout.RUST_REQUIRED, calls, context=RouteContext(Route.RESPONSES, provider="anthropic")) == "python"
     assert calls.calls == (PYTHON, PYTHON)
 
 
@@ -155,20 +155,20 @@ def test_context_outside_rule_stays_on_python() -> None:
 @pytest.mark.parametrize(
     "context",
     (
-        Context(Route.CHAT_COMPLETIONS, provider="anthropic"),
-        Context(Route.CHAT_COMPLETIONS, provider="bedrock"),
-        Context(Route.RESPONSES, provider="openai"),
-        Context(Route.TRANSCRIPTION, provider="openai"),
+        RouteContext(Route.CHAT_COMPLETIONS, provider="anthropic"),
+        RouteContext(Route.CHAT_COMPLETIONS, provider="bedrock"),
+        RouteContext(Route.RESPONSES, provider="openai"),
+        RouteContext(Route.TRANSCRIPTION, provider="openai"),
     ),
 )
 @pytest.mark.parametrize("delivery", tuple(Delivery))
 async def test_shipped_python_routes_never_load_native(
-    monkeypatch: pytest.MonkeyPatch, context: Context, delivery: Delivery
+    monkeypatch: pytest.MonkeyPatch, context: RouteContext, delivery: Delivery
 ) -> None:
     monkeypatch.setenv("LITELLM_RUST", "1")
     configuration.rust(True)
     calls: Final = recorder()
-    request: Final = Context(context.route, provider=context.provider, delivery=delivery)
+    request: Final = RouteContext(context.route, provider=context.provider, delivery=delivery)
 
     def reject_load(value: object) -> NativeFn | None:
         pytest.fail("Python-only dispatch must not load a native binding")

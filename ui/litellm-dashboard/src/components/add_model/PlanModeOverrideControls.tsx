@@ -1,5 +1,6 @@
 import React from "react";
 import { Switch } from "@/components/ui/switch";
+import { MultiSelect } from "@/components/shared/MultiSelect";
 import TierRowSelect from "./TierRowSelect";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 
@@ -38,6 +39,23 @@ const PlanModeOverrideControls: React.FC<{
         />
       </div>
     )}
+    <div className="mt-4">
+      <strong className="mb-1 block font-semibold">Additional plan-mode sentinels</strong>
+      <MultiSelect
+        options={(value.plan_mode_patterns ?? []).map((pattern) => ({ label: pattern, value: pattern }))}
+        value={value.plan_mode_patterns ?? []}
+        onValueChange={(patterns) =>
+          onChange({ ...value, plan_mode_patterns: patterns.length > 0 ? patterns : undefined })
+        }
+        placeholder="e.g., enter plan mode"
+        emptyText="Type to add a sentinel"
+        allowCustomValues
+        className="w-full"
+      />
+      <span className="mt-1 block text-xs text-muted-foreground">
+        Case-sensitive literal strings added to the built-in Claude Code and Copilot plan-mode markers.
+      </span>
+    </div>
   </>
 );
 

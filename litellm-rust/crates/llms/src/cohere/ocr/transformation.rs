@@ -102,6 +102,10 @@ impl BaseOcrConfig for CohereParseConfig {
         Some(COHERE_API_KEY_ENV)
     }
 
+    fn secret_names(&self) -> Vec<&'static str> {
+        vec![COHERE_API_KEY_ENV]
+    }
+
     fn get_health_check_document(&self) -> OcrDocument {
         OcrDocument::ImageUrl {
             image_url: COHERE_PARSE_HEALTH_CHECK_IMAGE_DATA_URI.into(),

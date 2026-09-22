@@ -29,7 +29,7 @@ pyo3::create_exception!(
 
 static FORK_GATE: ForkGate = ForkGate::new();
 
-/// Whether this process has started the Tokio runtime.
+/// Whether this process has entered process-bound native execution.
 pub fn runtime_started() -> bool {
     FORK_GATE.started(std::process::id())
 }
@@ -40,9 +40,8 @@ pub fn reserve_process_for_forking() -> Result<(), RuntimeAlreadyStarted> {
     FORK_GATE.reserve(std::process::id())
 }
 
-/// The only door to the Tokio runtime: every route reaches it through this module, which is
-/// what lets the gate speak for the whole extension. `clippy.toml` disallows going around it.
-fn enter_runtime() -> PyResult<()> {
+/// Claims process-bound native state before runtime startup or tokenizer execution.
+pub fn enter_native() -> PyResult<()> {
     FORK_GATE
         .enter(std::process::id())
         .map_err(|refused| match refused {
@@ -60,7 +59,7 @@ fn enter_runtime() -> PyResult<()> {
 
 #[expect(clippy::disallowed_methods, reason = "this is the gated door")]
 fn runtime() -> PyResult<&'static Runtime> {
-    enter_runtime()?;
+    enter_native()?;
     Ok(pyo3_async_runtimes::tokio::get_runtime())
 }
 
@@ -70,7 +69,7 @@ where
     F: Future<Output = PyResult<T>> + Send + 'static,
     T: for<'py> IntoPyObject<'py> + Send + 'static,
 {
-    enter_runtime()?;
+    enter_native()?;
     pyo3_async_runtimes::tokio::future_into_py(py, future)
 }
 
