@@ -2317,7 +2317,12 @@ class TestMalformedContentListItems:
         assert config.is_pdf_used([{"role": "user", "content": [{"type": "text", "text": "hi"}]}]) is False
         assert (
             config.is_cache_control_set(
-                [{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}]
+                [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}],
+                    }
+                ]
             )
             is True
         )
