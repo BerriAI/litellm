@@ -178,6 +178,14 @@ def test_potential_model_names_keeps_provider_prefixed_candidate():
     assert bare["provider_prefixed_model_name"] == bare["combined_model_name"] == "perplexity/glm-5.2"
 
 
+@pytest.mark.parametrize("capability", [True, False, None])
+def test_get_model_info_anthropic_compaction(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, capability: bool | None
+) -> None:
+    monkeypatch.setitem(litellm.model_cost["claude-sonnet-5"], "supports_anthropic_compaction", capability)
+    assert litellm.get_model_info("claude-sonnet-5")["supports_anthropic_compaction"] is capability
+
+
 def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local_model_cost_map):
     info = litellm.get_model_info(model="ft:gpt-4o-2024-08-06:my-org::abc123", custom_llm_provider="openai")
     assert info["key"] == "ft:gpt-4o-2024-08-06"
@@ -861,6 +869,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "source": {"type": "string"},
                 "comment": {"type": "string"},
                 "supports_assistant_prefill": {"type": "boolean"},
+                "supports_anthropic_compaction": {"type": "boolean"},
                 "supports_audio_input": {"type": "boolean"},
                 "supports_audio_output": {"type": "boolean"},
                 "gemini_native_audio": {"type": "boolean"},
