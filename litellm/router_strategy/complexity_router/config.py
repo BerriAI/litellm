@@ -838,6 +838,15 @@ class CustomDimension(BaseModel):
         )
 
 
+class ContextCompactionConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model: str | None = Field(default=None, min_length=1)
+    trigger_ratio: float = Field(default=0.9, gt=0, lt=1)
+    max_tokens: int = Field(default=4096, ge=512)
+    timeout_seconds: float = Field(default=120, gt=0)
+
+
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
@@ -1320,8 +1329,18 @@ class ComplexityRouterConfig(BaseModel):
         ),
     )
 
+    context_compaction: ContextCompactionConfig | Literal[False] = Field(
+        default_factory=ContextCompactionConfig,
+        description="Compact full conversation history near the selected deployment's input limit for Chat, Responses and Messages. Uses a capable configured tier model unless model is specified. Set false or null to disable. Stored and client-managed native history keep their existing behavior.",
+    )
+
+    @field_validator("context_compaction", mode="before")
+    @classmethod
+    def _normalize_context_compaction(cls, value: object) -> object:
+        return False if value is None else value
+
     enable_context_window_escalation: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Escalate a request off a tier whose models provably cannot hold its prompt, before "
             "dispatch. The classifier scores complexity and never prompt size, so a long agentic "
@@ -1331,7 +1350,8 @@ class ComplexityRouterConfig(BaseModel):
             "moves to the lowest configured tier with a model whose declared window fits; when "
             "only some of the tier's models fit, the pick is restricted to those and the tier "
             "keeps the request. Models with no resolvable window are never escalated away from "
-            "and never escalated onto. Set false to dispatch on complexity alone, as before."
+            "and never escalated onto. Disabled by default: omit or set false to dispatch on "
+            "complexity alone; set true to enable context-window escalation."
         ),
     )
     context_window_escalation_buffer: float = Field(

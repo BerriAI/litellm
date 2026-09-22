@@ -14,12 +14,12 @@ import asyncio
 import datetime
 import json
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from json import JSONDecodeError
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
@@ -28,6 +28,8 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.ptu_pricing import (
     CUSTOM_PRICING_FIELDS,
     PTU_EMPTIED_PRICING_FIELDS,
@@ -94,6 +96,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
     is_ptu_cost_attribution_enabled,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ModelTableRepository
@@ -137,7 +140,12 @@ from litellm.types.router import (
     updateDeployment,
     updateLiteLLMParams,
 )
-from litellm.types.utils import echoed_cost_map_pricing_fields, without_server_derived_pricing
+from litellm.types.utils import (
+    COST_MAP_LOOKUP_KEY,
+    echoed_cost_map_fields,
+    echoed_cost_map_pricing_fields,
+    without_server_derived_pricing,
+)
 from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
@@ -145,7 +153,7 @@ if TYPE_CHECKING:
     from prisma import types as prisma_types
 
 router: Final = APIRouter()
-CLEARABLE_LITELLM_PARAMS: Final = frozenset({"cache_control_injection_points"})
+CLEARABLE_LITELLM_PARAMS: Final = frozenset({"cache_control_injection_points", "litellm_credential_name"})
 NULL_CLEARABLE_LITELLM_PARAMS: Final = frozenset((*SPECIAL_MODEL_INFO_PARAMS, *CLEARABLE_LITELLM_PARAMS))
 
 
@@ -329,6 +337,36 @@ def _raise_on_strategy_router_write_violation(
         type=ProxyErrorTypes.validation_error.value,
         code=status.HTTP_400_BAD_REQUEST,
         param="litellm_params.model",
+    )
+
+
+async def _raise_on_invalid_credential_name(
+    litellm_params: updateLiteLLMParams | None, prisma_client: PrismaClient
+) -> None:
+    if litellm_params is None or "litellm_credential_name" not in litellm_params.model_fields_set:
+        return
+    credential_name: Final = litellm_params.litellm_credential_name
+    if credential_name is None:
+        return
+    if credential_name == "":
+        raise ProxyException(
+            message="litellm_credential_name cannot be an empty string. Send null to detach the stored credential or omit the field to leave it unchanged.",
+            type=ProxyErrorTypes.validation_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="litellm_credential_name",
+        )
+    if CredentialAccessor.find_credential(credential_name) is not None:
+        return
+    stored_credential: Final = await CredentialsRepository(WriterPinnedClient(prisma_client.db)).find_by_name(
+        credential_name
+    )
+    if stored_credential is not None:
+        return
+    raise ProxyException(
+        message=f"Credential '{credential_name}' not found. Create it via /credentials before attaching it to a model.",
+        type=ProxyErrorTypes.validation_error.value,
+        code=status.HTTP_400_BAD_REQUEST,
+        param="litellm_credential_name",
     )
 
 
@@ -622,7 +660,6 @@ async def _auto_router_capability_slot(
 
 
 ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING: Final = "enforce_rpm_tpm_on_model_add"
-_REQUIRED_RATE_LIMIT_FIELDS: Final = ("rpm", "tpm")
 
 
 def _raise_if_rate_limits_required_but_missing(*, litellm_params: GenericLiteLLMParams, enforced: bool) -> None:
@@ -637,8 +674,8 @@ def _raise_if_rate_limits_required_but_missing(*, litellm_params: GenericLiteLLM
         return
     missing: Final = tuple(
         field
-        for field in _REQUIRED_RATE_LIMIT_FIELDS
-        if (value := getattr(litellm_params, field)) is None or value <= 0
+        for field, value in (("rpm", litellm_params.rpm), ("tpm", litellm_params.tpm))
+        if value is None or value <= 0
     )
     if not missing:
         return
@@ -897,7 +934,33 @@ def _ptu_priced_deployment(model_params: Deployment) -> Deployment:
     )
 
 
-def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
+def _cost_map_entry(db_model: Deployment, incoming_model_info: Mapping[str, object]) -> Mapping[str, object]:
+    base_model: Final = incoming_model_info.get("base_model")
+    lookup: Final = base_model if isinstance(base_model, str) else _decrypted_model(db_model.litellm_params.model)
+    if lookup is None:
+        return MappingProxyType({})
+    with suppress(Exception):
+        return MappingProxyType(dict(litellm.get_model_info(model=lookup)))
+    return MappingProxyType({})
+
+
+LoadedCatalog: TypeAlias = Callable[[], Mapping[str, Mapping[str, object]]]  # mutable-ok: Callable parameter syntax
+
+
+def _loaded_catalog_entry(
+    incoming_model_info: Mapping[str, object], loaded_catalog: LoadedCatalog
+) -> Mapping[str, object]:
+    catalog_key: Final = incoming_model_info.get(COST_MAP_LOOKUP_KEY)
+    if not isinstance(catalog_key, str):
+        return MappingProxyType({})
+    return loaded_catalog().get(catalog_key, MappingProxyType({}))
+
+
+def update_db_model(
+    db_model: Deployment,
+    updated_patch: updateDeployment,
+    loaded_catalog: LoadedCatalog = GetModelCostMap.loaded_model_cost_map,
+) -> PrismaCompatibleUpdateDBModel:
     if updated_patch.model_info is not None:
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
@@ -924,7 +987,24 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
 
     # update model info
     if updated_patch.model_info:
-        merged_model_info.update(without_server_derived_pricing(updated_patch.model_info.model_dump(exclude_none=True)))
+        incoming_model_info: Final = updated_patch.model_info.model_dump(exclude_none=True)
+        echoed_fields: Final = echoed_cost_map_fields(
+            incoming_model_info,
+            _cost_map_entry(db_model, incoming_model_info),
+            _loaded_catalog_entry(incoming_model_info, loaded_catalog),
+        )
+        merged_model_info.update(
+            MappingProxyType(
+                dict(
+                    (k, v)
+                    for k, v in without_server_derived_pricing(incoming_model_info).items()
+                    if k not in echoed_fields
+                )
+            )
+        )
+        for k in echoed_fields:
+            if k in merged_model_info and merged_model_info[k] != incoming_model_info[k]:
+                del merged_model_info[k]
 
     # Honor explicit-null clears LAST, after both merges, so a model_info blob a client
     # passes through cannot silently undo a litellm_params clear via .update().
@@ -1110,7 +1190,9 @@ async def patch_model(
             litellm_params=patch_data.litellm_params,
             user_api_key_dict=user_api_key_dict,
             existing_litellm_params=db_model.litellm_params,
+            null_detaches=True,
         )
+        await _raise_on_invalid_credential_name(patch_data.litellm_params, prisma_client)
 
         ModelManagementAuthChecks.can_user_set_aws_session_tags(
             litellm_params=patch_data.litellm_params,
@@ -1920,22 +2002,33 @@ class ModelManagementAuthChecks:
         litellm_params: GenericLiteLLMParams | None,
         user_api_key_dict: UserAPIKeyAuth,
         existing_litellm_params: GenericLiteLLMParams | None = None,
+        *,
+        null_detaches: bool = False,
     ) -> Literal[True]:
-        if litellm_params is None or litellm_params.litellm_credential_name is None:
+        if litellm_params is None:
             return True
-        if existing_litellm_params is not None and existing_litellm_params.litellm_credential_name is not None:
-            existing_credential_name: Final = decrypt_value_helper(
+        if "litellm_credential_name" not in litellm_params.model_fields_set:
+            return True
+        if litellm_params.litellm_credential_name is None and not null_detaches:
+            return True
+        existing_credential_name: Final = (
+            decrypt_value_helper(
                 value=existing_litellm_params.litellm_credential_name,
                 key="litellm_credential_name",
                 exception_type="debug",
                 return_original_value=True,
             )
-            if litellm_params.litellm_credential_name == existing_credential_name:
-                return True
+            if existing_litellm_params is not None and existing_litellm_params.litellm_credential_name is not None
+            else None
+        )
+        requested_credential_name: Final = litellm_params.litellm_credential_name
+        if requested_credential_name == existing_credential_name:
+            return True
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return True
+        action: Final = "detach" if requested_credential_name is None else "attach"
         raise ProxyException(
-            message=f"Only a proxy admin can attach a stored credential (litellm_credential_name) to a model. Your role={user_api_key_dict.user_role}.",
+            message=f"Only a proxy admin can {action} a stored credential (litellm_credential_name) on a model. Your role={user_api_key_dict.user_role}.",
             type=ProxyErrorTypes.auth_error.value,
             code=status.HTTP_403_FORBIDDEN,
             param="litellm_credential_name",

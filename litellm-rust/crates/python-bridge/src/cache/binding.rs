@@ -11,10 +11,12 @@ use serde_json::Value;
 use super::{
     cache_error,
     callback::PythonCallback,
+    config::{CacheBackendConfig, CacheConfigProjection, NativeCacheConfig},
     future::{ready_none, ready_value},
     native::NativeResponseCache,
     request::{now, request, requests},
 };
+use crate::errors::RustBridgeDeclined;
 
 pub(super) enum CacheBinding {
     Disabled,
@@ -22,7 +24,7 @@ pub(super) enum CacheBinding {
     PythonCallback(PythonCallback),
 }
 
-#[pyclass(frozen, name = "_CacheTestBinding")]
+#[pyclass(frozen, name = "_ResponseCacheRuntime")]
 pub(crate) struct ResolvedCache {
     binding: CacheBinding,
     pid: u32,
@@ -56,12 +58,7 @@ impl ResolvedCache {
             CacheBinding::Disabled => ready_none(py)?,
             CacheBinding::Native(service) => {
                 let request = request(input)?;
-                let service = service.clone();
-                run_async(
-                    py,
-                    async move { service.async_lookup(&request, now()).await },
-                    cache_error,
-                )?
+                service.async_lookup_py(py, request)?
             }
             CacheBinding::PythonCallback(callback) => callback.async_lookup(py, kwargs)?,
         };
@@ -71,6 +68,33 @@ impl ResolvedCache {
 
 #[pymethods]
 impl ResolvedCache {
+    #[staticmethod]
+    fn from_cache(cache: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let config = match NativeCacheConfig::project(cache)? {
+            CacheConfigProjection::Native(config) => *config,
+            CacheConfigProjection::Unsupported(reason) => {
+                return Err(RustBridgeDeclined::new_err(reason.message()));
+            }
+        };
+        let service = match config.backend {
+            CacheBackendConfig::Memory(memory) => NativeResponseCache::memory(
+                memory.capacity,
+                memory.default_ttl,
+                memory.max_entry_bytes,
+            ),
+            _ => {
+                return Err(RustBridgeDeclined::new_err(
+                    "native response cache activation is not implemented for this backend",
+                ));
+            }
+        };
+        Ok(Self::new(CacheBinding::Native(
+            service
+                .with_scope(config.policy.semantic_cache_scope)
+                .with_redis_flush_size(config.policy.redis_flush_size),
+        )))
+    }
+
     #[getter]
     fn kind(&self) -> &'static str {
         match self.binding {
@@ -179,12 +203,7 @@ impl ResolvedCache {
             CacheBinding::Native(service) => {
                 let request = self::request(request)?;
                 let response: Value = from_py(response)?;
-                let service = service.clone();
-                run_async(
-                    py,
-                    async move { service.async_store(&request, response, now()).await },
-                    cache_error,
-                )
+                service.async_store_py(py, request, response)
             }
             CacheBinding::PythonCallback(callback) => {
                 callback.async_store(py, response, callback_kwargs)
@@ -241,12 +260,7 @@ impl ResolvedCache {
                     ));
                 }
                 let entries = requests.into_iter().zip(responses).collect();
-                let service = service.clone();
-                run_async(
-                    py,
-                    async move { service.async_store_batch(entries, now()).await },
-                    cache_error,
-                )
+                service.async_store_batch_py(py, entries)
             }
             CacheBinding::PythonCallback(callback) => {
                 callback.async_store_batch(py, callback_result, callback_kwargs)

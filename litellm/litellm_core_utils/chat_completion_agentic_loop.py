@@ -2,10 +2,13 @@
 
 import json
 from collections.abc import Mapping
+from itertools import chain
+from types import MappingProxyType
 from typing import Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
@@ -117,13 +120,25 @@ def _wrap_response_as_fake_stream(
     )
 
 
-def _add_agentic_loop_metadata(kwargs_for_followup: dict[str, object]) -> None:
-    metadata = kwargs_for_followup.get("litellm_metadata")
-    metadata = dict(metadata) if isinstance(metadata, dict) else {}
-    for key, value in kwargs_for_followup.items():
-        if key.startswith("_agentic_loop") or key == "max_agentic_loops" or is_interception_internal_key(key):
-            metadata[key] = value
-    kwargs_for_followup["litellm_metadata"] = metadata
+def _with_agentic_loop_metadata(kwargs_for_followup: Mapping[str, object]) -> Mapping[str, object]:
+    metadata: Final = kwargs_for_followup.get("litellm_metadata")
+    return MappingProxyType(
+        {
+            **kwargs_for_followup,
+            "litellm_metadata": dict(  # mutable-ok: the follow-up call's logging and proxy hooks write into litellm_metadata in place
+                chain(
+                    metadata.items() if isinstance(metadata, dict) else (),
+                    (
+                        (key, value)
+                        for key, value in kwargs_for_followup.items()
+                        if key.startswith("_agentic_loop")
+                        or key == "max_agentic_loops"
+                        or is_interception_internal_key(key)
+                    ),
+                )
+            ),
+        }
+    )
 
 
 def _filter_followup_kwargs(source: dict[str, object]) -> dict[str, object]:
@@ -165,14 +180,17 @@ async def _execute_chat_completion_agentic_plan(
     if "tool_choice" not in patch.optional_params:
         optional_params_for_followup.pop("tool_choice", None)
 
-    kwargs_for_followup: Final = _filter_followup_kwargs(kwargs)
-    kwargs_for_followup.update(
-        {k: v for k, v in _filter_followup_kwargs(patch.kwargs).items() if k not in optional_params_for_followup}
+    kwargs_for_followup: Final = _with_agentic_loop_metadata(
+        build_agentic_followup_kwargs(
+            request_kwargs=_filter_followup_kwargs(kwargs),
+            patch_kwargs=_filter_followup_kwargs(patch.kwargs),
+            request_params=frozenset((*optional_params_for_followup, "model", "messages")),
+            depth=depth,
+            max_loops=max_loops,
+            fingerprints=fingerprints,
+            fingerprint=fingerprint,
+        )
     )
-    kwargs_for_followup["_agentic_loop_depth"] = depth + 1
-    kwargs_for_followup["max_agentic_loops"] = max_loops
-    kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
-    _add_agentic_loop_metadata(kwargs_for_followup)
 
     try:
         response_followup = await litellm.acompletion(

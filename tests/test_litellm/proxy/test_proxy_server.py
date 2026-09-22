@@ -11766,6 +11766,66 @@ def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_n
     assert getattr(litellm, field_name) == db_value
 
 
+@pytest.mark.asyncio
+async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(monkeypatch: pytest.MonkeyPatch):
+    """A DB-only litellm_settings row that pairs success_callback: ["datadog"] with
+    datadog_params.turn_off_message_logging: true must build the DataDogLogger redacted, the
+    same as the identical block in YAML. Regression for the redaction keys being absent from
+    the safe-override allowlist while the callback half of the row was honoured."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.datadog.datadog import DataDogLogger
+    from litellm.litellm_core_utils import litellm_logging
+
+    monkeypatch.setenv("DD_API_KEY", "test-key")
+    monkeypatch.setenv("DD_SITE", "us5.datadoghq.com")
+    monkeypatch.setattr(litellm, "datadog_params", None)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+
+    db_row = {
+        "success_callback": ["datadog"],
+        "datadog_params": {"turn_off_message_logging": True},
+        "turn_off_message_logging": True,
+    }
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(pc._prepared_db_settings_values("litellm_settings", db_row))
+    pc._add_callbacks_from_db_config({"litellm_settings": db_row})
+
+    datadog_loggers = [cb for cb in litellm.success_callback if isinstance(cb, DataDogLogger)]
+    assert len(datadog_loggers) == 1
+    assert datadog_loggers[0].turn_off_message_logging is True
+    assert litellm.turn_off_message_logging is True
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "datadog_params",
+        "datadog_llm_observability_params",
+        "newrelic_params",
+        "pointfive_params",
+        "aws_sqs_callback_params",
+    ],
+)
+def test_db_stored_callback_params_propagate_to_litellm_module(monkeypatch: pytest.MonkeyPatch, field_name: str):
+    """Every callback init params block stored in the DB litellm_settings row must land on the
+    litellm module before the matching logger is built, so the DB row behaves like YAML."""
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(litellm, field_name, None)
+    db_value = {"turn_off_message_logging": True}
+
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(pc._prepared_db_settings_values("litellm_settings", {field_name: db_value}))
+
+    assert getattr(litellm, field_name) == db_value
+
+
 def test_get_config_list_marks_untouched_prompt_caching_flag_as_not_set(monkeypatch):
     """The flag defaults to False rather than None, so a plain 'is not None' check would
     report the default as 'In Config' and imply an admin had set it."""
@@ -14817,7 +14877,7 @@ async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_coun
 
 
 async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeypatch):
-    from tokenizers import Tokenizer
+    from litellm.rust_bridge._native import Tokenizer
 
     from litellm import Router
     from tests.test_litellm.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
@@ -14830,7 +14890,7 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
             time.sleep(0.3)
             return claude_tokenizer
 
-    monkeypatch.setattr(litellm.utils, "Tokenizer", SlowHubTokenizer)
+    monkeypatch.setattr("litellm.rust_bridge.tokenizer.from_pretrained", SlowHubTokenizer.from_pretrained)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
         Router(
@@ -14854,7 +14914,7 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
 
 
 async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revision_and_token(monkeypatch):
-    from tokenizers import Tokenizer
+    from litellm.rust_bridge._native import Tokenizer
 
     from litellm import Router
     from litellm.types.router import DeploymentTypedDict
@@ -14871,7 +14931,7 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
             },
         }
 
-    monkeypatch.setattr(litellm.utils, "Tokenizer", MagicMock(from_pretrained=from_pretrained))
+    monkeypatch.setattr("litellm.rust_bridge.tokenizer.from_pretrained", from_pretrained)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
         Router(

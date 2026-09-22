@@ -10,16 +10,20 @@ Covers the three defects from the ticket:
   handling live only on the native path).
 """
 
+import cProfile
+import sys
 import tempfile
 import time
+from collections.abc import Callable
+from typing import Final
 
 import pytest
-
 from litellm_enterprise.enterprise_callbacks.secret_detection import (
-    _ENTERPRISE_SecretDetection,
     _default_detect_secrets_config,
+    _ENTERPRISE_SecretDetection,
     _masked_entity_count,
 )
+
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 
@@ -665,14 +669,47 @@ def test_scan_message_stays_linear_on_repeated_sk_separators():
     assert time.perf_counter() - started < 2.0
 
 
+_SCALE: Final = 4
+
+
+def _value_run(n: int) -> str:
+    return f"api_key: '{OPENAI_KEY}'\npassword=" + "a-" * n + "!"
+
+
+def _quote_run(n: int) -> str:
+    return f"api_key: '{OPENAI_KEY}'\npassword:" + '"' * n
+
+
+def _keyword_run(n: int) -> str:
+    return f"api_key: '{OPENAI_KEY}'\n" + "api_key:" * n
+
+
+def _value_repeat(n: int) -> str:
+    return f"api_key: '{OPENAI_KEY}'\nsecret=" + "aB3dE6gH9jK2mN5p " * n
+
+
+def _assignment_flood(n: int) -> str:
+    return f"api_key: '{OPENAI_KEY}'\n" + "\n".join(f"password{i}=aB3dE6gH9jK2mN5p{i}" for i in range(n))
+
+
+def _calls_to_redact(guardrail: _ENTERPRISE_SecretDetection, content: str) -> int:
+    previous_profiler: Final = sys.getprofile()
+    profile: Final = cProfile.Profile()
+    try:
+        profile.runcall(guardrail.redact_text, content)
+    finally:
+        sys.setprofile(previous_profiler)
+    return sum(entry.callcount for entry in profile.getstats())
+
+
 @pytest.mark.parametrize(
-    "content",
+    ("adversarial_content", "size"),
     [
-        f"api_key: '{OPENAI_KEY}'\npassword=" + "a-" * 10_000 + "!",
-        f"api_key: '{OPENAI_KEY}'\npassword:" + '"' * 20_000,
-        f"api_key: '{OPENAI_KEY}'\n" + "api_key:" * 10_000,
-        f"api_key: '{OPENAI_KEY}'\nsecret=" + "aB3dE6gH9jK2mN5p " * 2_000,
-        f"api_key: '{OPENAI_KEY}'\n" + "\n".join(f"password{i}=aB3dE6gH9jK2mN5p{i}" for i in range(3_000)),
+        (_value_run, 10_000),
+        (_quote_run, 20_000),
+        (_keyword_run, 10_000),
+        (_value_repeat, 2_000),
+        (_assignment_flood, 3_000),
     ],
     ids=[
         "value-run",
@@ -682,12 +719,15 @@ def test_scan_message_stays_linear_on_repeated_sk_separators():
         "assignment-flood",
     ],
 )
-def test_scan_message_stays_linear_on_adversarial_credential_lines(content):
-    guardrail = _guardrail()
+def test_scan_message_stays_linear_on_adversarial_credential_lines(
+    adversarial_content: Callable[[int], str], size: int
+) -> None:
+    guardrail: Final = _guardrail()
 
-    started = time.perf_counter()
-    guardrail.redact_text(content)
-    assert time.perf_counter() - started < 10.0
+    small: Final = _calls_to_redact(guardrail, adversarial_content(size // _SCALE))
+    large: Final = _calls_to_redact(guardrail, adversarial_content(size))
+
+    assert large <= 1.25 * _SCALE * small, (small, large)
 
 
 def test_scan_message_redacts_whole_stripe_live_key():

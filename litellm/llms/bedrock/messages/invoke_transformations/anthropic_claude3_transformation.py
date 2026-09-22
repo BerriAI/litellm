@@ -81,6 +81,10 @@ class AmazonAnthropicClaudeMessagesConfig(
     def custom_llm_provider(self) -> str | None:
         return "bedrock"
 
+    @property
+    def beta_headers_provider(self) -> str:
+        return self.custom_llm_provider or "bedrock"
+
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 
     def get_error_class(
@@ -533,6 +537,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         if anthropic_model_info.is_eager_input_streaming_used(tools):
             beta_set.add(ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER)
 
+        if anthropic_messages_optional_request_params.get("safeguards") is not None:
+            beta_set.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
+
         self._filter_context_management_for_bedrock_invoke(
             anthropic_messages_request=anthropic_messages_request,
             beta_set=beta_set,
@@ -549,7 +556,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
 
-        beta_provider: Final = self.custom_llm_provider or "bedrock"
+        beta_provider: Final = self.beta_headers_provider
         filtered_betas: Final = sorted(
             filter_and_transform_beta_headers(
                 beta_headers=list(beta_set),
