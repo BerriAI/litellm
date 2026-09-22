@@ -156,6 +156,9 @@
     "tests/integration/providers/test_bedrock_role_configuration.py::test_role_reference_from_db_and_yaml_reaches_real_sts_http_and_bedrock": [
       "other.provider_wire.bedrock.db_yaml_role_reference_reaches_sts_and_signed_request"
     ],
+    "tests/integration/providers/test_bedrock_thinking_tokens_wire.py::test_bedrock_redacted_thinking_is_not_reported_as_zero_reasoning_tokens": [
+      "other.provider_wire.bedrock.hidden_thinking_tokens_are_not_reported_as_text"
+    ],
     "tests/integration/routing/test_redis_recovery.py::test_owned_redis_outage_recovers_requests_and_real_response_cache": [
       "other.routing.redis.owned_outage_recovers_serving_and_response_cache"
     ],
