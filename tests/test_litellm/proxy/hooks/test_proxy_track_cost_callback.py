@@ -882,7 +882,8 @@ def test_mixed_fusion_and_client_tool_calls_reconcile_on_the_initial_response():
 
 
 @pytest.mark.asyncio
-async def test_cached_fusion_hidden_call_accumulates_zero_cost():
+@pytest.mark.parametrize("guardrail_cost", [0.0, 0.03])
+async def test_cached_fusion_hidden_call_accumulates_only_guardrail_cost(guardrail_cost: float):
     logger = _ProxyDBLogger()
     reservation = {
         "reserved_cost": 1.0,
@@ -894,6 +895,7 @@ async def test_cached_fusion_hidden_call_accumulates_zero_cost():
         "call_type": "acompletion",
         "model": "panel",
         "cache_hit": True,
+        "response_cost": 0.2,
         "litellm_call_id": "cached-panel-call",
         "litellm_params": {
             "metadata": {
@@ -904,7 +906,7 @@ async def test_cached_fusion_hidden_call_accumulates_zero_cost():
             }
         },
         "standard_logging_object": {
-            "response_cost": 0.2,
+            "response_cost": guardrail_cost,
             "request_tags": [],
             "metadata": {},
         },
@@ -931,8 +933,8 @@ async def test_cached_fusion_hidden_call_accumulates_zero_cost():
             end_time=datetime.now(),
         )
 
-        assert reservation[FUSION_BUDGET_ACCUMULATED_COST_KEY] == 0.0
-        assert proxy_logging.db_spend_update_writer.update_database.await_args.kwargs["response_cost"] == 0.0
+        assert reservation[FUSION_BUDGET_ACCUMULATED_COST_KEY] == guardrail_cost
+        assert proxy_logging.db_spend_update_writer.update_database.await_args.kwargs["response_cost"] == guardrail_cost
         increment.assert_not_awaited()
 
 
