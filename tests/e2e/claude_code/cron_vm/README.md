@@ -98,7 +98,7 @@ the same values if it ever has to be rebuilt.
 | Docker build context | `tests/e2e` (the repo root `.dockerignore` excludes `tests`, so the context has to start below it) |
 | Build filter | included paths `tests/e2e/**` |
 | Schedule | `0 6 * * *` (06:00 UTC daily) |
-| Plan / region | Pro Max (4 CPU, 16 GB; the suite fans out to ~75 concurrent CLI calls) / Oregon |
+| Plan / region | `4c-16g` (4 CPU, 16 GB, what the dashboard calls Pro Max; the suite fans out to ~75 concurrent CLI calls) / Oregon |
 | Env vars | every key in `litellm-compat-matrix.env.example` |
 | Secret files | `github-token` (the publish PAT, one line) and `vertex-service-account.json` (the Vertex service-account key) |
 
@@ -130,7 +130,7 @@ curl -fsS https://api.render.com/v1/services \
     "serviceDetails": {
       "runtime": "docker",
       "schedule": "0 6 * * *",
-      "plan": "pro_max",
+      "plan": "4c-16g",
       "region": "oregon",
       "envSpecificDetails": {
         "dockerfilePath": "tests/e2e/claude_code/cron_vm/Dockerfile",
@@ -145,7 +145,7 @@ curl -fsS https://api.render.com/v1/services \
 ```bash
 # Trigger a real run right now (PRs to litellm-docs). The id is the
 # service id (`crn-...`) from the dashboard URL or `GET /v1/services`.
-curl -fsS -X POST "https://api.render.com/v1/cronjobs/${CRON_ID}/runs" \
+curl -fsS -X POST "https://api.render.com/v1/cron-jobs/${CRON_ID}/runs" \
   -H "Authorization: Bearer ${RENDER_API_KEY}"
 
 # Follow a run: the Logs tab on the service, or the API.
