@@ -1,6 +1,12 @@
-# LiteAsk PR 42443 browser evidence
+# LiteAsk UI evidence for PR 42443
+
+Captured interactively in Safari against local management and inference gateways with PostgreSQL and real provider calls
 
 Before: 238f4341532ae6dd150de55e9302c08a8e031c66
-After: 6f390d610f76274bf46830f3ac7c6a002e7cc498
+After: 0f97fa4e74ba016687399256680adb5e3c31200d
 
-Native browser screenshots from the local gateway, real PostgreSQL, and a real provider model. Synthetic team budget changed from 38 to 39 after inline confirmation. A proposal for 40 was cancelled, leaving 39. This branch contains review artifacts only.
+Synthetic team LiteAsk recovery verification starts at budget 40 and spend 0
+The administrator reviews and confirms 41, cancels 42, then asks for current budget and spend
+The final answer reports budget 41 and spend 0 without another write proposal
+
+This evidence branch contains screenshots only and is independent of the feature diff
