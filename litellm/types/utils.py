@@ -1,7 +1,7 @@
 import json
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import (
@@ -36,12 +36,14 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    FieldSerializationInfo,
     JsonValue,
     PrivateAttr,
     SkipValidation,
     field_serializer,
     field_validator,
 )
+from pydantic.main import IncEx
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
@@ -79,6 +81,27 @@ from .llms.openai import (
     WebSearchOptions,
 )
 from .rerank import RerankResponse as RerankResponse
+
+
+def _nested_selector(
+    selector: IncEx | None,
+    index: int,
+    count: int,
+    is_include: bool,
+) -> tuple[bool, IncEx | None]:
+    if selector is None:
+        return True, None
+    if isinstance(selector, Mapping):
+        value: Final = selector.get(index, selector.get(index - count, selector.get("__all__")))
+        keep: Final = value is not None if is_include else value is not True
+        per_item_selector: Final = None if value is True or value is None else value
+        return keep, per_item_selector
+    if isinstance(selector, Collection) and not isinstance(selector, (str, bytes)):
+        if all(isinstance(item, int) for item in selector):
+            addressed: Final = index in selector or index - count in selector
+            return (addressed if is_include else not addressed), None
+    return True, selector
+
 
 if TYPE_CHECKING:
     from .vector_stores import VectorStoreSearchResponse
@@ -2560,8 +2583,35 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
     @field_serializer("data")
-    def _serialize_image_data(self, data: Sequence[OpenAIImage] | None) -> Sequence[Mapping[str, object]] | None:
-        return None if data is None else [image.model_dump() for image in data]
+    def _serialize_image_data(
+        self,
+        data: Sequence[OpenAIImage] | None,
+        info: FieldSerializationInfo,
+    ) -> Sequence[Mapping[str, object]] | None:
+        if data is None:
+            return None
+        include: Final = info.include
+        exclude: Final = info.exclude
+
+        def _serialize_image(index: int, image: OpenAIImage) -> Mapping[str, object] | None:
+            include_keep, include_selector = _nested_selector(include, index, len(data), is_include=True)
+            exclude_keep, exclude_selector = _nested_selector(exclude, index, len(data), is_include=False)
+            if not include_keep or not exclude_keep:
+                return None
+            return image.model_dump(
+                mode=info.mode,
+                include=include_selector,
+                exclude=exclude_selector,
+                context=info.context,
+                exclude_none=info.exclude_none,
+                exclude_unset=info.exclude_unset,
+                exclude_defaults=info.exclude_defaults,
+                round_trip=info.round_trip,
+                by_alias=info.by_alias,
+            )
+
+        serialized_images: Final = tuple(_serialize_image(index, image) for index, image in enumerate(data))
+        return [image for image in serialized_images if image is not None]
 
     def __init__(
         self,
@@ -3159,6 +3209,15 @@ class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
     custom_pricing: bool | None
 
 
+ZeroCostReason = Literal["missing_pricing_key", "pricing_not_applied", "cost_calculation_error"]
+
+
+class StandardLoggingZeroCostDiagnostic(TypedDict):
+    reason: ReadOnly[ZeroCostReason]
+    pricing_model: ReadOnly[str]
+    missing_pricing_keys: ReadOnly[tuple[str, ...]]
+
+
 class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_code: str | None
     error_class: str | None
@@ -3477,6 +3536,7 @@ class StandardLoggingPayload(ClassifierAudit):
     autorouter_savings_estimate: ReadOnly[Mapping[str, JsonValue] | None]
     autorouter_baseline_observation: ReadOnly[str | None]
     response_cost_failure_debug_info: StandardLoggingModelCostFailureDebugInformation | None
+    zero_cost_diagnostic: NotRequired[ReadOnly[StandardLoggingZeroCostDiagnostic | None]]
     status: StandardLoggingPayloadStatus
     status_fields: StandardLoggingPayloadStatusFields
     custom_llm_provider: str | None
@@ -3796,6 +3856,24 @@ def echoed_cost_map_pricing_fields(model_info: Mapping[str, Any]) -> tuple[str, 
     if COST_MAP_LOOKUP_KEY not in model_info:
         return ()
     return tuple(sorted(k for k in model_info if is_server_derived_pricing_key(k)))
+
+
+def echoed_cost_map_fields(
+    model_info: Mapping[str, object], *cost_map_entries: Mapping[str, object]
+) -> tuple[str, ...]:
+    """Fields a ``/model/info`` echo copied from the cost map unchanged.
+
+    Only ``litellm.get_model_info`` emits ``key``, so a blob carrying it is an echo of that
+    response. Anything in it that still equals a resolved cost-map entry is a display value
+    nobody typed; a value the operator edited differs from every entry and stays a real override.
+    Callers pass both the live entry, which the router rewrites with each deployment's own
+    overrides, and the catalog entry as loaded, so a reset to the catalog value reads as an echo either way.
+    """
+    if COST_MAP_LOOKUP_KEY not in model_info:
+        return ()
+    return tuple(
+        sorted(k for k, v in model_info.items() if any(k in entry and entry[k] == v for entry in cost_map_entries))
+    )
 
 
 def pricing_override_fields(*sources: Mapping[str, Any]) -> tuple[str, ...]:

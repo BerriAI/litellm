@@ -50,6 +50,8 @@ from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
     _select_model_name_for_cost_calc,
+    get_usage_object,
+    pricing_entry_for_cost_calc,
 )
 from litellm.exceptions import (
     BudgetExceededError,
@@ -88,6 +90,10 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
     InteractionsUsageObjectTransformation,
+)
+from litellm.litellm_core_utils.llm_cost_calc.zero_cost_diagnostic import (
+    diagnose_zero_cost,
+    zero_cost_warning,
 )
 from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages,
@@ -157,6 +163,7 @@ from litellm.types.utils import (
     StandardLoggingPayloadStatusFields,
     StandardLoggingPromptManagementMetadata,
     StandardLoggingVectorStoreRequest,
+    StandardLoggingZeroCostDiagnostic,
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
@@ -614,6 +621,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.truncated_messages_for_logging: str | list | dict | None = None  # mutable-ok: logged messages shape
         ## TIME TO FIRST TOKEN LOGGING ##
         self.completion_start_time: datetime.datetime | None = None
+        self.zero_cost_warned: bool = False
         self._llm_caching_handler: LLMCachingHandler | None = None
 
         # INITIAL LITELLM_PARAMS
@@ -1764,11 +1772,6 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         result_hidden_params: Final = getattr(priced_result, "_hidden_params", None) or MappingProxyType({})
-        result_additional_headers: Final = (
-            result_hidden_params.get("additional_headers")
-            if isinstance(result_hidden_params, dict)
-            else getattr(result_hidden_params, "additional_headers", None)
-        )
         if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(
             priced_result, "_hidden_params"
         ):
@@ -1776,6 +1779,12 @@ class Logging(LiteLLMLoggingBaseClass):
             if (
                 "response_cost" in hidden_params and hidden_params["response_cost"] is not None
             ):  # use cost if already calculated
+                self._record_zero_cost_diagnostic(
+                    priced_result,
+                    hidden_params["response_cost"],
+                    litellm_model_name=litellm_model_name,
+                    router_model_id=router_model_id or hidden_params.get("model_id"),
+                )
                 return hidden_params["response_cost"]
             elif router_model_id is None and "model_id" in hidden_params:  # use model_id if not already set
                 router_model_id = hidden_params["model_id"]
@@ -1787,18 +1796,7 @@ class Logging(LiteLLMLoggingBaseClass):
             router_model_id = self.get_router_model_id()
 
         ## RESPONSE COST ##
-        spilled_over: Final = is_spilled_over_ptu_request(
-            model_info=_deployment_model_info(self.litellm_params if hasattr(self, "litellm_params") else None),
-            response_headers=self.model_call_details.get("response_headers"),
-            additional_headers=result_additional_headers,
-        )
-        custom_pricing: Final = (
-            False
-            if spilled_over
-            else use_custom_pricing_for_model(
-                litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None)
-            )
-        )
+        custom_pricing: Final = self._custom_pricing_for(priced_result)
 
         prompt = self._prompt_for_cost_calculation()
 
@@ -1850,9 +1848,18 @@ class Logging(LiteLLMLoggingBaseClass):
 
             verbose_logger.debug("response_cost: %s", response_cost)
             additional_response_cost: Final[object] = self.model_call_details.get("additional_response_cost")
-            if isinstance(additional_response_cost, (int, float)) and additional_response_cost > 0:
-                return (response_cost or 0.0) + additional_response_cost
-            return response_cost
+            total_response_cost: Final = (
+                (response_cost or 0.0) + additional_response_cost
+                if isinstance(additional_response_cost, (int, float)) and additional_response_cost > 0
+                else response_cost
+            )
+            self._record_zero_cost_diagnostic(
+                priced_result,
+                total_response_cost,
+                litellm_model_name=litellm_model_name,
+                router_model_id=router_model_id,
+            )
+            return total_response_cost
         except Exception as e:  # error calculating cost
             debug_info = StandardLoggingModelCostFailureDebugInformation(
                 error_str=str(e),
@@ -1866,8 +1873,107 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             verbose_logger.debug("response_cost_failure_debug_information: %s", debug_info)
             self.model_call_details["response_cost_failure_debug_information"] = debug_info
+            self._record_zero_cost_diagnostic(
+                priced_result,
+                None,
+                calculation_failed=True,
+                litellm_model_name=litellm_model_name,
+                router_model_id=router_model_id,
+            )
 
         return None
+
+    def _record_zero_cost_diagnostic(
+        self,
+        result: object,
+        response_cost: float | None,
+        *,
+        calculation_failed: bool = False,
+        litellm_model_name: str | None = None,
+        router_model_id: str | None = None,
+    ) -> None:
+        if response_cost is None and not calculation_failed:
+            return
+        if self.model_call_details.get("cache_hit") is True:
+            self.model_call_details["zero_cost_diagnostic"] = None
+            return
+        try:
+            finding: Final = self._zero_cost_finding(
+                result,
+                response_cost,
+                calculation_failed=calculation_failed,
+                litellm_model_name=litellm_model_name,
+                router_model_id=router_model_id,
+            )
+        except Exception as e:  # noqa: BLE001  # the pricing helpers raise plain Exception and a diagnostic must never break cost tracking
+            verbose_logger.debug("zero_cost_diagnostic skipped: %s", e)
+            return
+        self.model_call_details["zero_cost_diagnostic"] = finding[0] if finding is not None else None
+        if finding is None or self.zero_cost_warned:
+            return
+        self.zero_cost_warned = True
+        verbose_logger.warning(finding[1])
+
+    def _zero_cost_finding(
+        self,
+        result: object,
+        response_cost: float | None,
+        *,
+        calculation_failed: bool,
+        litellm_model_name: str | None,
+        router_model_id: str | None,
+    ) -> tuple[StandardLoggingZeroCostDiagnostic, str] | None:
+        metadata: Final = StandardLoggingPayloadSetup.merge_litellm_metadata(self.litellm_params)
+        if response_cost or is_unbilled_non_inference_call(self.call_type, metadata, result):
+            return None
+        usage: Final = get_usage_object(completion_response=result)
+        if usage is None:
+            return None
+        model: Final = litellm_model_name or self.model
+        custom_llm_provider: Final = self.model_call_details.get("custom_llm_provider")
+        pricing: Final = pricing_entry_for_cost_calc(
+            model=model,
+            completion_response=result,
+            custom_llm_provider=custom_llm_provider,
+            custom_pricing=self._custom_pricing_for(result),
+            base_model=_get_base_model_from_metadata(model_call_details=self.model_call_details),
+            router_model_id=router_model_id or self.get_router_model_id(),
+            region_name=_resolve_mantle_region_for_cost(
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=self.model_call_details.get("litellm_params"),
+            ),
+            litellm_logging_obj=self,
+        )
+        if pricing is None:
+            return None
+        diagnostic: Final = diagnose_zero_cost(
+            usage=usage, pricing_model=pricing[0], pricing_entry=pricing[1], calculation_failed=calculation_failed
+        )
+        if diagnostic is None:
+            return None
+        model_group: Final = metadata.get("model_group")
+        return diagnostic, zero_cost_warning(
+            diagnostic,
+            model_group=model_group if isinstance(model_group, str) else None,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            usage=usage,
+        )
+
+    def _custom_pricing_for(self, result: object) -> bool:
+        litellm_params: Final = getattr(self, "litellm_params", None)
+        result_hidden_params: Final = getattr(result, "_hidden_params", None) or MappingProxyType({})
+        additional_headers: Final = (
+            result_hidden_params.get("additional_headers")
+            if isinstance(result_hidden_params, dict)
+            else getattr(result_hidden_params, "additional_headers", None)
+        )
+        spilled_over: Final = is_spilled_over_ptu_request(
+            model_info=_deployment_model_info(litellm_params),
+            response_headers=self.model_call_details.get("response_headers"),
+            additional_headers=additional_headers,
+        )
+        return False if spilled_over else use_custom_pricing_for_model(litellm_params=litellm_params)
 
     def _prompt_for_cost_calculation(self) -> str:
         """
@@ -2213,6 +2319,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["response_cost"] = 0.0
         elif "response_cost" in hidden_params:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
+            self._record_zero_cost_diagnostic(logging_result, hidden_params["response_cost"])
         elif (existing_cost := self.model_call_details.get("response_cost")) is not None and existing_cost != 0:
             # Preserve response_cost if already calculated (e.g., by pass-through
             # handlers like Gemini/Vertex which call completion_cost directly).
@@ -6507,6 +6614,7 @@ def get_standard_logging_object_payload(
             error_str=error_str,
             error_information=error_information,
             response_cost_failure_debug_info=kwargs.get("response_cost_failure_debug_information"),
+            zero_cost_diagnostic=kwargs.get("zero_cost_diagnostic"),
             guardrail_information=metadata.get("standard_logging_guardrail_information", None),
             standard_built_in_tools_params=standard_built_in_tools_params,
         )
@@ -6685,6 +6793,7 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         response_cost=response_cost,
         autorouter_savings=None,
         response_cost_failure_debug_info=None,
+        zero_cost_diagnostic=None,
         status="success",
         total_tokens=int(DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT + DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT),
         prompt_tokens=int(DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT),

@@ -1,10 +1,11 @@
+from typing import Final
+
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
 from litellm.llms.fal_ai.cost_calculator import cost_calculator, fal_ai_passthrough_cost
 from litellm.types.utils import ImageObject, ImageResponse
-
 
 @pytest.fixture(autouse=True)
 def _use_local_model_cost_map(monkeypatch):
@@ -78,14 +79,27 @@ def test_gpt_image_response_dimensions_override_request_size():
     assert cost == expected
 
 
-def test_gpt_image_response_dimensions_fall_back_to_request_size_when_unpriced():
+def test_gpt_image_response_dimensions_use_nearest_keyed_row_when_unpriced():
     model = "fal_ai/openai/gpt-image-2.5/flare/text-to-image"
     cost = cost_calculator(
         model=model,
         image_response=_image_response_with_dimensions(((777, 888),)),
         optional_params={"quality": "low", "image_size": {"width": 1024, "height": 1536}},
     )
-    expected = litellm.model_cost[f"fal_ai/low/1024-x-1536/{model.removeprefix('fal_ai/')}"]["output_cost_per_image"]
+    expected = litellm.model_cost[f"fal_ai/low/1024-x-768/{model.removeprefix('fal_ai/')}"]["output_cost_per_image"]
+    assert cost == expected
+
+
+def test_gpt_image_25_noncanonical_response_uses_nearest_keyed_row():
+    model: Final = "fal_ai/openai/gpt-image-2.5/flare/text-to-image"
+    cost: Final = cost_calculator(
+        model=model,
+        image_response=_image_response_with_dimensions(((1536, 1024),)),
+        optional_params={"quality": "low", "image_size": {"width": 1536, "height": 1024}},
+    )
+    expected: Final = litellm.model_cost[
+        "fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image"
+    ]["output_cost_per_image"]
     assert cost == expected
 
 

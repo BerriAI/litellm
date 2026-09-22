@@ -75,11 +75,13 @@ from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
+from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (
     get_client_requested_model,
     get_tags_from_request_body,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
+    LITELLM_CALL_ID_HEADER,
     attribute_of,
     error_status_code,
     openai_error_param,
@@ -946,6 +948,9 @@ async def _resolve_stream_headers(
         return headers
 
 
+_NO_GENERAL_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
 async def create_response(
     generator: AsyncGenerator[str, None],
     media_type: str,
@@ -953,6 +958,7 @@ async def create_response(
     default_status_code: int = status.HTTP_200_OK,
     request: Request | None = None,
     refresh_headers: Callable[[], Awaitable[Mapping[str, str]]] | None = None,
+    general_settings: Mapping[str, object] = _NO_GENERAL_SETTINGS,
 ) -> StreamingResponse | JSONResponse:
     """
     Create streaming response, checking if the first chunk is an error.
@@ -960,7 +966,8 @@ async def create_response(
     Otherwise, return StreamingResponse and stream all content.
 
     ``refresh_headers`` is consulted once the first chunk has been buffered, for
-    callers whose headers can only be known then.
+    callers whose headers can only be known then. ``general_settings`` decides whether
+    the first-chunk error body also carries the ``x-litellm-call-id`` header's value.
     """
     first_chunk_value: str | None = None
     final_status_code = default_status_code
@@ -987,7 +994,10 @@ async def create_response(
                     )
 
                     # Parse error content
-                    error_dict: Final = _extract_error_from_sse_chunk(first_chunk_value)
+                    error_dict: Final = with_call_id(
+                        JSON_OBJECT.validate_python(_extract_error_from_sse_chunk(first_chunk_value)),
+                        error_body_call_id(general_settings, resolved_headers.get(LITELLM_CALL_ID_HEADER)),
+                    )
 
                     # Consume and close generator (avoid resource leak)
                     try:
@@ -2738,6 +2748,7 @@ class ProxyBaseLLMRequestProcessing:
                         headers=custom_headers,
                         request=request,
                         refresh_headers=refresh_stream_headers,
+                        general_settings=general_settings,
                     )
 
             ### CALL HOOKS ### - modify outgoing data

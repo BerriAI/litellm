@@ -213,6 +213,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/openai_passthrough/",
             "/transcribe",
             "/typesafe/",
+            "/openrouter/",
             "/vertex-ai/",
             "/vertex_ai/",
             "/vllm/",

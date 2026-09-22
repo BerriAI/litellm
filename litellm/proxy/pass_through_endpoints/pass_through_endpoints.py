@@ -78,11 +78,13 @@ from litellm.proxy.common_request_processing import (
     open_sse_before_first_byte,
     resolve_litellm_call_id,
 )
+from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
+    LITELLM_CALL_ID_HEADER,
     error_status_code,
     litellm_call_id_headers,
     openai_error_param,
@@ -1127,6 +1129,9 @@ async def pass_through_request(
         from litellm.proxy.proxy_server import (
             general_settings as proxy_general_settings,
         )
+        from litellm.proxy.proxy_server import (
+            general_settings_view,
+        )
 
         _managed_id_provider: Final = resolve_passthrough_managed_id_provider(custom_llm_provider)
 
@@ -1656,11 +1661,24 @@ async def pass_through_request(
             headers=response.headers,
             custom_headers=custom_headers,
         )
+        emitted_call_id: Final = (
+            JSON_OBJECT.validate_python(response_headers).get(LITELLM_CALL_ID_HEADER)
+            if response.status_code >= 400
+            else None
+        )
+        error_call_id: Final = (
+            error_body_call_id(general_settings_view(), emitted_call_id) if isinstance(emitted_call_id, str) else None
+        )
+        relayed_content: Final = (
+            json.dumps(with_call_id(JSON_OBJECT.validate_python(response_body), error_call_id)).encode("utf-8")
+            if error_call_id is not None and isinstance(response_body, dict)
+            else content
+        )
         if _content_modified:
             response_headers.pop("content-length", None)
 
         return Response(
-            content=content,
+            content=relayed_content,
             status_code=response.status_code,
             headers=response_headers,
         )
