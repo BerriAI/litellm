@@ -779,10 +779,18 @@ class GuardrailRunRecord(BaseModel):
     guardrail_response: object | None = None
 
 
+class SpendLogErrorInformation(BaseModel):
+    error_code: str | None = None
+    error_class: str | None = None
+    error_message: str | None = None
+    normalized_error: str | None = None
+
+
 class SpendLogMetadata(BaseModel):
     user_api_key_alias: str | None = None
     applied_guardrails: list[str] | None = None
     guardrail_information: list[GuardrailRunRecord] | None = None
+    error_information: SpendLogErrorInformation | None = None
 
 
 class SpendLogRow(BaseModel):

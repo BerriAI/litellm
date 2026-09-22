@@ -498,6 +498,47 @@ def test_failure_call_writes_failure_status_row(
     assert (failure_row.spend or 0) == 0.0, "failed call must not be charged"
 
 
+@pytest.mark.covers("quota_management.spend_tracking.failure.writes_normalized_error")
+def test_failure_rows_share_normalized_error_across_provider_wording(
+    client: SpendClient, resources: ResourceManager, scoped_key: str
+) -> None:
+    """Two upstream auth failures with different provider wording land as failure rows
+    whose metadata.error_information keeps each provider's own error_message and
+    carries the same stable normalized_error cluster key."""
+    marker = unique_marker()
+    deployments: Final = (
+        (f"e2e-norm-openai-{marker}", "openai/gpt-5.5"),
+        (f"e2e-norm-anthropic-{marker}", "anthropic/claude-haiku-4-5"),
+    )
+    for name, provider_model in deployments:
+        model_id = client.proxy.create_model(
+            name, LiteLLMParamsBody(model=provider_model, api_key=f"sk-invalid-{marker}")
+        )
+        resources.defer(lambda model_id=model_id: client.proxy.delete_model(model_id))
+        result = client.chat(scoped_key, name, f"normalize failure {marker}", max_tokens=1)
+        assert not is_ok(result), f"{name}: invalid upstream key must fail the call, got {result}"
+
+    rows = client.poll_logs_for_key(
+        scoped_key,
+        min_rows=2,
+        predicate=lambda rs: sum(1 for r in rs if r.status == "failure") >= 2,
+    )
+    failure_rows = [r for r in rows if r.status == "failure"]
+    assert len(failure_rows) == 2, f"expected one failure row per deployment: {_summarize(rows)}"
+
+    infos = [r.metadata.error_information if r.metadata else None for r in failure_rows]
+    assert all(info is not None for info in infos), (
+        f"failure rows must carry metadata.error_information: {[r.model_dump() for r in failure_rows]}"
+    )
+    messages = {info.error_message for info in infos if info is not None}
+    assert len(messages) == 2, f"provider wording must stay distinct in error_message: {messages}"
+    normalized = {info.normalized_error for info in infos if info is not None}
+    assert normalized == {"401_AUTHENTICATION_FAILED"}, (
+        f"both auth failures must share one normalized_error cluster key; saw {normalized} "
+        f"for messages {messages}"
+    )
+
+
 @pytest.mark.covers("quota_management.spend_tracking.spend_calculate.returns_cost")
 def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
     cost = client.calculate_spend(
