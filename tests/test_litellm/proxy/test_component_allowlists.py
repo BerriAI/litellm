@@ -59,6 +59,7 @@ from gateway.routes.allowlist import (
     GATEWAY_MOUNT_PATHS,
     GATEWAY_PATH_PREFIXES,
 )
+from litellm.proxy._lazy_features import LAZY_FEATURES, loaded_lazy_modules
 from litellm.proxy.proxy_server import app
 
 for _key, _previous in _PRE_EXISTING_ENV.items():
@@ -101,8 +102,23 @@ def _component_paths(routes, exact_paths, path_prefixes) -> set[str]:
     return out
 
 
+def _lazily_loaded_paths(paths: set[str]) -> set[str]:
+    """Paths contributed by a lazy feature that this process has already loaded."""
+    features = tuple(f for f in LAZY_FEATURES if f.module_path in loaded_lazy_modules(app))
+    return {path for path in paths if any(f.matches(path) for f in features)}
+
+
 def test_gateway_plus_backend_covers_full_app():
-    """Every route on the proxy app must be served by gateway or backend."""
+    """Every eagerly registered route on the proxy app must be served by gateway or backend.
+
+    ``gateway.main`` and ``backend.main`` trim the route table once, inside the
+    lifespan, so they only ever see the routes present at startup. A lazy
+    feature registers its router on demand afterwards, which appends routes the
+    trim never filters — those cannot be dropped on the floor and are therefore
+    out of scope here. Which features a test process has loaded depends on the
+    sibling modules xdist puts in the same worker, so subtracting exactly the
+    loaded ones is what keeps this assertion deterministic.
+    """
     all_paths = {
         getattr(r, "path")
         for r in app.router.routes
@@ -115,7 +131,7 @@ def test_gateway_plus_backend_covers_full_app():
         app.router.routes, BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
     )
 
-    uncovered = all_paths - (gateway_paths | backend_paths)
+    uncovered = all_paths - (gateway_paths | backend_paths) - _lazily_loaded_paths(all_paths)
 
     assert not uncovered, (
         f"{len(uncovered)} route(s) are not exposed on either component. "
