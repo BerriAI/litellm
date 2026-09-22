@@ -287,13 +287,15 @@ async def test_mcp_native_structured_replacement_must_match_returned_content(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("return_wrapper", [False, True])
+@pytest.mark.parametrize("mode", ["none", "wrapper", "exception"])
 @pytest.mark.parametrize("structured", [False, True])
-async def test_mcp_direct_content_edit_invalidates_stale_structured_data(logging_obj, return_wrapper, structured):
+async def test_mcp_direct_content_edit_invalidates_stale_structured_data(logging_obj, mode, structured):
     class DirectRedactor(CustomLogger):
         async def async_post_mcp_tool_call_hook(self, kwargs, response_obj, start_time, end_time):
             kwargs["original_response"].content[0].text = "[REDACTED]"
-            return response_obj if return_wrapper else None
+            if mode == "exception":
+                raise ValueError("non-blocking callback after direct edit")
+            return response_obj if mode == "wrapper" else None
 
     result = CallToolResult(
         content=[TextContent(type="text", text="SECRET-1234")],

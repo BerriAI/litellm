@@ -1655,15 +1655,21 @@ class Logging(LiteLLMLoggingBaseClass):
                     callback_response = MCPPostCallResponseObject(
                         mcp_tool_call_response=copy.deepcopy(original_content), hidden_params=hidden_params
                     )
-                    response = await callback.async_post_mcp_tool_call_hook(
-                        kwargs=kwargs,
-                        response_obj=callback_response,
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
-                    hook_content = self._parse_post_mcp_call_hook_response(response=response)
-                    if response is not None:
-                        hidden_params = response.hidden_params
+                    try:
+                        response = await callback.async_post_mcp_tool_call_hook(
+                            kwargs=kwargs,
+                            response_obj=callback_response,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
+                        hook_content = self._parse_post_mcp_call_hook_response(response=response)
+                        if response is not None:
+                            hidden_params = response.hidden_params
+                    except Exception as e:
+                        verbose_logger.exception(
+                            "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e
+                        )
+                        hook_content = None
                     structured_replacement_matches = (
                         response_obj.structured_content != original_structured_content
                         and (
