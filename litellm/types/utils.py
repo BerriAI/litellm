@@ -3571,6 +3571,8 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     arize_api_key: str | None
     arize_space_key: str | None
     arize_space_id: str | None
+    arize_success_sampling_rate: ReadOnly[float | None]
+    arize_error_sampling_rate: ReadOnly[float | None]
 
     # PostHog dynamic params
     posthog_api_key: str | None
