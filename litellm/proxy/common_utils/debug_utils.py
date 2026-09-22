@@ -8,7 +8,7 @@ import sys
 import tracemalloc
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, NamedTuple, Protocol, TypedDict
+from typing import Annotated, Any, Final, NamedTuple, Protocol, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing_extensions import ReadOnly
@@ -788,8 +788,8 @@ async def configure_gc_thresholds_endpoint(
 
 @router.get("/debug/report", include_in_schema=False)
 async def get_debug_report(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     verbose: bool = False,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> EnvironmentReport:
     """
     The same LiteLLM-owned environment facts the bug report link puts in a GitHub issue:
