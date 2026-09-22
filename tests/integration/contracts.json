@@ -143,6 +143,9 @@
     "tests/integration/streaming/test_stream_contracts.py::test_client_cancellation_releases_the_actual_provider_connection": [
       "other.streaming.cancellation.closes_actual_provider_connection"
     ],
+    "tests/integration/streaming/test_ttft_keepalive.py::test_stream_emits_sse_ping_comments_before_the_first_data_frame_while_upstream_is_silent": [
+      "streaming.keepalive.sse_pings_fill_silent_time_to_first_token"
+    ],
     "tests/integration/routing/test_observed_routing.py::test_retry_counts_and_public_errors_match_actual_provider_attempts": [
       "other.routing.retries.several_attempts_reach_success_without_hidden_retries",
       "other.routing.errors.nonretryable_and_exhausted_failures_remain_errors"
