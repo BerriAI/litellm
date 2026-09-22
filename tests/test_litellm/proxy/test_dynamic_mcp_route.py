@@ -3,8 +3,7 @@ Tests for the dynamic_mcp_route handler in proxy_server.py.
 
 Covers the resolution order:
   1. Registered MCP server alias  → forwards to /mcp/{name}
-  2. Comma-separated list          → short-circuits before any DB call;
-                                     forwarded to /mcp/{segment}
+  2. Comma-separated list          → forwards to /mcp/{segment}
   3. Toolset name (cached)         → sets toolset scope, forwards to /mcp
   4. MCP access group tag (cached) → forwards to /mcp/{name} when the group
                                      resolves to at least one server
