@@ -5,7 +5,6 @@ from collections.abc import Callable
 from typing import Final
 
 import pytest
-
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from integration.streaming.test_stream_contracts import text_stream
@@ -43,9 +42,10 @@ def test_stream_emits_sse_ping_comments_before_the_first_data_frame_while_upstre
             assert frames[:first_data] == (": ping",) * first_data, frames
             assert frames[-1] == "data: [DONE]", frames
             deltas: Final = tuple(json.loads(line.removeprefix("data: ")) for line in frames[first_data:-1])
-            assert "".join(
-                choice["delta"].get("content", "") for chunk in deltas for choice in chunk["choices"]
-            ) == "Hello 雪 café", frames
+            assert (
+                "".join(choice["delta"].get("content", "") for chunk in deltas for choice in chunk["choices"])
+                == "Hello 雪 café"
+            ), frames
             requests: Final = wire.drain()
             assert len(requests) == 1
             outbound: Final = json.loads(requests[0].body)
