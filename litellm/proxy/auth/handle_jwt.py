@@ -1895,6 +1895,16 @@ class JWTAuthManager:
         )
 
     @staticmethod
+    def _raise_header_team_alias_ambiguous(header_value: str) -> NoReturn:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"x-litellm-team-id '{header_value}' is a team alias shared by more than one team. "
+                "Send the team id instead."
+            ),
+        )
+
+    @staticmethod
     async def _team_id_by_alias(
         team_alias: str,
         prisma_client: PrismaClient | None,
@@ -1915,6 +1925,8 @@ class JWTAuthManager:
         except HTTPException as exc:
             if exc.status_code >= 500:
                 raise
+            if exc.status_code == 400:
+                JWTAuthManager._raise_header_team_alias_ambiguous(team_alias)
             return None
         return team.team_id
 
@@ -1940,8 +1952,9 @@ class JWTAuthManager:
         Raises:
             HTTPException: 403 when neither the value nor the team it aliases is
                 an allowed team, or the DB fallback's membership denial when the
-                value names no team at all; a 5xx from the alias lookup itself
-                is re-raised rather than reported as a denial
+                value names no team at all, or a 403 naming the value as an alias
+                more than one team shares; a 5xx from the alias lookup itself is
+                re-raised rather than reported as a denial
         """
         header_value: Final = JWTAuthManager._team_header_value(request_headers)
         if not header_value:

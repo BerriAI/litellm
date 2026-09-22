@@ -7127,10 +7127,12 @@ async def test_resolve_team_from_header_under_db_fallback_never_aliases_a_team_i
 
 
 @pytest.mark.asyncio
-async def test_resolve_team_from_header_treats_a_duplicate_alias_as_no_match_but_surfaces_lookup_errors():
-    """An alias two teams share cannot name one team, so it is refused like an
-    unknown value (a 4xx from the lookup is a miss), while a lookup failure
-    (5xx) is not disguised as a denial and propagates as is."""
+async def test_resolve_team_from_header_names_a_duplicate_alias_as_shared_but_surfaces_lookup_errors():
+    """An alias two teams share cannot name one team, so it is refused with a 403
+    that says the alias is shared and to send the team id, under claims and under
+    the DB fallback alike, rather than the "matched nothing" denial that would be
+    false for a value several teams matched. A lookup failure (5xx) is not
+    disguised as a denial and propagates as is."""
 
     async def duplicate_alias(team_alias, **kwargs):
         raise HTTPException(status_code=400, detail={"error": f"Multiple teams found with alias '{team_alias}'."})
@@ -7141,7 +7143,14 @@ async def test_resolve_team_from_header_treats_a_duplicate_alias_as_no_match_but
     with pytest.raises(HTTPException) as duplicate:
         await _resolve_header("shared_alias", {"team_a"}, False, _team_lookup_404, duplicate_alias)
     assert duplicate.value.status_code == 403
-    assert "Multiple teams" not in str(duplicate.value.detail)
+    assert duplicate.value.detail == (
+        "x-litellm-team-id 'shared_alias' is a team alias shared by more than one team. Send the team id instead."
+    )
+
+    with pytest.raises(HTTPException) as duplicate_under_fallback:
+        await _resolve_header("shared_alias", set(), True, _teams_by_id(frozenset({"team_a"})), duplicate_alias)
+    assert duplicate_under_fallback.value.status_code == 403
+    assert duplicate_under_fallback.value.detail == duplicate.value.detail
 
     with pytest.raises(HTTPException) as failure:
         await _resolve_header("alias_a", {"team_a"}, False, _team_lookup_404, db_down)
