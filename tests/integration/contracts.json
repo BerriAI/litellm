@@ -128,6 +128,9 @@
     "tests/integration/providers/test_bedrock_auth_wire.py::test_bearer_environment_reference_loads_from_db_and_yaml_and_survives_reload": [
       "other.provider_wire.bedrock.bearer_db_yaml_survives_reload"
     ],
+    "tests/integration/providers/test_bedrock_mantle_project_wire.py::test_mantle_project_id_is_sent_as_anthropic_workspace_id_header_on_chat_and_messages": [
+      "other.provider_wire.bedrock.mantle_project_id_reaches_provider_as_workspace_id_header"
+    ],
     "tests/integration/streaming/test_stream_contracts.py::test_generated_tcp_partitions_preserve_unicode_text_identity_and_final_usage": [
       "other.streaming.byte_partitions.preserve_text_identity_and_usage"
     ],
