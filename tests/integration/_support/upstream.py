@@ -83,7 +83,7 @@ def _aws_str_header(name: str, value: str) -> bytes:
     )
 
 
-def _aws_event_frame(
+def aws_event_frame(
     event_type: str,
     payload: Mapping[str, JsonValue],
     scenario_id: str,
@@ -320,7 +320,7 @@ class Provider:
                     else response.events
                 )
                 event_body: Final = b"".join(
-                    _aws_event_frame(event.event_type, event.payload, scenario_id, unique_id) for event in events
+                    aws_event_frame(event.event_type, event.payload, scenario_id, unique_id) for event in events
                 )
                 return Response(content=event_body, media_type=response.content_type)
 
