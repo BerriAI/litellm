@@ -85,6 +85,7 @@ from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
     _request_extra_headers,
     _request_resolved_auth_headers,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import ConnectionCredential
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -250,6 +251,7 @@ async def _dispatch_virtual_mcp_tool(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
     mcp_proxy_mode: bool = False,
+    connection_credential: ConnectionCredential | None = None,
 ) -> CallToolResult | None:
     """Handle the mcp_tool_search / mcp_tool_call virtual tools.
 
@@ -297,6 +299,7 @@ async def _dispatch_virtual_mcp_tool(
         )
         try:
             proxy_result: Final = await handle_mcp_proxy_tool(
+                connection_credential=connection_credential,
                 name=name,
                 arguments=arguments or {},  # mutable-ok: proxy handler payload
                 user_api_key_dict=user_api_key_auth,
@@ -364,6 +367,7 @@ async def _dispatch_virtual_mcp_tool(
     args: Final = arguments or {}
     if name == MCP_TOOL_SEARCH_TOOL_NAME:
         return await handle_mcp_tool_search(
+            connection_credential=connection_credential,
             query=TypeAdapter(str).validate_python(args.get("query", "")),
             top_k=coerce_top_k(args.get("top_k", 5)),
             user_api_key_dict=user_api_key_auth,
@@ -399,6 +403,7 @@ async def _dispatch_virtual_mcp_tool(
         types.MappingProxyType({"name": args.get("tool_name", ""), "arguments": args.get("arguments") or {}})
     )
     return await handle_mcp_tool_call(
+        connection_credential=connection_credential,
         tool_name=tool_request.name,
         arguments=tool_request.arguments or {},
         user_api_key_dict=user_api_key_auth,
@@ -943,6 +948,7 @@ async def _get_tools_from_mcp_servers(
     request_tags: list[str] | None = None,
     client_ip: str | None = None,
     mcp_proxy_mode: bool = False,
+    connection_credential: ConnectionCredential | None = None,
 ) -> AggregateToolListing:
     """
     Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -1105,6 +1111,7 @@ async def _get_tools_from_mcp_servers(
 
             try:
                 tools: Final = await global_mcp_server_manager._get_tools_from_server(
+                    connection_credential=connection_credential,
                     server=server,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
@@ -1230,6 +1237,7 @@ async def _get_prompts_from_mcp_servers(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
+    connection_credential: ConnectionCredential | None = None,
 ) -> list[Prompt]:
     """
     Helper method to fetch prompt from MCP servers based on server filtering criteria.
@@ -1269,6 +1277,7 @@ async def _get_prompts_from_mcp_servers(
 
         try:
             prompts = await global_mcp_server_manager.get_prompts_from_server(
+                connection_credential=connection_credential,
                 server=server,
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=server_auth_header,
@@ -1298,6 +1307,7 @@ async def _get_resources_from_mcp_servers(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
+    connection_credential: ConnectionCredential | None = None,
 ) -> list[Resource]:
     """Fetch resources from allowed MCP servers."""
 
@@ -1324,6 +1334,7 @@ async def _get_resources_from_mcp_servers(
 
         try:
             resources = await global_mcp_server_manager.get_resources_from_server(
+                connection_credential=connection_credential,
                 server=server,
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=server_auth_header,
@@ -1351,6 +1362,7 @@ async def _get_resource_templates_from_mcp_servers(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
+    connection_credential: ConnectionCredential | None = None,
 ) -> list[ResourceTemplate]:
     """Fetch resource templates from allowed MCP servers."""
 
@@ -1377,6 +1389,7 @@ async def _get_resource_templates_from_mcp_servers(
 
         try:
             resource_templates = await global_mcp_server_manager.get_resource_templates_from_server(
+                connection_credential=connection_credential,
                 server=server,
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=server_auth_header,
@@ -1446,6 +1459,7 @@ async def _list_mcp_tools(
     list_tools_log_source: str | None = None,
     client_ip: str | None = None,
     mcp_proxy_mode: bool = False,
+    connection_credential: ConnectionCredential | None = None,
 ) -> AggregateToolListing:
     """
     List all available MCP tools.
@@ -1464,6 +1478,7 @@ async def _list_mcp_tools(
 
     try:
         listing: Final = await _get_tools_from_mcp_servers(
+            connection_credential=connection_credential,
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_servers=mcp_servers,
@@ -1493,6 +1508,7 @@ async def _list_mcp_prompts(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
+    connection_credential: ConnectionCredential | None = None,
 ) -> list[Prompt]:
     """
     List all available MCP prompts.
@@ -1510,6 +1526,7 @@ async def _list_mcp_prompts(
     managed_prompts = []
     try:
         managed_prompts = await _get_prompts_from_mcp_servers(
+            connection_credential=connection_credential,
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_servers=mcp_servers,
@@ -1534,12 +1551,14 @@ async def _list_mcp_resources(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
+    connection_credential: ConnectionCredential | None = None,
 ) -> list[Resource]:
     """List all available MCP resources."""
 
     managed_resources: list[Resource] = []
     try:
         managed_resources = await _get_resources_from_mcp_servers(
+            connection_credential=connection_credential,
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_servers=mcp_servers,
@@ -1563,12 +1582,14 @@ async def _list_mcp_resource_templates(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
+    connection_credential: ConnectionCredential | None = None,
 ) -> list[ResourceTemplate]:
     """List all available MCP resource templates."""
 
     managed_resource_templates: list[ResourceTemplate] = []
     try:
         managed_resource_templates = await _get_resource_templates_from_mcp_servers(
+            connection_credential=connection_credential,
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_servers=mcp_servers,
@@ -1731,6 +1752,7 @@ async def _list_tools_before_first_call(
     oauth2_headers: dict[str, str] | None,
     raw_headers: dict[str, str] | None,
     client_ip: str | None = None,
+    connection_credential: ConnectionCredential | None = None,
 ) -> None:
     """List ``server`` with the caller's own credentials when it does not yet expose ``tool_name`` here.
 
@@ -1746,6 +1768,7 @@ async def _list_tools_before_first_call(
         return
     try:
         await _get_tools_from_mcp_servers(
+            connection_credential=connection_credential,
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_servers=[server.server_id],
@@ -1771,9 +1794,11 @@ async def execute_mcp_tool(
     host_progress_callback: ProgressCallback | None = None,
     guardrail_context: Mapping[str, object] | None = None,
     client_ip: str | None = None,
+    connection_credential: ConnectionCredential | None = None,
     **kwargs: object,  # kwargs-ok: preserves the existing REST and decorated logging call contract
 ) -> CallToolResult:
     context: Final = prepare_context(
+        connection_credential=connection_credential,
         user_api_key_auth=user_api_key_auth,
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
@@ -1806,6 +1831,7 @@ async def _execute_mcp_tool(
     host_progress_callback: ProgressCallback | None = None,
     guardrail_context: Mapping[str, object] | None = None,
     client_ip: str | None = None,
+    connection_credential: ConnectionCredential | None = None,
     **kwargs: Any,
 ) -> CallToolResult:
     """
@@ -1865,6 +1891,7 @@ async def _execute_mcp_tool(
         else strip_known_server_prefix(name, first_call_target)
     )
     await _list_tools_before_first_call(
+        connection_credential=connection_credential,
         server=first_call_target,
         tool_name=first_call_tool_name,
         allowed_mcp_servers=allowed_mcp_servers,
@@ -2059,6 +2086,7 @@ async def _execute_mcp_tool(
     #########################################################
     elif mcp_server:
         response = await _handle_managed_mcp_tool(
+            connection_credential=connection_credential,
             server_name=server_name,
             name=original_tool_name,
             arguments=arguments,
@@ -2281,6 +2309,7 @@ async def call_mcp_tool(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
+    connection_credential: ConnectionCredential | None = None,
     **kwargs: Any,
 ) -> CallToolResult:
     """
@@ -2325,6 +2354,7 @@ async def call_mcp_tool(
 
         # Delegate to execute_mcp_tool for execution
         response = await execute_mcp_tool(
+            connection_credential=connection_credential,
             name=name,
             arguments=arguments,
             allowed_mcp_servers=allowed_mcp_servers,
@@ -2363,6 +2393,7 @@ async def mcp_get_prompt(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
+    connection_credential: ConnectionCredential | None = None,
 ) -> GetPromptResult:
     """
     Fetch a specific MCP prompt, handling both prefixed and unprefixed names.
@@ -2399,6 +2430,7 @@ async def mcp_get_prompt(
     )
 
     return await global_mcp_server_manager.get_prompt_from_server(
+        connection_credential=connection_credential,
         server=server,
         user_api_key_auth=user_api_key_auth,
         prompt_name=original_prompt_name,
@@ -2419,6 +2451,7 @@ async def mcp_read_resource(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
+    connection_credential: ConnectionCredential | None = None,
 ) -> ReadResourceResult:
     """Read resource contents from upstream MCP servers."""
 
@@ -2452,6 +2485,7 @@ async def mcp_read_resource(
     )
 
     return await global_mcp_server_manager.read_resource_from_server(
+        connection_credential=connection_credential,
         server=server,
         user_api_key_auth=user_api_key_auth,
         url=url,
@@ -2506,12 +2540,14 @@ async def _handle_managed_mcp_tool(
     host_progress_callback: ProgressCallback | None = None,
     guardrail_context: Mapping[str, object] | None = None,
     client_ip: str | None = None,
+    connection_credential: ConnectionCredential | None = None,
 ) -> CallToolResult:
     """Handle tool execution for managed server tools"""
     # Import here to avoid circular import
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     call_tool_result: Final = await global_mcp_server_manager.call_tool(
+        connection_credential=connection_credential,
         server_name=server_name,
         name=name,
         arguments=arguments,
@@ -2576,6 +2612,7 @@ _MCP_CREDENTIAL_REQUEST_FIELDS: Final = frozenset(
         "mcp_server_auth_headers",
         "oauth2_headers",
         "user_api_key_auth",
+        "connection_credential",
     }
 )
 
@@ -2622,6 +2659,7 @@ async def _execute_handle_list_tools(
         # Get mcp_servers from context variable
         verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
         listing: Final = await _list_mcp_tools(
+            connection_credential=context.connection_credential,
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_servers=mcp_servers,
@@ -2681,6 +2719,7 @@ async def _execute_mcp_server_tool_call(
         # Inside this try so virtual-tool errors convert to isError
         # CallToolResult instead of raising out of the protocol handler.
         virtual_tool_result: Final = await _dispatch_virtual_mcp_tool(
+            connection_credential=context.connection_credential,
             name=params.name,
             arguments=params.arguments,
             user_api_key_auth=user_api_key_auth,
@@ -2729,6 +2768,7 @@ async def _execute_mcp_server_tool_call(
             data = body_data
 
         response: Final = await call_mcp_tool(
+            connection_credential=context.connection_credential,
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_servers=mcp_servers,
@@ -2822,6 +2862,7 @@ async def _execute_list_prompts(
         # Get mcp_servers from context variable
         verbose_logger.debug("MCP list_prompts - Calling _list_prompts")
         prompts: Final = await _list_mcp_prompts(
+            connection_credential=context.connection_credential,
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_servers=mcp_servers,
@@ -2856,6 +2897,7 @@ async def _execute_get_prompt(
 
     verbose_logger.debug("MCP mcp_server_tool_call - User API Key Auth from context: %s", user_api_key_auth)
     return await mcp_get_prompt(
+        connection_credential=context.connection_credential,
         name=params.name,
         arguments=params.arguments,
         user_api_key_auth=user_api_key_auth,
@@ -2891,6 +2933,7 @@ async def _execute_list_resources(
         )
 
         resources: Final = await _list_mcp_resources(
+            connection_credential=context.connection_credential,
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_servers=mcp_servers,
@@ -2929,6 +2972,7 @@ async def _execute_list_resource_templates(
         )
 
         resource_templates: Final = await _list_mcp_resource_templates(
+            connection_credential=context.connection_credential,
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_servers=mcp_servers,
@@ -2962,6 +3006,7 @@ async def _execute_read_resource(
     ) = context.legacy_auth()
 
     read_resource_result: Final = await mcp_read_resource(
+        connection_credential=context.connection_credential,
         url=params.uri,
         user_api_key_auth=user_api_key_auth,
         mcp_auth_header=mcp_auth_header,
@@ -2991,8 +3036,10 @@ def prepare_context(
     raw_headers: Mapping[str, str] | None = None,
     client_ip: str | None = None,
     mcp_proxy_mode: bool = False,
+    connection_credential: ConnectionCredential | None = None,
 ) -> OperationContext:
     return OperationContext(
+        connection_credential=connection_credential,
         _caller=user_api_key_auth,
         mcp_auth_header=mcp_auth_header,
         mcp_servers=tuple(mcp_servers) if mcp_servers is not None else None,
@@ -3060,6 +3107,7 @@ class GatewayOperations:
             case AuthorizedToolCall():
                 auth, token, _servers, server_headers, oauth_headers, headers, _client_ip = context.legacy_auth()
                 return await _execute_mcp_tool(
+                    connection_credential=context.connection_credential,
                     name=operation.name,
                     arguments=dict(operation.arguments),  # mutable-ok: existing tool hooks own mutable argument data
                     allowed_mcp_servers=list(

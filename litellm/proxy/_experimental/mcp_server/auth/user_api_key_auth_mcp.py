@@ -13,6 +13,12 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
+    CONNECTION_SCOPE_KEY,
+    connection_challenge,
+    is_connection_credential,
+    open_connection_credential,
+)
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
     get_passthrough_www_authenticate,
@@ -28,6 +34,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credenti
     resolve_bridge_envelope,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+    ConnectionBinding,
+    ConnectionCredential,
     EnvelopeIdentity,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
@@ -42,6 +50,7 @@ from litellm.proxy._types import (
     SpecialMCPServerName,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
+    hash_token,
     user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -453,7 +462,8 @@ class MCPRequestHandler:
 
         request_route: Final = get_request_route(request)
         # Only OAuth metadata routes registered under /.well-known/ are public.
-        if request_route.startswith("/.well-known/"):
+        is_public_metadata: Final = request_route.startswith("/.well-known/")
+        if is_public_metadata:
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif has_explicit_litellm_key:
             # An explicit x-litellm-api-key is always a LiteLLM credential, even
@@ -541,6 +551,19 @@ class MCPRequestHandler:
                     bearer_presented=False,
                 )
 
+        scope.pop(CONNECTION_SCOPE_KEY, None)
+        connection_header: Final = headers.get("authorization")
+        if is_connection_credential(connection_header) and not is_public_metadata:
+            scope[CONNECTION_SCOPE_KEY] = await MCPRequestHandler._admit_connection_credential(
+                request=request,
+                request_route=request_route,
+                connection_header=connection_header or "",
+                litellm_api_key=litellm_api_key,
+                mcp_servers=mcp_servers,
+                validated_user_api_key_auth=validated_user_api_key_auth,
+                has_explicit_litellm_key=has_explicit_litellm_key,
+            )
+
         # Leak-defense (single chokepoint): a gateway admission credential (session bearer or bridge
         # envelope) is NEVER a valid upstream token. Scrub it from EVERY egress context so no
         # client-forwarded, OBO, or passthrough path can send it upstream for replay. Anchored to the
@@ -569,11 +592,67 @@ class MCPRequestHandler:
         )
 
     @staticmethod
+    async def _admit_connection_credential(
+        request: Request,
+        request_route: str,
+        connection_header: str,
+        litellm_api_key: str,
+        mcp_servers: list[str] | None,
+        validated_user_api_key_auth: UserAPIKeyAuth,
+        has_explicit_litellm_key: bool,
+    ) -> ConnectionCredential:
+        if not has_explicit_litellm_key or request_route != "/mcp":
+            raise HTTPException(status_code=401, detail="A connection credential requires the original MCP key")
+        targets: Final = MCPRequestHandler._resolve_target_server_names(request_route, mcp_servers)
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+        target: Final = (
+            global_mcp_server_manager.get_mcp_server_by_name(
+                targets[0], client_ip=IPAddressUtils.get_mcp_client_ip(request)
+            )
+            if len(targets) == 1
+            else None
+        )
+        allowed: Final = await MCPRequestHandler.get_allowed_mcp_servers(validated_user_api_key_auth)
+        if (
+            target is None
+            or target.server_id not in allowed
+            or not target.is_gateway_managed_oauth2
+            or not target.needs_user_oauth_token
+            or target.oauth_identity_binding is not None
+        ):
+            raise HTTPException(status_code=403, detail="Connection credential does not authorize this MCP server")
+        expected_binding: Final = ConnectionBinding(
+            key_hash=hash_token(_get_bearer_token_or_received_api_key(litellm_api_key)),
+            server_id=target.server_id,
+            resource=f"{get_request_base_url(request)}/mcp",
+        )
+        connection: Final = open_connection_credential(connection_header)
+        if connection is None or connection.binding != expected_binding:
+            raise HTTPException(
+                status_code=401,
+                detail=(
+                    "Invalid or expired MCP connection credential"
+                    if connection is None
+                    else "Connection credential belongs to a different key or resource"
+                ),
+                headers=MappingProxyType(
+                    {
+                        "www-authenticate": connection_challenge(request, expected_binding),
+                        "Cache-Control": "no-store",
+                    }
+                ),
+            )
+        return connection
+
+    @staticmethod
     def _is_gateway_admission_credential(value: str | None) -> bool:
         """True when a header value is a gateway admission credential — a session bearer or bridge
         envelope. It proves who signed in to the GATEWAY, never a valid UPSTREAM token, so it must never
         be forwarded (a hostile upstream could capture and replay it against the aggregate ``/mcp`` scope)."""
-        return value is not None and (is_session_bearer_shaped(value) or is_bridge_envelope_shaped(value))
+        return value is not None and (
+            is_session_bearer_shaped(value) or is_bridge_envelope_shaped(value) or is_connection_credential(value)
+        )
 
     @staticmethod
     def _scrub_gateway_admission_credentials(
@@ -1140,7 +1219,13 @@ class MCPRequestHandler:
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
 
     @staticmethod
-    async def _enforce_admitted_live_policy(admitted: UserAPIKeyAuth, request: Request, route: str) -> None:
+    async def _enforce_admitted_live_policy(
+        admitted: UserAPIKeyAuth,
+        request: Request,
+        route: str,
+        *,
+        request_data: dict[str, object] | None = None,
+    ) -> None:
         """Run the standard pipeline's authorization checks over the admitted identity.
 
         Mirrors the ``user_api_key_auth`` wrapper between the builder and its return: clear the
@@ -1170,7 +1255,7 @@ class MCPRequestHandler:
             await _run_centralized_common_checks(
                 user_api_key_auth_obj=admitted,
                 request=request,
-                request_data=await _read_request_body(request=request),
+                request_data=await _read_request_body(request=request) if request_data is None else request_data,
                 route=route,
             )
         except (HTTPException, ProxyException):

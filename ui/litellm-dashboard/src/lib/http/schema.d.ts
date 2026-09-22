@@ -155,6 +155,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/.well-known/oauth-authorization-server/mcp-connect/{bootstrap}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Connection Authorization Metadata */
+        get: operations["connection_authorization_metadata__well_known_oauth_authorization_server_mcp_connect__bootstrap__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/.well-known/oauth-authorization-server/mcp/{mcp_server_name}": {
         parameters: {
             query?: never;
@@ -1194,6 +1211,23 @@ export interface paths {
          *     ``decision`` (approve or deny) and the ``team_id`` the credential is attributed to.
          */
         post: operations["authorize_complete_authorize_complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/authorize/connection/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete Connection */
+        post: operations["complete_connection_authorize_connection_complete_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -24843,6 +24877,13 @@ export interface components {
             /** Team Id */
             team_id?: string | null;
         };
+        /** Body_complete_connection_authorize_connection_complete_post */
+        Body_complete_connection_authorize_connection_complete_post: {
+            /** Decision */
+            decision: string;
+            /** Flow */
+            flow: string;
+        };
         /** Body_convert_prompt_file_to_json_utils_dotprompt_json_converter_post */
         Body_convert_prompt_file_to_json_utils_dotprompt_json_converter_post: {
             /** File */
@@ -42362,6 +42403,37 @@ export interface operations {
             };
         };
     };
+    connection_authorization_metadata__well_known_oauth_authorization_server_mcp_connect__bootstrap__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bootstrap: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     oauth_authorization_server_mcp_standard__well_known_oauth_authorization_server_mcp__mcp_server_name__get: {
         parameters: {
             query?: never;
@@ -42479,7 +42551,9 @@ export interface operations {
     };
     oauth_protected_resource_aggregate__well_known_oauth_protected_resource_mcp_get: {
         parameters: {
-            query?: never;
+            query?: {
+                connection?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -42493,6 +42567,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -43793,6 +43876,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/x-www-form-urlencoded": components["schemas"]["Body_authorize_complete_authorize_complete_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    complete_connection_authorize_connection_complete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["Body_complete_connection_authorize_connection_complete_post"];
             };
         };
         responses: {
@@ -58770,6 +58886,7 @@ export interface operations {
         parameters: {
             query?: {
                 mcp_server_name?: string | null;
+                connection?: string | null;
             };
             header?: never;
             path?: never;
@@ -72325,7 +72442,9 @@ export interface operations {
     };
     register_client__mcp_server_name__register_post: {
         parameters: {
-            query?: never;
+            query?: {
+                connection?: string | null;
+            };
             header?: never;
             path: {
                 mcp_server_name: string | null;

@@ -1,7 +1,10 @@
 
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
-from litellm.proxy.common_utils.html_forms.native_client_consent import render_native_client_consent_page
+from litellm.proxy.common_utils.html_forms.native_client_consent import (
+    render_mcp_connection_consent_page,
+    render_native_client_consent_page,
+)
 
 
 def _render(teams=(), **overrides) -> str:
@@ -65,3 +68,48 @@ def test_consent_page_promises_only_what_logout_can_deliver():
     assert f"expires within {CLI_JWT_EXPIRATION_HOURS} hours" in page
     assert "<code>lite logout</code> stops it from being renewed" in page
     assert "revoked" not in page
+
+
+def test_connection_consent_escapes_client_server_permissions_and_form_values():
+    page = render_mcp_connection_consent_page(
+        client_name='<img src=x onerror="alert(1)">',
+        server_name="Documents <script>alert(1)</script>",
+        scopes=("files:read", "</code><script>alert(1)</script>"),
+        redirect_uri="http://localhost:33418/callback?x=<svg>",
+        flow_handle='flow" onmouseover="alert(1)',
+        complete_url="https://gateway.example/authorize/connection/complete?x=<y>",
+        style_nonce='nonce" onload="alert(1)',
+    )
+    assert "<script>" not in page
+    assert "<img " not in page
+    assert "<svg>" not in page
+    assert 'onmouseover="alert' not in page
+    assert 'onload="alert' not in page
+    assert "Documents &lt;script&gt;alert(1)&lt;/script&gt;" in page
+    assert "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;" in page
+    assert "<li><code>files:read</code></li>" in page
+    assert "&lt;/code&gt;&lt;script&gt;alert(1)&lt;/script&gt;" in page
+    assert "http://localhost:33418/callback?x=&lt;svg&gt;" in page
+    assert 'value="flow&quot; onmouseover=&quot;alert(1)"' in page
+    assert 'action="https://gateway.example/authorize/connection/complete?x=&lt;y&gt;"' in page
+    assert 'nonce="nonce&quot; onload=&quot;alert(1)"' in page
+
+
+def test_connection_consent_without_explicit_scopes_discloses_server_defaults():
+    page = render_mcp_connection_consent_page(
+        client_name="Desktop client",
+        server_name="Calendar",
+        scopes=(),
+        redirect_uri="http://localhost:33418/callback",
+        flow_handle="flow-123",
+        complete_url="https://gateway.example/authorize/connection/complete",
+        style_nonce="style-123",
+    )
+    assert "Default permissions configured by the server" in page
+    assert "Desktop client" in page and "Calendar" in page
+    assert 'name="flow" value="flow-123"' in page
+    assert 'value="deny" class="deny">Cancel</button>' in page
+    assert 'value="approve" class="approve">Continue</button>' in page
+    assert 'type="password"' not in page
+    assert 'name="user_id"' not in page
+    assert 'name="team_id"' not in page

@@ -953,7 +953,9 @@ async def test_get_tools_from_mcp_servers():
                 client_ip=None,
                 user_api_key_auth=None,
                 oauth2_headers=None,
+                connection_credential=None,
             ):
+                assert connection_credential is None
                 if server.server_id == "server1_id":
                     return [mock_tool_1]
                 return [mock_tool_2]
