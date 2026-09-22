@@ -6,6 +6,8 @@ import pathlib
 import ssl
 import threading
 import weakref
+from collections.abc import Callable, Mapping
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import certifi
@@ -23,6 +25,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_ssl_configuration,
 )
+from litellm.types.llms.custom_http import VerifyTypes
 
 
 @pytest.mark.asyncio
@@ -1394,6 +1397,47 @@ async def test_finalizer_on_live_loop_disposes_foreign_loop_session_without_sche
 
     assert AsyncHTTPHandler._finalizer_close_tasks == baseline_tasks
     assert session.closed
+
+
+class _RetryClientHandler(AsyncHTTPHandler):
+    def __init__(self, first: httpx.AsyncClient, retry: httpx.AsyncClient) -> None:
+        self._retry_client: Final = retry
+        super().__init__()
+        self.client = first
+
+    def create_client(
+        self,
+        timeout: float | httpx.Timeout | None = None,
+        event_hooks: Mapping[str, list[Callable[..., object]]] | None = None,
+        ssl_verify: VerifyTypes | None = None,
+        shared_session: ClientSession | None = None,
+    ) -> httpx.AsyncClient:
+        return self._retry_client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+async def test_connection_error_retry_forwards_content(method: str):
+    captured: list[bytes] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_connection_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("connection dropped", request=request)
+
+    async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
+        captured.append(request.content)
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        body = b'{"post": ["run1"]}'
+        await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
+
+        assert captured == [body], "the retried request must carry the same content= body"
+        await handler.close()
+
 
 
 @pytest.fixture
