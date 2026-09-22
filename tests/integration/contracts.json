@@ -190,6 +190,18 @@
     "tests/integration/providers/test_fal_ai_chat_wire.py::test_fal_moondream3_chat_sends_prompt_image_and_reasoning": [
       "other.provider_wire.fal_ai.moondream3_chat_query_wire_and_token_pricing"
     ],
+    "tests/integration/providers/test_xiaomi_mimo_wire.py::test_xiaomi_mimo_nonstream_surfaces_reasoning_and_charges_registry_price[mimo-v2.6-pro]": [
+      "other.provider_wire.xiaomi_mimo.reasoning_content_and_registry_pricing"
+    ],
+    "tests/integration/providers/test_xiaomi_mimo_wire.py::test_xiaomi_mimo_nonstream_surfaces_reasoning_and_charges_registry_price[mimo-v2.6-flash]": [
+      "other.provider_wire.xiaomi_mimo.reasoning_content_and_registry_pricing"
+    ],
+    "tests/integration/providers/test_xiaomi_mimo_wire.py::test_xiaomi_mimo_stream_delivers_reasoning_then_answer_deltas": [
+      "other.provider_wire.xiaomi_mimo.reasoning_and_answer_stream_as_deltas"
+    ],
+    "tests/integration/providers/test_xiaomi_mimo_wire.py::test_xiaomi_mimo_tool_call_is_forwarded_and_returned": [
+      "other.provider_wire.xiaomi_mimo.tool_call_survives_translation"
+    ],
     "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_h3_video_create_uses_canonical_body_and_status_path": [
       "other.provider_wire.fal_ai.video_queue_create_status_and_content_download"
     ],
