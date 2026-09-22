@@ -316,6 +316,7 @@ class TestOtelTraceCompleteness:
         _assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")
 
     @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["chat_completions"])
+    @pytest.mark.otel_tls
     def test_otel_export_over_tls_with_internal_ca_reaches_destination(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
