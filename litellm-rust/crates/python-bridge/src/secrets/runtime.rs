@@ -88,10 +88,13 @@ impl NativeSecretManager {
             native.borrow(py).backend()?;
             return Ok(Some(native));
         }
-        let Some(config) = optional_attribute(client, "_litellm_native_secret_config")? else {
-            reject_unregistered_builtin(client)?;
+        let config = py
+            .import("litellm.rust_bridge.secret_manager")?
+            .getattr("native_secret_manager_config")?
+            .call1((client,))?;
+        if config.is_none() {
             return Ok(None);
-        };
+        }
         if !config.getattr("owner_type")?.is(client.get_type()) {
             return Ok(None);
         }
@@ -261,46 +264,4 @@ fn parse_settings(value: Option<&str>) -> PyResult<KeyManagementSettings> {
         })
         .transpose()
         .map(Option::unwrap_or_default)
-}
-
-fn reject_unregistered_builtin(client: &Bound<'_, PyAny>) -> PyResult<()> {
-    let class = client.get_type();
-    let module = class.getattr("__module__")?.extract::<String>()?;
-    let name = class.getattr("__name__")?.extract::<String>()?;
-    let known = matches!(
-        (module.as_str(), name.as_str()),
-        (
-            "litellm.secret_managers.aws_secret_manager_v2",
-            "AWSSecretsManagerV2"
-        ) | (
-            "litellm.secret_managers.hashicorp_secret_manager",
-            "HashicorpSecretManager"
-        ) | (
-            "litellm.secret_managers.google_secret_manager",
-            "GoogleSecretManager"
-        ) | (
-            "litellm.secret_managers.cyberark_secret_manager",
-            "CyberArkSecretManager"
-        ) | ("azure.keyvault.secrets._client", "SecretClient")
-            | (
-                "google.cloud.kms_v1.services.key_management_service.client",
-                "KeyManagementServiceClient"
-            )
-    );
-    let canonical = if known {
-        let modules = client.py().import("sys")?.getattr("modules")?;
-        modules
-            .get_item(module.as_str())
-            .ok()
-            .and_then(|module| module.getattr(name.as_str()).ok())
-            .is_some_and(|expected| expected.is(&class))
-    } else {
-        module == "botocore.client" && name == "KMS"
-    };
-    if canonical {
-        return Err(crate::errors::RustBridgeDeclined::new_err(
-            "built-in secret manager needs native configuration; use its LiteLLM loader or an explicit native handle",
-        ));
-    }
-    Ok(())
 }

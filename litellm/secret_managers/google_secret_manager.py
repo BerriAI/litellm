@@ -1,6 +1,5 @@
 import base64
 import os
-from types import MappingProxyType
 from typing import Final
 
 import litellm
@@ -50,23 +49,6 @@ class GoogleSecretManager(GCSBucketBase):
         else:
             # by default this should be False, we want to use in memory caching for this. It's a bad idea to fetch from secret manager for all requests
             self.always_read_secret_manager = always_read_secret_manager or False
-
-        from litellm.rust_bridge.secret_manager import register_native_secret_manager
-
-        register_native_secret_manager(
-            self,
-            KeyManagementSystem.GOOGLE_SECRET_MANAGER,
-            GoogleSecretManager,
-            methods=("get_secret_from_google_secret_manager",),
-            environment_attributes=MappingProxyType(
-                {
-                    "GOOGLE_SECRET_MANAGER_PROJECT_ID": "PROJECT_ID",
-                    "GOOGLE_SECRET_MANAGER_REFRESH_INTERVAL": "cache.default_ttl",
-                    "GOOGLE_SECRET_MANAGER_ALWAYS_READ_SECRET_MANAGER": "always_read_secret_manager",
-                }
-            ),
-            enterprise_enabled=True,
-        )
 
     def get_secret_from_google_secret_manager(self, secret_name: str) -> str | None:
         """

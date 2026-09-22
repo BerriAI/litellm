@@ -12,7 +12,7 @@ Inject `Arc<dyn SecretSource>` from `litellm_secrets::source` into route prepara
 
 For synchronous provider transformations, call `source.resolve(names).await` during preparation and inject the returned `Secrets` snapshot. A snapshot contains only those names and never reads the process environment implicitly. Resolve runtime names through the source before invoking a synchronous transformation. OCR uses this pattern; other routes can adopt it as they are implemented
 
-The Python bridge uses this shared source and resolver. Built-in loaders register their effective configuration, and the bridge retains a native backend per configured client. Python reads and Rust routes share that backend. Custom Python implementations remain external callbacks. Rollout policy controls whether the native binding is selected
+The Python bridge uses this shared source and resolver. The shared proxy initializer captures effective configuration, and directly constructed LiteLLM managers are adapted at the dispatch boundary, and the bridge retains a native backend per configured client. Python reads and Rust routes share that backend. Custom Python implementations remain external callbacks. Rollout policy controls whether the native binding is selected
 
 ## Backend contracts
 

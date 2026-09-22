@@ -69,37 +69,6 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         self.replica_regions: list[str] = replica_regions or []
         self.kms_key_id = kms_key_id
 
-        from litellm.rust_bridge.secret_manager import register_native_secret_manager
-
-        register_native_secret_manager(
-            self,
-            KeyManagementSystem.AWS_SECRET_MANAGER,
-            AWSSecretsManagerV2,
-            methods=("sync_read_secret", "async_read_secret"),
-            settings_attributes=(
-                "aws_region_name",
-                "aws_role_name",
-                "aws_session_name",
-                "aws_external_id",
-                "aws_profile_name",
-                "aws_web_identity_token",
-                "aws_sts_endpoint",
-                "replica_regions",
-                "kms_key_id",
-            ),
-            settings=KeyManagementSettings(
-                aws_region_name=aws_region_name,
-                aws_role_name=aws_role_name,
-                aws_session_name=aws_session_name,
-                aws_external_id=aws_external_id,
-                aws_profile_name=aws_profile_name,
-                aws_web_identity_token=aws_web_identity_token,
-                aws_sts_endpoint=aws_sts_endpoint,
-                replica_regions=replica_regions,
-                kms_key_id=kms_key_id,
-            ),
-        )
-
     @classmethod
     def validate_environment(cls):
         # AWS_REGION_NAME is only strictly required if not using a profile or role

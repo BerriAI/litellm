@@ -37,10 +37,6 @@ def load_aws_kms(use_aws_kms: bool | None):
         litellm.secret_manager_client = kms_client
         litellm._key_management_system = KeyManagementSystem.AWS_KMS
 
-        from litellm.rust_bridge.secret_manager import register_native_secret_manager
-
-        register_native_secret_manager(kms_client, KeyManagementSystem.AWS_KMS, type(kms_client), methods=("decrypt",))
-
     except Exception as e:
         raise e
 
