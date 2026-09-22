@@ -58,6 +58,23 @@ describe("DrawerHeader sidebar toggle", () => {
     expect(within(row).getByText("gpt-4o")).toBeInTheDocument();
   });
 
+  it("shows the x-litellm-call-id with its own copy button when it differs from the request id", () => {
+    renderHeader(logEntry({ request_id: "chatcmpl-h", litellm_call_id: "call-h" }), false);
+
+    expect(screen.getByText("chatcmpl-h")).toBeInTheDocument();
+    expect(screen.getByText("call-h")).toBeInTheDocument();
+    expect(screen.getByText("call id")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy Request ID" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy Call ID" })).toBeInTheDocument();
+  });
+
+  it("omits the call id caption and button when the ids match", () => {
+    renderHeader(logEntry({ request_id: "same-h", litellm_call_id: "same-h" }), false);
+
+    expect(screen.queryByText("call id")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy Call ID" })).not.toBeInTheDocument();
+  });
+
   it("falls back to the request id row when the log names no model", () => {
     renderHeader(logEntry({ model: "", custom_llm_provider: "" }), true);
 
