@@ -52,13 +52,10 @@ export async function sendChatCompletion(request: APIRequestContext, opts: ChatO
 }
 
 export interface ServedChat {
-  /** The completion id, which the Logs table calls Request ID. */
   requestId: string;
-  /** The proxy's own correlation id, returned as x-litellm-call-id and used for OTEL traces. */
   callId: string;
 }
 
-/** POST /v1/chat/completions and return both the completion id and the proxy's x-litellm-call-id. */
 export async function sendChatCompletionWithCallId(request: APIRequestContext, opts: ChatOptions): Promise<ServedChat> {
   const res = await postChatCompletion(request, opts);
   expect(res.ok(), `chat completion for ${opts.model} failed (${res.status()}): ${await res.text()}`).toBe(true);

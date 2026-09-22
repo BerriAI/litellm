@@ -111,8 +111,6 @@ test.describe("Logs page", () => {
     await expect(search).toBeVisible({ timeout: 20_000 });
     await search.fill(callId);
 
-    // Searching by the header value finds the row; the row itself must show that same id so it can be
-    // correlated with the OTEL trace by eye.
     const row = requestLogsRows(page).filter({ hasText: requestId });
     await expect(row, `no logs row for call id ${callId}`).toHaveCount(1, { timeout: 30_000 });
     await expect(row, `Logs row for ${requestId} does not display its x-litellm-call-id ${callId}`).toContainText(callId);
