@@ -109,8 +109,6 @@ def test_get_cost_for_built_in_tools_file_search():
     assert cost == 0.00
 
 
-
-
 def test_get_cost_for_anthropic_web_search_with_server_tool_use_dict():
     """
     Anthropic-compatible passthrough responses can construct Usage from a raw
@@ -125,10 +123,6 @@ def test_get_cost_for_anthropic_web_search_with_server_tool_use_dict():
     assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
         response_object=None, usage=usage
     )
-
-
-
-
 
 
 def test_anthropic_web_search_zero_requests_from_raw_response_charges_zero():
@@ -189,11 +183,6 @@ def test_anthropic_response_usage_block_preserves_server_tool_use():
     dumped_usage = AnthropicResponse.model_validate(raw_response).model_dump()["usage"]
 
     assert dumped_usage["server_tool_use"] == {"web_search_requests": 2}
-
-
-@pytest.mark.parametrize(
-    "model", []
-)
 
 
 def test_completion_cost_includes_web_search_without_standard_built_in_tools_params():
