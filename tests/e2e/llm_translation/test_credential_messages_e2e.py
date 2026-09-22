@@ -49,5 +49,6 @@ class TestCredentialBackedMessages:
             extra_body=NO_PROXY_CACHE,
         )
         assert message.role == "assistant", f"unexpected role: {message.role!r}"
+        assert message.usage.output_tokens > 0, f"/v1/messages billed no output tokens: {message.usage!r}"
         text = "".join(block.text for block in message.content if block.type == "text")
         assert text.strip(), f"/v1/messages returned no text: {message.content!r}"

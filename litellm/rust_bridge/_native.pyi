@@ -105,6 +105,7 @@ class _ResponseCacheRuntime:
         *,
         callback_kwargs: Mapping[str, object] | Sequence[object] | None = None,
     ) -> object: ...
+    def lookup_semantic(self, request: object) -> tuple[object, float | None]: ...
     def store(
         self,
         request: object,
@@ -124,6 +125,7 @@ class _ResponseCacheRuntime:
         *,
         callback_kwargs: Mapping[str, object] | None = None,
     ) -> Future[object]: ...
+    def async_lookup_semantic(self, request: object) -> Future[tuple[object, float | None]]: ...
     def async_store(
         self,
         request: object,

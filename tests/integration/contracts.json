@@ -190,6 +190,12 @@
     "tests/integration/providers/test_fal_ai_passthrough_wire.py::test_fal_queue_submit_charges_and_polls_pass_through_free": [
       "other.provider_wire.fal_ai.passthrough_queue_submit_charges_and_polls_do_not"
     ],
+    "tests/integration/providers/test_fal_ai_passthrough_wire.py::test_fal_queue_submit_prices_string_resolution_like_the_integer": [
+      "other.provider_wire.fal_ai.passthrough_queue_submit_prices_string_resolution_like_integer"
+    ],
+    "tests/integration/providers/test_fal_ai_passthrough_wire.py::test_fal_queue_submit_to_catalog_key_the_pricer_cannot_price_is_rejected_not_forwarded": [
+      "other.provider_wire.fal_ai.passthrough_queue_submit_rejects_unpriceable_catalog_key"
+    ],
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_edit_inlines_upload_as_data_url_and_charges_keyed_row": [
       "other.provider_wire.fal_ai.image_edit_json_data_urls_and_keyed_pricing"
     ],
@@ -198,6 +204,12 @@
     ],
     "tests/integration/providers/test_fal_ai_chat_wire.py::test_fal_moondream3_chat_sends_prompt_image_and_reasoning": [
       "other.provider_wire.fal_ai.moondream3_chat_query_wire_and_token_pricing"
+    ],
+    "tests/integration/providers/test_fal_ai_chat_wire.py::test_fal_moondream3_chat_rejects_non_string_reasoning_effort_before_the_wire": [
+      "other.provider_wire.fal_ai.chat_non_string_reasoning_effort_rejected_before_wire"
+    ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_flux_dev_generation_without_deployment_api_base_uses_global_api_base": [
+      "other.provider_wire.fal_ai.global_api_base_routes_image_generation"
     ],
     "tests/integration/providers/test_xiaomi_mimo_wire.py::test_xiaomi_mimo_nonstream_surfaces_reasoning_and_charges_registry_price[mimo-v2.6-pro]": [
       "other.provider_wire.xiaomi_mimo.reasoning_content_and_registry_pricing"
@@ -213,6 +225,15 @@
     ],
     "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_h3_video_create_uses_canonical_body_and_status_path": [
       "other.provider_wire.fal_ai.video_queue_create_status_and_content_download"
+    ],
+    "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_result_probe_carries_the_deployment_extra_headers": [
+      "other.provider_wire.fal_ai.video_result_probe_forwards_extra_headers"
+    ],
+    "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_result_probe_reuses_the_ssl_verify_false_client": [
+      "other.provider_wire.fal_ai.video_result_probe_honors_ssl_verify"
+    ],
+    "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_provider_hanging_up_on_the_result_probe_keeps_the_completed_status": [
+      "other.provider_wire.fal_ai.video_result_probe_hangup_stays_completed"
     ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_saved_headers_reach_real_mcp_tool_and_survive_unrelated_edit": [
       "mcp.call_tool.saved_headers.reach_actual_transport"
