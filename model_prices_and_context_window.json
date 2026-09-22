@@ -65151,48 +65151,6 @@
         "output_cost_per_token": 2e-06,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
-||||||| 25ebb9458c
-    "together_ai/deepseek-ai/deepseek-coder-33b-instruct": {
-        "deprecation_date": "2024-08-22",
-        "input_cost_per_token": 8e-07,
-        "litellm_provider": "together_ai",
-        "mode": "chat",
-        "output_cost_per_token": 8e-07,
-        "source": "https://api.together.ai/v1/models"
-    },
-    "together_ai/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": {
-        "deprecation_date": "2025-12-23",
-        "input_cost_per_token": 2e-06,
-        "litellm_provider": "together_ai",
-        "mode": "chat",
-        "output_cost_per_token": 2e-06,
-        "source": "https://api.together.ai/v1/models"
-    },
-    "together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": {
-        "deprecation_date": "2025-08-28",
-        "input_cost_per_token": 1.8e-07,
-        "litellm_provider": "together_ai",
-        "mode": "chat",
-        "output_cost_per_token": 1.8e-07,
-        "source": "https://api.together.ai/v1/models"
-    },
-    "together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": {
-        "deprecation_date": "2025-11-13",
-        "input_cost_per_token": 1.6e-06,
-        "litellm_provider": "together_ai",
-        "mode": "chat",
-        "output_cost_per_token": 1.6e-06,
-        "source": "https://api.together.ai/v1/models"
-    },
-    "vertex_ai/gemini-2.5-flash-native-audio": {
-        "input_cost_per_audio_token": 3e-06,
-        "input_cost_per_token": 5e-07,
-        "litellm_provider": "vertex_ai",
-        "mode": "realtime",
-        "output_cost_per_audio_token": 1.2e-05,
-        "output_cost_per_token": 2e-06,
-        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
-    },
     "vertex_ai/gemini-2.5-flash-preview-tts": {
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
