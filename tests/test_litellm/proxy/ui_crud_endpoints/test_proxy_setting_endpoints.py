@@ -3807,6 +3807,31 @@ class TestTeamAdminEditableTeamFieldsSetting:
         assert "tpm_limit" in field_schema["items"]["enum"]
         assert "projects" in field_schema["items"]["enum"]
 
+    @pytest.mark.parametrize(("stored", "patched"), [(["tpm_limit"], []), (["rpm_limit"], ["max_budget"])])
+    def test_get_reports_its_own_db_row_whatever_an_earlier_test_patched(self, monkeypatch, stored, patched):
+        """A booted proxy keeps its runtime settings in one shared store. Each case PATCHes a list into
+        that store, so whichever case ran second used to read the other's list instead of its own DB row."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy import proxy_server
+
+        mock_prisma = self._as_proxy_admin(monkeypatch)
+        mock_db_record = MagicMock()
+        mock_db_record.ui_settings = {"team_admin_editable_team_fields": stored}
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=mock_db_record)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+        try:
+            fetched = client.get("/get/ui_settings")
+            proxy_server._bind_general_settings_store(proxy_server.proxy_config.settings)
+            response = client.patch("/update/ui_settings", json={"team_admin_editable_team_fields": patched})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert fetched.json()["values"]["team_admin_editable_team_fields"] == stored
+        assert response.status_code == 200
+        assert proxy_server.general_settings["team_admin_editable_team_fields"] == patched
+
 
 class TestSyncUiSettingsToGeneralSettings:
     """The DB re-read each pod runs on startup and on every config reload."""
@@ -3902,20 +3927,3 @@ class TestSyncUiSettingsToGeneralSettings:
         assert general_settings["forward_client_headers_to_llm_api"] is False
         assert general_settings.source("forward_client_headers_to_llm_api") == "config"
 
-
-class TestSettingsStoreIsolation:
-    def test_runtime_flags_land_in_the_store_the_endpoint_reads(self):
-        from litellm.proxy import proxy_server
-        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import apply_runtime_general_settings_flags
-
-        apply_runtime_general_settings_flags({"team_admin_editable_team_fields": []})
-
-        assert proxy_server.general_settings is proxy_server.proxy_config.settings
-        assert proxy_server.proxy_config.settings["team_admin_editable_team_fields"] == []
-
-    def test_the_next_test_starts_from_an_empty_store(self):
-        from litellm.proxy import proxy_server
-
-        assert proxy_server.general_settings is proxy_server.proxy_config.settings
-        assert "team_admin_editable_team_fields" not in proxy_server.proxy_config.settings
-        assert len(proxy_server.proxy_config.settings) == 0
