@@ -3069,6 +3069,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-logger"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
@@ -3093,9 +3103,11 @@ dependencies = [
  "litellm-callbacks-legacy-python",
  "litellm-core",
  "litellm-core-utils",
+ "litellm-host",
  "litellm-host-python",
  "litellm-http",
  "litellm-llms",
+ "litellm-logger",
  "litellm-secrets",
  "litellm-secrets-aws",
  "litellm-secrets-types",
@@ -3171,12 +3183,12 @@ dependencies = [
  "base64 0.22.1",
  "litellm-auth-aws",
  "litellm-core-utils",
+ "litellm-logger",
  "litellm-secrets-types",
  "rstest",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
- "tracing",
  "veil",
  "wiremock",
 ]
@@ -3207,6 +3219,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "litellm-core-utils",
+ "litellm-logger",
  "litellm-secrets-types",
  "moka",
  "percent-encoding",
@@ -3216,7 +3229,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
- "tracing",
  "veil",
  "wiremock",
 ]

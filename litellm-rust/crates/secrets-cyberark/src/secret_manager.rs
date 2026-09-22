@@ -92,7 +92,7 @@ impl CyberArkSecretManager {
             .unwrap_or(true);
         let mut builder = reqwest::Client::builder();
         if !verify {
-            tracing::warn!(
+            litellm_logger::warn!(
                 "CyberArk SSL verification is disabled. This is insecure and should only be used for testing with self-signed certificates."
             );
             builder = builder.danger_accept_invalid_certs(true);
@@ -259,11 +259,11 @@ impl CyberArkSecretManager {
             .endpoint
             .join(&format!("policies/{}/policy/root", self.account));
         let Ok(policy_url) = policy_url else {
-            tracing::warn!("Could not build CyberArk policy endpoint");
+            litellm_logger::warn!("Could not build CyberArk policy endpoint");
             return;
         };
         let Ok(authorization) = self.authorization_header(context).await else {
-            tracing::warn!("Could not authenticate while ensuring CyberArk variable exists");
+            litellm_logger::warn!("Could not authenticate while ensuring CyberArk variable exists");
             return;
         };
         let body = format!(
@@ -288,19 +288,19 @@ impl CyberArkSecretManager {
                     reqwest::StatusCode::CONFLICT | reqwest::StatusCode::UNPROCESSABLE_ENTITY
                 ) =>
             {
-                tracing::debug!(
+                litellm_logger::debug!(
                     "CyberArk variable policy already exists or conflicts: {}",
                     response.status()
                 );
             }
             Ok(response) => {
-                tracing::warn!(
+                litellm_logger::warn!(
                     "Could not ensure CyberArk variable exists: {}",
                     response.status()
                 );
             }
             Err(error) => {
-                tracing::warn!("Error ensuring CyberArk variable exists: {error}");
+                litellm_logger::warn!("Error ensuring CyberArk variable exists: {error}");
             }
         }
     }
@@ -324,7 +324,7 @@ impl CyberArkSecretManager {
         _recovery_window_in_days: Option<u32>,
         _context: &SecretOperationContext,
     ) -> Result<DeleteOutcome, Error> {
-        tracing::warn!(
+        litellm_logger::warn!(
             "CyberArk Conjur does not support direct secret deletion. Secrets must be removed through policy updates."
         );
         self.secrets.invalidate(name).await;
