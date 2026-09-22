@@ -1,5 +1,7 @@
+import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from typing import Final, cast
 
 import pytest
 
@@ -3634,3 +3636,279 @@ def test_get_token_base_cost_resolves_missing_cache_write_rates_like_the_tiered_
 
     assert creation == pytest.approx(expected_creation)
     assert creation_1h == pytest.approx(expected_creation_1h)
+
+
+def _image_response(num_images: int = 1, usage: ImageUsage | None = None) -> ImageResponse:
+    return ImageResponse(
+        data=[ImageObject(url="https://example.com/img.png") for _ in range(num_images)],
+        usage=usage,
+    )
+
+
+_GPT_IMAGE_2_HIGH_1024: Final = {"quality": "high", "image_size": {"width": 1024, "height": 1024}}
+
+
+@pytest.mark.parametrize(
+    ("model", "optional_params", "model_info", "num_images", "expected_cost"),
+    [
+        ("fal-ai/unlisted-image-model", None, {"output_cost_per_image": 0.08}, 1, 0.08),
+        ("fal-ai/unlisted-image-model", None, {"output_cost_per_image": 0.08}, 2, 0.16),
+        ("fal-ai/unlisted-image-model", None, {"output_cost_per_image": "0.08"}, 1, 0.08),
+        ("openai/gpt-image-2", _GPT_IMAGE_2_HIGH_1024, {"output_cost_per_image": 0.5}, 1, 0.5),
+        ("openai/gpt-image-2", _GPT_IMAGE_2_HIGH_1024, {"mode": "image_generation"}, 1, 0.211),
+        ("openai/gpt-image-2", _GPT_IMAGE_2_HIGH_1024, {"output_cost_per_image": "0.08 USD"}, 1, 0.211),
+    ],
+)
+def test_route_image_generation_cost_honors_deployment_model_info(
+    _local_model_cost_map: None,
+    model: str,
+    optional_params: dict[str, object] | None,
+    model_info: ModelInfo,
+    num_images: int,
+    expected_cost: float,
+) -> None:
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        completion_response=_image_response(num_images),
+        custom_llm_provider="fal_ai",
+        optional_params=optional_params,
+        call_type="image_generation",
+        model_info=model_info,
+    )
+
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_route_image_generation_cost_openai_honors_deployment_input_cost_per_image(
+    _local_model_cost_map: None,
+) -> None:
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="dall-e-3",
+        completion_response=_image_response(),
+        custom_llm_provider="openai",
+        quality="standard",
+        size="1024-x-1024",
+        call_type="image_generation",
+        model_info={"input_cost_per_image": 0.07},
+    )
+
+    assert cost == pytest.approx(0.07)
+
+
+def test_route_image_generation_cost_gemini_adds_grounding_to_deployment_image_price(
+    _local_model_cost_map: None,
+) -> None:
+    usage = ImageUsage(
+        input_tokens=0,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=0),
+        output_tokens=0,
+        total_tokens=0,
+        web_search_requests=3,
+    )
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="gemini/gemini-3.1-flash-image-preview",
+        completion_response=_image_response(usage=usage),
+        custom_llm_provider="gemini",
+        call_type="image_generation",
+        model_info={"output_cost_per_image": 0.1},
+    )
+
+    assert cost == pytest.approx(0.1 + 3 * 0.014)
+
+
+def test_route_image_generation_cost_gemini_bills_tokens_when_no_image_returned(
+    _local_model_cost_map: None,
+) -> None:
+    usage = ImageUsage(
+        input_tokens=10,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=10),
+        output_tokens=1290,
+        total_tokens=1300,
+    )
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="gemini/gemini-3.1-flash-image-preview",
+        completion_response=ImageResponse(data=[], usage=usage),
+        custom_llm_provider="gemini",
+        call_type="image_generation",
+        model_info={"output_cost_per_image": 0.08},
+    )
+
+    assert cost == pytest.approx(10 * 5e-07 + 1290 * 6e-05)
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model"),
+    [
+        ("gemini", "gemini/unlisted-image-model"),
+        ("vertex_ai", "vertex_ai/unlisted-image-model"),
+        ("azure_ai", "unlisted-image-model"),
+        ("openai", "gpt-image-unlisted"),
+    ],
+)
+def test_route_image_generation_cost_bills_deployment_image_price_when_unlisted_model_reports_tokens(
+    _local_model_cost_map: None,
+    custom_llm_provider: str,
+    model: str,
+) -> None:
+    usage = ImageUsage(
+        input_tokens=10,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=10),
+        output_tokens=1290,
+        total_tokens=1300,
+    )
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        completion_response=_image_response(num_images=2, usage=usage),
+        custom_llm_provider=custom_llm_provider,
+        call_type="image_generation",
+        model_info={"output_cost_per_image": 0.05},
+    )
+
+    assert cost == pytest.approx(0.10)
+
+
+def _batch_rates_model_info(**rates: object) -> ModelInfo:
+    return cast(ModelInfo, dict(rates))
+
+
+def test_get_batch_cost_rates_parses_string_rates():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches="1e-06",
+            output_cost_per_token_batches="4e-06",
+            cache_read_input_token_cost_batches="1e-07",
+            input_cost_per_token_above_272k_tokens_batches="2e-06",
+            output_cost_per_token_above_272k_tokens_batches="6e-06",
+            cache_read_input_token_cost_above_272k_tokens_batches="2e-07",
+        ),
+        Usage(prompt_tokens=300_000, completion_tokens=1, total_tokens=300_001),
+        "openai",
+    )
+
+    assert (rates.input, rates.output, rates.cache_read) == (2e-6, 6e-6, 2e-7)
+
+
+def test_get_batch_cost_rates_falls_back_to_the_flat_rates_when_tier_rates_are_unparsable():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=1e-6,
+            output_cost_per_token_batches=4e-6,
+            cache_read_input_token_cost_batches=1e-7,
+            input_cost_per_token_above_272k_tokens_batches="two",
+            output_cost_per_token_above_272k_tokens_batches="six",
+            cache_read_input_token_cost_above_272k_tokens_batches="none",
+            cache_creation_input_token_cost_batches=1.25e-7,
+            cache_creation_input_token_cost_above_272k_tokens_batches="nope",
+        ),
+        Usage(prompt_tokens=300_000, completion_tokens=1, total_tokens=300_001),
+        "openai",
+    )
+
+    assert (rates.input, rates.output, rates.cache_read, rates.cache_creation) == (1e-6, 4e-6, 1e-7, 1.25e-7)
+
+
+def test_get_batch_cost_rates_has_no_cached_rate_without_a_cached_batch_key():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=1e-6,
+            output_cost_per_token_batches=4e-6,
+            cache_read_input_token_cost=2e-7,
+            input_cost_per_token_above_272k_tokens_batches=2e-6,
+        ),
+        Usage(prompt_tokens=300_000, completion_tokens=1, total_tokens=300_001),
+        "openai",
+    )
+
+    assert (rates.input, rates.output, rates.cache_read) == (2e-6, 4e-6, None)
+
+
+@pytest.mark.parametrize(("prompt_tokens", "expected"), [(1_000, 1.25e-7), (272_000, 1.25e-7), (300_000, 2.5e-7)])
+def test_get_batch_cost_rates_reads_the_batch_cache_write_rate_for_the_crossed_tier(prompt_tokens, expected):
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=1e-7,
+            input_cost_per_token_above_272k_tokens_batches=2e-7,
+            cache_creation_input_token_cost_batches=1.25e-7,
+            cache_creation_input_token_cost_above_272k_tokens_batches=2.5e-7,
+        ),
+        Usage(prompt_tokens=prompt_tokens, completion_tokens=1, total_tokens=prompt_tokens + 1),
+        "openai",
+    )
+
+    assert rates.cache_creation == expected
+
+
+@pytest.mark.parametrize(
+    ("tier_key", "attribute"),
+    [
+        ("output_cost_per_token_above_272k_tokens_batches", "output"),
+        ("cache_read_input_token_cost_above_272k_tokens_batches", "cache_read"),
+        ("cache_creation_input_token_cost_above_272k_tokens_batches", "cache_creation"),
+    ],
+)
+def test_get_batch_cost_rates_crosses_a_tier_declared_without_an_input_tier_key(tier_key, attribute):
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=1e-6,
+            output_cost_per_token_batches=4e-6,
+            cache_read_input_token_cost_batches=1e-7,
+            cache_creation_input_token_cost_batches=1.25e-7,
+            **{tier_key: 9e-6},
+        ),
+        Usage(prompt_tokens=300_000, completion_tokens=1, total_tokens=300_001),
+        "openai",
+    )
+
+    assert getattr(rates, attribute) == 9e-6
+    assert rates.input == 1e-6
+
+
+@pytest.mark.parametrize(
+    ("prompt_tokens", "expected_input", "expected_output"),
+    [(200_000, 1e-6, 4e-6), (250_000, 1e-6, 5e-6), (300_000, 2e-6, 5e-6)],
+)
+def test_get_batch_cost_rates_crosses_each_components_own_tier(prompt_tokens, expected_input, expected_output):
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=1e-6,
+            input_cost_per_token_above_272k_tokens_batches=2e-6,
+            output_cost_per_token_batches=4e-6,
+            output_cost_per_token_above_200k_tokens_batches=5e-6,
+        ),
+        Usage(prompt_tokens=prompt_tokens, completion_tokens=1, total_tokens=prompt_tokens + 1),
+        "openai",
+    )
+
+    assert (rates.input, rates.output) == (expected_input, expected_output)
+
+
+def test_get_batch_cost_rates_has_no_cache_write_rate_without_a_cache_write_batch_key():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=1e-7,
+            input_cost_per_token_above_272k_tokens_batches=2e-7,
+            cache_creation_input_token_cost=2.5e-7,
+            cache_creation_input_token_cost_above_272k_tokens=5e-7,
+        ),
+        Usage(prompt_tokens=300_000, completion_tokens=1, total_tokens=300_001),
+        "openai",
+    )
+
+    assert rates.cache_creation is None

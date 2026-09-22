@@ -21,6 +21,30 @@ from litellm.types.secret_managers.main import KeyManagementSystem
 _OBJECT_MAP: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _OBJECT_LIST: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+CREDENTIAL_KEY_PARTS: Final = frozenset(
+    {
+        "key",
+        "keys",
+        "secret",
+        "secrets",
+        "token",
+        "password",
+        "passwd",
+        "credential",
+        "credentials",
+        "url",
+        "uri",
+        "dsn",
+        "host",
+        "hosts",
+        "base",
+        "endpoint",
+        "cert",
+        "pem",
+        "salt",
+    }
+)
+ENUM_KEYS_WITH_CREDENTIAL_PARTS: Final = frozenset({"key_management_system"})
 
 
 def _object_map(value: object) -> Mapping[str, object]:
@@ -87,22 +111,26 @@ def _cache_params_keys() -> frozenset[str]:
     return frozenset(name for name in inspect.signature(Cache.__init__).parameters if name != "self")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped params, only names are read
 
 
-def _render_json(value: JsonValue) -> str | None:
+def _is_credential_key(key: str) -> bool:
+    return key not in ENUM_KEYS_WITH_CREDENTIAL_PARTS and not CREDENTIAL_KEY_PARTS.isdisjoint(key.lower().split("_"))
+
+
+def _render_json(key: str, value: JsonValue) -> str | None:
     match value:
         case bool():
             return str(value).lower()
         case str():
-            return value if value in _known_values() else None
+            return value if value in _known_values() and not _is_credential_key(key) else None
         case list():
-            known_items: Final = tuple(rendered for item in value if (rendered := _render_json(item)) is not None)
+            known_items: Final = tuple(rendered for item in value if (rendered := _render_json(key, item)) is not None)
             return f"[{', '.join(known_items)}]" if known_items else None
         case _:
             return None
 
 
-def _render(value: object) -> str | None:
+def _render(key: str, value: object) -> str | None:
     try:
-        return _render_json(_JSON.validate_python(value))
+        return _render_json(key, _JSON.validate_python(value))
     except ValidationError:
         return None
 
@@ -111,7 +139,7 @@ def _section_lines(section: str, values: Mapping[str, object], known_keys: froze
     return tuple(
         f"{section}.{key} = {rendered}"
         for key, value in values.items()
-        if key in known_keys and (rendered := _render(value)) is not None
+        if key in known_keys and (rendered := _render(key, value)) is not None
     )
 
 

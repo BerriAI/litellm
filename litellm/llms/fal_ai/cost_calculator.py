@@ -7,7 +7,8 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.types.utils import ImageObject, ImageResponse
+from litellm.litellm_core_utils.llm_cost_calc.utils import deployment_pricing, resolve_image_model_info
+from litellm.types.utils import ImageObject, ImageResponse, ModelInfo
 
 FAL_KEYED_PRICING_DEFAULT_QUALITY: Final[str] = "high"
 _DEFAULT_KEYED_DIMENSIONS: Final[tuple[int, int]] = (1024, 768)
@@ -149,6 +150,7 @@ def cost_calculator(
     model: str,
     image_response: object,
     optional_params: Mapping[str, object] | None = None,
+    model_info: ModelInfo | None = None,
 ) -> float:
     """
     fal.ai image generation cost calculator
@@ -156,8 +158,14 @@ def cost_calculator(
     if not isinstance(image_response, ImageResponse):
         raise ValueError(f"image_response must be of type ImageResponse got type={type(image_response)}")
     normalized_model: Final = model.removeprefix(f"{litellm.LlmProviders.FAL_AI.value}/")
-    params: Final[Mapping[str, object]] = optional_params or MappingProxyType({})
     images: Final = tuple(image_response.data or ())
+    deployment_prices: Final = deployment_pricing(model_info)
+    deployment_cost_per_image: Final = (
+        None if deployment_prices is None else deployment_prices.get("output_cost_per_image")
+    )
+    if deployment_cost_per_image is not None:
+        return deployment_cost_per_image * len(images)
+    params: Final[Mapping[str, object]] = optional_params or MappingProxyType({})
     keyed_costs: Final = tuple(
         _keyed_cost_per_image(
             model=normalized_model,
@@ -168,15 +176,16 @@ def cost_calculator(
     )
     if not any(cost is None for cost in keyed_costs):
         return sum(cost for cost in keyed_costs if cost is not None)
-    model_info: Final = litellm.get_model_info(
+    resolved_model_info: Final = resolve_image_model_info(
         model=normalized_model,
         custom_llm_provider=litellm.LlmProviders.FAL_AI.value,
+        model_info=deployment_prices,
     )
-    raw_output_cost_per_image: Final = model_info.get("output_cost_per_image")
+    raw_output_cost_per_image: Final = resolved_model_info.get("output_cost_per_image")
     output_cost_per_image: Final = (
         float(raw_output_cost_per_image) if isinstance(raw_output_cost_per_image, (int, float)) else 0.0
     )
-    raw_output_cost_per_pixel: Final = model_info.get("output_cost_per_pixel")
+    raw_output_cost_per_pixel: Final = resolved_model_info.get("output_cost_per_pixel")
     output_cost_per_pixel: Final = (
         float(raw_output_cost_per_pixel) if isinstance(raw_output_cost_per_pixel, (int, float)) else None
     )

@@ -104,7 +104,10 @@ def _profile_for_model(model: str) -> _ModelProfile:
 
 
 def _resolution_for_short_side(short_side: int, profile: _ModelProfile) -> str:
-    return next(resolution for threshold, resolution in profile.resolution_tiers if short_side <= threshold)
+    return next(
+        (resolution for threshold, resolution in profile.resolution_tiers if short_side <= threshold),
+        profile.resolution_tiers[-1][1],
+    )
 
 
 def _model_path_from_request_url(raw_response: httpx.Response) -> str | None:
@@ -352,6 +355,8 @@ class FalAIVideoConfig(BaseVideoConfig):
         duration: Final[str | None] = _duration_value(seconds)
         if duration is None:
             raise ValueError("fal.ai seconds must be a numeric value")
+        if duration == "auto":
+            return MappingProxyType({}) if profile.integer_duration else MappingProxyType({"duration": duration})
         return MappingProxyType({"duration": int(duration) if profile.integer_duration else duration})
 
     def validate_environment(
