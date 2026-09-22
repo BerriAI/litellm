@@ -62014,7 +62014,7 @@
         "mode": "responses",
         "output_cost_per_token": 2.5e-06,
         "source": "https://api.x.ai/v1/language-models",
-        "supports_function_calling": true,
+        "supports_function_calling": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": false,
@@ -65585,7 +65585,7 @@
         "supported_endpoints": [
             "/v1/responses"
         ],
-        "supports_function_calling": true,
+        "supports_function_calling": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": false,
@@ -65610,7 +65610,7 @@
         "supported_endpoints": [
             "/v1/responses"
         ],
-        "supports_function_calling": true,
+        "supports_function_calling": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": false,
@@ -77383,7 +77383,7 @@
         "mode": "responses",
         "output_cost_per_token": 2.5e-06,
         "source": "https://api.x.ai/v1/language-models",
-        "supports_function_calling": true,
+        "supports_function_calling": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": false,
@@ -77408,7 +77408,7 @@
         "mode": "responses",
         "output_cost_per_token": 2.5e-06,
         "source": "https://api.x.ai/v1/language-models",
-        "supports_function_calling": true,
+        "supports_function_calling": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": false,
@@ -77433,7 +77433,7 @@
         "mode": "responses",
         "output_cost_per_token": 2.5e-06,
         "source": "https://api.x.ai/v1/language-models",
-        "supports_function_calling": true,
+        "supports_function_calling": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": false,
