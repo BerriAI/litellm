@@ -620,6 +620,7 @@ def _bridge_grant_from_token_response(token_response: object) -> "UpstreamTokenG
 
 _BridgeMintError = Literal[
     "no_identity",
+    "jwt_client_policy_unsupported",
     "invalid_refresh",
     "identity_unavailable",
     "identity_faulted",
@@ -659,6 +660,13 @@ def _bridge_mint_error_response(error: _BridgeMintError) -> JSONResponse:
                 "invalid_request",
                 "this server issues a gateway-bound credential; complete the interactive sign-in, or "
                 "send a litellm credential (x-litellm-api-key or Authorization) on the token request",
+            )
+        case "jwt_client_policy_unsupported":
+            status, code, desc = (
+                400,
+                "invalid_request",
+                "JWT bridge minting is not supported with a claim-based MCP client allowlist; "
+                "the bridge credential cannot preserve the signed client identity",
             )
         case "invalid_refresh":
             status, code, desc = (
@@ -766,10 +774,15 @@ async def _prepare_bridge_mint(
     authorization code) and mints a user subject. The scripted two-header client presents a litellm
     credential (a virtual key or a JWT) on the token request instead: a key mints a key_hash subject,
     while a JWT resolves through the same auth path as admission and mints a key_hash subject when it
-    maps to a virtual key or a user subject when it resolves to a user identity. A missing or invalid
+    maps to a virtual key. An unmapped JWT is rejected because a user subject cannot preserve its
+    JWT-specific authorization restrictions. A JWT client-claim allowlist also prevents JWT minting:
+    the envelope cannot retain the signed client identity for subsequent allowlist checks. A missing or invalid
     presented key keeps its resolution origin so the mapper statuses it truthfully; neither source
     present is ``no_identity``. The refresh_token grant has its own phase-1
     (:func:`_prepare_bridge_refresh`), which recovers identity from the presented refresh envelope."""
+    from litellm.proxy._experimental.mcp_server.client_allowlist import (  # noqa: PLC0415  # keep mint policy dependencies local
+        load_mcp_client_allowlist,
+    )
     from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (  # noqa: PLC0415  # inline import avoids a module-load circular import
         envelope_keys_from_master_key,
     )
@@ -778,11 +791,9 @@ async def _prepare_bridge_mint(
         user_identity,
     )
     from litellm.proxy._types import UserAPIKeyAuth  # noqa: PLC0415  # proxy import cycle
-    from litellm.proxy.auth.handle_jwt import (  # noqa: PLC0415  # proxy import cycle
-        JWTHandler,
-        JWTIdentity,
-    )
+    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        general_settings,
         master_key,
     )
 
@@ -794,12 +805,12 @@ async def _prepare_bridge_mint(
         return _BridgeMintReady(identity=identity, keys=keys)
     presented_token: Final = _litellm_key_from_request(request)
     if presented_token is not None and JWTHandler.is_jwt(presented_token):
+        client_allowlist: Final = load_mcp_client_allowlist(general_settings)
+        if client_allowlist is not None and client_allowlist.jwt_field is not None:
+            return "jwt_client_policy_unsupported"
         resolved_jwt: Final = await _resolve_jwt_auth(request, presented_token, None)
         if isinstance(resolved_jwt, UserAPIKeyAuth) and resolved_jwt.token:
             identity = key_hash_identity(server_id=mcp_server.server_id, key_hash=resolved_jwt.token)
-            return _BridgeMintReady(identity=identity, keys=keys)
-        if isinstance(resolved_jwt, JWTIdentity) and resolved_jwt.user_id:
-            identity = user_identity(server_id=mcp_server.server_id, user_id=resolved_jwt.user_id)
             return _BridgeMintReady(identity=identity, keys=keys)
         return "no_identity"
     resolved: Final = await _resolve_active_litellm_key(request)

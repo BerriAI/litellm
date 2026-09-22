@@ -6770,29 +6770,15 @@ async def _exchange_for_bridge_server_with_jwt(jwt_auth_result, upstream_body=No
 
 
 @pytest.mark.asyncio
-async def test_bridge_mint_jwt_user_identity_seals_user_subject():
-    """A JWT that resolves to a user identity (no virtual-key mapping) mints a user_id-subject
-    envelope, matching the interactive SSO subject so admission reloads the same principal type."""
-    from datetime import datetime, timezone
-
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
-        BridgeEnvelopeAdmitted,
-        envelope_keys_from_master_key,
-        resolve_bridge_envelope,
-    )
+async def test_bridge_mint_unmapped_jwt_is_rejected_before_upstream():
     from litellm.proxy.auth.handle_jwt import JWTIdentity
 
-    response, _post = await _exchange_for_bridge_server_with_jwt(
+    response, post = await _exchange_for_bridge_server_with_jwt(
         JWTIdentity(user_id="jwt-user-5", user_object=None, agent_id=None)
     )
-    assert response.status_code == 200
-    token = json.loads(response.body)["access_token"]
-    assert token.startswith("llm_env_")
-    keys = envelope_keys_from_master_key(_BRIDGE_MASTER_KEY)
-    opened = resolve_bridge_envelope(token, keys, datetime.now(timezone.utc), "bridge_srv")
-    assert isinstance(opened, BridgeEnvelopeAdmitted)
-    assert opened.identity.subject_type == "user_id"
-    assert opened.identity.subject == "jwt-user-5"
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_request"
+    post.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -6816,6 +6802,50 @@ async def test_bridge_mint_jwt_mapped_to_virtual_key_seals_key_hash_subject():
     assert isinstance(opened, BridgeEnvelopeAdmitted)
     assert opened.identity.subject_type == "key_hash"
     assert opened.identity.subject == "mapped-key-hash-99"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("jwt_claims", [{"client_id": "allowed"}, {"client_id": "denied"}, {}])
+async def test_bridge_mint_jwt_cannot_drop_signed_client_policy(jwt_claims):
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    settings = {
+        "mcp_allowed_clients": [{"alias": "Allowed", "value": "allowed"}],
+        "mcp_client_id_header": "x-client-id",
+        "litellm_jwtauth": {"mcp_client_id_jwt_field": "client_id"},
+    }
+    with patch("litellm.proxy.proxy_server.general_settings", settings):
+        response, post = await _exchange_for_bridge_server_with_jwt(
+            UserAPIKeyAuth(token="mapped-key-hash-99", jwt_claims=jwt_claims)
+        )
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_request"
+    assert "signed client identity" in json.loads(response.body)["error_description"]
+    post.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {},
+        {"litellm_jwtauth": {"mcp_client_id_jwt_field": "client_id"}},
+        {
+            "mcp_allowed_clients": [{"alias": "Allowed", "value": "allowed"}],
+            "mcp_client_id_header": "x-client-id",
+        },
+    ],
+)
+async def test_bridge_mint_mapped_jwt_without_signed_client_policy(settings):
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    with patch("litellm.proxy.proxy_server.general_settings", settings):
+        response, post = await _exchange_for_bridge_server_with_jwt(
+            UserAPIKeyAuth(token="mapped-key-hash-99", jwt_claims={"client_id": "allowed"})
+        )
+    assert response.status_code == 200
+    assert json.loads(response.body)["access_token"].startswith("llm_env_")
+    post.assert_awaited_once()
 
 
 @pytest.mark.asyncio
