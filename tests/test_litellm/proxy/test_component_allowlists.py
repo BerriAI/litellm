@@ -23,8 +23,10 @@ import (which raises on a non-postgres ``DATABASE_URL`` scheme and can mint an
 RDS IAM token when ``IAM_TOKEN_DB_AUTH`` is set).
 """
 
+import json
 import os
 import sys
+from typing import Final
 
 # Importing ``litellm.proxy.proxy_server`` runs its module-level setup, which
 # reads ``DATABASE_URL`` (Prisma) and ``LITELLM_MASTER_KEY``. Tier-zero CI
@@ -49,17 +51,10 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..",
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from backend.routes.allowlist import (
-    BACKEND_EXACT_PATHS,
-    BACKEND_MOUNT_PATHS,
-    BACKEND_PATH_PREFIXES,
-)
-from gateway.routes.allowlist import (
-    GATEWAY_EXACT_PATHS,
-    GATEWAY_MOUNT_PATHS,
-    GATEWAY_PATH_PREFIXES,
-)
+from backend.routes.allowlist import BACKEND_MOUNT_PATHS
+from gateway.routes.allowlist import GATEWAY_MOUNT_PATHS
 from litellm.proxy.proxy_server import app
+from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 for _key, _previous in _PRE_EXISTING_ENV.items():
     if _previous is None:
@@ -87,40 +82,69 @@ for _key, _previous in _PRE_DB_ENV.items():
         os.environ[_key] = _previous
 
 
-def _component_paths(routes, exact_paths, path_prefixes) -> set[str]:
-    """Reproduce ``gateway.main._is_gateway_route`` / ``backend.main._is_backend_route``."""
-    out: set[str] = set()
-    for route in routes:
-        if isinstance(route, Mount):
-            continue
-        path = getattr(route, "path", None)
-        if path is None:
-            continue
-        if path in exact_paths or any(path.startswith(p) for p in path_prefixes):
-            out.add(path)
-    return out
+_COVERAGE_PROBE: Final = """
+import json, os, sys
+sys.path.insert(0, os.environ["LITELLM_COMPONENT_ALLOWLIST_REPO_ROOT"])
+from fastapi.routing import Mount
+from backend.routes.allowlist import BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
+from gateway.routes.allowlist import GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
+from litellm.proxy._lazy_features import loaded_lazy_modules
+from litellm.proxy.proxy_server import app
+
+all_paths = {
+    r.path for r in app.router.routes
+    if not isinstance(r, Mount) and getattr(r, "path", None) is not None
+}
+
+
+def covered(exact, prefixes):
+    return {p for p in all_paths if p in exact or any(p.startswith(x) for x in prefixes)}
+
+
+json.dump({
+    "lazy_loaded": sorted(loaded_lazy_modules(app)),
+    "route_count": len(all_paths),
+    "uncovered": sorted(all_paths - (
+        covered(GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES)
+        | covered(BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES)
+    )),
+}, sys.stdout)
+"""
 
 
 def test_gateway_plus_backend_covers_full_app():
-    """Every route on the proxy app must be served by gateway or backend."""
-    all_paths = {
-        getattr(r, "path")
-        for r in app.router.routes
-        if not isinstance(r, Mount) and getattr(r, "path", None) is not None
-    }
-    gateway_paths = _component_paths(
-        app.router.routes, GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
+    """Every route on the proxy app must be served by gateway or backend.
+
+    ``gateway.main`` and ``backend.main`` trim the route table once, inside the
+    lifespan, so the set this has to cover is the one registered at startup. A
+    lazy feature appends its router on demand, after that trim, and whether a
+    sibling test in the same xdist worker has triggered one is not something
+    this test can control. Measuring in a fresh interpreter is what makes the
+    route table deterministic; nothing is subtracted, so every route the trim
+    will actually see stays in the assertion.
+    """
+    env: Final = {**os.environ, "LITELLM_COMPONENT_ALLOWLIST_REPO_ROOT": _REPO_ROOT}
+    for key, value in _THROWAWAY_ENV.items():
+        env.setdefault(key, value)
+
+    probe: Final = run_child_interpreter(_COVERAGE_PROBE, env=env, timeout=90)
+    assert probe.returncode == 0, f"route probe failed:\n{probe.stderr}"
+    report: Final = json.loads(probe.stdout)
+
+    assert not report["lazy_loaded"], (
+        "route probe was not pristine; it loaded lazy features "
+        f"{report['lazy_loaded']}, so its route table is not the startup one"
     )
-    backend_paths = _component_paths(
-        app.router.routes, BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
+    assert report["route_count"] > 100, (
+        f"route probe only saw {report['route_count']} routes, so an empty "
+        "uncovered set would not mean anything"
     )
 
-    uncovered = all_paths - (gateway_paths | backend_paths)
-
+    uncovered: Final = report["uncovered"]
     assert not uncovered, (
         f"{len(uncovered)} route(s) are not exposed on either component. "
         f"Update gateway/routes/allowlist.py or backend/routes/allowlist.py to cover:\n  "
-        + "\n  ".join(sorted(uncovered))
+        + "\n  ".join(uncovered)
     )
 
 
