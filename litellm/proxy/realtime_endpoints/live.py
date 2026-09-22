@@ -524,6 +524,8 @@ def _session_policy(body: Mapping[str, JsonValue], source: LiveHandle | None) ->
 
 
 def _managed_constraints(auth: UserAPIKeyAuth) -> bool:
+    from litellm.proxy import proxy_server as server
+
     if any(
         value is not None
         for value in (
@@ -539,12 +541,24 @@ def _managed_constraints(auth: UserAPIKeyAuth) -> bool:
             auth.team_member_tpm_limit,
             auth.end_user_rpm_limit,
             auth.end_user_tpm_limit,
+            auth.max_parallel_requests,
             auth.max_budget,
             auth.team_max_budget,
             auth.user_max_budget,
             auth.end_user_max_budget,
             auth.organization_max_budget,
         )
+    ):
+        return True
+
+    # An admin-configured proxy-wide concurrency cap admits every key through the limiter,
+    # and delegated backend invocations never reach that admission, so it constrains the key
+    # the same way a key-level `max_parallel_requests` does.
+    if (
+        _MAPPING.validate_python(getattr(server, "general_settings", None) or _EMPTY).get(
+            "global_max_parallel_requests"
+        )
+        is not None
     ):
         return True
 

@@ -465,6 +465,36 @@ def test_managed_constraints_detect_scalar_and_window_budgets(limits):
     assert live._managed_constraints(UserAPIKeyAuth(api_key="owner", **limits)) is True
 
 
+@pytest.mark.parametrize("global_limit", [None, 8])
+def test_managed_constraints_covers_configured_parallel_limits(monkeypatch, global_limit):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"global_max_parallel_requests": global_limit})
+
+    key_limited = live._managed_constraints(UserAPIKeyAuth(api_key="owner", max_parallel_requests=2))
+    globally_limited = live._managed_constraints(UserAPIKeyAuth(api_key="owner"))
+    assert key_limited is True
+    assert globally_limited is (global_limit is not None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limits", [{}, {"max_parallel_requests": 2}])
+async def test_managed_delegation_requires_client_delegation_under_a_concurrency_limit(monkeypatch, limits):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    body = {"session": {"delegation": {"type": "responses", "responses": {"model": "backend"}}}}
+    auth = UserAPIKeyAuth(api_key="owner", **limits)
+
+    if not limits:
+        assert await live._authorize_delegation(body, auth) is None
+        return
+    with pytest.raises(HTTPException) as rejected:
+        await live._authorize_delegation(body, auth)
+    assert rejected.value.status_code == 400
+    assert "use client delegation" in str(rejected.value.detail)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "member_limit, default_limit, blocked",
@@ -540,11 +570,17 @@ def test_managed_constraints_fails_closed_after_metadata_node_limit():
         {"metadata": {"nested": [{"model_max_budget": {}}]}},
     ],
 )
-def test_empty_model_limit_maps_do_not_mark_delegation_as_managed(limits):
+def test_empty_model_limit_maps_do_not_mark_delegation_as_managed(monkeypatch, limits):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
     assert live._managed_constraints(UserAPIKeyAuth(api_key="owner", **limits)) is False
 
 
-def test_managed_constraints_terminates_on_cyclic_metadata_without_a_limit():
+def test_managed_constraints_terminates_on_cyclic_metadata_without_a_limit(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
     metadata = {}
     metadata["self"] = metadata
     auth = UserAPIKeyAuth(api_key="owner")
@@ -1247,7 +1283,10 @@ async def test_sparse_responses_update_without_model_remains_valid_for_user_scop
     assert result is None
 
 
-def test_managed_constraints_uses_exact_metadata_keys():
+def test_managed_constraints_uses_exact_metadata_keys(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
     for key in ("max_budget_alert_emails", "model_max_budget_usage"):
         assert live._managed_constraints(UserAPIKeyAuth(api_key="owner", metadata={key: {"backend": 1}})) is False
 
