@@ -4651,6 +4651,90 @@ async def test_pass_through_request_upstream_error_body_stays_buffered():
         await fake_client.aclose()
 
 
+_UPSTREAM_JSON_ERROR: Final = b'{"error": {"message": "bad request", "type": "invalid_request_error"}}'
+
+
+async def _relay_upstream_through_pass_through_request(
+    general_settings, status_code, content_type, body, callback_headers=None
+):
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=status_code,
+            headers={"content-type": content_type},
+            stream=_RecordingUpstreamByteStream((body,)),
+        ),
+        timeout=313.0,
+    )
+    try:
+        with ExitStack() as stack:
+            mock_proxy_logging, _ = _enter_relay_logging_mocks(stack, {})
+            mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=callback_headers)
+            stack.enter_context(patch("litellm.proxy.proxy_server.general_settings", general_settings))
+            return await pass_through_request(
+                request=_relay_client_request(),
+                target="http://upstream.test/v1/messages",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+                timeout=313.0,
+            )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pass_through_error_body_carries_the_call_id_when_opted_in():
+    """With include_call_id_in_error_body on, a buffered upstream JSON error gets a top-level
+    litellm_call_id byte-identical to the x-litellm-call-id header, and content-length still
+    matches the rewritten body."""
+    response = await _relay_upstream_through_pass_through_request(
+        {"include_call_id_in_error_body": True}, 400, "application/json", _UPSTREAM_JSON_ERROR
+    )
+
+    call_id = response.headers["x-litellm-call-id"]
+    assert response.status_code == 400
+    assert json.loads(response.body) == {**json.loads(_UPSTREAM_JSON_ERROR), "litellm_call_id": call_id}
+    assert int(response.headers["content-length"]) == len(response.body)
+
+
+@pytest.mark.asyncio
+async def test_pass_through_error_body_call_id_follows_a_restamped_header():
+    """A post_call_response_headers_hook that rewrites x-litellm-call-id wins in the header, so the
+    body copies the emitted header value rather than the id the proxy generated."""
+    response = await _relay_upstream_through_pass_through_request(
+        {"include_call_id_in_error_body": True},
+        400,
+        "application/json",
+        _UPSTREAM_JSON_ERROR,
+        callback_headers={"x-litellm-call-id": "restamped-by-hook"},
+    )
+
+    assert response.headers["x-litellm-call-id"] == "restamped-by-hook"
+    assert json.loads(response.body)["litellm_call_id"] == "restamped-by-hook"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "general_settings, status_code, content_type, body",
+    [
+        ({}, 400, "application/json", _UPSTREAM_JSON_ERROR),
+        ({"include_call_id_in_error_body": True}, 502, "text/plain", b"upstream exploded"),
+        ({"include_call_id_in_error_body": True}, 200, "application/json", b'{"id": "msg_1", "type": "message"}'),
+    ],
+)
+async def test_pass_through_body_stays_byte_identical_outside_the_opt_in(
+    general_settings, status_code, content_type, body
+):
+    """Opted out, a non-JSON error, or a success body: the upstream bytes are relayed as-is."""
+    response = await _relay_upstream_through_pass_through_request(general_settings, status_code, content_type, body)
+
+    assert response.status_code == status_code
+    assert response.body == body
+    assert "x-litellm-call-id" in response.headers
+
+
 _PARTIAL_RELAY_WARNING_MARKER = "ended before upstream body was fully relayed"
 
 
