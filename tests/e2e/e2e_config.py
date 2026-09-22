@@ -34,7 +34,7 @@ CONTROL_PLANE_BASE_URL = os.environ.get(
 
 
 def parse_replica_urls(raw: str, fallback: str) -> tuple[str, ...]:
-    urls: Final = tuple(url.strip().rstrip("/") for url in raw.split(",") if url.strip())
+    urls: Final = tuple(dict.fromkeys(url.strip().rstrip("/") for url in raw.split(",") if url.strip()))
     return urls or (fallback,)
 
 
