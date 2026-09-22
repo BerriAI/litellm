@@ -1,12 +1,37 @@
-use std::{future::Future, pin::Pin};
+use std::{fmt, future::Future, pin::Pin};
 
 use litellm_core_utils::settings::Lookup;
 use litellm_secrets::{
     Error, ExternalSecretManager, KeyManagementSettings, KeyManagementSystem, Secret, SecretValue,
 };
-use pyo3::{prelude::*, types::PyDict};
+use pyo3::{exceptions::PyBaseException, prelude::*, types::PyDict};
 
 const HANDLER_MODULE: &str = "litellm.secret_managers.secret_manager_handler";
+
+struct PythonSecretError(Py<PyBaseException>);
+
+impl fmt::Debug for PythonSecretError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PythonSecretError")
+    }
+}
+
+impl fmt::Display for PythonSecretError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Python secret manager failed")
+    }
+}
+
+impl std::error::Error for PythonSecretError {}
+
+pub(crate) fn python_error(py: Python<'_>, error: &Error) -> Option<PyErr> {
+    let Error::ExternalManager(source) = error else {
+        return None;
+    };
+    source
+        .downcast_ref::<PythonSecretError>()
+        .map(|error| PyErr::from_value(error.0.clone_ref(py).into_bound(py).into_any()))
+}
 
 /// A secret manager whose reads execute in Python: a custom manager, a legacy compatible
 /// client, or a manually assigned SDK client.
@@ -34,9 +59,19 @@ impl PythonSecretManager {
 
     fn read(&self, py: Python<'_>, name: &str) -> PyResult<Option<String>> {
         let client = self.client.bind(py);
-        if self.system.is_none() && client.hasattr("sync_read_secret")? {
+        if self.system == Some(KeyManagementSystem::Custom)
+            || (self.system.is_none() && client.hasattr("sync_read_secret")?)
+        {
             let kwargs = PyDict::new(py);
             kwargs.set_item("secret_name", name)?;
+            if self.system == Some(KeyManagementSystem::Custom) {
+                let optional_params = self
+                    .settings
+                    .as_ref()
+                    .map(|settings| settings.bind(py).call_method0("model_dump"))
+                    .transpose()?;
+                kwargs.set_item("optional_params", optional_params)?;
+            }
             return client
                 .call_method("sync_read_secret", (), Some(&kwargs))?
                 .extract();
@@ -85,9 +120,13 @@ impl ExternalSecretManager for PythonSecretManager {
         _environment: &'a (dyn Lookup + Send + Sync),
     ) -> Pin<Box<dyn Future<Output = Result<Option<Secret>, Error>> + Send + 'a>> {
         Box::pin(async move {
-            Python::attach(|py| self.read(py, name))
-                .map(|value| value.map(SecretValue::new).map(Secret::String))
-                .map_err(|_| Error::ExternalManager)
+            Python::attach(|py| {
+                self.read(py, name)
+                    .map(|value| value.map(SecretValue::new).map(Secret::String))
+                    .map_err(|error| {
+                        Error::ExternalManager(Box::new(PythonSecretError(error.into_value(py))))
+                    })
+            })
         })
     }
 }

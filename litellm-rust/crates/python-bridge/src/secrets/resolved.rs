@@ -1,9 +1,11 @@
 use std::{collections::HashMap, sync::Arc};
 
-use futures_util::{future::BoxFuture, future::join_all};
+use futures_util::{future::BoxFuture, future::try_join_all};
 use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
 use litellm_llms::base_llm::inference::secrets::{SecretSource, Secrets};
-use litellm_secrets::{FailurePolicy, OidcResolver, Secret, SecretManagerState, SecretResolver};
+use litellm_secrets::{
+    Error, FailurePolicy, OidcResolver, Secret, SecretManagerState, SecretResolver,
+};
 
 use super::config::SecretManagerSnapshot;
 
@@ -29,23 +31,19 @@ impl ResolvedSecrets {
 }
 
 impl SecretSource for ResolvedSecrets {
-    fn resolve<'a>(&'a self, names: &'a [&'static str]) -> BoxFuture<'a, Secrets> {
+    fn resolve<'a>(&'a self, names: &'a [&'static str]) -> BoxFuture<'a, Result<Secrets, Error>> {
         Box::pin(async move {
-            let values = join_all(names.iter().map(|name| async move {
+            let values = try_join_all(names.iter().map(|name| async move {
                 self.resolver
                     .get_secret(name, None)
                     .await
-                    .ok()
-                    .flatten()
-                    .and_then(|secret| {
-                        secret_value(secret).map(|value| ((*name).to_owned(), value))
-                    })
+                    .map(|secret| secret.map(|secret| ((*name).to_owned(), secret_value(secret))))
             }))
-            .await
+            .await?
             .into_iter()
             .flatten()
             .collect::<HashMap<_, _>>();
-            Arc::new(ResolvedLookup { values }) as Secrets
+            Ok(Arc::new(ResolvedLookup { values }) as Secrets)
         })
     }
 }
@@ -63,11 +61,11 @@ impl Lookup for ResolvedLookup {
     }
 }
 
-fn secret_value(secret: Secret) -> Option<String> {
+fn secret_value(secret: Secret) -> String {
     match secret {
-        Secret::String(value) => Some(value.expose().to_owned()),
-        Secret::Bool(value) => Some(if value { "True" } else { "False" }.to_owned()),
-        Secret::Json(value) => Some(value.to_string()),
+        Secret::String(value) => value.expose().to_owned(),
+        Secret::Bool(value) => if value { "True" } else { "False" }.to_owned(),
+        Secret::Json(value) => value.to_string(),
     }
 }
 
@@ -113,6 +111,7 @@ mod tests {
         ResolvedSecrets::from_state(state)
             .resolve(&[name])
             .await
+            .unwrap()
             .get(name)
     }
 
@@ -166,12 +165,11 @@ mod tests {
             .expect(1)
             .mount(&missing_server)
             .await;
-        let missing = resolve(
-            state(&missing_server, KeyManagementSettings::default()),
-            "LITELLM_RUST_BRIDGE_MANAGER_FAILURE_MISSING",
-        )
-        .await;
-        assert_eq!(missing, None);
+        let missing =
+            ResolvedSecrets::from_state(state(&missing_server, KeyManagementSettings::default()))
+                .resolve(&["LITELLM_RUST_BRIDGE_MANAGER_FAILURE_MISSING"])
+                .await;
+        assert!(matches!(missing, Err(litellm_secrets::Error::Aws(_))));
     }
 
     #[tokio::test]
@@ -221,6 +219,14 @@ mod tests {
             Some("manager-key")
         );
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn oidc_failures_are_not_converted_to_missing_secrets() {
+        let result = ResolvedSecrets::from_state(Arc::new(SecretManagerState::default()))
+            .resolve(&["oidc/"])
+            .await;
+        assert!(matches!(result, Err(litellm_secrets::Error::InvalidOidc)));
     }
 
     #[tokio::test]

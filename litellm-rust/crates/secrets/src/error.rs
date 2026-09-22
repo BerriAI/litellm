@@ -25,7 +25,7 @@ pub enum Error {
     #[error("secret cannot be converted to {expected}")]
     TypeMismatch { expected: &'static str },
     #[error("external secret manager failed")]
-    ExternalManager,
+    ExternalManager(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[cfg(feature = "aws")]
     #[error(transparent)]
     Aws(#[from] litellm_secrets_aws::Error),

@@ -38,18 +38,21 @@ struct RecordingSecretSource {
 }
 
 impl SecretSource for RecordingSecretSource {
-    fn resolve<'a>(&'a self, names: &'a [&'static str]) -> BoxFuture<'a, Secrets> {
+    fn resolve<'a>(
+        &'a self,
+        names: &'a [&'static str],
+    ) -> BoxFuture<'a, Result<Secrets, litellm_secrets::Error>> {
         *self.names.lock().unwrap() = names.to_vec();
         let values = self.values;
         let api_base = self.api_base.clone();
         Box::pin(async move {
-            Arc::new(move |name: &str| match name {
+            Ok(Arc::new(move |name: &str| match name {
                 "MISTRAL_AZURE_API_BASE" => Some(api_base.clone()),
                 _ => values
                     .iter()
                     .find(|(key, _)| *key == name)
                     .map(|(_, value)| value.to_string()),
-            }) as Secrets
+            }) as Secrets)
         })
     }
 }
