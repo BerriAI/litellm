@@ -1,5 +1,6 @@
 import re
 from collections.abc import Awaitable, Callable, Iterator
+from http import HTTPStatus
 from typing import Final, Protocol, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
@@ -376,6 +377,15 @@ class PrismaDBExceptionHandler:
             "Service Unavailable, the authentication database query engine reported "
             f"{type(fault).__name__}, which is not a transient outage and will not clear by retrying. "
             "The proxy deployment needs attention."
+        )
+
+    @staticmethod
+    def service_unavailable_proxy_exception(e: Exception) -> ProxyException:
+        return ProxyException(
+            message=PrismaDBExceptionHandler.database_unavailable_message(e),
+            type=ProxyErrorTypes.no_db_connection,
+            param="None",
+            code=HTTPStatus.SERVICE_UNAVAILABLE.value,
         )
 
     @staticmethod

@@ -1,4 +1,4 @@
-import json
+import datetime
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,6 +37,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+from litellm.types.videos.main import VideoObject
 
 
 @pytest.fixture
@@ -3130,21 +3131,23 @@ def test_completion_cost_logs_cache_and_reasoning_breakdown_for_custom_pricing()
     assert total == pytest.approx(100 * 1e-6 + 800 * 1e-7 + 100 * 1.25e-6 + 500 * 2e-6)
 
 
-def test_cost_per_token_per_second_pricing(monkeypatch):
+@pytest.mark.parametrize("custom_llm_provider", ["together_ai", "openai", "anthropic", "bedrock", "azure"])
+def test_cost_per_token_per_second_pricing(monkeypatch, custom_llm_provider: str):
     """
     Models priced by duration (input/output_cost_per_second) with no per-token rates
-    must be billed as cost_per_second * response_time_ms / 1000 in cost_per_token.
+    must be billed as cost_per_second * response_time_ms / 1000 in cost_per_token,
+    whether or not the provider has its own cost calculator.
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
-    model = "test-per-second-pricing-model"
+    model = f"test-per-second-pricing-{custom_llm_provider}"
     litellm.register_model(
         model_cost={
             model: {
                 "input_cost_per_second": 0.02,
                 "output_cost_per_second": 0.04,
-                "litellm_provider": "together_ai",
+                "litellm_provider": custom_llm_provider,
                 "mode": "chat",
             }
         }
@@ -3152,7 +3155,7 @@ def test_cost_per_token_per_second_pricing(monkeypatch):
 
     prompt_cost, completion_cost_value = cost_per_token(
         model=model,
-        custom_llm_provider="together_ai",
+        custom_llm_provider=custom_llm_provider,
         prompt_tokens=10,
         completion_tokens=20,
         response_time_ms=1500.0,
@@ -3160,6 +3163,143 @@ def test_cost_per_token_per_second_pricing(monkeypatch):
 
     assert prompt_cost == pytest.approx(0.02 * 1.5)
     assert completion_cost_value == pytest.approx(0.04 * 1.5)
+
+
+def test_cost_per_token_keeps_token_pricing_when_per_second_rates_are_also_set(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model = "test-token-and-per-second-pricing-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "input_cost_per_second": 0.02,
+                "output_cost_per_second": 0.04,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+
+    prompt_cost, completion_cost_value = cost_per_token(
+        model=model,
+        custom_llm_provider="openai",
+        prompt_tokens=10,
+        completion_tokens=20,
+        response_time_ms=1500.0,
+    )
+
+    assert prompt_cost == pytest.approx(10 * 1e-6)
+    assert completion_cost_value == pytest.approx(20 * 2e-6)
+
+
+def _logging_obj_with_call_window(duration_ms: float) -> Logging:
+    start_time: Final = datetime.datetime(2026, 9, 21, 12, 0, 0)
+    logging_obj: Final = Logging(
+        model="gpt-5.4-nano",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=start_time,
+        litellm_call_id="per-second-call-window",
+        function_id="f",
+    )
+    logging_obj.model_call_details["start_time"] = start_time
+    logging_obj.model_call_details["end_time"] = start_time + datetime.timedelta(milliseconds=duration_ms)
+    return logging_obj
+
+
+@pytest.mark.parametrize(
+    ("stamped_response_ms", "total_time", "logged_duration_ms", "expected_seconds"),
+    [(None, 0.0, 1500.0, 1.5), (3000.0, 0.0, 1500.0, 3.0), (None, 2500.0, 1500.0, 2.5), (3000.0, 2500.0, 1500.0, 3.0)],
+)
+def test_completion_cost_per_second_deployment_bills_the_call_duration(
+    monkeypatch,
+    stamped_response_ms: float | None,
+    total_time: float,
+    logged_duration_ms: float,
+    expected_seconds: float,
+):
+    """
+    A deployment priced only per second bills the stamped ``_response_ms`` when there is one,
+    then the caller's explicit ``total_time``, and the logging object's start/end window otherwise
+    (a streamed response is never stamped).
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    deployment_id = "per-second-openai-deployment"
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "input_cost_per_second": 0.02,
+                "output_cost_per_second": 0.04,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+    response = ModelResponse(
+        model="gpt-5.4-nano",
+        usage=Usage(prompt_tokens=11, completion_tokens=7, total_tokens=18),
+    )
+    response._response_ms = stamped_response_ms
+
+    cost = completion_cost(
+        completion_response=response,
+        model="openai/gpt-5.4-nano",
+        custom_llm_provider="openai",
+        custom_pricing=True,
+        router_model_id=deployment_id,
+        total_time=total_time,
+        litellm_logging_obj=_logging_obj_with_call_window(logged_duration_ms),
+    )
+
+    assert cost == pytest.approx((0.02 + 0.04) * expected_seconds)
+
+
+@pytest.mark.parametrize("mode", ["audio_transcription", "audio_speech", "video_generation", "realtime"])
+def test_cost_per_token_leaves_media_second_rates_to_their_dedicated_paths(monkeypatch, mode: str):
+    """
+    A media-mode entry's per-second rates price audio or video seconds, which the dedicated
+    transcription, speech, video, and realtime paths bill from the media itself, so a call that
+    reaches the generic path with only a wall-clock duration must not bill them.
+    """
+    model = f"test-media-per-second-{mode}"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_second": 0.02, "output_cost_per_second": 0.4, "litellm_provider": "openai", "mode": mode},
+    )
+
+    assert cost_per_token(model=model, custom_llm_provider="openai", response_time_ms=2000.0) == (0.0, 0.0)
+
+
+def test_completion_cost_video_status_poll_bills_nothing_on_a_per_second_video_model(monkeypatch):
+    """
+    Polling a video job returns a ``VideoObject`` with no stamped duration, so the cost path falls
+    back to the logging object's call window; on a video model priced per output second that
+    window must not be billed, or every status poll would charge for the seconds it took to answer.
+    """
+    model = "test-veo-per-second-poll"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"output_cost_per_second": 0.4, "litellm_provider": "vertex_ai", "mode": "video_generation"},
+    )
+    video = VideoObject(id="video_1", object="video", status="completed", model=model, progress=100)
+
+    cost = completion_cost(
+        completion_response=video,
+        model=model,
+        custom_llm_provider="vertex_ai",
+        call_type=CallTypes.video_retrieve.value,
+        litellm_logging_obj=_logging_obj_with_call_window(2000.0),
+    )
+
+    assert cost == 0.0
 
 
 def _batch_cache_usage() -> Usage:

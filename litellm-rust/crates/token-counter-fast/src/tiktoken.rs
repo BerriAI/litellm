@@ -22,11 +22,25 @@ pub(super) struct MergeRanks(FxHashMap<Box<[u8]>, Rank>);
 
 impl MergeRanks {
     pub(super) fn parse(text: &str) -> Result<Self, Error> {
-        let ranks = text
-            .lines()
-            .filter(|line| !line.is_empty())
-            .map(parse_line)
-            .collect::<Result<FxHashMap<_, _>, _>>()?;
+        Self::from_entries(text.lines().filter(|line| !line.is_empty()).map(parse_line))
+    }
+
+    /// The same table from ranks another loader already parsed.
+    pub(super) fn from_pairs<'a>(
+        pairs: impl IntoIterator<Item = (&'a [u8], Rank)>,
+    ) -> Result<Self, Error> {
+        Self::from_entries(pairs.into_iter().map(|(bytes, rank)| {
+            if rank == NO_RANK {
+                return Err(Error::Ranks(format!("rank {rank} is reserved")));
+            }
+            Ok((Box::from(bytes), rank))
+        }))
+    }
+
+    fn from_entries(
+        entries: impl Iterator<Item = Result<(Box<[u8]>, Rank), Error>>,
+    ) -> Result<Self, Error> {
+        let ranks = entries.collect::<Result<FxHashMap<_, _>, _>>()?;
         if let Some(byte) = (0..=u8::MAX).find(|byte| !ranks.contains_key(&[*byte][..])) {
             return Err(Error::Ranks(format!("byte 0x{byte:02X} has no token")));
         }

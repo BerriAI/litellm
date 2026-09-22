@@ -15,7 +15,9 @@ def _input_cost_per_pixel(resolved: ModelInfo) -> float:
     if deployment_price is not None:
         return deployment_price
     model_cost_key: Final = resolved.get("key")
-    shared_entry: Final = litellm.model_cost.get(model_cost_key, {}) if model_cost_key is not None else {}
+    shared_entry: Final = litellm.model_cost.get(model_cost_key) if model_cost_key is not None else None
+    if shared_entry is None:
+        return 0.0
     return shared_entry.get("input_cost_per_pixel") or 0.0
 
 

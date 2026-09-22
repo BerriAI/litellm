@@ -107,6 +107,10 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_streaming_responses_for_custom_logger,
     should_redact_message_logging,
 )
+from litellm.litellm_core_utils.served_output_texts import (
+    SERVED_OUTPUT_TEXTS_KEY,
+    overlay_served_output_texts,
+)
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -494,6 +498,14 @@ def mask_api_base_credentials(api_base: str) -> str:
         return api_base
     key_end: Final = api_base.find("key=") + 4
     return api_base[:key_end] + "*" * 5 + api_base[-4:]
+
+
+def _timestamp_seconds(moment: object) -> float | None:
+    if isinstance(moment, datetime.datetime):
+        return moment.timestamp()
+    if isinstance(moment, (int, float)):
+        return float(moment)
+    return None
 
 
 class Logging(LiteLLMLoggingBaseClass):
@@ -1634,10 +1646,12 @@ class Logging(LiteLLMLoggingBaseClass):
         return response.mcp_tool_call_response
 
     def get_response_ms(self) -> float:
-        return (
-            self.model_call_details.get("end_time", datetime.datetime.now())
-            - self.model_call_details.get("start_time", datetime.datetime.now())
-        ).total_seconds() * 1000
+        now: Final = datetime.datetime.now()
+        start_seconds: Final = _timestamp_seconds(self.model_call_details.get("start_time", now))
+        end_seconds: Final = _timestamp_seconds(self.model_call_details.get("end_time", now))
+        if start_seconds is None or end_seconds is None:
+            return 0.0
+        return (end_seconds - start_seconds) * 1000
 
     def set_cost_breakdown(
         self,
@@ -5833,15 +5847,12 @@ class StandardLoggingPayloadSetup:
 
         modified_final_response_obj: Final = redact_message_input_output_from_logging(
             model_call_details=kwargs,
-            result=final_response_obj,
+            result=overlay_served_output_texts(final_response_obj, kwargs.get(SERVED_OUTPUT_TEXTS_KEY)),
         )
 
         if modified_final_response_obj is not None and isinstance(modified_final_response_obj, BaseModel):
-            final_response_obj = modified_final_response_obj.model_dump()
-        else:
-            final_response_obj = modified_final_response_obj
-
-        return final_response_obj
+            return modified_final_response_obj.model_dump()
+        return modified_final_response_obj
 
     @staticmethod
     def get_additional_headers(
@@ -6277,6 +6288,8 @@ def _extract_response_obj_and_hidden_params(
         hidden_params = getattr(init_response_obj, "_hidden_params", None)
     elif isinstance(init_response_obj, dict):
         response_obj = init_response_obj
+    elif isinstance(init_response_obj, HttpxBinaryResponseContent):
+        response_obj = dict(init_response_obj.logging_summary())
     else:
         response_obj = {}
 
