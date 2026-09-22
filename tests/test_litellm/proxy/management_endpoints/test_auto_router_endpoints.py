@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
 from litellm.proxy._types import (
@@ -25,6 +25,10 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterRoutingTestRequest,
 )
 from litellm.types.utils import Choices, Message, ModelResponse
+
+ROUTING_HTTP_REQUEST: Final = Request(
+    {"type": "http", "method": "POST", "path": "/auto_router/test_routing", "headers": []}
+)
 
 ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", user_id="admin")
 
@@ -94,6 +98,7 @@ async def _route_body(body: Mapping[str, object], monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(proxy_server, "llm_router", _router())
     return await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST,
         data=_request_from(body, **config_overrides),
         user_api_key_dict=ADMIN,
     )
@@ -121,6 +126,7 @@ async def _classifier_user_payload(body: Mapping[str, object], monkeypatch: pyte
     monkeypatch.setattr(proxy_server, "llm_router", router)
 
     await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST,
         data=_request_from(body, classifier_type="llm", classifier_llm_config={"model": "classifier-model"}),
         user_api_key_dict=ADMIN,
     )
@@ -198,6 +204,7 @@ async def test_llm_classifier_call_is_billed_to_the_calling_key(monkeypatch: pyt
     monkeypatch.setattr(proxy_server, "llm_router", router)
 
     response = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST,
         data=_request(
             "what is 2+2",
             classifier_type="llm",
@@ -359,6 +366,7 @@ async def test_a_key_that_cannot_call_the_classifier_model_is_rejected_before_it
 
     with pytest.raises(ProxyException) as exc_info:
         await preview_auto_router_routing(
+            http_request=ROUTING_HTTP_REQUEST,
             data=_request("what is 2+2", **config_overrides),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -388,6 +396,7 @@ async def test_a_key_over_its_budget_cannot_run_a_classifier_config(monkeypatch:
 
     with pytest.raises(ProxyException) as exc_info:
         await preview_auto_router_routing(
+            http_request=ROUTING_HTTP_REQUEST,
             data=_request(
                 "what is 2+2",
                 classifier_type="llm",
@@ -413,6 +422,7 @@ async def test_a_heuristic_config_does_not_need_a_budget(monkeypatch: pytest.Mon
     monkeypatch.setattr(proxy_server, "llm_router", _router())
 
     response = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST,
         data=_request("what is 2+2"),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -434,7 +444,9 @@ async def test_no_llm_router_on_the_proxy_is_a_500(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(proxy_server, "llm_router", None)
 
     with pytest.raises(HTTPException) as exc_info:
-        await preview_auto_router_routing(data=_request("what is 2+2"), user_api_key_dict=ADMIN)
+        await preview_auto_router_routing(
+            http_request=ROUTING_HTTP_REQUEST, data=_request("what is 2+2"), user_api_key_dict=ADMIN
+        )
 
     assert exc_info.value.status_code == 500
 
@@ -447,6 +459,7 @@ async def test_non_admin_without_a_team_is_rejected(monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(HTTPException) as exc_info:
         await preview_auto_router_routing(
+            http_request=ROUTING_HTTP_REQUEST,
             data=_request("what is 2+2"),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user", user_id="user"
@@ -2712,12 +2725,16 @@ async def test_routing_test_never_confirms_models_the_caller_cannot_use(monkeypa
     )
 
     monkeypatch.setattr(proxy_server, "prisma_client", _team_prisma("team-probe", models=["mid-model"]))
-    probing = await preview_auto_router_routing(data=_request("team-probe"), user_api_key_dict=team_admin)
+    probing = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST, data=_request("team-probe"), user_api_key_dict=team_admin
+    )
     assert probing.routed_model == "cheap-model"
     assert probing.routed_model_configured is False
 
     monkeypatch.setattr(proxy_server, "prisma_client", _team_prisma("team-grant", models=["cheap-model"]))
-    granted = await preview_auto_router_routing(data=_request("team-grant"), user_api_key_dict=team_admin)
+    granted = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST, data=_request("team-grant"), user_api_key_dict=team_admin
+    )
     assert granted.routed_model == "cheap-model"
     assert granted.routed_model_configured is True
 
