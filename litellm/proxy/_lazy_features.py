@@ -57,6 +57,11 @@ class LazyFeature:
 
 LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
     LazyFeature(
+        name="liteask",
+        module_path="litellm.proxy.management_endpoints.liteask.endpoints",
+        path_prefixes=("/management/v1/liteask",),
+    ),
+    LazyFeature(
         name="guardrails",
         module_path="litellm.proxy.guardrails.guardrail_endpoints",
         path_prefixes=(

@@ -18,6 +18,7 @@ import { uiHref } from "@/utils/uiHref";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
+import LiteAskWidget from "@/components/liteask/LiteAskWidget";
 
 const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
 
@@ -142,6 +143,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <UpgradeBanner accessToken={accessToken} />
         <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
       </div>
+      <LiteAskWidget />
     </div>
   );
 }
