@@ -160,14 +160,14 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
-        
+
         # Test completely different hostname
         updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
             headers, None, api_base="https://custom-gateway.com/v1"
         )
         assert extracted_api_key is None
         assert "authorization" not in updated_headers
-        
+
         # Test lookalike hostname
         updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
             headers, FAKE_OAUTH_TOKEN, api_base="https://api.anthropic.com.attacker.com/v1"
@@ -485,8 +485,8 @@ class TestIsAnthropicOAuthKey:
 class TestProxyOAuthHeaderForwarding:
     """Tests for proxy-layer OAuth header preservation and forwarding."""
 
-    def test_clean_headers_preserves_oauth_authorization(self):
-        """clean_headers should preserve Authorization header with OAuth tokens."""
+    def test_clean_headers_strips_oauth_authorization_by_default(self):
+        """clean_headers should strip Authorization header with OAuth tokens when forward_llm_provider_auth_headers is False."""
         from starlette.datastructures import Headers
 
         from litellm.proxy.litellm_pre_call_utils import clean_headers
@@ -497,10 +497,9 @@ class TestProxyOAuthHeaderForwarding:
                 (b"content-type", b"application/json"),
             ]
         )
-        cleaned = clean_headers(raw_headers)
+        cleaned = clean_headers(raw_headers, forward_llm_provider_auth_headers=False)
 
-        assert "authorization" in cleaned
-        assert cleaned["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+        assert "authorization" not in cleaned
         assert cleaned["content-type"] == "application/json"
 
     def test_clean_headers_strips_non_oauth_authorization(self):
@@ -578,8 +577,8 @@ class TestProxyOAuthHeaderForwarding:
         assert cleaned["x-goog-api-key"] == "google-api-key-123"
         assert cleaned["content-type"] == "application/json"
 
-    def test_clean_headers_preserves_oauth_regardless_of_forward_flag(self):
-        """clean_headers should always preserve OAuth tokens regardless of forward_llm_provider_auth_headers."""
+    def test_clean_headers_strips_oauth_unless_forward_flag_is_true(self):
+        """clean_headers should only preserve OAuth tokens when forward_llm_provider_auth_headers=True."""
         from starlette.datastructures import Headers
 
         from litellm.proxy.litellm_pre_call_utils import clean_headers
@@ -591,12 +590,11 @@ class TestProxyOAuthHeaderForwarding:
             ]
         )
 
-        # Should preserve OAuth even with flag=False
+        # Should strip OAuth with flag=False
         cleaned_without_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=False)
-        assert "authorization" in cleaned_without_flag
-        assert cleaned_without_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+        assert "authorization" not in cleaned_without_flag
 
-        # Should also preserve OAuth with flag=True
+        # Should preserve OAuth with flag=True
         cleaned_with_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=True)
         assert "authorization" in cleaned_with_flag
         assert cleaned_with_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
