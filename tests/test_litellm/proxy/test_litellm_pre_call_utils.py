@@ -8238,3 +8238,45 @@ def test_default_team_settings_bool_turn_off_message_logging_redacts():
         )
         is True
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/mcp-rest/tools/call", "/v1/responses", "/v1/chat/completions"])
+@pytest.mark.parametrize("custom_auth", ["x-mcp-auth", "x-private-mcp-token"])
+async def test_mcp_credentials_only_removed_from_logging_copies(path: str, custom_auth: str):
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    metadata_name: Final = "litellm_metadata" if path == "/v1/responses" else "metadata"
+    secrets: Final = {
+        "X-MCP-Deepwiki-Authorization": "upstream-sentinel",
+        custom_auth: "client-auth-sentinel",
+        "x-service-token": "configured-secret-sentinel",
+    }
+    attribution: Final = {"x-app-id": "app-a", "x-nuid": "user-a", "x-user-id": "identity-a"}
+    request: Final = _make_request_mock(path, {"Content-Type": "application/json", **secrets, **attribution})
+    request.headers = Headers(request.headers)
+    settings: Final = {"mcp_client_side_auth_header_name": custom_auth, "user_header_name": "x-user-id"}
+    server: Final = MCPServer(
+        server_id="header-test", name="header-test", transport="http", url="https://example.com/mcp",
+        extra_headers=["x-service-token", "x-user-id"],
+    )
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", settings),
+        patch.dict(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.config_mcp_servers",
+            {"header-test": server}, clear=True,
+        ),
+    ):
+        updated: Final = await add_litellm_data_to_request(
+            data={"model": "test-model", "messages": [{"role": "user", "content": "hello"}]},
+            request=request, user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(), general_settings=settings, version="test",
+        )
+    for header_dict in _all_header_dicts(updated, metadata_name):
+        assert not any(value in json.dumps(header_dict) for value in secrets.values())
+    assert updated[metadata_name]["headers"] == updated["proxy_server_request"]["headers"]
+    for name, value in attribution.items():
+        assert updated[metadata_name]["headers"][name] == value
+    for name, value in secrets.items():
+        assert updated["secret_fields"]["raw_headers"][name.lower()] == value
+        assert request.headers[name] == value
