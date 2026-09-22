@@ -1764,6 +1764,9 @@
     ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[bearer]": [
       "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
+    ],
+    "tests/integration/observability/test_callback_delivery.py::test_streamed_responses_success_callback_carries_provider_apim_request_id": [
+      "other.observability.callbacks.streamed_responses_events_carry_provider_response_headers"
     ]
   },
   "browser": {
