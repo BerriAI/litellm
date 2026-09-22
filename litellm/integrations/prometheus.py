@@ -10,6 +10,7 @@ import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
 
 from pydantic import BaseModel
@@ -66,6 +67,7 @@ from litellm.types.proxy.carried_budget_state import (
 from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
     StandardLoggingPayload,
+    StandardLoggingZeroCostDiagnostic,
 )
 
 if TYPE_CHECKING:
@@ -711,6 +713,15 @@ class PrometheusLogger(CustomLogger):
                 name="litellm_requests_metric",
                 documentation="deprecated - use litellm_proxy_total_requests_metric. Total number of LLM calls to litellm - track total per API Key, team, user",
                 labelnames=self.get_labels_for_metric("litellm_requests_metric"),
+            )
+
+            self.litellm_zero_cost_requests_total = self._counter_factory(
+                name="litellm_zero_cost_requests_total",
+                documentation=(
+                    "Requests that carried usage but were logged at $0 on a model whose pricing entry "
+                    "has a non-zero rate, by reason (missing_pricing_key, pricing_not_applied, cost_calculation_error)"
+                ),
+                labelnames=self.get_labels_for_metric("litellm_zero_cost_requests_total"),
             )
 
             # Cache metrics
@@ -1410,6 +1421,11 @@ class PrometheusLogger(CustomLogger):
             enum_values=enum_values,
             label_context=label_context,
         )
+        self._increment_zero_cost_requests_metric(
+            zero_cost_diagnostic=standard_logging_payload.get("zero_cost_diagnostic"),
+            enum_values=enum_values,
+            label_context=label_context,
+        )
 
         # input, output, total token metrics
         self._increment_token_metrics(
@@ -1983,6 +1999,30 @@ class PrometheusLogger(CustomLogger):
             amount=float(response_cost),
         )
 
+    def _increment_zero_cost_requests_metric(
+        self,
+        zero_cost_diagnostic: StandardLoggingZeroCostDiagnostic | None,
+        enum_values: UserAPIKeyLabelValues,
+        label_context: PrometheusLabelFactoryContext,
+    ) -> None:
+        if zero_cost_diagnostic is None:
+            return
+        supported_labels: Final = self.get_labels_for_metric("litellm_zero_cost_requests_total")
+        reason_label: Final = (
+            MappingProxyType({ZERO_COST_REASON_LABEL: zero_cost_diagnostic["reason"]})
+            if ZERO_COST_REASON_LABEL in supported_labels
+            else MappingProxyType({})
+        )
+        labels: Final = MappingProxyType(
+            {
+                **prometheus_label_factory(
+                    supported_enum_labels=supported_labels, enum_values=enum_values, label_context=label_context
+                ),
+                **reason_label,
+            }
+        )
+        self.litellm_zero_cost_requests_total.labels(**labels).inc()
+
     @staticmethod
     def _get_remaining_from_v3_rate_limit_headers(
         standard_logging_payload: StandardLoggingPayload | None,
@@ -2333,6 +2373,8 @@ class PrometheusLogger(CustomLogger):
                 team_alias=user_api_team_alias,
                 user=user_id,
                 model_id=standard_logging_payload.get("model_id", ""),
+                requested_model=standard_logging_payload.get("model_group"),
+                api_provider=standard_logging_payload.get("custom_llm_provider"),
                 custom_metadata_labels=get_custom_labels_from_metadata(
                     metadata=_get_combined_custom_metadata_from_standard_logging_payload(
                         standard_logging_payload=standard_logging_payload
@@ -2344,6 +2386,11 @@ class PrometheusLogger(CustomLogger):
                 self.litellm_llm_api_failed_requests_metric,
                 "litellm_llm_api_failed_requests_metric",
                 enum_values,
+            )
+            self._increment_zero_cost_requests_metric(
+                zero_cost_diagnostic=standard_logging_payload.get("zero_cost_diagnostic"),
+                enum_values=enum_values,
+                label_context=PrometheusLabelFactoryContext(enum_values),
             )
             self.set_llm_deployment_failure_metrics(kwargs)
             await self._set_org_budget_metrics_after_api_request(
