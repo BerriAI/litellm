@@ -472,6 +472,7 @@ from .exceptions import (
     BudgetExceededError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    ModelNotMappedError,
     NotFoundError,
     OpenAIError,
     PermissionDeniedError,
@@ -2015,13 +2016,19 @@ def client(original_function):
                     print_verbose(f"Error while checking max token limit: {e}")
 
             # MODEL CALL
+            call_kwargs: Final = (
+                {**kwargs, "input": _caching_handler_response.embedding_uncached_input}
+                if _caching_handler_response is not None
+                and _caching_handler_response.embedding_uncached_input is not None
+                else kwargs
+            )
             try:
-                result = await original_function(*args, **kwargs)
+                result = await original_function(*args, **call_kwargs)
             except Exception as deployment_error:
                 _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
                 try:
                     await async_post_call_failure_deployment_hook(
-                        request_data=kwargs,
+                        request_data=call_kwargs,
                         exception=deployment_error,
                         call_type=call_type,
                     )
@@ -2062,7 +2069,7 @@ def client(original_function):
             post_call_processing(
                 original_response=result,
                 model=model,
-                optional_params=kwargs,
+                optional_params=call_kwargs,
                 original_function=original_function,
                 rules_obj=rules_obj,
             )
@@ -2070,7 +2077,7 @@ def client(original_function):
             _call_type_enum: Final = _CALL_TYPE_ENUM_MAP.get(call_type)
             if _call_type_enum is not None:
                 result = await async_post_call_success_deployment_hook(
-                    request_data=kwargs,
+                    request_data=call_kwargs,
                     response=result,
                     call_type=_call_type_enum,
                 )
@@ -2079,7 +2086,7 @@ def client(original_function):
             await _llm_caching_handler.async_set_cache(
                 result=result,
                 original_function=original_function,
-                kwargs=kwargs,
+                kwargs=call_kwargs,
                 args=args,
             )
 
@@ -5824,6 +5831,13 @@ def _is_potential_model_name_in_model_cost(
 _ABOVE_THRESHOLD_COST_KEY: Final = ABOVE_THRESHOLD_COST_KEY_PATTERN
 
 
+def _model_not_mapped_message(model: str, custom_llm_provider: str | None) -> str:
+    return (
+        f"This model isn't mapped yet. model={model}, custom_llm_provider={custom_llm_provider}. "
+        "Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json."
+    )
+
+
 def _get_model_info_helper(
     model: str,
     custom_llm_provider: str | None = None,
@@ -6006,9 +6020,7 @@ def _get_model_info_helper(
                     key, _model_info = generalization
 
             if _model_info is None or key is None:
-                raise ValueError(
-                    "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
-                )
+                raise ModelNotMappedError(_model_not_mapped_message(model, custom_llm_provider))
             _input_cost_per_token: float | None = _model_info.get("input_cost_per_token")
             if _input_cost_per_token is None:
                 # default value to 0, be noisy about this
@@ -6243,11 +6255,11 @@ def _get_model_info_helper(
                 if cost_key not in returned_model_info and _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None:
                     returned_model_info[cost_key] = cost_value
             return returned_model_info
+    except ModelNotMappedError:
+        raise
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)
-        raise Exception(
-            f"This model isn't mapped yet. model={model}, custom_llm_provider={custom_llm_provider}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json."
-        )
+        raise Exception(_model_not_mapped_message(model, custom_llm_provider))
 
 
 def _build_model_info(
