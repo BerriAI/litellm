@@ -41,8 +41,13 @@ OPERATOR_KEYED_MAPS: Final = frozenset(
         "content_policy_fallbacks",
         "extra_headers",
         "default_headers",
+        "headers",
+        "static_headers",
         "extra_body",
         "metadata",
+        "model_alias_map",
+        "tag_budget_config",
+        "priority_reservation",
     }
 )
 
@@ -112,13 +117,11 @@ def _cache_params_keys() -> frozenset[str]:
 
 
 def _render_json_scalar(value: JsonValue) -> str | None:
-    match value:
-        case bool():
-            return str(value).lower()
-        case str():
-            return value if value in _known_values() else None
-        case _:
-            return None
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, str) and value in _known_values():
+        return value
+    return None
 
 
 def _render_json(value: JsonValue) -> str | None:
@@ -178,20 +181,18 @@ def _model_list_lines(model_list: object) -> tuple[str, ...]:
 
 
 def _verbose_scalar(value: object) -> str:
-    match value:
-        case bool():
-            return str(value).lower()
-        case int() | float():
-            return str(value)
-        case None:
-            return "null"
-        case str() if value in _known_values():
-            return value
-        case str():
-            provider: Final = _deployment_provider(value)
-            return "<str>" if provider is None else f"{provider}/<str>"
-        case _:
-            return "<object>"
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, int | float):
+        return str(value)
+    if value is None:
+        return "null"
+    if not isinstance(value, str):
+        return "<object>"
+    if value in _known_values():
+        return value
+    provider: Final = _deployment_provider(value)
+    return "<str>" if provider is None else f"{provider}/<str>"
 
 
 def _mapping_or_none(value: object) -> Mapping[str, object] | None:

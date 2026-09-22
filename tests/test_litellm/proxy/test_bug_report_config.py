@@ -229,6 +229,39 @@ def test_verbose_lines_count_operator_keyed_maps_and_type_unknown_leaves():
     )
 
 
+def test_verbose_lines_count_pass_through_headers_and_operator_named_budget_maps():
+    config: Mapping[str, object] = {
+        "litellm_settings": {
+            "model_alias_map": {"acme-gpt4": "gpt-4o"},
+            "tag_budget_config": {"acme-team": {"max_budget": 10}},
+            "priority_reservation": {"acme-prod": 0.9},
+        },
+        "mcp_servers": {"acme_mcp": {"url": "https://mcp.acme.example", "static_headers": {"x-acme-token": "t"}}},
+    }
+    general_settings: Mapping[str, object] = {
+        "pass_through_endpoints": [
+            {
+                "path": "/acme",
+                "target": "https://acme.example",
+                "headers": {"x-acme-tenant": "acme", "Authorization": "k"},
+            }
+        ]
+    }
+
+    lines = verbose_config_lines(config, general_settings)
+
+    assert lines == (
+        "litellm_settings.model_alias_map = <1 keys>",
+        "litellm_settings.tag_budget_config = <1 keys>",
+        "litellm_settings.priority_reservation = <1 keys>",
+        "mcp_servers = <1 keys>",
+        "general_settings.pass_through_endpoints[0].path = <str>",
+        "general_settings.pass_through_endpoints[0].target = <str>",
+        "general_settings.pass_through_endpoints[0].headers = <2 keys>",
+    )
+    assert "acme" not in "\n".join(lines)
+
+
 def test_verbose_lines_stop_at_the_depth_cap_and_survive_self_referencing_config():
     deep: dict[str, object] = {"drop_params": True}
     for _ in range(MAX_CONFIG_DEPTH + 5):
