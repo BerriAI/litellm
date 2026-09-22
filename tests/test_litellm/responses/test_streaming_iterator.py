@@ -342,6 +342,46 @@ def test_run_post_success_hooks_does_not_report_generation_time_as_overhead():
     assert "litellm_overhead_time_ms" not in iterator.completed_response._hidden_params
 
 
+def test_run_post_success_hooks_prices_the_completed_response_not_the_event():
+    """The terminal ResponseCompletedEvent carries no usage, so pricing it recomputes
+    cost as 0 and clobbers the cost_breakdown the stream already stored."""
+    inner_response: Final = ResponsesAPIResponse(
+        id="resp_pricing",
+        created_at=0,
+        status="completed",
+        model="gpt-4o-mini",
+        object="response",
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=1840, output_tokens=412, total_tokens=2252),
+    )
+    event: Final = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=inner_response,
+    )
+
+    logging_obj = _logging_obj_stub()
+    priced_results: Final[list[object]] = []
+
+    def _cost_calculator(*, result, **_kwargs):
+        priced_results.append(result)
+        return 0.0156
+
+    logging_obj._response_cost_calculator.side_effect = _cost_calculator
+
+    iterator = _make_iterator(sse_events=[], logging_obj=logging_obj)
+    iterator.completed_response = event
+    iterator.start_time = datetime(2025, 1, 1, 0, 0, 0)
+
+    iterator._run_post_success_hooks(datetime(2025, 1, 1, 0, 0, 10))
+
+    assert priced_results and all(
+        isinstance(result, ResponsesAPIResponse) and result is not event and result.usage is not None
+        for result in priced_results
+    )
+    assert priced_results[0]._hidden_params["response_cost"] == 0.0156
+    assert event.response._hidden_params == {}
+
+
 def _mock_config_with_completed_response(response: ResponsesAPIResponse) -> Mock:
     mock_config = Mock(spec=BaseResponsesAPIConfig)
 
