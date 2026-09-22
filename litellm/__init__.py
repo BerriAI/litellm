@@ -245,7 +245,7 @@ token: Optional[str] = (
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = drop_params_env_flag(os.environ, verbose_logger)
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
-strict_stream_completion: bool = os.getenv("LITELLM_STRICT_STREAM_COMPLETION", "").strip().lower() in ("1", "true", "yes", "on")
+strict_stream_completion: bool = False
 bedrock_neutralize_orphaned_tool_blocks: bool = True
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)

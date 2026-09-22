@@ -5023,20 +5023,6 @@ def test_a_clean_terminator_with_no_finish_reason_is_not_treated_as_truncation()
     assert wrapper.finish_reason_handler().choices[0].finish_reason == "stop"
 
 
-@pytest.mark.parametrize("value", ["false", "False", "FALSE", "0", "no", ""])
-def test_falsy_environment_values_do_not_enable_strict_mode(value, monkeypatch):
-    """bool('false') is True, which would have turned this on for everyone"""
-    import importlib
-
-    monkeypatch.setenv("LITELLM_STRICT_STREAM_COMPLETION", value)
-    reloaded = importlib.reload(litellm)
-    try:
-        assert reloaded.strict_stream_completion is False
-    finally:
-        monkeypatch.delenv("LITELLM_STRICT_STREAM_COMPLETION", raising=False)
-        importlib.reload(litellm)
-
-
 def test_incomplete_stream_error_is_reachable_from_the_package_root():
     """A caller writes `except litellm.IncompleteStreamError`, not the submodule path"""
     assert litellm.IncompleteStreamError is litellm.exceptions.IncompleteStreamError
