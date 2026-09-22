@@ -51,6 +51,7 @@ from models import (
     SpendLogRow,
     TextContentPart,
 )
+from pydantic import JsonValue
 
 pytestmark = pytest.mark.e2e
 
@@ -137,12 +138,10 @@ def _has_pre_call_record(rows: list[SpendLogRow]) -> bool:
 
 
 def _images_scanned_total(record: GuardrailRunRecord) -> int:
-    response = record.guardrail_response
-    if not isinstance(response, dict):
-        return 0
-    coverage = response.get("guardrailCoverage")
-    images = coverage.get("images") if isinstance(coverage, dict) else None
-    total = images.get("total") if isinstance(images, dict) else None
+    response = cast("dict[str, JsonValue]", record.guardrail_response)
+    coverage: Final = response.get("guardrailCoverage")
+    images: Final = coverage.get("images") if isinstance(coverage, dict) else None
+    total: Final = images.get("total") if isinstance(images, dict) else None
     return total if isinstance(total, int) else 0
 
 
