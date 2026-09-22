@@ -184,7 +184,13 @@ class OllamaConfig(BaseConfig):
                 optional_params["stop"] = value
             elif (
                 param == "reasoning_effort"
-                and (think := think_from_reasoning_effort(model, cast(object, value))) is not None
+                and (
+                    think := think_from_reasoning_effort(
+                        model,
+                        cast(object, value),  # cast-ok: [LIT006] untyped dict value, widened to object for the helper
+                    )
+                )
+                is not None
             ):
                 optional_params["think"] = think
             elif param == "response_format" and isinstance(value, dict):
