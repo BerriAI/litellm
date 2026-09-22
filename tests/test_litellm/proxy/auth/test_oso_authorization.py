@@ -89,14 +89,10 @@ async def test_oso_allow_sends_model_and_non_secret_authenticated_identity() -> 
         OsoContextFact(
             predicate="has_relation", args=(actor, "project", OsoValue(type="Project", id="project-gateway"))
         ),
-        OsoContextFact(
-            predicate="has_relation",
-            args=(actor, "api_key", OsoValue(type="ApiKey", id=hash_token(raw_litellm_key))),
-        ),
     )
     serialized: Final = decision.model_dump_json()
     assert raw_litellm_key not in serialized
-    assert hash_token(raw_litellm_key) in serialized
+    assert "ApiKey" not in serialized
     assert all(secret not in serialized for secret in ("oso-test-secret", "Bearer"))
 
 

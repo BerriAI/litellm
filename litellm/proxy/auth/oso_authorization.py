@@ -13,7 +13,6 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
-    hash_token,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -125,7 +124,7 @@ def _safe_key_id(valid_token: UserAPIKeyAuth) -> str | None:
         return None
     if _HASHED_TOKEN_PATTERN.fullmatch(candidate) or candidate.startswith("hashed-jwt-"):
         return candidate
-    return hash_token(candidate)
+    return None
 
 
 def _actor(valid_token: UserAPIKeyAuth, key_id: str | None) -> OsoValue | None:
