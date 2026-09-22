@@ -11,7 +11,7 @@ class _CaseInsensitiveDict(dict):
     equality checks preserve the caller's format, but lookups always fold to lower-case.
     """
 
-    def __getitem__(self, key: str) -> str:  # type: ignore[override]
+    def __getitem__(self, key: str) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]  # narrower key type is intentional; HTTP header keys are always str
         try:
             return super().__getitem__(key)
         except KeyError:
@@ -29,7 +29,7 @@ class _CaseInsensitiveDict(dict):
             return any(k.lower() == key_lower for k in self.keys())
         return False
 
-    def get(self, key: str, default=None):  # type: ignore[override]
+    def get(self, key: str, default=None):  # pyright: ignore[reportIncompatibleMethodOverride]  # narrower key type is intentional; HTTP header keys are always str
         try:
             return self[key]
         except KeyError:
