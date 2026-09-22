@@ -1888,7 +1888,10 @@ class JWTAuthManager:
     def _raise_header_team_not_allowed(header_value: str, allowed_team_ids: set[str]) -> NoReturn:
         raise HTTPException(
             status_code=403,
-            detail=f"Team '{header_value}' from x-litellm-team-id header is not in your JWT's allowed teams. Allowed teams: {list(allowed_team_ids)}",
+            detail=(
+                f"x-litellm-team-id '{header_value}' matches no team id or team alias in your JWT's allowed teams. "
+                f"Allowed team ids: {sorted(allowed_team_ids)}"
+            ),
         )
 
     @staticmethod
@@ -2336,7 +2339,7 @@ class JWTAuthManager:
         """
         raise HTTPException(
             status_code=403,
-            detail=(f"Team '{header_value}' (from x-litellm-team-id header) is not in your team memberships."),
+            detail=f"x-litellm-team-id '{header_value}' matches no team id or team alias among your team memberships.",
         )
 
     @staticmethod

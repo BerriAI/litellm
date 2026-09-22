@@ -7045,7 +7045,9 @@ async def test_resolve_team_from_header_denies_aliases_of_teams_the_jwt_does_not
     """An alias that exists but names a team outside the JWT's allowed teams is
     refused with the same 403 as an unknown value, and the detail names only
     what the caller sent, so the response reveals neither that the alias exists
-    nor which team id it maps to."""
+    nor which team id it maps to. Because the id and the alias lookups both ran
+    before the denial, the detail says the value matched neither form and lists
+    the team ids the JWT does allow."""
     aliases = {"alias_a": "team_a", "alias_b": "team_b"}
 
     with pytest.raises(HTTPException) as other_team:
@@ -7057,6 +7059,10 @@ async def test_resolve_team_from_header_denies_aliases_of_teams_the_jwt_does_not
     assert unknown.value.status_code == 403
     assert "team_b" not in other_team.value.detail
     assert other_team.value.detail.replace("alias_b", "<value>") == unknown.value.detail.replace("no_such", "<value>")
+    assert unknown.value.detail == (
+        "x-litellm-team-id 'no_such' matches no team id or team alias in your JWT's allowed teams. "
+        "Allowed team ids: ['team_a']"
+    )
 
 
 @pytest.mark.asyncio
@@ -7080,7 +7086,9 @@ async def test_resolve_team_from_header_under_db_fallback_tries_the_id_before_th
     with pytest.raises(HTTPException) as neither:
         await _resolve_header("ghost", set(), True, _teams_by_id(known_ids), _teams_by_alias(aliases))
     assert neither.value.status_code == 403
-    assert neither.value.detail == ("Team 'ghost' (from x-litellm-team-id header) is not in your team memberships.")
+    assert neither.value.detail == (
+        "x-litellm-team-id 'ghost' matches no team id or team alias among your team memberships."
+    )
 
 
 @pytest.mark.asyncio
@@ -7112,7 +7120,9 @@ async def test_resolve_team_from_header_under_db_fallback_never_aliases_a_team_i
         )
 
     assert unreadable.value.status_code == 403
-    assert unreadable.value.detail == ("Team 'team_a' (from x-litellm-team-id header) is not in your team memberships.")
+    assert unreadable.value.detail == (
+        "x-litellm-team-id 'team_a' matches no team id or team alias among your team memberships."
+    )
     lookups_by_alias.assert_not_awaited()
 
 
