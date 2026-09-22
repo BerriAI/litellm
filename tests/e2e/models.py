@@ -813,9 +813,6 @@ class ImageEditForm(BaseModel):
     quality: str = "low"
 
 
-# ---------- search ----------
-
-
 class SearchBody(BaseModel):
     """POST /v1/search/{search_tool_name} body (Perplexity-compatible)."""
 

@@ -289,7 +289,7 @@ except (ImportError, AttributeError, TypeError):
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
 
 from typing_extensions import assert_never
 
