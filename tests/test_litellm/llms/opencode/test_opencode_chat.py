@@ -537,7 +537,7 @@ class TestMockedCompletion:
                     "id": "msg_123",
                     "type": "message",
                     "role": "assistant",
-                    "model": "claude-sonnet-4",
+                    "model": "claude-sonnet-4-5",
                     "content": [{"type": "text", "text": "messages ok"}],
                     "stop_reason": "end_turn",
                     "usage": {"input_tokens": 1, "output_tokens": 1},
@@ -553,7 +553,7 @@ class TestMockedCompletion:
             api_key="sk-fake",
         )
         litellm.completion(
-            model="opencode_zen/claude-sonnet-4",
+            model="opencode_zen/claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
             api_key="sk-fake",
             max_tokens=16,

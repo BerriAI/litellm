@@ -39,7 +39,7 @@ def _anthropic_response(content: str, **usage_kwargs) -> dict:
         "id": "msg_123",
         "type": "message",
         "role": "assistant",
-        "model": "claude-sonnet-4",
+        "model": "claude-sonnet-4-5",
         "content": [{"type": "text", "text": content}],
         "stop_reason": "end_turn",
         "usage": {
@@ -71,7 +71,7 @@ class TestMessagesModelSet:
             "claude-opus-4-7",
             "claude-opus-4-8",
             "claude-opus-5",
-            "claude-sonnet-4",
+            "claude-opus-5-5",
             "claude-sonnet-4-5",
             "claude-sonnet-4-6",
             "claude-sonnet-5",
@@ -85,8 +85,8 @@ class TestMessagesModelSet:
         assert "qwen3.6-plus" in OPENCODE_MESSAGES_MODELS["zen"]
 
     def test_set_size(self):
-        """Exactly 14 models in the zen messages set."""
-        assert len(OPENCODE_MESSAGES_MODELS["zen"]) == 14
+        """Exactly 15 models in the zen messages set."""
+        assert len(OPENCODE_MESSAGES_MODELS["zen"]) == 15
 
     def test_non_claude_model_not_in_set(self):
         """gpt-5 models are NOT in the messages set (they belong on chat)."""
@@ -124,8 +124,8 @@ class TestIsMessagesModel:
     """Model-to-arm dispatch decision."""
 
     def test_claude_model_routes_to_messages(self):
-        """claude-sonnet-4 routes to the messages arm on zen."""
-        assert is_messages_model("zen", "claude-sonnet-4") is True
+        """claude-sonnet-4-5 routes to the messages arm on zen."""
+        assert is_messages_model("zen", "claude-sonnet-4-5") is True
         assert is_messages_model("zen", "claude-opus-4-5") is True
 
     def test_qwen_model_routes_to_messages(self):
@@ -208,12 +208,12 @@ class TestMessagesConfig:
 
     def test_get_complete_url_zen(self):
         cfg = OpenCodeMessagesConfig(surface="zen")
-        url = cfg.get_complete_url(None, None, "claude-sonnet-4", {}, {})
+        url = cfg.get_complete_url(None, None, "claude-sonnet-4-5", {}, {})
         assert url == "https://opencode.ai/zen/v1/messages"
 
     def test_get_complete_url_trailing_slash(self):
         cfg = OpenCodeMessagesConfig(surface="zen")
-        url = cfg.get_complete_url("http://localhost:4000/", None, "claude-sonnet-4", {}, {})
+        url = cfg.get_complete_url("http://localhost:4000/", None, "claude-sonnet-4-5", {}, {})
         assert url == "http://localhost:4000/v1/messages"
 
     def test_error_class(self):
@@ -240,7 +240,7 @@ class TestBillingMetadataNotLeaked:
         }
 
         cfg.transform_anthropic_messages_request(
-            model="claude-sonnet-4",
+            model="claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
             anthropic_messages_optional_request_params=optional_params,
             litellm_params=GenericLiteLLMParams(),
@@ -270,7 +270,7 @@ class TestAuthHeader:
         headers: dict = {}
         result, _ = cfg.validate_anthropic_messages_environment(
             headers=headers,
-            model="claude-sonnet-4",
+            model="claude-sonnet-4-5",
             messages=[],
             optional_params={},
             litellm_params={},
@@ -306,7 +306,7 @@ class TestAuthHeader:
         headers: dict = {}
         result, _ = cfg.validate_anthropic_messages_environment(
             headers=headers,
-            model="claude-sonnet-4",
+            model="claude-sonnet-4-5",
             messages=[],
             optional_params={},
             litellm_params={},
@@ -320,7 +320,7 @@ class TestAuthHeader:
         headers: dict = {}
         result, _ = cfg.validate_anthropic_messages_environment(
             headers=headers,
-            model="claude-sonnet-4",
+            model="claude-sonnet-4-5",
             messages=[],
             optional_params={},
             litellm_params={},
@@ -374,7 +374,7 @@ class TestMockedMessagesCompletion:
         monkeypatch.setattr(litellm, "api_key", "sk-fake")
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         result = litellm.completion(
-            model="opencode_zen/claude-sonnet-4",
+            model="opencode_zen/claude-sonnet-4-5",
             messages=[{"role": "user", "content": "say hi"}],
             custom_llm_provider="opencode_zen",
             max_tokens=256,
@@ -399,7 +399,7 @@ class TestMockedMessagesCompletion:
         monkeypatch.setattr(litellm, "api_key", "sk-zen-123")
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         litellm.completion(
-            model="opencode_zen/claude-sonnet-4",
+            model="opencode_zen/claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
             custom_llm_provider="opencode_zen",
             max_tokens=256,
@@ -419,7 +419,7 @@ class TestMockedMessagesCompletion:
         monkeypatch.setattr(litellm, "api_key", "sk-key")
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         litellm.completion(
-            model="opencode_zen/claude-sonnet-4",
+            model="opencode_zen/claude-sonnet-4-5",
             messages=[{"role": "user", "content": "test body shape"}],
             custom_llm_provider="opencode_zen",
             max_tokens=256,
@@ -475,7 +475,7 @@ class TestMockedMessagesCompletion:
         monkeypatch.setattr(litellm, "api_key", "sk-key")
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         litellm.completion(
-            model="opencode_zen/claude-sonnet-4",
+            model="opencode_zen/claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
             custom_llm_provider="opencode_zen",
             max_tokens=256,
@@ -559,7 +559,7 @@ class TestMockedMessagesCompletion:
         monkeypatch.setattr(litellm, "opencode_zen_api_key", "sk-opencode")
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         result = litellm.completion(
-            model="opencode_zen/claude-sonnet-4",
+            model="opencode_zen/claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
             custom_llm_provider="opencode_zen",
             max_tokens=256,
@@ -623,7 +623,7 @@ class TestMockedMessagesCompletion:
         monkeypatch.setattr(litellm, "api_key", "sk-key")
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         result = litellm.completion(
-            model="opencode_zen/claude-sonnet-4",
+            model="opencode_zen/claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
             custom_llm_provider="opencode_zen",
         )
@@ -631,7 +631,7 @@ class TestMockedMessagesCompletion:
         assert result is not None
         request = respx_mock.calls[0].request
         body = json.loads(request.read())
-        # claude-sonnet-4 cost-map max_output_tokens is 64000
+        # claude-sonnet-4-5 cost-map max_output_tokens is 64000
         assert body["max_tokens"] == 64000
 
     def test_max_tokens_defaulted_on_go_surface(self, respx_mock, monkeypatch):
@@ -663,7 +663,7 @@ class TestMockedMessagesCompletion:
         monkeypatch.setattr(litellm, "api_key", "sk-key")
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         result = litellm.completion(
-            model="opencode_zen/claude-sonnet-4",
+            model="opencode_zen/claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
             custom_llm_provider="opencode_zen",
             max_tokens=128,
@@ -688,7 +688,7 @@ def _sse_body(content: str, **usage_kwargs) -> str:
         "type": "message",
         "id": "msg_123",
         "role": "assistant",
-        "model": "claude-sonnet-4",
+        "model": "claude-sonnet-4-5",
         "stop_reason": "end_turn",
         "content": [{"type": "text", "text": content}],
         "usage": {"input_tokens": prompt, "output_tokens": completion},
@@ -715,7 +715,7 @@ class TestMessagesArmStreaming:
 
         monkeypatch.setattr(litellm, "api_key", "sk-key")
         result = litellm.completion(
-            model="opencode_zen/claude-sonnet-4",
+            model="opencode_zen/claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
             custom_llm_provider="opencode_zen",
             stream=True,
@@ -740,7 +740,7 @@ class TestMessagesArmStreaming:
 
         monkeypatch.setattr(litellm, "api_key", "sk-key")
         litellm.completion(
-            model="opencode_zen/claude-sonnet-4",
+            model="opencode_zen/claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
             custom_llm_provider="opencode_zen",
             stream=True,
@@ -772,7 +772,7 @@ class TestMessagesArmAcompletion:
 
         monkeypatch.setattr(litellm, "api_key", "sk-key")
         result = await litellm.acompletion(
-            model="opencode_zen/claude-sonnet-4",
+            model="opencode_zen/claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
             custom_llm_provider="opencode_zen",
             max_tokens=512,
@@ -791,7 +791,7 @@ class TestMessagesArmAcompletion:
 
         monkeypatch.setattr(litellm, "api_key", "sk-key")
         await litellm.acompletion(
-            model="opencode_zen/claude-sonnet-4",
+            model="opencode_zen/claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
             custom_llm_provider="opencode_zen",
             max_tokens=512,
@@ -830,7 +830,7 @@ class TestMessagesArmReturnShape:
         respx_mock.post(ZEN_MESSAGES_ENDPOINT).mock(return_value=Response(200, json=_anthropic_response("hi there")))
 
         result = litellm.completion(
-            model="opencode_zen/claude-sonnet-4",
+            model="opencode_zen/claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
             max_tokens=16,
         )
@@ -843,7 +843,7 @@ class TestMessagesArmReturnShape:
 
         result = asyncio.run(
             litellm.acompletion(
-                model="opencode_zen/claude-sonnet-4",
+                model="opencode_zen/claude-sonnet-4-5",
                 messages=[{"role": "user", "content": "hi"}],
                 max_tokens=16,
             )
@@ -862,7 +862,7 @@ class TestMessagesArmReturnShape:
         route = respx_mock.post(ZEN_MESSAGES_ENDPOINT).mock(return_value=Response(200, json=_anthropic_response("ok")))
 
         litellm.completion(
-            model="opencode_zen/claude-sonnet-4",
+            model="opencode_zen/claude-sonnet-4-5",
             messages=[
                 {"role": "system", "content": "be terse"},
                 {"role": "user", "content": "hi"},
@@ -895,7 +895,7 @@ class TestMessagesArmReturnShape:
         route = respx_mock.post(expected_url).mock(return_value=Response(200, json=_anthropic_response("ok")))
 
         litellm.completion(
-            model="opencode_zen/claude-sonnet-4",
+            model="opencode_zen/claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
             api_base=configured_base,
             max_tokens=16,
@@ -917,8 +917,8 @@ class TestMessagesCostMap:
     def _load_cost_map(self, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
-    def test_claude_sonnet_4_entry(self):
-        entry = litellm.model_cost["opencode_zen/claude-sonnet-4"]
+    def test_claude_sonnet_4_5_entry(self):
+        entry = litellm.model_cost["opencode_zen/claude-sonnet-4-5"]
         assert entry["litellm_provider"] == "opencode_zen"
         assert entry["max_input_tokens"] == 1000000
         assert entry["max_output_tokens"] == 64000
@@ -976,12 +976,12 @@ class TestMessagesArmPricingMitigation:
         served = {
             key: value
             for key, value in litellm.get_model_cost_map(url="").items()
-            if key != "opencode_zen/claude-sonnet-4"
+            if key != "opencode_zen/claude-sonnet-4-5"
         }
         monkeypatch.setattr(litellm, "model_cost", served)
 
         payload = OpenCodeMessagesConfig(surface="zen").transform_anthropic_messages_request(
-            model="claude-sonnet-4",
+            model="claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
             anthropic_messages_optional_request_params={},
             litellm_params=GenericLiteLLMParams(),
@@ -989,11 +989,11 @@ class TestMessagesArmPricingMitigation:
         )
 
         assert payload["max_tokens"] == 64000
-        assert litellm.model_cost["opencode_zen/claude-sonnet-4"]["output_cost_per_token"] == 1.5e-05
+        assert litellm.model_cost["opencode_zen/claude-sonnet-4-5"]["output_cost_per_token"] == 1.5e-05
 
     def test_unpriced_placeholder_is_repriced_before_billing(self, monkeypatch):
         served = dict(litellm.get_model_cost_map(url=""))
-        served["opencode_zen/claude-sonnet-4"] = {
+        served["opencode_zen/claude-sonnet-4-5"] = {
             "litellm_provider": "opencode_zen",
             "max_tokens": 64000,
             "max_output_tokens": 64000,
@@ -1003,13 +1003,13 @@ class TestMessagesArmPricingMitigation:
         monkeypatch.setattr(litellm, "model_cost", served)
 
         OpenCodeMessagesConfig(surface="zen").transform_anthropic_messages_request(
-            model="claude-sonnet-4",
+            model="claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
             anthropic_messages_optional_request_params={"max_tokens": 16},
             litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
-        entry = litellm.model_cost["opencode_zen/claude-sonnet-4"]
+        entry = litellm.model_cost["opencode_zen/claude-sonnet-4-5"]
         assert entry["input_cost_per_token"] == 3e-06
         assert entry["output_cost_per_token"] == 1.5e-05

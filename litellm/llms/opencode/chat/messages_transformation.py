@@ -48,12 +48,13 @@ OPENCODE_MESSAGES_MODELS: Final = MappingProxyType(
                 "claude-opus-4-7",
                 "claude-opus-4-8",
                 "claude-opus-5",
-                "claude-sonnet-4",
+                "claude-opus-5-5",
                 "claude-sonnet-4-5",
                 "claude-sonnet-4-6",
                 "claude-sonnet-5",
                 "qwen3.5-plus",
                 "qwen3.6-plus",
+                "qwen3.8-flash",
             }
         ),
         # The qwen3.{5..8}-{plus,max} grid is listed in full rather than only the

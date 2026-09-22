@@ -21,6 +21,7 @@ from httpx import Response
 import litellm
 import pytest
 
+from litellm.llms.opencode.common_utils import is_responses_model
 from litellm.llms.opencode.go.responses.transformation import (
     OpenCodeGoResponsesAPIConfig,
 )
@@ -435,7 +436,7 @@ class TestGoCostMap:
         for model in [
             "opencode_go/qwen3.8-max",
             "opencode_go/minimax-m3",
-            "opencode_go/qwen3.5-plus",
+            "opencode_go/qwen3.7-plus",
         ]:
             entry = self._check_base_entry(model)
             assert entry["mode"] == "messages", f"{model} mode must be messages, got {entry['mode']}"
@@ -444,7 +445,7 @@ class TestGoCostMap:
         """Go chat models must remain on chat mode."""
         for model in [
             "opencode_go/deepseek-v4-pro",
-            "opencode_go/grok-4.5",
+            "opencode_go/kimi-k2.6",
             "opencode_go/mimo-v2.5",
         ]:
             entry = self._check_base_entry(model)
@@ -467,36 +468,34 @@ class TestGoCostMap:
         *-free models, grok-build-0.1, big-pickle) were leaking into the Go
         cost map and showing up in the wildcard model list even though they
         are not callable on Go. The cost map must contain exactly the models
-        served by https://opencode.ai/zen/go/v1/models.
+        served by https://opencode.ai/zen/go/v1/models that the Go docs list, minus the
+        muse-spark contributor models, which only answer after a data-sharing opt-in.
         """
         live_go_models = {
             "opencode_go/deepseek-v4-flash",
             "opencode_go/deepseek-v4-flash-vision-exp",
             "opencode_go/deepseek-v4-pro",
             "opencode_go/deepseek-v4.1-flash",
-            "opencode_go/glm-5",
             "opencode_go/glm-5.1",
             "opencode_go/glm-5.2",
             "opencode_go/glm-5.3",
             "opencode_go/glm-5.3-flash",
             "opencode_go/gpt-5.6-luna",
-            "opencode_go/grok-4.5",
             "opencode_go/grok-4.6",
+            "opencode_go/grok-4.7",
             "opencode_go/hy3",
             "opencode_go/hy4-preview",
-            "opencode_go/kimi-k2.5",
             "opencode_go/kimi-k2.6",
             "opencode_go/kimi-k2.7-code",
             "opencode_go/kimi-k3",
             "opencode_go/longcat-2.0",
-            "opencode_go/mimo-v2-omni",
-            "opencode_go/mimo-v2-pro",
             "opencode_go/mimo-v2.5",
             "opencode_go/mimo-v2.5-pro",
+            "opencode_go/mimo-v2.6-flash",
+            "opencode_go/mimo-v2.6-pro",
             "opencode_go/minimax-m2.5",
             "opencode_go/minimax-m2.7",
             "opencode_go/minimax-m3",
-            "opencode_go/qwen3.5-plus",
             "opencode_go/qwen3.6-plus",
             "opencode_go/qwen3.7-max",
             "opencode_go/qwen3.7-plus",
@@ -522,13 +521,13 @@ class TestGoCostMap:
             assert model not in litellm.model_cost, f"{model} must not be in Go cost map"
 
     def test_new_go_models_present(self):
-        """The 5 live Go models added to the gateway must have cost-map entries."""
-        for model in [
-            "opencode_go/hy3",
-            "opencode_go/mimo-v2.5",
-            "opencode_go/mimo-v2.5-pro",
-            "opencode_go/mimo-v2-omni",
-            "opencode_go/mimo-v2-pro",
-        ]:
+        """Recently added live Go models have cost-map entries on their documented wire format."""
+        for model, mode in {
+            "opencode_go/hy3": "chat",
+            "opencode_go/mimo-v2.6-flash": "chat",
+            "opencode_go/mimo-v2.6-pro": "chat",
+            "opencode_go/grok-4.7": "responses",
+        }.items():
             entry = self._check_base_entry(model)
-            assert entry["mode"] == "chat", f"{model} mode must be chat, got {entry['mode']}"
+            assert entry["mode"] == mode, f"{model} mode must be {mode}, got {entry['mode']}"
+            assert is_responses_model("go", model) is (mode == "responses")

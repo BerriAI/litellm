@@ -46,14 +46,23 @@ OPENCODE_RESPONSES_MODELS: Final = MappingProxyType(
                 "gpt-5.6-sol",
                 "gpt-5.6-terra",
                 "gpt-6-astra",
+                "gpt-6-luna",
+                "gpt-6-sol",
                 "grok-4.5",
                 "grok-4.6",
+                "grok-4.7",
                 "grok-build-0.1",
                 "muse-spark-1.2",
                 "muse-spark-1.3",
             }
         ),
-        "go": frozenset({"gpt-5.6-luna", "grok-4.6"}),
+        "go": frozenset(
+            {
+                "gpt-5.6-luna",
+                "grok-4.6",
+                "grok-4.7",
+            }
+        ),
     }
 )
 
