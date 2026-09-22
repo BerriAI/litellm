@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from typing import cast
 
 import pytest
 
@@ -3634,3 +3635,147 @@ def test_get_token_base_cost_resolves_missing_cache_write_rates_like_the_tiered_
 
     assert creation == pytest.approx(expected_creation)
     assert creation_1h == pytest.approx(expected_creation_1h)
+
+
+def _batch_rates_model_info(**rates: object) -> ModelInfo:
+    return cast(ModelInfo, dict(rates))
+
+
+def test_get_batch_cost_rates_parses_string_rates():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches="1e-06",
+            output_cost_per_token_batches="4e-06",
+            cache_read_input_token_cost_batches="1e-07",
+            input_cost_per_token_above_272k_tokens_batches="2e-06",
+            output_cost_per_token_above_272k_tokens_batches="6e-06",
+            cache_read_input_token_cost_above_272k_tokens_batches="2e-07",
+        ),
+        Usage(prompt_tokens=300_000, completion_tokens=1, total_tokens=300_001),
+        "openai",
+    )
+
+    assert (rates.input, rates.output, rates.cache_read) == (2e-6, 6e-6, 2e-7)
+
+
+def test_get_batch_cost_rates_falls_back_to_the_flat_rates_when_tier_rates_are_unparsable():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=1e-6,
+            output_cost_per_token_batches=4e-6,
+            cache_read_input_token_cost_batches=1e-7,
+            input_cost_per_token_above_272k_tokens_batches="two",
+            output_cost_per_token_above_272k_tokens_batches="six",
+            cache_read_input_token_cost_above_272k_tokens_batches="none",
+            cache_creation_input_token_cost_batches=1.25e-7,
+            cache_creation_input_token_cost_above_272k_tokens_batches="nope",
+        ),
+        Usage(prompt_tokens=300_000, completion_tokens=1, total_tokens=300_001),
+        "openai",
+    )
+
+    assert (rates.input, rates.output, rates.cache_read, rates.cache_creation) == (1e-6, 4e-6, 1e-7, 1.25e-7)
+
+
+def test_get_batch_cost_rates_has_no_cached_rate_without_a_cached_batch_key():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=1e-6,
+            output_cost_per_token_batches=4e-6,
+            cache_read_input_token_cost=2e-7,
+            input_cost_per_token_above_272k_tokens_batches=2e-6,
+        ),
+        Usage(prompt_tokens=300_000, completion_tokens=1, total_tokens=300_001),
+        "openai",
+    )
+
+    assert (rates.input, rates.output, rates.cache_read) == (2e-6, 4e-6, None)
+
+
+@pytest.mark.parametrize(("prompt_tokens", "expected"), [(1_000, 1.25e-7), (272_000, 1.25e-7), (300_000, 2.5e-7)])
+def test_get_batch_cost_rates_reads_the_batch_cache_write_rate_for_the_crossed_tier(prompt_tokens, expected):
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=1e-7,
+            input_cost_per_token_above_272k_tokens_batches=2e-7,
+            cache_creation_input_token_cost_batches=1.25e-7,
+            cache_creation_input_token_cost_above_272k_tokens_batches=2.5e-7,
+        ),
+        Usage(prompt_tokens=prompt_tokens, completion_tokens=1, total_tokens=prompt_tokens + 1),
+        "openai",
+    )
+
+    assert rates.cache_creation == expected
+
+
+@pytest.mark.parametrize(
+    ("tier_key", "attribute"),
+    [
+        ("output_cost_per_token_above_272k_tokens_batches", "output"),
+        ("cache_read_input_token_cost_above_272k_tokens_batches", "cache_read"),
+        ("cache_creation_input_token_cost_above_272k_tokens_batches", "cache_creation"),
+    ],
+)
+def test_get_batch_cost_rates_crosses_a_tier_declared_without_an_input_tier_key(tier_key, attribute):
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=1e-6,
+            output_cost_per_token_batches=4e-6,
+            cache_read_input_token_cost_batches=1e-7,
+            cache_creation_input_token_cost_batches=1.25e-7,
+            **{tier_key: 9e-6},
+        ),
+        Usage(prompt_tokens=300_000, completion_tokens=1, total_tokens=300_001),
+        "openai",
+    )
+
+    assert getattr(rates, attribute) == 9e-6
+    assert rates.input == 1e-6
+
+
+@pytest.mark.parametrize(
+    ("prompt_tokens", "expected_input", "expected_output"),
+    [(200_000, 1e-6, 4e-6), (250_000, 1e-6, 5e-6), (300_000, 2e-6, 5e-6)],
+)
+def test_get_batch_cost_rates_crosses_each_components_own_tier(prompt_tokens, expected_input, expected_output):
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=1e-6,
+            input_cost_per_token_above_272k_tokens_batches=2e-6,
+            output_cost_per_token_batches=4e-6,
+            output_cost_per_token_above_200k_tokens_batches=5e-6,
+        ),
+        Usage(prompt_tokens=prompt_tokens, completion_tokens=1, total_tokens=prompt_tokens + 1),
+        "openai",
+    )
+
+    assert (rates.input, rates.output) == (expected_input, expected_output)
+
+
+def test_get_batch_cost_rates_has_no_cache_write_rate_without_a_cache_write_batch_key():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=1e-7,
+            input_cost_per_token_above_272k_tokens_batches=2e-7,
+            cache_creation_input_token_cost=2.5e-7,
+            cache_creation_input_token_cost_above_272k_tokens=5e-7,
+        ),
+        Usage(prompt_tokens=300_000, completion_tokens=1, total_tokens=300_001),
+        "openai",
+    )
+
+    assert rates.cache_creation is None

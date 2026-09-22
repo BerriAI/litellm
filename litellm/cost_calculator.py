@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _get_service_tier_cost_key,
     calculate_cost_component,
     generic_cost_per_token,
+    get_batch_cost_rates,
     get_billable_input_tokens,
     get_token_type_cost_breakdown,
     parse_prompt_tokens_details,
@@ -2557,35 +2558,14 @@ def batch_cost_calculator(
     if not model_info:
         return 0.0, 0.0
 
-    input_cost_per_token_batches: Final = model_info.get("input_cost_per_token_batches")
+    batch_rates: Final = get_batch_cost_rates(model_info, usage, custom_llm_provider)
     input_cost_per_token: Final = model_info.get("input_cost_per_token")
-    output_cost_per_token_batches: Final = model_info.get("output_cost_per_token_batches")
     output_cost_per_token: Final = model_info.get("output_cost_per_token")
     total_prompt_cost = 0.0
     total_completion_cost = 0.0
-    if input_cost_per_token_batches is not None:
-        batch_details: Final = parse_prompt_tokens_details(usage)
-        audio_tokens, image_tokens, video_tokens = (
-            batch_details["audio_tokens"],
-            batch_details["image_tokens"],
-            batch_details["video_tokens"],
-        )
-        modality_rates: Final = (
-            _batch_rate(model_info, "input_cost_per_audio_token_batches", input_cost_per_token_batches),
-            _batch_rate(model_info, "input_cost_per_image_token_batches", input_cost_per_token_batches),
-            _batch_rate(model_info, "input_cost_per_video_token_batches", input_cost_per_token_batches),
-        )
-        total_prompt_cost = sum(
-            tokens * rate
-            for tokens, rate in zip(
-                (
-                    max((usage.prompt_tokens or 0) - audio_tokens - image_tokens - video_tokens, 0),
-                    audio_tokens,
-                    image_tokens,
-                    video_tokens,
-                ),
-                (input_cost_per_token_batches, *modality_rates),
-            )
+    if batch_rates.input is not None:
+        total_prompt_cost = _batch_prompt_cost(
+            usage, model_info, batch_rates.input, batch_rates.cache_read, batch_rates.cache_creation
         )
     elif input_cost_per_token:
         details: Final = parse_prompt_tokens_details(usage)
@@ -2605,8 +2585,8 @@ def batch_cost_calculator(
 
         cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
         total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
-    if output_cost_per_token_batches is not None:
-        total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
+    if batch_rates.output is not None:
+        total_completion_cost = usage.completion_tokens * batch_rates.output
     elif output_cost_per_token:
         total_completion_cost = (
             usage.completion_tokens * (output_cost_per_token) / 2
@@ -2618,6 +2598,34 @@ def batch_cost_calculator(
         total_completion_cost *= uplift
 
     return total_prompt_cost, total_completion_cost
+
+
+def _batch_prompt_cost(
+    usage: Usage,
+    model_info: ModelInfo,
+    input_rate: float,
+    cache_read_rate: float | None,
+    cache_creation_rate: float | None,
+) -> float:
+    details: Final = parse_prompt_tokens_details(usage)
+    cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
+    written_tokens: Final = details["cache_creation_tokens"] if cache_creation_rate is not None else 0
+    audio_tokens, image_tokens, video_tokens = (
+        details["audio_tokens"],
+        details["image_tokens"],
+        details["video_tokens"],
+    )
+    text_tokens: Final = max(
+        (usage.prompt_tokens or 0) - audio_tokens - image_tokens - video_tokens - cached_tokens - written_tokens, 0
+    )
+    return (
+        text_tokens * input_rate
+        + audio_tokens * _batch_rate(model_info, "input_cost_per_audio_token_batches", input_rate)
+        + image_tokens * _batch_rate(model_info, "input_cost_per_image_token_batches", input_rate)
+        + video_tokens * _batch_rate(model_info, "input_cost_per_video_token_batches", input_rate)
+        + cached_tokens * (cache_read_rate or 0.0)
+        + written_tokens * (cache_creation_rate or 0.0)
+    )
 
 
 def _attribute_value(obj: object, name: str) -> object:
