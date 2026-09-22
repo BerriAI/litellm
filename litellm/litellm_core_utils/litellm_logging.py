@@ -1765,14 +1765,22 @@ class Logging(LiteLLMLoggingBaseClass):
         if transformed_result is not None:
             result = transformed_result
 
-        result_hidden_params: Final = getattr(result, "_hidden_params", None) or MappingProxyType({})
-        if isinstance(result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(result, "_hidden_params"):
+        priced_result: Final = (
+            result.response
+            if isinstance(result, (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent))
+            else result
+        )
+
+        result_hidden_params: Final = getattr(priced_result, "_hidden_params", None) or MappingProxyType({})
+        if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(
+            priced_result, "_hidden_params"
+        ):
             hidden_params: Final = result_hidden_params
             if (
                 "response_cost" in hidden_params and hidden_params["response_cost"] is not None
             ):  # use cost if already calculated
                 self._record_zero_cost_diagnostic(
-                    result,
+                    priced_result,
                     hidden_params["response_cost"],
                     litellm_model_name=litellm_model_name,
                     router_model_id=router_model_id or hidden_params.get("model_id"),
@@ -1788,7 +1796,7 @@ class Logging(LiteLLMLoggingBaseClass):
             router_model_id = self.get_router_model_id()
 
         ## RESPONSE COST ##
-        custom_pricing: Final = self._custom_pricing_for(result)
+        custom_pricing: Final = self._custom_pricing_for(priced_result)
 
         prompt = self._prompt_for_cost_calculation()
 
@@ -1797,7 +1805,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         try:
             response_cost_calculator_kwargs: Final = {
-                "response_object": result,
+                "response_object": priced_result,
                 "model": litellm_model_name or self.model,
                 "cache_hit": cache_hit,
                 "custom_llm_provider": self.model_call_details.get("custom_llm_provider", None),
@@ -1846,7 +1854,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 else response_cost
             )
             self._record_zero_cost_diagnostic(
-                result, total_response_cost, litellm_model_name=litellm_model_name, router_model_id=router_model_id
+                priced_result,
+                total_response_cost,
+                litellm_model_name=litellm_model_name,
+                router_model_id=router_model_id,
             )
             return total_response_cost
         except Exception as e:  # error calculating cost
@@ -1863,7 +1874,7 @@ class Logging(LiteLLMLoggingBaseClass):
             verbose_logger.debug("response_cost_failure_debug_information: %s", debug_info)
             self.model_call_details["response_cost_failure_debug_information"] = debug_info
             self._record_zero_cost_diagnostic(
-                result,
+                priced_result,
                 None,
                 calculation_failed=True,
                 litellm_model_name=litellm_model_name,
