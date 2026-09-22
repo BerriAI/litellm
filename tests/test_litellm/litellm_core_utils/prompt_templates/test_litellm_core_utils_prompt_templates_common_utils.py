@@ -357,7 +357,6 @@ def test_get_file_ids_from_messages_file_field_not_dict():
 
 
 def test_get_file_ids_from_messages_skips_bare_string_content_items():
-    """A bare string in the content list must not crash; a real file part is still found (#42094)."""
     messages = [
         {
             "role": "user",

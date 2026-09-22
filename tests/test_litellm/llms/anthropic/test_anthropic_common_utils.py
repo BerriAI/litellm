@@ -2279,8 +2279,6 @@ def test_create_anthropic_model_list_response_lists_ids_as_told():
 
 
 class TestMalformedContentListItems:
-    """Non-dict items in a content list must not crash the beta-header helpers (#42094)."""
-
     @pytest.mark.parametrize(
         "content",
         [

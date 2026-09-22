@@ -210,6 +210,7 @@ _DBLESS_ENV_DROP: Final = frozenset(
         "DATABASE_USERNAME",
         "DATABASE_PASSWORD",
         "DATABASE_NAME",
+        "DIRECT_URL",
         "STORE_MODEL_IN_DB",
     }
 )
@@ -228,9 +229,6 @@ def _await_dbless_liveness(transport: HttpTransport, proc: subprocess.Popen[byte
 
 @pytest.fixture(scope="module")
 def dbless_anthropic_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_DblessProxy]:
-    """A proxy booted from this checkout with no database: the enterprise managed-files
-    hook never registers, so malformed chat bodies reach the Anthropic translator
-    itself, which is the surface the bare-string 500 was reported on."""
     if "ANTHROPIC_API_KEY" not in os.environ:
         pytest.fail("ANTHROPIC_API_KEY must be set: the DB-less Anthropic proxy hits the real provider")
     workdir: Final = tmp_path_factory.mktemp("dbless")
@@ -255,18 +253,20 @@ def dbless_anthropic_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator
         probe_sock.bind(("127.0.0.1", 0))
         port: Final = cast(int, probe_sock.getsockname()[1])
     transport: Final = HttpTransport(base_url=f"http://127.0.0.1:{port}", master_key=master_key)
-    env: Final = {
-        **{key: value for key, value in os.environ.items() if key not in _DBLESS_ENV_DROP},
-        "PYTHONPATH": str(repo_root),
-    }
+    env: Final = {key: value for key, value in os.environ.items() if key not in _DBLESS_ENV_DROP}
     log: Final = workdir / "proxy.log"
+    launcher: Final = (
+        "import sys; sys.path.insert(0, "
+        + repr(str(repo_root))
+        + "); from runpy import run_module; run_module('litellm.proxy.proxy_cli', run_name='__main__')"
+    )
     with log.open("w") as log_file:
         proc: Final = subprocess.Popen(
             (
                 sys.executable,
-                "-P",
-                "-m",
-                "litellm.proxy.proxy_cli",
+                "-I",
+                "-c",
+                launcher,
                 "--config",
                 str(config),
                 "--port",
