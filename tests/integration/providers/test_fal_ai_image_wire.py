@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import litellm
 import pytest
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
@@ -117,6 +118,63 @@ def test_fal_gpt_image_25_generation_sends_quality_and_size_and_charges_keyed_ro
         assert [(request.method, request.target) for request in wire.drain()] == [
             ("POST", "/openai/gpt-image-2.5/flare/text-to-image"),
             ("POST", "/openai/gpt-image-2.5/flare/text-to-image"),
+        ]
+
+
+@pytest.mark.covers("other.provider_wire.fal_ai.gpt_image_generation_noncanonical_size_uses_nearest_keyed_row")
+def test_fal_gpt_image_25_generation_prices_non_canonical_size_from_nearest_row(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.headers["authorization"] == "Key synthetic-fal-key"
+        assert request.target == "/openai/gpt-image-2.5/flare/text-to-image"
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        assert body == {"prompt": _PROMPT, "quality": "low", "image_size": {"width": 1536, "height": 1024}}
+        return Reply(body=_image_response(((f"{wire_url}/files/noncanonical.png", 1536, 1024),), _PROMPT))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        wire_url: Final = wire.url
+        model: Final = scenario.model(
+            model=f"fal_ai/{_GPT_IMAGE_MODEL}", api_base=wire.url, api_key="synthetic-fal-key"
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/images/generations",
+            {"model": model, "prompt": _PROMPT, "quality": "low", "size": "1536x1024"},
+        )
+        assert response.status_code == 200, response.text
+        cost: Final = _response_cost(response)
+        assert cost == _approx(_catalog_cost("fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image"))
+        assert [(request.method, request.target) for request in wire.drain()] == [
+            ("POST", "/openai/gpt-image-2.5/flare/text-to-image")
+        ]
+
+
+@pytest.mark.covers("other.provider_wire.fal_ai.sdk_image_response_dump_options")
+def test_fal_gpt_image_sdk_response_honors_dump_options() -> None:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.headers["authorization"] == "Key synthetic-fal-key"
+        assert request.target == "/openai/gpt-image-2.5/flare/text-to-image"
+        assert _JSON_OBJECT.validate_json(request.body) == {"prompt": _PROMPT, "quality": "low"}
+        return Reply(body=_image_response((("https://example.com/fal.png", 1024, 1536),), _PROMPT))
+
+    with wire_server(respond) as wire:
+        response: Final = litellm.image_generation(
+            model=_GPT_IMAGE_MODEL,
+            prompt=_PROMPT,
+            quality="low",
+            api_base=wire.url,
+            api_key="synthetic-fal-key",
+            custom_llm_provider="fal_ai",
+        )
+        assert response.model_dump(exclude_none=True)["data"] == [
+            {
+                "url": "https://example.com/fal.png",
+                "provider_specific_fields": {"width": 1024, "height": 1536, "content_type": "image/png"},
+            }
+        ]
+        assert [(request.method, request.target) for request in wire.drain()] == [
+            ("POST", "/openai/gpt-image-2.5/flare/text-to-image")
         ]
 
 

@@ -433,13 +433,18 @@ def _bridges_to_chat_completions(
     return responses_api_provider_config is None or use_chat_completions_api is True
 
 
+_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED: Final = frozenset({"client_metadata"})
+
+
 def _bridge_kwargs(
     kwargs: Mapping[str, object],
     responses_api_provider_config: BaseResponsesAPIConfig | None,
     allowed_openai_params: Sequence[str] | None,
 ) -> Mapping[str, object]:
     if responses_api_provider_config is None:
-        return kwargs
+        return MappingProxyType(
+            {key: value for key, value in kwargs.items() if key not in _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED}
+        )
     forwarded_keys: Final = frozenset(
         (
             *litellm.OPENAI_CHAT_COMPLETION_PARAMS,
@@ -448,7 +453,7 @@ def _bridge_kwargs(
             *GenericLiteLLMParams.model_fields,
             *(allowed_openai_params or ()),
         )
-    )
+    ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
     return MappingProxyType({key: value for key, value in kwargs.items() if key in forwarded_keys})
 
 
