@@ -42,7 +42,7 @@ class Database:
             connection.execute("SET statement_timeout = '15s'")
             yield connection
 
-    def execute(self, statement: LiteralString | bytes | sql.Composed, params: tuple[Scalar, ...] = ()) -> None:
+    def execute(self, statement: LiteralString | sql.Composed, params: tuple[Scalar, ...] = ()) -> None:
         with self.connection() as connection:
             connection.execute(statement, params or None)
 

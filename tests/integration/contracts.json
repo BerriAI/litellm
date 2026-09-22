@@ -86,6 +86,9 @@
       "other.database.partitions.lock_wait_outlives_transaction_default",
       "other.database.partitions.repeat_preserves_rows"
     ],
+    "tests/integration/database/test_partitioned_spend_logs_upgrade.py::test_upgrade_builds_the_call_id_index_on_a_partitioned_spend_log": [
+      "other.database.partitions.upgrade_builds_call_id_index_on_partitioned_parent"
+    ],
     "tests/integration/database/test_reader_writer_regeneration.py::test_key_regeneration_uses_writer_with_a_real_readonly_reader": [
       "other.database.regeneration.writer_updates_dependent_grants"
     ],

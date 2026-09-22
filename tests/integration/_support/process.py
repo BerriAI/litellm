@@ -1,6 +1,6 @@
 import os
-import socket
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -12,7 +12,6 @@ from typing import Final
 
 import httpx
 import psutil
-
 from integration._support.client import Gateway
 
 
@@ -46,7 +45,15 @@ def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
 
 
 @contextmanager
-def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str], *, config: Path | None = None, remove_environment: tuple[str, ...] = ()) -> Iterator[Gateway]:
+def owned_proxy(
+    gateway: Gateway,
+    directory: Path,
+    overrides: Mapping[str, str],
+    *,
+    config: Path | None = None,
+    remove_environment: tuple[str, ...] = (),
+    use_prisma_db_push: bool = True,
+) -> Iterator[Gateway]:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         port: Final = reserve.getsockname()[1]
@@ -61,8 +68,8 @@ def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str],
     output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
     with (output / f"owned-proxy-{uuid.uuid4().hex}.log").open("w") as log:
-        process: Final = subprocess.Popen(
-            [
+        argv: Final = (
+            (
                 sys.executable,
                 "-m",
                 "integration._support.proxy",
@@ -74,9 +81,12 @@ def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str],
                 str(port),
                 "--num_workers",
                 "1",
-                "--use_prisma_db_push",
-                "--enforce_prisma_migration_check",
-            ],
+            )
+            + (("--use_prisma_db_push",) if use_prisma_db_push else ())
+            + ("--enforce_prisma_migration_check",)
+        )
+        process: Final = subprocess.Popen(
+            argv,
             cwd=root,
             env=environment,
             stdout=log,
