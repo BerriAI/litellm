@@ -331,6 +331,7 @@ class HuggingFaceEncoding:
 def gil_stats() -> dict[str, int]: ...
 def process_state_started() -> bool: ...
 def reserve_process_for_forking() -> None: ...
+def cost_api(name: str) -> Never: ...
 
 __all__ = [
     "ForkedAfterNativeRuntimeStarted",
@@ -347,6 +348,7 @@ __all__ = [
     "atranscription",
     "chat_completions",
     "chat_completions_decline",
+    "cost_api",
     "gil_stats",
     "messages",
     "ocr",

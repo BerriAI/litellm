@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     tier_rate,
 )
 from litellm.llms.fireworks_ai.cache_pricing import with_default_cache_read_rate
+from litellm.rust_bridge.cost.dispatch import CostApi, route_cost_api
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
@@ -164,6 +165,7 @@ def get_billable_input_tokens(usage: Usage) -> int:
     return usage.prompt_tokens - details["cache_hit_tokens"]
 
 
+@route_cost_api(CostApi.SELECT_COST_METRIC)
 def select_cost_metric_for_model(
     model_info: ModelInfo,
 ) -> Literal["cost_per_character", "cost_per_token"]:
@@ -333,6 +335,7 @@ def _batch_rate_for_prefix(model_info: ModelInfo, prefix: str, usage: Usage, inc
     return _batch_tier_rate(model_info, f"{prefix}_above_{threshold}_tokens{_BATCH_KEY_SUFFIX}", flat_key)
 
 
+@route_cost_api(CostApi.BATCH_COST_RATES)
 def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provider: str | None) -> BatchCostRates:
     inclusive: Final = _uses_inclusive_token_thresholds(custom_llm_provider)
     return BatchCostRates(
@@ -777,6 +780,7 @@ def _get_token_base_cost(
     )
 
 
+@route_cost_api(CostApi.COST_COMPONENT)
 def calculate_cost_component(model_info: ModelInfo, cost_key: str, usage_value: float | None) -> float:
     """
     Generic cost calculator for any usage component
@@ -883,6 +887,7 @@ def resolve_image_model_info(model: str, custom_llm_provider: str, model_info: M
     return resolved
 
 
+@route_cost_api(CostApi.CACHE_WRITING_COST)
 def calculate_cache_writing_cost(
     cache_creation_tokens: int,
     cache_creation_token_details: CacheCreationTokenDetails | None,
@@ -1282,6 +1287,7 @@ def _resolve_billed_reasoning_rate(
     )
 
 
+@route_cost_api(CostApi.GENERIC_COST_PER_TOKEN)
 def generic_cost_per_token(
     model: str,
     usage: Usage,
@@ -1620,6 +1626,7 @@ def _cost_map_billed_rates(
     ).scaled(multiplier)
 
 
+@route_cost_api(CostApi.BILLED_TOKEN_RATES)
 def get_billed_token_rates(
     model: str,
     custom_llm_provider: str | None,
@@ -1652,6 +1659,7 @@ def get_billed_token_rates(
     )
 
 
+@route_cost_api(CostApi.TOKEN_TYPE_COST_BREAKDOWN)
 def get_token_type_cost_breakdown(
     model: str,
     custom_llm_provider: str | None,
@@ -1713,6 +1721,7 @@ def get_token_type_cost_breakdown(
     )
 
 
+@route_cost_api(CostApi.PROMPT_CACHING_SAVINGS)
 def calculate_prompt_caching_savings(
     model_info: ModelInfo,
     usage: Usage,
@@ -1764,6 +1773,7 @@ def calculate_prompt_caching_savings(
     return (read_discount - write_premium) * uplift
 
 
+@route_cost_api(CostApi.IMAGE_RESPONSE_COST_FROM_USAGE)
 def calculate_image_response_cost_from_usage(
     model: str,
     image_response: ImageResponse,
@@ -1856,6 +1866,7 @@ def calculate_image_response_cost_from_usage(
     return prompt_cost + completion_cost
 
 
+@route_cost_api(CostApi.IMAGE_RESPONSE_WEB_SEARCH_COST)
 def calculate_image_response_web_search_cost(
     image_response: ImageResponse,
     custom_llm_provider: str,

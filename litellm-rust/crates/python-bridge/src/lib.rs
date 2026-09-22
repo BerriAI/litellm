@@ -1,5 +1,6 @@
 mod cache;
 mod coercion;
+mod cost;
 mod credentials;
 mod diagnostics;
 mod errors;
@@ -17,6 +18,8 @@ mod tokenizer;
 #[pymodule(gil_used = true)]
 mod _native {
     use crate::cache::{CacheTestHandle, CacheTestResolver, ResolvedCache};
+    #[pymodule_export]
+    use crate::cost::cost_api;
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -75,6 +78,7 @@ mod tests {
             let mut expected = vec![
                 "RustBridgeDeclined",
                 "RustUpstreamError",
+                "cost_api",
                 "ForkedAfterNativeRuntimeStarted",
                 "ProcessReservedForForking",
                 "ocr",

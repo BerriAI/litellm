@@ -10,6 +10,8 @@ from litellm.rust_bridge.catalog import (
     CacheContext,
     CacheRule,
     Context,
+    CostContext,
+    CostRule,
     Delivery,
     Route,
     RouteContext,
@@ -97,6 +99,27 @@ def test_response_cache_rules_select_the_whole_backend_runtime() -> None:
 
     assert catalog.decision(CacheContext(backend="local"), rules) is Decision.RUST_REQUIRED
     assert catalog.decision(CacheContext(backend="redis"), rules) is Decision.PYTHON
+
+
+@pytest.mark.parametrize("process", (False, True))
+@pytest.mark.parametrize("environment", ("0", "1"))
+def test_cost_policy_is_one_hard_switch(monkeypatch: pytest.MonkeyPatch, process: bool, environment: str) -> None:
+    configuration.rust(process)
+    monkeypatch.setenv("LITELLM_RUST", environment)
+    context: Final = CostContext()
+
+    assert catalog.decision(context) is Decision.PYTHON
+    assert (
+        catalog.decision(context, (CostRule(Rollout.PYTHON_ONLY), CostRule(Rollout.RUST_REQUIRED))) is Decision.PYTHON
+    )
+    assert catalog.decision(context, (CostRule(Rollout.RUST_REQUIRED),)) is Decision.RUST_REQUIRED
+    assert catalog.decision(context, ()) is Decision.PYTHON
+
+
+@pytest.mark.parametrize("rollout", (Rollout.RUST_OPT_IN, Rollout.RUST_OPT_OUT))
+def test_cost_policy_rejects_fallback_modes(rollout: Rollout) -> None:
+    with pytest.raises(ValueError, match="Cost rollout must be PYTHON_ONLY or RUST_REQUIRED"):
+        CostRule(rollout)
 
 
 @pytest.mark.parametrize(

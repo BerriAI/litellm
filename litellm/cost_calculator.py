@@ -97,6 +97,7 @@ from litellm.llms.vertex_ai.cost_calculator import (
 from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.rust_bridge.cost.dispatch import CostApi, route_cost_api
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import (
@@ -366,6 +367,7 @@ def _per_second_pricing_cost(
     return (input_cost_per_second or 0.0) * seconds, (output_cost_per_second or 0.0) * seconds
 
 
+@route_cost_api(CostApi.COST_PER_TOKEN)
 def cost_per_token(
     model: str = "",
     prompt_tokens: int = 0,
@@ -746,6 +748,7 @@ def cost_per_token(
         return 0.0, 0.0
 
 
+@route_cost_api(CostApi.REPLICATE_COMPLETION_PRICING)
 def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
     # see https://replicate.com/pricing
     # for all litellm currently supported LLMs, almost all requests go to a100_80gb
@@ -1253,6 +1256,7 @@ def _response_time_ms_for_cost(
     return 0.0
 
 
+@route_cost_api(CostApi.COMPLETION_COST)
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
@@ -1914,6 +1918,7 @@ def get_response_cost_from_hidden_params(
     return None
 
 
+@route_cost_api(CostApi.RESPONSE_COST_CALCULATOR)
 def response_cost_calculator(
     response_object: ModelResponse
     | EmbeddingResponse
@@ -2102,6 +2107,7 @@ def pricing_entry_for_cost_calc(
     return resolved["key"], _raw_cost_map_entry(resolved["key"]) or resolved
 
 
+@route_cost_api(CostApi.OCR_COST)
 def ocr_cost(
     model: str,
     custom_llm_provider: str | None,
@@ -2188,6 +2194,7 @@ _OCR_BATCH_PAGE_RATE_KEYS: Final = ("ocr_cost_per_page_batches", "ocr_cost_per_p
 _OCR_BATCH_ANNOTATION_RATE_KEYS: Final = ("annotation_cost_per_page_batches", "annotation_cost_per_page")
 
 
+@route_cost_api(CostApi.OCR_BATCH_COST)
 def ocr_batch_cost(
     model: str,
     custom_llm_provider: str | None,
@@ -2265,6 +2272,7 @@ def _first_price(model_info: ModelInfo | None, *keys: str) -> float | None:
     return next((price for price in (model_info.get(k) for k in keys) if isinstance(price, (int, float))), None)
 
 
+@route_cost_api(CostApi.VECTOR_STORE_SEARCH_COST)
 def vector_store_search_cost(
     model: str | None,
     custom_llm_provider: str,
@@ -2297,6 +2305,7 @@ def vector_store_search_cost(
     )
 
 
+@route_cost_api(CostApi.RERANK_COST)
 def rerank_cost(
     model: str,
     custom_llm_provider: str | None,
@@ -2331,10 +2340,12 @@ def rerank_cost(
         raise e
 
 
+@route_cost_api(CostApi.TRANSCRIPTION_COST)
 def transcription_cost(model: str, custom_llm_provider: str | None, duration: float) -> tuple[float, float]:
     return openai_cost_per_second(model=model, custom_llm_provider=custom_llm_provider, duration=duration)
 
 
+@route_cost_api(CostApi.IMAGE_COST)
 def default_image_cost_calculator(
     model: str,
     custom_llm_provider: str | None = None,
@@ -2421,6 +2432,7 @@ def default_image_cost_calculator(
     return cost
 
 
+@route_cost_api(CostApi.VIDEO_COST)
 def default_video_cost_calculator(
     model: str,
     duration_seconds: float,
@@ -2513,6 +2525,7 @@ def _batch_rate(
     return fallback if rate is None else rate
 
 
+@route_cost_api(CostApi.BATCH_COST)
 def batch_cost_calculator(
     usage: Usage,
     model: str,
@@ -2902,6 +2915,7 @@ def _first_priced_realtime_token_costs(
     )
 
 
+@route_cost_api(CostApi.REALTIME_STREAM_COST)
 def handle_realtime_stream_cost_calculation(
     results: OpenAIRealtimeStreamList,
     combined_usage_object: Usage,
@@ -2956,6 +2970,7 @@ def handle_realtime_stream_cost_calculation(
     return total_cost
 
 
+@route_cost_api(CostApi.REALTIME_TRANSCRIPTION_COST)
 def handle_realtime_transcription_cost_calculation(
     results: OpenAIRealtimeStreamList,
     custom_llm_provider: str,
