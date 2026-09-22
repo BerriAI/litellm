@@ -294,31 +294,13 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 raise ValueError("Tags must be a dict or list of {Key, Value} pairs")
             data["Tags"] = tags_list
 
-        endpoint_url, headers, body = self._prepare_request(
-            action="CreateSecret",
+        create_response: Final = await self._async_create_or_restore_secret(
             secret_name=secret_name,
             secret_value=secret_value,
-            optional_params=optional_params,
             request_data=data,
+            optional_params=optional_params,
+            timeout=timeout,
         )
-
-        async_client: Final = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.SecretManager,
-            params={"timeout": timeout},
-        )
-
-        try:
-            response: Final = await async_client.post(
-                url=endpoint_url,
-                headers=headers,
-                data=body.decode("utf-8"),
-            )
-            response.raise_for_status()
-            create_response: Final = response.json()
-        except httpx.HTTPStatusError as err:
-            raise ValueError(f"HTTP error occurred: {err.response.text}")
-        except httpx.TimeoutException:
-            raise ValueError("Timeout error occurred")
 
         if self.replica_regions:
             try:
@@ -342,6 +324,90 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 )
 
         return create_response
+
+    async def _async_create_or_restore_secret(
+        self,
+        secret_name: str,
+        secret_value: str,
+        request_data: dict[str, object],
+        optional_params: dict | None,
+        timeout: float | httpx.Timeout | None,
+    ) -> dict:
+        try:
+            return await self._async_post_action(
+                action="CreateSecret",
+                secret_name=secret_name,
+                request_data=request_data,
+                optional_params=optional_params,
+                timeout=timeout,
+            )
+        except httpx.HTTPStatusError as err:
+            if not await self._async_is_scheduled_for_deletion(
+                secret_name=secret_name,
+                optional_params=optional_params,
+                timeout=timeout,
+            ):
+                raise ValueError(f"HTTP error occurred: {err.response.text}")
+        except httpx.TimeoutException:
+            raise ValueError("Timeout error occurred")
+
+        verbose_logger.info(
+            "Secret %s is scheduled for deletion, restoring and updating in place (RestoreSecret + PutSecretValue)",
+            secret_name,
+        )
+        await self._async_post_action(
+            action="RestoreSecret",
+            secret_name=secret_name,
+            request_data=None,
+            optional_params=optional_params,
+            timeout=timeout,
+        )
+        return await self.async_put_secret_value(
+            secret_name=secret_name,
+            secret_value=secret_value,
+            optional_params=optional_params,
+            timeout=timeout,
+        )
+
+    async def _async_is_scheduled_for_deletion(
+        self,
+        secret_name: str,
+        optional_params: dict | None,
+        timeout: float | httpx.Timeout | None,
+    ) -> bool:
+        try:
+            described: Final = await self._async_post_action(
+                action="DescribeSecret",
+                secret_name=secret_name,
+                request_data=None,
+                optional_params=optional_params,
+                timeout=timeout,
+            )
+        except (httpx.HTTPStatusError, httpx.TimeoutException):
+            return False
+        return described.get("DeletedDate") is not None
+
+    async def _async_post_action(
+        self,
+        action: str,
+        secret_name: str,
+        request_data: dict[str, object] | None,
+        optional_params: dict | None,
+        timeout: float | httpx.Timeout | None,
+    ) -> dict:
+        endpoint_url, headers, body = self._prepare_request(
+            action=action,
+            secret_name=secret_name,
+            optional_params=optional_params,
+            request_data=request_data,
+        )
+        async_client: Final = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SecretManager,
+            params={"timeout": timeout},
+        )
+        response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
+        response.raise_for_status()
+        return response.json()
 
     async def async_replicate_secret(
         self,
