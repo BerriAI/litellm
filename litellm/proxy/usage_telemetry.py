@@ -8,9 +8,10 @@ untouched. The OSS twin of litellm.proxy.enterprise_billing.billing_metrics:
 same exporter shape, no license key, no client certificate, no hostname.
 
 Only aggregate counts leave the process: request totals by endpoint category
-and status class, plus per-call model, provider, call type, token counts, and
-cost from the standard logging payload. No API keys, teams, users, model
-groups, or api_base values are ever exported.
+and status class, plus per-call provider, call type, token counts, and cost
+from the standard logging payload. Model names are exported only when they are
+present in the public pricing map; anything else is reported as "other". No
+API keys, teams, users, model groups, or api_base values are ever exported.
 """
 
 import json
@@ -19,7 +20,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeAlias
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk.metrics import MeterProvider
@@ -28,6 +29,7 @@ from opentelemetry.sdk.resources import Resource
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
@@ -95,11 +97,19 @@ def load_usage_telemetry_config(*, litellm_version: str, instance_id: str) -> Us
     )
 
 
-def build_usage_meter_provider(config: UsageTelemetryConfig) -> MeterProvider:
-    exporter: Final = OTLPMetricExporter(
+def _build_exporter(config: UsageTelemetryConfig) -> OTLPMetricExporter:
+    """``headers`` must be non-empty: with a falsy value OTLPMetricExporter
+    reads OTEL_EXPORTER_OTLP_*_HEADERS from the environment, which would
+    forward a deployment's own collector auth header to telemetry.litellm.ai."""
+    return OTLPMetricExporter(
         endpoint=_metrics_endpoint(config.endpoint),
         timeout=EXPORT_TIMEOUT_S,
+        headers={"User-Agent": f"litellm-proxy/{config.litellm_version}"},
     )
+
+
+def build_usage_meter_provider(config: UsageTelemetryConfig) -> MeterProvider:
+    exporter: Final = _build_exporter(config)
     reader: Final = PeriodicExportingMetricReader(exporter, export_interval_millis=config.export_interval_ms)
     resource: Final = Resource.create(
         MappingProxyType(
@@ -170,7 +180,13 @@ class UsageTelemetryRecorder(CustomLogger):
             ),
         )
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: object,
+        end_time: object,
+    ) -> None:
         raw_payload: Final = kwargs.get("standard_logging_object")
         if not isinstance(raw_payload, dict):
             return
@@ -181,7 +197,7 @@ class UsageTelemetryRecorder(CustomLogger):
             return
         attrs: Final[Mapping[str, str]] = MappingProxyType(
             {
-                "litellm.model": payload.model,
+                "litellm.model": _public_model_label(payload.model, payload.custom_llm_provider),
                 "litellm.provider": payload.custom_llm_provider or "unknown",
                 "litellm.call_type": payload.call_type,
             }
@@ -197,6 +213,17 @@ class UsageTelemetryRecorder(CustomLogger):
         self._provider.shutdown(timeout_millis=SHUTDOWN_FLUSH_TIMEOUT_MS)
 
 
+def _public_model_label(model: str, provider: str | None) -> str:
+    """Only public model names leave the process. A name absent from the
+    public pricing map (fine-tunes, aliases, internal deployments) collapses
+    to "other" so a private model identifier cannot leak."""
+    if model in litellm.model_cost:
+        return model
+    if provider is not None and f"{provider}/{model}" in litellm.model_cost:
+        return f"{provider}/{model}"
+    return "other"
+
+
 class _ConfigParamWhere(TypedDict):
     param_name: ReadOnly[str]
 
@@ -210,6 +237,18 @@ class _ConfigParamCreate(TypedDict):
     param_value: ReadOnly[str]
 
 
+class _ConfigParamRow(Protocol):
+    param_value: object
+
+
+def _instance_id_from_row(row: "_ConfigParamRow | None") -> str | None:
+    param_value: Final[object] = row.param_value if row is not None else None
+    parsed: Final[object] = json.loads(param_value) if isinstance(param_value, str) else param_value
+    if isinstance(parsed, dict) and isinstance(parsed.get("instance_id"), str):
+        return parsed["instance_id"]
+    return None
+
+
 async def resolve_instance_id(prisma_client: "PrismaClient | None") -> str:
     """
     A stable anonymous deployment id persisted in ``LiteLLM_Config``, so counts
@@ -220,18 +259,22 @@ async def resolve_instance_id(prisma_client: "PrismaClient | None") -> str:
         return str(uuid.uuid4())
     try:
         where: Final[_ConfigParamWhere] = {"param_name": INSTANCE_ID_CONFIG_KEY}
-        row: Final = await prisma_client.db.litellm_config.find_unique(where=where)
-        param_value: Final[object] = row.param_value if row is not None else None
-        parsed: Final[object] = json.loads(param_value) if isinstance(param_value, str) else param_value
-        if isinstance(parsed, dict) and isinstance(parsed.get("instance_id"), str):
-            return parsed["instance_id"]
+        existing: Final = _instance_id_from_row(await prisma_client.db.litellm_config.find_unique(where=where))
+        if existing is not None:
+            return existing
         instance_id: Final = str(uuid.uuid4())
         instance_value: Final[_InstanceIdValue] = {"instance_id": instance_id}
         data: Final[_ConfigParamCreate] = {
             "param_name": INSTANCE_ID_CONFIG_KEY,
             "param_value": json.dumps(instance_value),
         }
-        await prisma_client.db.litellm_config.create(data=data)
+        try:
+            await prisma_client.db.litellm_config.create(data=data)
+        except Exception:  # noqa: BLE001 -- a concurrent worker won the insert; read its row instead
+            raced: Final = _instance_id_from_row(await prisma_client.db.litellm_config.find_unique(where=where))
+            if raced is not None:
+                return raced
+            raise
         return instance_id
     except Exception as exc:  # noqa: BLE001 -- telemetry must never break proxy startup
         verbose_proxy_logger.warning(

@@ -8,34 +8,45 @@ and aggregated values. Nothing the proxy sends is mocked.
 
 import json
 import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Final
 
 import pytest
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader, Metric
 
+import litellm
 from litellm.proxy import usage_telemetry as ut
 from litellm.proxy.middleware.billable_request_metrics_middleware import BillableCategory
 
 
 @pytest.fixture(autouse=True)
-def clear_env(monkeypatch):
+def clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (ut.ENABLED_ENV, ut.ENDPOINT_ENV, ut.EXPORT_INTERVAL_ENV):
         monkeypatch.delenv(name, raising=False)
     yield
     ut.shutdown_usage_telemetry_recorder()
 
 
-def _data_points(reader: InMemoryMetricReader, metric_name: str):
+def _metric(reader: InMemoryMetricReader, metric_name: str) -> Metric | None:
     data = reader.get_metrics_data()
+    if data is None:
+        return None
     for resource_metric in data.resource_metrics:
         for scope_metric in resource_metric.scope_metrics:
             for metric in scope_metric.metrics:
                 if metric.name == metric_name:
-                    return list(metric.data.data_points)
-    return []
+                    return metric
+    return None
 
 
-def _all_data_points(reader: InMemoryMetricReader):
+def _data_points(reader: InMemoryMetricReader, metric_name: str) -> list:
+    metric: Final = _metric(reader, metric_name)
+    return [] if metric is None else list(metric.data.data_points)
+
+
+def _all_data_points(reader: InMemoryMetricReader) -> list:
     data = reader.get_metrics_data()
     if data is None:
         return []
@@ -49,32 +60,39 @@ def _all_data_points(reader: InMemoryMetricReader):
 
 
 def _recorder_with_reader() -> tuple[ut.UsageTelemetryRecorder, InMemoryMetricReader]:
-    reader = InMemoryMetricReader()
+    reader: Final = InMemoryMetricReader()
     return ut.UsageTelemetryRecorder(MeterProvider(metric_readers=[reader])), reader
 
 
-# ── Middleware sink: litellm.usage.requests ────────────────────────────────────
+def _config(**overrides: object) -> ut.UsageTelemetryConfig:
+    base: Final[dict[str, object]] = {
+        "endpoint": "https://telemetry.litellm.ai/v1/metrics",
+        "export_interval_ms": 60_000,
+        "litellm_version": "1.2.3",
+        "instance_id": "inst-1",
+    }
+    return ut.UsageTelemetryConfig(**{**base, **overrides})
 
 
-def test_record_aggregates_by_route_and_status_class():
+def test_record_aggregates_by_route_and_status_class() -> None:
     recorder, reader = _recorder_with_reader()
 
     recorder.record(category=BillableCategory.LLM, route="/chat/completions", status_code=200)
     recorder.record(category=BillableCategory.LLM, route="/chat/completions", status_code=200)
     recorder.record(category=BillableCategory.LLM, route="/chat/completions", status_code=500)
 
-    points = _data_points(reader, "litellm.usage.requests")
-    by_class = {point.attributes["http.response.status_class"]: point.value for point in points}
+    points: Final = _data_points(reader, "litellm.usage.requests")
+    by_class: Final = {point.attributes["http.response.status_class"]: point.value for point in points}
     assert by_class == {"2xx": 2, "5xx": 1}
     for point in points:
         assert point.attributes["http.route"] == "/chat/completions"
         assert point.attributes["litellm.endpoint.category"] == "llm"
 
 
-# ── Success callback: llm_requests / tokens / spend ────────────────────────────
+_PUBLIC_MODEL: Final = next(key for key in litellm.model_cost if "/" not in key)
 
-_SUCCESS_PAYLOAD = {
-    "model": "gpt-4.1",
+_SUCCESS_PAYLOAD: Final[dict] = {
+    "model": _PUBLIC_MODEL,
     "custom_llm_provider": "openai",
     "call_type": "acompletion",
     "prompt_tokens": 10,
@@ -91,7 +109,7 @@ _SUCCESS_PAYLOAD = {
 }
 
 
-async def test_success_event_exports_only_anonymous_attributes():
+async def test_success_event_exports_only_anonymous_attributes() -> None:
     recorder, reader = _recorder_with_reader()
 
     await recorder.async_log_success_event(
@@ -101,34 +119,64 @@ async def test_success_event_exports_only_anonymous_attributes():
         end_time=None,
     )
 
-    llm_points = _data_points(reader, "litellm.usage.llm_requests")
+    llm_points: Final = _data_points(reader, "litellm.usage.llm_requests")
     assert len(llm_points) == 1
     assert llm_points[0].value == 1
     assert dict(llm_points[0].attributes) == {
-        "litellm.model": "gpt-4.1",
+        "litellm.model": _PUBLIC_MODEL,
         "litellm.provider": "openai",
         "litellm.call_type": "acompletion",
     }
 
-    token_points = _data_points(reader, "litellm.usage.tokens")
-    by_kind = {point.attributes["litellm.token.kind"]: point.value for point in token_points}
+    token_points: Final = _data_points(reader, "litellm.usage.tokens")
+    by_kind: Final = {point.attributes["litellm.token.kind"]: point.value for point in token_points}
     assert by_kind == {"prompt": 10, "completion": 5}
 
-    spend_points = _data_points(reader, "litellm.usage.spend_usd")
+    spend_points: Final = _data_points(reader, "litellm.usage.spend_usd")
     assert len(spend_points) == 1
     assert spend_points[0].value == pytest.approx(0.0123)
 
-    leaked = [
+    leaked: Final = [
         value
         for point in _all_data_points(reader)
         for value in point.attributes.values()
         if value
-        in ("sk-secret-key-value", "team-secret", "user-secret", "my-secret-alias", "https://customer-proxy.example.com")
+        in (
+            "sk-secret-key-value",
+            "team-secret",
+            "user-secret",
+            "my-secret-alias",
+            "https://customer-proxy.example.com",
+        )
     ]
     assert leaked == []
 
 
-async def test_success_event_with_missing_payload_records_nothing():
+async def test_private_model_name_collapses_to_other() -> None:
+    """A model name absent from the public pricing map could be an internal
+    identifier (a fine-tune name, a private deployment alias), so it must not
+    be exported; the label falls back to "other"."""
+    recorder, reader = _recorder_with_reader()
+
+    await recorder.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {
+                **_SUCCESS_PAYLOAD,
+                "model": "my-internal-finetune-v7",
+                "custom_llm_provider": "openai",
+            }
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    llm_points: Final = _data_points(reader, "litellm.usage.llm_requests")
+    assert len(llm_points) == 1
+    assert llm_points[0].attributes["litellm.model"] == "other"
+
+
+async def test_success_event_with_missing_payload_records_nothing() -> None:
     recorder, reader = _recorder_with_reader()
 
     await recorder.async_log_success_event(kwargs={}, response_obj=None, start_time=None, end_time=None)
@@ -148,27 +196,24 @@ async def test_success_event_with_missing_payload_records_nothing():
     assert _all_data_points(reader) == []
 
 
-# ── Env flag and factory ───────────────────────────────────────────────────────
-
-
 @pytest.mark.parametrize("value", ["true", "TRUE", "1"])
-def test_usage_telemetry_enabled_true_values(monkeypatch, value):
+def test_usage_telemetry_enabled_true_values(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setenv(ut.ENABLED_ENV, value)
     assert ut.usage_telemetry_enabled() is True
 
 
 @pytest.mark.parametrize("value", ["false", "0", "yes", ""])
-def test_usage_telemetry_enabled_false_values(monkeypatch, value):
+def test_usage_telemetry_enabled_false_values(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setenv(ut.ENABLED_ENV, value)
     assert ut.usage_telemetry_enabled() is False
 
 
-def test_usage_telemetry_enabled_unset_is_false():
+def test_usage_telemetry_enabled_unset_is_false() -> None:
     assert ut.usage_telemetry_enabled() is False
 
 
-def test_build_recorder_returns_none_when_disabled_and_builds_no_provider():
-    builds = []
+def test_build_recorder_returns_none_when_disabled_and_builds_no_provider() -> None:
+    builds: Final[list] = []
     assert (
         ut.build_usage_telemetry_recorder(
             litellm_version="1.0", instance_id="i-1", provider_factory=lambda config: builds.append(config)
@@ -178,17 +223,17 @@ def test_build_recorder_returns_none_when_disabled_and_builds_no_provider():
     assert builds == []
 
 
-def test_build_recorder_uses_injected_provider_factory(monkeypatch):
+def test_build_recorder_uses_injected_provider_factory(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(ut.ENABLED_ENV, "true")
-    built: dict[str, ut.UsageTelemetryConfig] = {}
+    built: Final[dict[str, ut.UsageTelemetryConfig]] = {}
 
-    reader = InMemoryMetricReader()
+    reader: Final = InMemoryMetricReader()
 
     def _factory(config: ut.UsageTelemetryConfig) -> MeterProvider:
         built["config"] = config
         return MeterProvider(metric_readers=[reader])
 
-    recorder = ut.build_usage_telemetry_recorder(
+    recorder: Final = ut.build_usage_telemetry_recorder(
         litellm_version="9.9", instance_id="inst-1", provider_factory=_factory
     )
     assert isinstance(recorder, ut.UsageTelemetryRecorder)
@@ -197,112 +242,150 @@ def test_build_recorder_uses_injected_provider_factory(monkeypatch):
     ut.shutdown_usage_telemetry_recorder()
 
 
-def test_build_recorder_returns_none_when_provider_factory_raises(monkeypatch):
+def test_build_recorder_returns_none_when_provider_factory_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(ut.ENABLED_ENV, "true")
 
     def _explode(config: ut.UsageTelemetryConfig) -> MeterProvider:
         raise OSError("no network")
 
     assert (
-        ut.build_usage_telemetry_recorder(litellm_version="1.0", instance_id="i-1", provider_factory=_explode)
-        is None
+        ut.build_usage_telemetry_recorder(litellm_version="1.0", instance_id="i-1", provider_factory=_explode) is None
     )
 
 
-def test_export_interval_invalid_falls_back(monkeypatch):
+def test_export_interval_invalid_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(ut.ENABLED_ENV, "true")
     monkeypatch.setenv(ut.EXPORT_INTERVAL_ENV, "not-a-number")
-    config = ut.load_usage_telemetry_config(litellm_version="1.0", instance_id="i-1")
+    config: Final = ut.load_usage_telemetry_config(litellm_version="1.0", instance_id="i-1")
     assert config.export_interval_ms == ut.DEFAULT_EXPORT_INTERVAL_MS
 
 
-def test_metrics_endpoint_appends_signal_path():
+def test_metrics_endpoint_appends_signal_path() -> None:
     assert ut._metrics_endpoint("http://127.0.0.1:4318") == "http://127.0.0.1:4318/v1/metrics"
     assert ut._metrics_endpoint("http://127.0.0.1:4318/v1/metrics") == "http://127.0.0.1:4318/v1/metrics"
 
 
-# ── Sink composition ──────────────────────────────────────────────────────────
+def test_exporter_ignores_otlp_header_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With a falsy headers value OTLPMetricExporter falls back to the
+    OTEL_EXPORTER_OTLP_*_HEADERS env vars, which would forward a deployment's
+    own collector credentials to telemetry.litellm.ai."""
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer secret-token")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_METRICS_HEADERS", "x-api-key=secret-key")
+
+    exporter: Final = ut._build_exporter(_config())
+    headers: Final[Mapping[str, str]] = exporter._session.headers  # pyright: ignore[reportPrivateUsage]  # asserts the session's real header set
+
+    assert "authorization" not in {key.lower() for key in headers}
+    assert "x-api-key" not in {key.lower() for key in headers}
+    assert headers["User-Agent"] == "litellm-proxy/1.2.3"
 
 
 class _SpySink:
     def __init__(self, raises: bool = False) -> None:
-        self.calls = []
-        self._raises = raises
+        self.calls: list[tuple[BillableCategory, str, int]] = []
+        self._raises: Final = raises
 
-    def record(self, *, category, route, status_code) -> None:
+    def record(self, *, category: BillableCategory, route: str, status_code: int) -> None:
         if self._raises:
             raise RuntimeError("boom")
         self.calls.append((category, route, status_code))
 
 
-def test_compose_sinks_empty_returns_none():
+def test_compose_sinks_empty_returns_none() -> None:
     assert ut.compose_gateway_request_sinks(None, None) is None
 
 
-def test_compose_sinks_single_returns_it():
-    sink = _SpySink()
+def test_compose_sinks_single_returns_it() -> None:
+    sink: Final = _SpySink()
     assert ut.compose_gateway_request_sinks(None, sink) is sink
 
 
-def test_compose_sinks_fans_out_and_isolates_failures():
-    raising = _SpySink(raises=True)
-    spy = _SpySink()
-    sink = ut.compose_gateway_request_sinks(raising, spy)
+def test_compose_sinks_fans_out_and_isolates_failures() -> None:
+    raising: Final = _SpySink(raises=True)
+    spy: Final = _SpySink()
+    sink: Final = ut.compose_gateway_request_sinks(raising, spy)
     assert sink is not None
     sink.record(category=BillableCategory.LLM, route="/chat/completions", status_code=200)
     assert spy.calls == [(BillableCategory.LLM, "/chat/completions", 200)]
 
 
-# ── Instance id resolution ────────────────────────────────────────────────────
+@dataclass
+class _FakeRow:
+    param_value: object
 
 
+@dataclass
 class _FakeConfigTable:
-    def __init__(self, row=None) -> None:
-        self._row = row
-        self.created = []
+    rows: list[_FakeRow] = field(default_factory=list)
+    find_calls: int = 0
+    created: list[dict] = field(default_factory=list)
+    create_raises: bool = False
 
-    async def find_unique(self, *, where):
-        return self._row
+    async def find_unique(self, *, where: dict) -> _FakeRow | None:
+        self.find_calls += 1
+        return self.rows[0] if self.rows else None
 
-    async def create(self, *, data):
+    async def create(self, *, data: dict) -> None:
+        if self.create_raises:
+            raise RuntimeError("duplicate key")
         self.created.append(data)
-        self._row = type("Row", (), {"param_value": data["param_value"]})()
+        self.rows.append(_FakeRow(data["param_value"]))
 
 
+@dataclass
+class _FakeDb:
+    litellm_config: _FakeConfigTable
+
+
+@dataclass
 class _FakePrisma:
-    def __init__(self, row=None) -> None:
-        self.db = type("DB", (), {"litellm_config": _FakeConfigTable(row)})()
+    db: _FakeDb
 
 
-class _Row:
-    def __init__(self, param_value) -> None:
-        self.param_value = param_value
-
-
-async def test_resolve_instance_id_without_db_returns_uuid():
-    resolved = await ut.resolve_instance_id(None)
+async def test_resolve_instance_id_without_db_returns_uuid() -> None:
+    resolved: Final = await ut.resolve_instance_id(None)
     assert str(uuid.UUID(resolved)) == resolved
 
 
-async def test_resolve_instance_id_returns_existing():
-    prisma = _FakePrisma(row=_Row({"instance_id": "existing-id"}))
+async def test_resolve_instance_id_returns_existing() -> None:
+    prisma: Final = _FakePrisma(_FakeDb(_FakeConfigTable(rows=[_FakeRow({"instance_id": "existing-id"})])))
     assert await ut.resolve_instance_id(prisma) == "existing-id"
 
 
-async def test_resolve_instance_id_persists_new_id():
-    prisma = _FakePrisma(row=None)
-    resolved = await ut.resolve_instance_id(prisma)
+async def test_resolve_instance_id_persists_new_id() -> None:
+    prisma: Final = _FakePrisma(_FakeDb(_FakeConfigTable()))
+    resolved: Final = await ut.resolve_instance_id(prisma)
     assert str(uuid.UUID(resolved)) == resolved
     (created,) = prisma.db.litellm_config.created
     assert created["param_name"] == ut.INSTANCE_ID_CONFIG_KEY
     assert json.loads(created["param_value"]) == {"instance_id": resolved}
 
 
-async def test_resolve_instance_id_falls_back_on_db_error():
+async def test_resolve_instance_id_insert_race_returns_winner_row() -> None:
+    """When two workers miss the row and race the create, the loser must adopt
+    the winner's persisted id rather than falling back to a per-process uuid."""
+    winner: Final = _FakeRow({"instance_id": "winner-id"})
+
+    class _RaceTable:
+        def __init__(self) -> None:
+            self._find_calls: Final[list] = []
+
+        async def find_unique(self, *, where: dict) -> _FakeRow | None:
+            self._find_calls.append(where)
+            return None if len(self._find_calls) == 1 else winner
+
+        async def create(self, *, data: dict) -> None:
+            raise RuntimeError("duplicate key")
+
+    prisma: Final = type("P", (), {"db": type("DB", (), {"litellm_config": _RaceTable()})()})()
+    assert await ut.resolve_instance_id(prisma) == "winner-id"
+
+
+async def test_resolve_instance_id_falls_back_on_db_error() -> None:
     class _ExplodingTable:
-        async def find_unique(self, *, where):
+        async def find_unique(self, *, where: dict) -> None:
             raise RuntimeError("db down")
 
-    prisma = type("P", (), {"db": type("DB", (), {"litellm_config": _ExplodingTable()})()})()
-    resolved = await ut.resolve_instance_id(prisma)
+    prisma: Final = type("P", (), {"db": type("DB", (), {"litellm_config": _ExplodingTable()})()})()
+    resolved: Final = await ut.resolve_instance_id(prisma)
     assert str(uuid.UUID(resolved)) == resolved
