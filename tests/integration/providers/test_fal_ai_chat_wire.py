@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 from typing import Final
 
-import httpx
 import pytest
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
@@ -57,7 +56,6 @@ def test_fal_moondream3_chat_sends_prompt_image_and_reasoning(gateway: Gateway) 
         )
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        wire_url: Final = wire.url
         model: Final = scenario.model(model=f"fal_ai/{_MODEL}", api_base=wire.url, api_key="synthetic-fal-key")
         response: Final = gateway.request(
             "POST",
@@ -97,3 +95,32 @@ def test_fal_moondream3_chat_sends_prompt_image_and_reasoning(gateway: Gateway) 
             + 7 * _catalog_cost(f"fal_ai/{_MODEL}", "output_cost_per_token")
         )
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", f"/{_MODEL}")]
+
+
+@pytest.mark.covers("other.provider_wire.fal_ai.chat_non_string_reasoning_effort_rejected_before_wire")
+def test_fal_moondream3_chat_rejects_non_string_reasoning_effort_before_the_wire(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        raise AssertionError(f"provider must not be reached: {request.method} {request.target}")
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"fal_ai/{_MODEL}", api_base=wire.url, api_key="synthetic-fal-key")
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": _PROMPT},
+                            {"type": "image_url", "image_url": {"url": "https://example.com/pic.png"}},
+                        ],
+                    }
+                ],
+                "reasoning_effort": {"level": "low"},
+            },
+        )
+        assert response.status_code == 400, response.text
+        assert "reasoning_effort" in response.text
+        assert wire.drain() == ()
