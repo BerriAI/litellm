@@ -101,6 +101,9 @@
     "tests/integration/pricing/test_off_peak_pricing.py::test_closed_off_peak_window_bills_standard_rates": [
       "quota_management.spend_tracking.off_peak_pricing.closed_window_bills_standard_rates"
     ],
+    "tests/integration/pricing/test_ocr_page_pricing.py::test_ocr_annotation_pages_are_billed_at_annotation_cost_per_page": [
+      "pricing.ocr.annotation_pages_billed_at_annotation_rate"
+    ],
     "tests/integration/spend/test_cache_and_quota.py::test_generated_cache_sequences_preserve_content_usage_and_zero_hit_cost": [
       "quota_management.response_cache.generated_sequences_preserve_content_and_accounting"
     ],
