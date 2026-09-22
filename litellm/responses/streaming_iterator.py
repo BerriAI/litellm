@@ -801,13 +801,8 @@ class BaseResponsesAPIStreamingIterator:
                 request_payload["litellm_params"] = {}
 
         try:
-            response_obj: Final = self._get_completed_response_object()
             update_response_metadata(
-                result=(
-                    type(response_obj).model_validate(response_obj.model_dump())
-                    if response_obj is not None
-                    else self.completed_response
-                ),
+                result=self.completed_response,
                 logging_obj=self.logging_obj,
                 model=self.model,
                 kwargs=request_payload,

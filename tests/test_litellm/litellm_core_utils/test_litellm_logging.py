@@ -7467,3 +7467,26 @@ def test_get_assembled_streaming_response_without_usage_cost_leaves_pricing_to_t
     assert "additional_headers" not in assembled._hidden_params
     price_map_cost = logging_obj._response_cost_calculator(result=assembled)
     assert price_map_cost is not None and 0 < price_map_cost != 0.0042
+
+
+def test_response_cost_calculator_prices_terminal_responses_event_from_its_response():
+    """A terminal Responses stream event carries no usage itself; pricing must unwrap
+    it so the stored cost_breakdown is not overwritten with zeros."""
+    logging_obj: Final = _responses_stream_logging_obj()
+    inner_response: Final = ResponsesAPIResponse(
+        id="resp-priced",
+        created_at=1,
+        object="response",
+        status="completed",
+        model="gpt-4o-mini",
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=1840, output_tokens=412, total_tokens=2252),
+    )
+    event: Final = ResponseCompletedEvent(type="response.completed", response=inner_response)
+
+    event_cost: Final = logging_obj._response_cost_calculator(result=event)
+    inner_cost: Final = logging_obj._response_cost_calculator(result=inner_response)
+
+    assert event_cost is not None and event_cost > 0
+    assert event_cost == inner_cost
+    assert logging_obj.cost_breakdown["input_cost"] is not None and logging_obj.cost_breakdown["input_cost"] > 0
