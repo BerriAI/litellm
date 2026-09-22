@@ -25,7 +25,7 @@ from threading import Lock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import (
@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     request_contains_image_content,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
@@ -491,6 +492,42 @@ def _human_text(content: object, marker_pairs: tuple[tuple[str, str], ...] = _DE
     model and therefore the spend. An unclosed tag is not a block and is left intact.
     """
     return _strip_reminder_blocks(_message_text(content), marker_pairs)
+
+
+def _encrypted_classifier_task(
+    request_kwargs: Mapping[str, object] | None,
+    marker_pairs: tuple[tuple[str, str], ...],
+) -> dict[str, object] | None:
+    from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
+
+    raw_input: Final = (request_kwargs or EMPTY_MAPPING).get("input")
+    if not isinstance(raw_input, list) or (request_kwargs or EMPTY_MAPPING).get("messages"):
+        return None
+    try:
+        items: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(raw_input)
+    except ValidationError:
+        return None
+    current: Final = next(
+        (
+            item
+            for item in reversed(items)
+            if (messages := resolve_structured_messages(messages=None, request_kwargs={"input": [item]}))
+            and any(_iter_human_asks_newest_first(messages, marker_pairs))
+        ),
+        None,
+    )
+    if current is None or current.get("type") != "agent_message" or not isinstance(current.get("content"), list):
+        return None
+    try:
+        parts: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(current["content"])
+    except ValidationError:
+        return None
+    if not any(part.get("type") == "encrypted_content" and part.get("encrypted_content") for part in parts):
+        return None
+    return {
+        **current,
+        "content": [part for part in parts if part.get("type") in ("input_text", "encrypted_content")],
+    }
 
 
 def _iter_human_asks_newest_first(
@@ -1640,7 +1677,7 @@ class ComplexityRouter(CustomLogger):
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
         if self.config.classifier_type == "jev":
-            return await self._jev_classifier_outcome(prompt, system_prompt)
+            return await self._jev_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type == "heuristic_first" and self.config.classifier_llm_config is not None:
             return await self._classify_heuristic_first(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type == "hybrid" and self.config.classifier_llm_config is not None:
@@ -1799,11 +1836,22 @@ class ComplexityRouter(CustomLogger):
                 breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
             return self._classifier_failure_outcome(f"LLM classifier failed ({e})", prompt, system_prompt, scored)
 
-    async def _jev_classifier_outcome(self, prompt: str, system_prompt: str | None) -> ClassificationOutcome:
+    async def _jev_classifier_outcome(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: Mapping[str, object] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> ClassificationOutcome:
         config: Final = self.config.jev_classifier_config
         client: Final = self._jev_client
         if config is None or client is None:
             return self._classifier_failure_outcome("jev classifier is not configured", prompt, system_prompt)
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
+        if _encrypted_classifier_task(request_kwargs, marker_pairs) is not None:
+            return self._classifier_failure_outcome(
+                "jev classifier does not support encrypted agent tasks", prompt, system_prompt
+            )
         breaker: Final = self._classifier_circuit_breaker
         permit: Final = breaker.acquire_permit() if breaker is not None else None
         if breaker is not None and permit is None:
@@ -1828,14 +1876,14 @@ class ComplexityRouter(CustomLogger):
         )
         timeout_s: Final = config.timeout_ms / 1000
         request: Final = build_jev_request(
-            prompt=prompt,
-            system_prompt=system_prompt,
+            prompt=self._classifier_context_payload(prompt, system_prompt, request_kwargs, messages),
+            system_prompt=None,
             model=config.model,
             instructions=config.instructions or DEFAULT_JEV_INSTRUCTIONS,
             criteria=criteria,
         )
         try:
-            response: Final = await asyncio.wait_for(client.evaluate(request, timeout_s), timeout_s)
+            response: Final = await asyncio.wait_for(client.evaluate(request, timeout_s, request_kwargs), timeout_s)
             answer: Final = response.answers.get("tier")
             if answer is None:
                 raise ValueError("Jev response is missing the 'tier' answer")
@@ -2002,6 +2050,59 @@ class ComplexityRouter(CustomLogger):
             tier=tier, score=None, signals=("classifier-failed:default-model",), cause="default_model_fallback"
         )
 
+    def _classifier_caller_constraints(
+        self, system_prompt: str | None, request_kwargs: Mapping[str, object] | None
+    ) -> str | None:
+        """Exclude Claude Code's environment and skill catalogs from task forecasts."""
+        return (
+            None
+            if any(
+                is_claude_code_user_agent(user_agent)
+                for metadata in (self._iter_metadata_dicts(request_kwargs) if request_kwargs is not None else ())
+                if isinstance(user_agent := metadata.get("user_agent"), str)
+            )
+            else system_prompt
+        )
+
+    def _classifier_context_payload(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: Mapping[str, object] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+        *,
+        encrypted_task: bool = False,
+    ) -> str:
+        include_assistant: Final = self.config.classifier_context_include_assistant_turns
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
+        context_enabled: Final = bool(messages) and self.config.classifier_context_window_size > 0
+        prior_turns: Final = (
+            _extract_prior_turns(
+                messages,
+                current_ask=prompt,
+                window_size=self.config.classifier_context_window_size,
+                budget_chars=self.config.classifier_context_budget_chars,
+                per_turn_chars=self.config.classifier_context_per_turn_chars,
+                include_assistant=include_assistant,
+                marker_pairs=marker_pairs,
+            )
+            if context_enabled
+            else ()
+        )
+        has_prior_conversation: Final = (
+            context_enabled
+            and len(tuple(islice(_iter_context_turns_newest_first(messages or (), include_assistant, marker_pairs), 2)))
+            > 1
+        )
+        return self._build_classifier_user_payload(
+            prompt="The delegated task in the following agent_message." if encrypted_task else prompt,
+            system_prompt=self._classifier_caller_constraints(system_prompt, request_kwargs),
+            prior_turns=prior_turns,
+            messages=messages,
+            has_prior_conversation=has_prior_conversation,
+            label_roles=include_assistant,
+        )
+
     async def _classify_with_llm(
         self,
         prompt: str,
@@ -2032,40 +2133,10 @@ class ComplexityRouter(CustomLogger):
         if llm_config is None or classifier_system_prompt is None or classifier_response_format is None:
             raise ValueError("classifier_llm_config is not set")
 
-        include_assistant: Final = self.config.classifier_context_include_assistant_turns
-        context_enabled: Final = bool(messages) and self.config.classifier_context_window_size > 0
-        prior_turns: Final = (
-            _extract_prior_turns(
-                messages,
-                current_ask=prompt,
-                window_size=self.config.classifier_context_window_size,
-                budget_chars=self.config.classifier_context_budget_chars,
-                per_turn_chars=self.config.classifier_context_per_turn_chars,
-                include_assistant=include_assistant,
-                marker_pairs=self._reminder_markers,
-            )
-            if context_enabled
-            else ()
-        )
-        has_prior_conversation: Final = (
-            context_enabled
-            and len(
-                tuple(
-                    islice(
-                        _iter_context_turns_newest_first(messages or (), include_assistant, self._reminder_markers), 2
-                    )
-                )
-            )
-            > 1
-        )
-
-        user_payload: Final = self._build_classifier_user_payload(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            prior_turns=prior_turns,
-            messages=messages,
-            has_prior_conversation=has_prior_conversation,
-            label_roles=include_assistant,
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or {})
+        encrypted_task: Final = _encrypted_classifier_task(request_kwargs, marker_pairs)
+        user_payload: Final = self._classifier_context_payload(
+            prompt, system_prompt, request_kwargs, messages, encrypted_task=encrypted_task is not None
         )
 
         request_metadata = (request_kwargs or {}).get("litellm_metadata") or (request_kwargs or {}).get("metadata")
@@ -3304,6 +3375,9 @@ class ComplexityRouter(CustomLogger):
         and harness messages) and the last system prompt.
         """
         return _extract_current_ask_and_system_prompt(messages)
+
+    def _reminder_markers_for_request(self, request_kwargs: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
+        return self._reminder_markers
 
     @staticmethod
     def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:

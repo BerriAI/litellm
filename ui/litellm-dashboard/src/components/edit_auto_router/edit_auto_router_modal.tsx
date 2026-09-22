@@ -1,3 +1,5 @@
+import { usesClassifierContext } from "../add_model/classifier_types";
+import { defaultJevClassifierConfig, jevClassifierConfigSchema } from "../add_model/jev_classifier_config";
 import React, { useEffect, useMemo, useState } from "react";
 import { z } from "zod/v4";
 import { toast } from "@/lib/toast";
@@ -34,6 +36,7 @@ import {
   getSemanticConfigError,
   getPlanModeTierError,
   getTierLabelsError,
+  hydrateBuiltInTiers,
   hydrateCustomTierSet,
   hydratePlanModeMinTier,
   hydrateTierLabels,
@@ -91,6 +94,7 @@ interface EditAutoRouterModalProps {
  * hydrators validate themselves stay `unknown`; the ones assigned straight through carry their type. */
 export interface StoredComplexityRouterConfig {
   tiers?: Partial<Record<keyof ComplexityTiers, unknown>>;
+  enable_non_reasoning_tier?: boolean;
   tier_model_configs?: unknown;
   default_model?: string | null;
   plan_mode_min_tier?: unknown;
@@ -101,8 +105,10 @@ export interface StoredComplexityRouterConfig {
   tier_labels?: unknown;
   classifier_type?: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  jev_classifier_config?: unknown;
   classifier_context_window_size?: unknown;
   classifier_context_budget_chars?: unknown;
+  classifier_context_per_turn_chars?: unknown;
   classifier_context_include_assistant_turns?: unknown;
   classifier_fallback?: unknown;
   classification_mode?: unknown;
@@ -135,18 +141,14 @@ export const hydrateComplexityRouterConfig = (
   parsedConfig: StoredComplexityRouterConfig,
   complexityRouterDefaultModel: string | null | undefined,
 ): ComplexityRouterConfigValue => {
-  const hydratedTiers: ComplexityTiers = {
-    SIMPLE: normalizeTierModels(parsedConfig.tiers?.SIMPLE),
-    MEDIUM: normalizeTierModels(parsedConfig.tiers?.MEDIUM),
-    COMPLEX: normalizeTierModels(parsedConfig.tiers?.COMPLEX),
-    REASONING: normalizeTierModels(parsedConfig.tiers?.REASONING),
-  };
-
+  const builtIn = hydrateBuiltInTiers(parsedConfig.tiers, parsedConfig.enable_non_reasoning_tier);
+  const { tiers: hydratedTiers, enable_non_reasoning_tier } = builtIn;
   const custom_tier_set = hydrateCustomTierSet(parsedConfig);
-  const activeTiers = { tiers: hydratedTiers, custom_tier_set };
+  const activeTiers = { ...builtIn, custom_tier_set };
 
   return {
     tiers: hydratedTiers,
+    enable_non_reasoning_tier,
     custom_tier_set,
     tier_model_params: tierParamsByRowId(
       hydrateTierModelParams(parsedConfig.tiers, parsedConfig.tier_model_configs),
@@ -156,7 +158,12 @@ export const hydrateComplexityRouterConfig = (
     plan_mode_min_tier: hydratePlanModeMinTier(parsedConfig.plan_mode_min_tier, custom_tier_set),
     tier_labels: hydrateTierLabels(parsedConfig.tier_labels),
     classifier_type: parsedConfig.classifier_type || "heuristic",
-    classifier_llm_config: parsedConfig.classifier_llm_config,
+    classifier_llm_config: parsedConfig.classifier_type === "jev" ? undefined : parsedConfig.classifier_llm_config,
+    jev_classifier_config:
+      parsedConfig.classifier_type === "jev"
+        ? jevClassifierConfigSchema.safeParse(parsedConfig.jev_classifier_config ?? {}).data ??
+          defaultJevClassifierConfig()
+        : undefined,
     classifier_context_window_size:
       typeof parsedConfig.classifier_context_window_size === "number"
         ? parsedConfig.classifier_context_window_size
@@ -164,6 +171,10 @@ export const hydrateComplexityRouterConfig = (
     classifier_context_budget_chars:
       typeof parsedConfig.classifier_context_budget_chars === "number"
         ? parsedConfig.classifier_context_budget_chars
+        : undefined,
+    classifier_context_per_turn_chars:
+      typeof parsedConfig.classifier_context_per_turn_chars === "number"
+        ? parsedConfig.classifier_context_per_turn_chars
         : undefined,
     classifier_context_include_assistant_turns:
       typeof parsedConfig.classifier_context_include_assistant_turns === "boolean"
@@ -242,6 +253,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tier_labels",
   "classifier_type",
   "classifier_llm_config",
+  "jev_classifier_config",
   "classifier_context_window_size",
   "classifier_context_budget_chars",
   "classifier_context_include_assistant_turns",
@@ -328,6 +340,9 @@ export const buildUpdatedComplexityRouterConfig = (
   keywordMatching?: KeywordMatchingState,
 ): Record<string, unknown> => {
   const isManaged = (key: string): boolean => {
+    if (key === "classifier_context_per_turn_chars") {
+      return !usesClassifierContext(effectiveClassifierType(value)) || Object.prototype.hasOwnProperty.call(value, key);
+    }
     if (MANAGED_COMPLEXITY_ROUTER_KEYS.has(key)) return true;
     if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;
     return customTechnicalKeywords !== undefined && key === "custom_technical_keywords";
@@ -349,9 +364,12 @@ export const buildUpdatedComplexityRouterConfig = (
     classificationMode: value.classification_mode,
     tierLabels: value.tier_labels,
     classifierType: value.classifier_type,
+    enableNonReasoningTier: value.enable_non_reasoning_tier,
+    jevClassifierConfig: value.jev_classifier_config,
     classifierLlmConfig: value.classifier_llm_config,
     classifierContextWindowSize: value.classifier_context_window_size,
     classifierContextBudgetChars: value.classifier_context_budget_chars,
+    classifierContextPerTurnChars: value.classifier_context_per_turn_chars,
     classifierContextIncludeAssistantTurns: value.classifier_context_include_assistant_turns,
     classifierFallback: value.classifier_fallback,
     sessionAffinity: value.session_affinity ?? DEFAULT_SESSION_AFFINITY,
