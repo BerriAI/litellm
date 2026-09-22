@@ -34,6 +34,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_set_request_parsed_body,
 )
+from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
     ResponsesAPIOptionalRequestParams,
@@ -296,6 +297,7 @@ async def responses_api(
                 route_type="aresponses",
                 llm_router=llm_router,
             )
+            raise_if_required_body_param_missing(route_type="aresponses", data=data)
         except Exception as e:
             raise await processor._handle_llm_api_exception(
                 e=e,
@@ -1363,7 +1365,7 @@ async def _read_ws_model_from_first_frame(
     return model, first_message
 
 
-def _extract_model_from_first_ws_event(first_event: Any) -> str | None:
+def _extract_model_from_first_ws_event(first_event: object) -> str | None:
     """Extract model from a response.create WS event, handling flat and nested formats.
 
     Flat:   {"type": "response.create", "model": "gpt-4o", ...}

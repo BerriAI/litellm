@@ -23,7 +23,7 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
         params: dict[str, Any],
         api_base: str | None = None,
         **kwargs: Any,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Handle non-streaming request to Pydantic AI agent."""
         if api_base is None:
             raise ValueError("api_base is required for PydanticAIProviderConfig")
@@ -41,7 +41,7 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
         params: dict[str, Any],
         api_base: str | None = None,
         **kwargs,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, object]]:
         """Handle streaming request with fake streaming."""
         if not api_base:
             raise ValueError("api_base is required for Pydantic AI agents")

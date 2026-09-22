@@ -34,6 +34,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_provider_specific_headers_to_request,
     check_if_token_is_service_account,
     clean_headers,
+    move_guardrails_to_metadata,
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
@@ -5188,6 +5189,45 @@ def test_clean_headers_strips_x_api_key_when_byok_enabled_but_x_api_key_was_auth
 
 
 @pytest.mark.asyncio
+async def test_move_guardrails_to_metadata_moves_include_guardrail_response_before_the_no_guardrail_early_out():
+    policy_registry = MagicMock()
+    policy_registry.is_initialized.return_value = False
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    true_data = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "include_guardrail_response": True,
+    }
+    with patch("litellm.proxy.policy_engine.policy_registry.get_policy_registry", return_value=policy_registry):
+        await move_guardrails_to_metadata(
+            data=true_data,
+            _metadata_variable_name="metadata",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert "include_guardrail_response" not in true_data
+    assert true_data["metadata"]["include_guardrail_response"] is True
+
+    string_data = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "include_guardrail_response": "true",
+    }
+    with patch("litellm.proxy.policy_engine.policy_registry.get_policy_registry", return_value=policy_registry):
+        await move_guardrails_to_metadata(
+            data=string_data,
+            _metadata_variable_name="metadata",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert "include_guardrail_response" not in string_data
+    assert string_data["metadata"]["include_guardrail_response"] is False
+
+
+@pytest.mark.asyncio
 async def test_team_guardrail_merges_with_global_policy():
     """
     Regression: team's direct guardrail must be present alongside guardrails
@@ -7249,7 +7289,7 @@ CROSS_ACCOUNT_AUTHORIZATION = "Bearer deliberately-configured-pass-through-token
 
 SIGV4_PREFIX = "AWS4-HMAC-SHA256"
 AUTHORIZATION_HEADER_CASINGS = ["authorization", "Authorization", "AUTHORIZATION"]
-LEAK_TARGET_PROVIDERS = ["bedrock", "bedrock_converse", "vertex_ai"]
+LEAK_TARGET_PROVIDERS = ["bedrock", "bedrock_converse", "bedrock_mantle", "vertex_ai"]
 
 BEDROCK_ENDPOINT = (
     "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/invoke"
@@ -7340,6 +7380,28 @@ def test_oauth_credential_entry_is_scoped_to_anthropic_alone():
 
     credential_entries = [entry for entry in scoped_headers if OAUTH_TOKEN in entry["extra_headers"].values()]
     assert [entry["custom_llm_provider"] for entry in credential_entries] == ["anthropic"]
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["anthropic", "bedrock", "bedrock_mantle", "vertex_ai"])
+def test_client_anthropic_api_headers_reach_every_anthropic_messages_provider(custom_llm_provider):
+    client_headers = {
+        "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14",
+        "anthropic-version": "2023-06-01",
+        "user-agent": "claude-cli/2.1.239",
+    }
+
+    forwarded = _headers_forwarded_to(client_headers, custom_llm_provider)
+
+    assert forwarded == {
+        "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14",
+        "anthropic-version": "2023-06-01",
+    }
+
+
+def test_client_anthropic_api_headers_stay_off_openai_compatible_providers():
+    forwarded = _headers_forwarded_to({"anthropic-beta": "claude-code-20250219"}, "openai")
+
+    assert forwarded == {}
 
 
 def test_no_provider_specific_header_when_client_sends_nothing_anthropic():
@@ -8176,3 +8238,45 @@ def test_default_team_settings_bool_turn_off_message_logging_redacts():
         )
         is True
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/mcp-rest/tools/call", "/v1/responses", "/v1/chat/completions"])
+@pytest.mark.parametrize("custom_auth", ["x-mcp-auth", "x-private-mcp-token"])
+async def test_mcp_credentials_only_removed_from_logging_copies(path: str, custom_auth: str):
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    metadata_name: Final = "litellm_metadata" if path == "/v1/responses" else "metadata"
+    secrets: Final = {
+        "X-MCP-Deepwiki-Authorization": "upstream-sentinel",
+        custom_auth: "client-auth-sentinel",
+        "x-service-token": "configured-secret-sentinel",
+    }
+    attribution: Final = {"x-app-id": "app-a", "x-nuid": "user-a", "x-user-id": "identity-a"}
+    request: Final = _make_request_mock(path, {"Content-Type": "application/json", **secrets, **attribution})
+    request.headers = Headers(request.headers)
+    settings: Final = {"mcp_client_side_auth_header_name": custom_auth, "user_header_name": "x-user-id"}
+    server: Final = MCPServer(
+        server_id="header-test", name="header-test", transport="http", url="https://example.com/mcp",
+        extra_headers=["x-service-token", "x-user-id"],
+    )
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", settings),
+        patch.dict(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.config_mcp_servers",
+            {"header-test": server}, clear=True,
+        ),
+    ):
+        updated: Final = await add_litellm_data_to_request(
+            data={"model": "test-model", "messages": [{"role": "user", "content": "hello"}]},
+            request=request, user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(), general_settings=settings, version="test",
+        )
+    for header_dict in _all_header_dicts(updated, metadata_name):
+        assert not any(value in json.dumps(header_dict) for value in secrets.values())
+    assert updated[metadata_name]["headers"] == updated["proxy_server_request"]["headers"]
+    for name, value in attribution.items():
+        assert updated[metadata_name]["headers"][name] == value
+    for name, value in secrets.items():
+        assert updated["secret_fields"]["raw_headers"][name.lower()] == value
+        assert request.headers[name] == value

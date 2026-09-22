@@ -60,6 +60,20 @@ def test_translate_openai_response_to_anthropic_empty_choices() -> None:
     assert result["usage"]["input_tokens"] == 10
 
 
+@pytest.mark.parametrize("text,count,expected_stop", [
+    ("", 1, "compaction"), (None, 1, "compaction"), ("Answer", 1, "max_tokens"),
+    (" ", 1, "max_tokens"), ("", 2, "max_tokens"), ("", 0, "max_tokens"),
+])
+def test_native_compaction_response_roundtrip(text: str | None, count: int, expected_stop: str) -> None:
+    block: Final = {"type": "compaction", "content": "Exact summary", "signature": "opaque-signature"}
+    message: Final = Message(content=text, provider_specific_fields={"compaction_blocks": [block] * count})
+    response: Final = ModelResponse(choices=[Choices(message=message, finish_reason="length")], usage=Usage())
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+    expected_text: Final = [{"type": "text", "text": text}] if text is not None and (text != "" or not count) else []
+    assert result["content"] == [*([block] * count), *expected_text]
+    assert result["stop_reason"] == expected_stop
+
+
 def test_translate_chat_refusal_to_anthropic_response():
     response = ModelResponse(
         id="chatcmpl-refusal",
@@ -2109,13 +2123,52 @@ def test_should_not_add_cache_control_for_non_anthropic_model():
     for model in [
         CACHE_CONTROL_NON_ANTHROPIC_MODEL,
         "openai/gpt-4-turbo",
-        "gemini-pro",
     ]:
         target = {}
         adapter._add_cache_control_if_applicable(
             {"cache_control": cache_control}, target, model
         )
         assert "cache_control" not in target
+
+
+def test_should_add_cache_control_for_gemini_model():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    cache_control = {"type": "ephemeral", "ttl": "1h"}
+
+    for model in [
+        "gemini-3.5-flash",
+        "gemini/gemini-3.5-flash",
+        "gemini-3.1-pro-preview",
+        "vertex_ai/gemini-2.5-pro",
+    ]:
+        target = {}
+        adapter._add_cache_control_if_applicable(
+            {"cache_control": cache_control}, target, model
+        )
+        assert target.get("cache_control") == cache_control
+
+
+def test_cache_control_preserved_in_text_content_for_gemini():
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "text",
+                    "text": "This is cached content",
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model="gemini/gemini-3.5-flash"
+    )
+
+    assert len(result) == 1
+    assert result[0]["content"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
 
 
 def test_should_not_add_cache_control_when_none():
