@@ -4,7 +4,7 @@ VerificationToken repository for database operations on LiteLLM_VerificationToke
 
 import json
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from types import TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -122,6 +122,25 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         """Find all tokens belonging to a user."""
         records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(where={"user_id": user_id})
         return self._to_model_list(records)
+
+    async def find_latest_active_row_by_user_id(self, user_id: str) -> "PrismaVerificationToken | None":
+        """Find the most recently created non-blocked, non-expired token row for a user."""
+        row: Final = await self.table.find_first(
+            where={  # mutable-ok: the prisma where clause contract is a plain dict
+                "user_id": user_id,
+                "AND": [  # mutable-ok: prisma filter literal
+                    {"OR": [{"blocked": False}, {"blocked": None}]},  # mutable-ok: prisma filter literal
+                    {  # mutable-ok: prisma filter literal
+                        "OR": [  # mutable-ok: prisma filter literal
+                            {"expires": None},  # mutable-ok: prisma filter literal
+                            {"expires": {"gt": datetime.now(timezone.utc)}},  # mutable-ok: prisma filter literal
+                        ]
+                    },
+                ],
+            },
+            order={"created_at": "desc"},  # mutable-ok: prisma order literal
+        )
+        return row
 
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_VerificationToken]:
         """Find all tokens belonging to a team."""
