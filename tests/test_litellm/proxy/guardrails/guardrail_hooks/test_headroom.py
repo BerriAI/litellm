@@ -1137,7 +1137,47 @@ def test_initialize_guardrail_passes_min_tokens(monkeypatch: pytest.MonkeyPatch)
     )
 
     assert configured_guardrail.min_tokens == 42
-    assert default_guardrail.min_tokens == 0
+    assert default_guardrail.min_tokens is None
+
+
+def test_min_tokens_falls_back_to_env_var(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("HEADROOM_MIN_TOKENS", raising=False)
+    assert _make_guardrail(min_tokens=None).min_tokens is None
+
+    monkeypatch.setenv("HEADROOM_MIN_TOKENS", "1500")
+    assert _make_guardrail(min_tokens=None).min_tokens == 1500
+    assert _make_guardrail(min_tokens=7).min_tokens == 7
+
+    monkeypatch.setenv("HEADROOM_MIN_TOKENS", "")
+    assert _make_guardrail(min_tokens=None).min_tokens is None
+
+    monkeypatch.setenv("HEADROOM_MIN_TOKENS", "-5")
+    with pytest.raises(ValueError, match="HEADROOM_MIN_TOKENS"):
+        _make_guardrail(min_tokens=None)
+
+    monkeypatch.setenv("HEADROOM_MIN_TOKENS", "lots")
+    with pytest.raises(ValueError, match="HEADROOM_MIN_TOKENS"):
+        _make_guardrail(min_tokens=None)
+
+
+@pytest.mark.asyncio
+async def test_env_var_threshold_skips_compression(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("HEADROOM_MIN_TOKENS", "1000000")
+    guardrail = _make_guardrail(min_tokens=None)
+    inputs = GenericGuardrailAPIInputs(
+        texts=[str(m["content"]) for m in ORIGINAL_MESSAGES],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+    request_data = {"model": "gpt-4o"}
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as post:
+        result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
+
+    assert result is inputs
+    post.assert_not_awaited()
+    response = _recorded_guardrail_response(request_data)
+    assert response["skipped"] == "below_min_tokens"
+    assert response["min_tokens"] == 1000000
 
 
 @pytest.mark.asyncio

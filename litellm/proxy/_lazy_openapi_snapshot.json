@@ -12119,11 +12119,17 @@
               "title": "Metadata"
             },
             "min_tokens": {
-              "default": 0,
-              "description": "Skip the compression round trip when the compressible messages total fewer than this many tokens. The default of 0 always calls the compression service.",
-              "minimum": 0.0,
-              "title": "Min Tokens",
-              "type": "integer"
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Skip the compression round trip when the compressible messages total fewer than this many tokens. Falls back to the HEADROOM_MIN_TOKENS env var; when neither is set, every request is compressed.",
+              "title": "Min Tokens"
             },
             "mock_redacted_text": {
               "anyOf": [

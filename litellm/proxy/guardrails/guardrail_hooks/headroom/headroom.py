@@ -70,6 +70,23 @@ _HASH_CACHE_TTL_SECONDS: Final = 15 * 60
 # untranslated messages can be read with concrete types (values pass through by
 # reference, so this is a shallow top-level reconstruction).
 _REQUEST_DATA_ADAPTER: Final = TypeAdapter(dict[str, object])
+MIN_TOKENS_ENV_VAR: Final = "HEADROOM_MIN_TOKENS"
+
+
+def _resolve_min_tokens(configured: int | None) -> int | None:
+    """Config wins over the env var; neither set means every request is compressed."""
+    if configured is not None:
+        return configured
+    raw: Final = get_secret_str(MIN_TOKENS_ENV_VAR)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value: Final = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{MIN_TOKENS_ENV_VAR} must be a non-negative integer, got {raw!r}") from exc
+    if value < 0:
+        raise ValueError(f"{MIN_TOKENS_ENV_VAR} must be a non-negative integer, got {raw!r}")
+    return value
 
 
 def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
@@ -515,7 +532,7 @@ class HeadroomGuardrail(CustomGuardrail):
         unreachable_fallback: str | None = None,
         timeout: float | None = None,
         ccr_retrieval: bool = True,
-        min_tokens: int = 0,
+        min_tokens: int | None = None,
     ):
         self.headroom_api_base = (api_base or get_secret_str("HEADROOM_API_BASE") or "").rstrip("/")
         if not self.headroom_api_base:
@@ -530,7 +547,7 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         self.timeout: httpx.Timeout = self._resolve_timeout(timeout)
         self.ccr_retrieval = ccr_retrieval
-        self.min_tokens = min_tokens
+        self.min_tokens: int | None = _resolve_min_tokens(min_tokens)
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -833,13 +850,13 @@ class HeadroomGuardrail(CustomGuardrail):
         model: Final = self.headroom_model or request_data.get("model")
         flattened: Final = _flatten_messages_for_compression(compressible)
         compressible_tokens: Final = (
-            await _estimate_compressible_tokens(model=model, messages=flattened) if self.min_tokens > 0 else None
+            await _estimate_compressible_tokens(model=model, messages=flattened) if self.min_tokens else None
         )
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
 
-        if compressible_tokens is not None and compressible_tokens < self.min_tokens:
+        if self.min_tokens and compressible_tokens is not None and compressible_tokens < self.min_tokens:
             verbose_proxy_logger.debug(
                 "Headroom: %s compressible tokens below min_tokens=%s; skipping compression",
                 compressible_tokens,
