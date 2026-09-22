@@ -1,9 +1,6 @@
 import re
-from collections.abc import Generator, Mapping, MutableMapping
-from contextlib import contextmanager
+from collections.abc import Mapping
 from typing import Final
-
-PROVIDER_AFFINITY_REDACTED_VALUE: Final = "[REDACTED]"
 
 _SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 _HTTP_HEADER_NAME_PATTERN: Final = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
@@ -98,45 +95,3 @@ def add_provider_affinity_header(  # mutable-ok: downstream handlers add auth an
     if any(character in session_id for character in ("\r", "\n", "\0")):
         raise ValueError("session_id cannot contain HTTP header control characters")
     return {**headers, header_name: session_id}  # mutable-ok: downstream handlers add auth and signing headers
-
-
-def redact_provider_affinity_header(  # mutable-ok: logging callbacks may enrich the payload
-    headers: Mapping[str, object], litellm_params: object | None
-) -> dict[str, object]:  # mutable-ok: logging callbacks may enrich the payload
-    header_name: Final = _get_provider_affinity_header_name(litellm_params)
-    if header_name is None:
-        return dict(headers)  # mutable-ok: logging callbacks may enrich the payload
-    return {  # mutable-ok: logging callbacks may enrich the returned payload
-        key: PROVIDER_AFFINITY_REDACTED_VALUE if key.lower() == header_name.lower() else value
-        for key, value in headers.items()
-    }
-
-
-@contextmanager
-def temporarily_redact_provider_affinity_header(
-    headers: object, litellm_params: object | None
-) -> Generator[None, None, None]:
-    header_name: Final = _get_provider_affinity_header_name(litellm_params)
-    if header_name is None or not isinstance(headers, MutableMapping):
-        yield
-        return
-
-    matching_key: Final = next(
-        (key for key in headers if isinstance(key, str) and key.lower() == header_name.lower()),
-        None,
-    )
-    if matching_key is None:
-        yield
-        return
-
-    original_value: Final = headers[matching_key]
-    headers[matching_key] = PROVIDER_AFFINITY_REDACTED_VALUE
-    try:
-        yield
-    finally:
-        current_key: Final = next(
-            (key for key in headers if isinstance(key, str) and key.lower() == header_name.lower()),
-            None,
-        )
-        if current_key is not None and headers[current_key] == PROVIDER_AFFINITY_REDACTED_VALUE:
-            headers[current_key] = original_value
