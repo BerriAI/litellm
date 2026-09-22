@@ -14,7 +14,7 @@ SUITES: Final = {
     "recovery": (("test_recovery.py",), 15),
     "legacy": (("test_legacy.py", "test_pooling.py"), 11),
     "upgrade": (("test_upgrade.py", "test_rolling_upgrade.py"), 5),
-    "shaped": (("test_shaped_database.py",), 1),
+    "shaped": (("test_shaped_database.py",), 2),
 }
 
 

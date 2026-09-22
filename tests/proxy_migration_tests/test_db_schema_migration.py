@@ -2,9 +2,17 @@ import os
 import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
+from typing import Final
 
 import pytest
+
+psycopg = pytest.importorskip("psycopg")
+
+CALL_ID_MIGRATION: Final = Path(
+    "./litellm-proxy-extras/litellm_proxy_extras/migrations/20260831120001_spend_logs_litellm_call_id_index/migration.sql"
+)
 
 
 @pytest.mark.skipif(
@@ -68,3 +76,31 @@ def test_schema_migration_in_sync():
         assert diff.returncode == 0, f"prisma migrate diff errored: {diff.stderr}"
     finally:
         shutil.rmtree(temp_base, ignore_errors=True)
+
+
+@pytest.mark.skipif(
+    "DATABASE_URL" not in os.environ,
+    reason="requires a postgres database (DATABASE_URL)",
+)
+def test_spend_logs_call_id_index_migration_applies_to_a_partitioned_table() -> None:
+    schema: Final = f"partitioned_spend_logs_{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(os.environ["DATABASE_URL"].split("?")[0], autocommit=True) as conn:
+        conn.execute(f'CREATE SCHEMA "{schema}"')
+        conn.execute(f'SET search_path TO "{schema}"')
+        conn.execute(
+            'CREATE TABLE "LiteLLM_SpendLogs" (request_id TEXT, "startTime" TIMESTAMPTZ, litellm_call_id TEXT) '
+            'PARTITION BY RANGE ("startTime")'
+        )
+        conn.execute('CREATE TABLE "LiteLLM_SpendLogs_pdefault" PARTITION OF "LiteLLM_SpendLogs" DEFAULT')
+        try:
+            conn.execute(CALL_ID_MIGRATION.read_bytes())
+            indexed: Final = conn.execute(
+                "SELECT tablename FROM pg_indexes WHERE schemaname = %s AND indexdef LIKE '%%(litellm_call_id)' "
+                "ORDER BY tablename",
+                (schema,),
+            ).fetchall()
+        finally:
+            conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
+    assert indexed == [("LiteLLM_SpendLogs",), ("LiteLLM_SpendLogs_pdefault",)], (
+        "the call id index was not built on the partitioned parent and its partition"
+    )

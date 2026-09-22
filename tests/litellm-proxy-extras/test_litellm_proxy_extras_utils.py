@@ -338,6 +338,26 @@ class TestMigrationSQLIdempotency:
             + "\n".join(violations)
         )
 
+    def test_spend_logs_indexes_are_not_built_concurrently(self, all_migrations):
+        """CREATE INDEX on LiteLLM_SpendLogs must not use CONCURRENTLY
+
+        db_scripts/partition_spend_logs.sql makes LiteLLM_SpendLogs a partitioned table, and
+        Postgres rejects CREATE INDEX CONCURRENTLY on a partitioned parent (GitHub issue #41548).
+        """
+        violations = []
+        for migration_name, sql in _guarded_migrations(all_migrations):
+            for line_num, line in _statements(sql):
+                if re.search(
+                    r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+.*ON\s+\"LiteLLM_SpendLogs\"",
+                    line,
+                    re.IGNORECASE,
+                ):
+                    violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
+        assert not violations, (
+            "CREATE INDEX CONCURRENTLY on LiteLLM_SpendLogs found (fails on a partitioned table):\n"
+            + "\n".join(violations)
+        )
+
     def test_rename_column_is_guarded(self, all_migrations):
         """RENAME COLUMN must be inside a DO $$ IF EXISTS block"""
         violations = []
