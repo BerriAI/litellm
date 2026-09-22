@@ -95,7 +95,7 @@ class UnauthorizedError(BaseModel):
 class RateLimitedError(BaseModel):
     kind: Literal["rate_limited"] = "rate_limited"
     retry_after_seconds: int | None = None
-    # litellm overloads 429 for budget_exceeded too, so keep the body to tell them apart.
+    # keep the body so callers can tell limiter kinds apart.
     body: str = ""
 
 
@@ -674,6 +674,35 @@ def send(
     except requests.RequestException as exc:
         return StreamingResponse(status_code=-1, body=str(exc))
     return streaming_outcome(resp, stream, sent_at=sent_at)
+
+
+class AbandonedRequest(BaseModel):
+    """A non-streaming request whose socket the client closed ``after`` seconds in,
+    before the proxy had answered."""
+
+    kind: Literal["abandoned"] = "abandoned"
+    after: float
+
+
+def abandon(
+    url: URL, *, headers: BaseModel, json: BaseModel, after: float, connect_timeout: float = 10.0
+) -> AbandonedRequest | StreamingResponse:
+    """POST and close the connection ``after`` seconds if no response head has arrived
+    by then; returns the response instead when the proxy answered first."""
+    sent_at: Final = time.monotonic()
+    session: Final = requests.Session()
+    try:
+        resp = session.post(
+            str(url),
+            headers=_headers(headers),
+            json=wire_body(json),
+            timeout=(connect_timeout, after),
+        )
+    except requests.exceptions.ReadTimeout:
+        return AbandonedRequest(after=after)
+    finally:
+        session.close()
+    return streaming_outcome(resp, False, sent_at=sent_at)
 
 
 def stream(url: URL, *, headers: BaseModel, json: BaseModel, timeout: float = 60.0) -> StreamingResponse:

@@ -97,7 +97,14 @@ import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelM
 import type { ObjectPermission } from "./object_permission_types";
 import type { components } from "@/lib/http/schema";
 import { jsonFields } from "./common_components/check_openapi_schema";
-import type { MCPGatewaySessionsResponse, MCPUserEnvVarsStatus } from "./mcp_tools/types";
+import type {
+  MCPGatewaySessionSelector,
+  MCPGatewaySessionsResponse,
+  MCPGatewaySessionsTerminateResponse,
+  MCPServerUserCredentialListItem,
+  MCPServerUserCredentialType,
+  MCPUserEnvVarsStatus,
+} from "./mcp_tools/types";
 import type {
   CoordinationRedisSettings,
   CoordinationRedisSettingsResponse,
@@ -1588,6 +1595,20 @@ export const claimOnboardingToken = async (
   }
 };
 
+export const changePasswordCall = async (
+  accessToken: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<{ user_id: string; message: string }> => {
+  return await apiClient.post(`/user/password/change`, {
+    accessToken,
+    body: {
+      current_password: currentPassword,
+      new_password: newPassword,
+    },
+  });
+};
+
 export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: string, formData: any) => {
   try {
     const url = proxyBaseUrl
@@ -2319,7 +2340,8 @@ export const testModelGroupConnection = async (
 
 export interface AutoRouterRoutingTestRequest {
   prompt: string;
-  complexity_router_config: ComplexityRouterConfigPayload;
+  complexity_router_config: ComplexityRouterConfigPayload | Record<string, unknown>;
+  saved_model_id?: string;
   default_model?: string;
   router_name?: string;
   team_id?: string;
@@ -3660,6 +3682,34 @@ export const updateMCPSemanticFilterSettings = async (accessToken: string, setti
   }
 };
 
+export type WebSearchInterceptionSettings = components["schemas"]["WebSearchInterceptionSettings"];
+export type WebSearchInterceptionSettingsResponse = components["schemas"]["WebSearchInterceptionSettingsResponse"];
+
+export const getWebSearchInterceptionSettings = async (
+  accessToken: string,
+): Promise<WebSearchInterceptionSettingsResponse> => {
+  try {
+    return await apiClient.get<WebSearchInterceptionSettingsResponse>(`/get/websearch_interception_settings`, {
+      accessToken,
+    });
+  } catch (error) {
+    console.error("Failed to get web search interception settings:", error);
+    throw error;
+  }
+};
+
+export const updateWebSearchInterceptionSettings = async (
+  accessToken: string,
+  settings: WebSearchInterceptionSettings,
+) => {
+  try {
+    return await apiClient.patch(`/update/websearch_interception_settings`, { accessToken, body: settings });
+  } catch (error) {
+    console.error("Failed to update web search interception settings:", error);
+    throw error;
+  }
+};
+
 export const testMCPSemanticFilter = async (accessToken: string, model: string, query: string) => {
   /**
    * Test MCP semantic filter by making a responses API call
@@ -4976,6 +5026,33 @@ export const fetchMCPSubmissions = async (accessToken: string) => {
 export const fetchMCPGatewaySessions = async (accessToken: string): Promise<MCPGatewaySessionsResponse> =>
   apiClient.get<MCPGatewaySessionsResponse>(`/v1/mcp/sessions`, { accessToken });
 
+export const terminateMCPGatewaySessions = async (
+  accessToken: string,
+  selector: MCPGatewaySessionSelector,
+): Promise<MCPGatewaySessionsTerminateResponse> =>
+  apiClient.delete<MCPGatewaySessionsTerminateResponse>(`/v1/mcp/sessions`, { accessToken, query: { ...selector } });
+
+export const fetchMCPServerUserCredentials = async (
+  accessToken: string,
+  serverId: string,
+): Promise<MCPServerUserCredentialListItem[]> =>
+  apiClient.get<MCPServerUserCredentialListItem[]>(`/v1/mcp/server/${encodeURIComponent(serverId)}/user-credentials`, {
+    accessToken,
+  });
+
+export const revokeMCPServerUserCredential = async (
+  accessToken: string,
+  serverId: string,
+  userId: string,
+  credentialType: MCPServerUserCredentialType,
+): Promise<void> => {
+  const route = credentialType === "oauth2" ? "oauth-user-credential" : "user-credential";
+  await apiClient.delete(`/v1/mcp/server/${encodeURIComponent(serverId)}/${route}`, {
+    accessToken,
+    query: { user_id: userId },
+  });
+};
+
 export const approveMCPServer = async (accessToken: string, serverId: string) => {
   try {
     const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${encodeURIComponent(serverId)}/approve`;
@@ -6134,6 +6211,7 @@ export const patchAgentCall = async (
     rpm_limit?: number | null;
     session_tpm_limit?: number | null;
     session_rpm_limit?: number | null;
+    access_group_ids?: string[];
   },
 ) => {
   try {

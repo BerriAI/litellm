@@ -9,7 +9,7 @@ import functools
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 
 if TYPE_CHECKING:
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -328,6 +329,17 @@ def normalize_custom_field_on_tools(request_body: dict) -> None:
         deferred: object = custom.get("defer_loading")
         if isinstance(deferred, bool):
             tool["defer_loading"] = deferred
+
+
+_TOOL_DICTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def tools_without_eager_input_streaming(request_body: Mapping[str, object]) -> Sequence[object] | None:
+    try:
+        tools: Final = _TOOL_DICTS_ADAPTER.validate_python(request_body.get("tools"))
+    except ValidationError:
+        return None
+    return [{key: value for key, value in tool.items() if key != "eager_input_streaming"} for tool in tools]
 
 
 def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
@@ -1543,11 +1555,33 @@ def resolve_s3_encryption_key_id(
     Precedence: `s3_encryption_key_id` in litellm_params, then optional_params
     (client-side / request params), then the AWS_S3_ENCRYPTION_KEY_ID env var.
     """
+    return _resolve_s3_setting("s3_encryption_key_id", "AWS_S3_ENCRYPTION_KEY_ID", litellm_params, optional_params)
+
+
+def resolve_s3_bucket_owner(
+    litellm_params: Mapping[str, object],
+    optional_params: Mapping[str, object] | None = None,
+) -> str | None:
+    """
+    Resolve the AWS account id that owns the S3 buckets used by Bedrock batch jobs.
+
+    Precedence: `s3_bucket_owner` in litellm_params, then optional_params
+    (client-side / request params), then the AWS_S3_BUCKET_OWNER env var.
+    """
+    return _resolve_s3_setting("s3_bucket_owner", "AWS_S3_BUCKET_OWNER", litellm_params, optional_params)
+
+
+def _resolve_s3_setting(
+    param_name: str,
+    env_var: str,
+    litellm_params: Mapping[str, object],
+    optional_params: Mapping[str, object] | None,
+) -> str | None:
     candidates: Final = tuple(
-        source.get("s3_encryption_key_id") for source in (litellm_params, optional_params) if source is not None
+        source.get(param_name) for source in (litellm_params, optional_params) if source is not None
     )
     explicit: Final = next((value for value in candidates if isinstance(value, str) and value), None)
-    return explicit or get_secret_str("AWS_S3_ENCRYPTION_KEY_ID")
+    return explicit or get_secret_str(env_var)
 
 
 class CommonBatchFilesUtils:

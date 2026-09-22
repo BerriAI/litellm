@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -29,6 +31,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
     model_access_group_cache_key,
     model_access_group_spend_counter_key,
+    project_cache_key,
+    project_spend_counter_key,
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
@@ -62,6 +66,7 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
     "Tag": Litellm_EntityType.TAG.value,
     "Model access group": Litellm_EntityType.MODEL_ACCESS_GROUP.value,
     "Organization": Litellm_EntityType.ORGANIZATION.value,
+    "Project": Litellm_EntityType.PROJECT.value,
 }
 
 
@@ -99,6 +104,48 @@ def get_reserved_counter_keys(budget_reservation: dict | None) -> set:
     return {
         entry["counter_key"] for entry in entries if isinstance(entry, dict) and entry.get("counter_key") is not None
     }
+
+
+_lease_renewals: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: asyncio only weak-refs pending tasks
+
+
+def _start_reservation_lease_renewal(budget_reservation: Mapping[str, object], counter_keys: frozenset[str]) -> None:
+    """A reservation lives inside spend counter keys that expire on their Redis TTL. Renew the TTL
+    while the request is in flight so a request longer than the TTL does not drop its
+    reservation and admit concurrent requests against the DB floor on any worker."""
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    if spend_counter_cache.redis_cache is None or not counter_keys:
+        return
+    task: Final = asyncio.create_task(
+        _renew_reservation_lease(
+            budget_reservation=budget_reservation,
+            counter_keys=counter_keys,
+            interval=spend_counter_cache.redis_cache.default_ttl / 2,
+            request_task=asyncio.current_task(),
+        )
+    )
+    _lease_renewals.add(task)
+    task.add_done_callback(_lease_renewals.discard)
+
+
+async def _renew_reservation_lease(
+    budget_reservation: Mapping[str, object],
+    counter_keys: frozenset[str],
+    interval: float,
+    request_task: asyncio.Task[object] | None,
+) -> None:
+    """Stops on finalization or once the request task that took the reservation is gone, so a
+    disconnect path that skipped reconciliation falls back to the plain counter TTL."""
+    from litellm.proxy.proxy_server import refresh_spend_counter_ttl
+
+    deadline: Final = time.monotonic() + litellm.request_timeout
+    while time.monotonic() < deadline:
+        await asyncio.sleep(interval)
+        if budget_reservation.get("finalized") is True or (request_task is not None and request_task.done()):
+            return
+        for counter_key in counter_keys:
+            await refresh_spend_counter_ttl(counter_key=counter_key)
 
 
 def _key_reservation_should_release_for_throttle(counter_key: str, valid_token: UserAPIKeyAuth | None) -> bool:
@@ -315,13 +362,18 @@ async def reserve_budget_for_request(
         llm_router=llm_router,
         input_token_counts=input_token_counts,
     )
-    return {
+    budget_reservation: Final = {
         "reserved_cost": reservation_cost,
         "entries": applied_entries,
         "finalized": False,
         "input_cost": min(float(input_cost or 0.0), reservation_cost),
         "input_tokens": max(input_token_counts.values(), default=None),
     }
+    _start_reservation_lease_renewal(
+        budget_reservation=budget_reservation,
+        counter_keys=frozenset(get_reserved_counter_keys(budget_reservation=budget_reservation)),
+    )
+    return budget_reservation
 
 
 async def reconcile_budget_reservation(
@@ -542,6 +594,13 @@ async def _get_budget_counters(
     if org_counter is not None:
         counters.append(org_counter)
 
+    project_counter: Final = await _get_project_budget_counter(
+        valid_token=valid_token,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if project_counter is not None:
+        counters.append(project_counter)
+
     return counters
 
 
@@ -754,6 +813,36 @@ async def _get_org_budget_counter(
         fallback_spend=org_spend,
         entity_type="Organization",
         entity_id=org_id,
+    )
+
+
+async def _get_project_budget_counter(
+    valid_token: UserAPIKeyAuth,
+    user_api_key_cache: UserApiKeyCache,
+) -> _BudgetCounter | None:
+    if valid_token.project_id is None:
+        return None
+
+    source_cache_key: Final = project_cache_key(valid_token.project_id)
+    project_object: Final = await user_api_key_cache.async_get_cache(key=source_cache_key)
+    if project_object is None:
+        return None
+
+    project_budget_table: Final = _get_value(project_object, "litellm_budget_table")
+    if project_budget_table is None:
+        return None
+
+    project_max_budget: Final = _to_float(_get_value(project_budget_table, "max_budget"))
+    if project_max_budget is None or project_max_budget <= 0 or not math.isfinite(project_max_budget):
+        return None
+
+    return _BudgetCounter(
+        counter_key=project_spend_counter_key(valid_token.project_id),
+        source_cache_key=source_cache_key,
+        max_budget=project_max_budget,
+        fallback_spend=_to_float(_get_value(project_object, "spend")) or 0.0,
+        entity_type="Project",
+        entity_id=valid_token.project_id,
     )
 
 

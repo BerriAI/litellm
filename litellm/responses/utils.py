@@ -1194,6 +1194,7 @@ class ResponseAPILoggingUtils:
                     cached_tokens_details=getattr(
                         response_api_usage.input_tokens_details, "cached_tokens_details", None
                     ),
+                    video_tokens=getattr(response_api_usage.input_tokens_details, "video_tokens", None),
                     cache_write_tokens=getattr(response_api_usage.input_tokens_details, "cache_write_tokens", None),
                     web_search_requests=getattr(response_api_usage.input_tokens_details, "web_search_requests", None),
                     google_maps_grounding_requests=getattr(

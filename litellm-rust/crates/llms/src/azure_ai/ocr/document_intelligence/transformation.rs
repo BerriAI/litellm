@@ -14,24 +14,20 @@ use serde_json::{Map, Value};
 use serde_with::serde_as;
 use tokio::time::Instant;
 
-use crate::{
-    base_llm::ocr::{
-        document::InlineDocument,
-        error::Error,
-        transformation::{
-            BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES,
-            OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrDocument, OcrPage,
-            OcrPageDimensions, OcrResponseContext, OcrResponseFormat, OcrUsageInfo,
-            PreparedOcrRequest, ResolvedOcrCredentials, credential_env,
-            decode_and_normalize_response, decode_response,
-        },
+use crate::base_llm::ocr::{
+    document::InlineDocument,
+    error::Error,
+    handler::{CallHooks, OcrClient, read_json_response},
+    settings::OcrSettings,
+    transformation::{
+        BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES,
+        OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrDocument, OcrPage,
+        OcrPageDimensions, OcrResponseContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        ResolvedOcrCredentials, decode_and_normalize_response, decode_response,
     },
-    custom_httpx::llm_http_handler::{CallHooks, OcrClient, read_json_response},
 };
 
-const AZURE_DI_API_VERSION: &str = "2024-11-30";
 const AZURE_DI_SUBSCRIPTION_HEADER: &str = "Ocp-Apim-Subscription-Key";
-const AZURE_DI_DEFAULT_DPI: i64 = 96;
 const AZURE_DI_DEFAULT_WIDTH: f64 = 8.5;
 const AZURE_DI_DEFAULT_HEIGHT: f64 = 11.0;
 
@@ -150,7 +146,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
             api_key: inputs.api_key.and_then(|key| {
                 inputs
                     .dynamic_api_key
-                    .filter(|value| !value.value().is_empty())
+                    .filter(|value| !value.value().expose().is_empty())
                     .or(Some(key))
             }),
             api_base: inputs.api_base.and_then(|base| {
@@ -178,15 +174,11 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
-        let config = AzureAuthInputs {
-            azure_ad_token_provider: request.azure_ad_token_provider.clone(),
-            ..AzureAuthInputs::from_sourced_optional_params(
-                &request.optional_params,
-                &request.input_sources,
-            )?
-        };
-        self.resolve_headers(&request.connection, &config, &credential_env)
-            .await
+        let config = crate::azure_ai::ocr::common_utils::azure_auth_inputs(request)?;
+        self.resolve_headers(&request.connection, &config, &|name: &str| {
+            request.connection.secret(name)
+        })
+        .await
     }
 
     fn get_complete_url(
@@ -196,9 +188,17 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         _environment: &Self::Environment,
     ) -> Result<String, Error> {
         let endpoint = nonblank(request.connection.api_base.clone())
-            .or_else(|| nonblank(credential_env(AZURE_DI_ENDPOINT_ENV)))
+            .or_else(|| nonblank(request.connection.secret(AZURE_DI_ENDPOINT_ENV)))
             .ok_or_else(|| Error::Auth(litellm_auth::Error::ProviderAuthentication("Missing Azure Document Intelligence API Base - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base".into())))?;
-        self.build_ocr_url(&endpoint, &request.model, optional_params)
+        self.build_ocr_url(
+            &endpoint,
+            &request.model,
+            optional_params,
+            &request
+                .connection
+                .settings
+                .document_intelligence_api_version,
+        )
     }
 
     fn transform_ocr_request(
@@ -217,12 +217,13 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         raw_response: &[u8],
         request_format: OcrResponseFormat,
     ) -> Result<LiteLLMOcrResponse, Error> {
-        decode_and_normalize_response(
-            model,
-            raw_response,
-            request_format,
-            transform_completed_response,
-        )
+        decode_and_normalize_response(model, raw_response, request_format, |model, response| {
+            transform_completed_response(
+                model,
+                response,
+                OcrSettings::default().document_intelligence_dpi,
+            )
+        })
     }
 
     async fn async_transform_ocr_response(
@@ -243,7 +244,11 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         .await?;
         Ok(LiteLLMOcrResponse {
             provider_native_response: decoded.native,
-            ..transform_completed_response(model, decoded.data)?
+            ..transform_completed_response(
+                model,
+                decoded.data,
+                context.connection.settings.document_intelligence_dpi,
+            )?
         })
     }
 }
@@ -356,6 +361,7 @@ fn build_request(document: OcrDocument) -> Result<DocumentIntelligenceRequest, E
 fn transform_completed_response(
     model: &str,
     response: AzureDocumentIntelligenceOperation,
+    dpi: i64,
 ) -> Result<LiteLLMOcrResponse, Error> {
     if response.status != Some(OperationStatus::Succeeded) {
         return Err(Error::OperationStatus(
@@ -369,7 +375,7 @@ fn transform_completed_response(
     let pages = result
         .pages
         .into_iter()
-        .map(transform_azure_page)
+        .map(|page| transform_azure_page(page, dpi))
         .collect::<Result<Vec<_>, _>>()?;
     let pages_processed = i64::try_from(pages.len()).map_err(|_| Error::NumericRange("pages"))?;
     Ok(LiteLLMOcrResponse {
@@ -384,7 +390,7 @@ fn transform_completed_response(
     })
 }
 
-fn transform_azure_page(page: AzureDocumentIntelligencePage) -> Result<OcrPage, Error> {
+fn transform_azure_page(page: AzureDocumentIntelligencePage, dpi: i64) -> Result<OcrPage, Error> {
     let index = page
         .page_number
         .unwrap_or(1)
@@ -394,6 +400,7 @@ fn transform_azure_page(page: AzureDocumentIntelligencePage) -> Result<OcrPage, 
         page.width.unwrap_or(AZURE_DI_DEFAULT_WIDTH),
         page.height.unwrap_or(AZURE_DI_DEFAULT_HEIGHT),
         page.unit.as_deref().unwrap_or("inch"),
+        dpi,
     )?;
     let markdown = page
         .lines
@@ -409,16 +416,17 @@ fn transform_azure_page(page: AzureDocumentIntelligencePage) -> Result<OcrPage, 
     })
 }
 
-fn convert_dimensions(width: f64, height: f64, unit: &str) -> Result<OcrPageDimensions, Error> {
-    let scale = if unit == "inch" {
-        AZURE_DI_DEFAULT_DPI as f64
-    } else {
-        1.0
-    };
+fn convert_dimensions(
+    width: f64,
+    height: f64,
+    unit: &str,
+    dpi: i64,
+) -> Result<OcrPageDimensions, Error> {
+    let scale = if unit == "inch" { dpi as f64 } else { 1.0 };
     Ok(OcrPageDimensions {
         width: Some(pixel_dimension(width, scale, "page.width")?),
         height: Some(pixel_dimension(height, scale, "page.height")?),
-        dpi: Some(AZURE_DI_DEFAULT_DPI),
+        dpi: Some(dpi),
     })
 }
 
@@ -440,7 +448,7 @@ async fn read_operation_response(
     hooks: &dyn CallHooks<Error>,
 ) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, Error> {
     if response.status() != reqwest::StatusCode::ACCEPTED {
-        let bytes = crate::custom_httpx::llm_http_handler::read_response_bytes(
+        let bytes = crate::base_llm::ocr::handler::read_response_bytes(
             response,
             connection.max_response_bytes,
         )
@@ -462,11 +470,9 @@ async fn read_operation_response(
     {
         return Err(Error::PollOrigin);
     }
-    let bytes = crate::custom_httpx::llm_http_handler::read_response_bytes(
-        response,
-        connection.max_response_bytes,
-    )
-    .await?;
+    let bytes =
+        crate::base_llm::ocr::handler::read_response_bytes(response, connection.max_response_bytes)
+            .await?;
     hooks.response_received(&bytes).await?;
     poll_operation(http_client, operation, headers, connection, native, hooks).await
 }
@@ -480,7 +486,7 @@ async fn poll_operation(
     hooks: &dyn CallHooks<Error>,
 ) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, Error> {
     let deadline = Instant::now()
-        .checked_add(connection.poll_timeout)
+        .checked_add(connection.settings.poll_timeout)
         .ok_or(Error::PollTimeout)?;
 
     loop {
@@ -491,21 +497,19 @@ async fn poll_operation(
         let builder = http_client
             .get(url.clone())
             .timeout(remaining.min(connection.timeout));
-        let builder = crate::custom_httpx::http_handler::with_headers(
+        let builder = litellm_http::request::with_headers(
             builder,
             headers,
-            crate::custom_httpx::http_handler::HeaderPolicy::Only(&[
+            litellm_http::request::HeaderPolicy::Only(&[
                 AZURE_DI_SUBSCRIPTION_HEADER,
                 "authorization",
             ]),
         );
-        let response = tokio::time::timeout_at(
-            deadline,
-            crate::custom_httpx::http_handler::http_request(builder),
-        )
-        .await
-        .map_err(|_| Error::PollTimeout)?
-        .map_err(crate::custom_httpx::transport::Error::from)?;
+        let response =
+            tokio::time::timeout_at(deadline, litellm_http::request::http_request(builder))
+                .await
+                .map_err(|_| Error::PollTimeout)?
+                .map_err(litellm_http::transport::Error::from)?;
         let retry = response
             .headers()
             .get(reqwest::header::RETRY_AFTER)
@@ -551,13 +555,14 @@ impl AzureDocumentIntelligenceOcrConfig {
         endpoint: &str,
         model: &str,
         params: &DocumentIntelligenceParams,
+        api_version: &str,
     ) -> Result<String, Error> {
         let model = format!("{}:analyze", model_id(model)?);
         ApiUrl::parse(endpoint)
             .and_then(|url| url.complete_path(&["documentintelligence", "documentModels", &model]))
             .map(|url| {
                 url.append_query_pairs(
-                    [("api-version", AZURE_DI_API_VERSION)]
+                    [("api-version", api_version)]
                         .into_iter()
                         .chain(params.pages.iter().map(|pages| ("pages", pages.as_str())))
                         .chain(
@@ -580,8 +585,8 @@ impl AzureDocumentIntelligenceOcrConfig {
         config: &AzureAuthInputs,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Vec<(String, String)>, Error> {
-        if crate::custom_httpx::http_handler::has_header(&connection.extra_headers, "authorization")
-            || crate::custom_httpx::http_handler::has_header(
+        if litellm_http::request::has_header(&connection.extra_headers, "authorization")
+            || litellm_http::request::has_header(
                 &connection.extra_headers,
                 AZURE_DI_SUBSCRIPTION_HEADER,
             )
@@ -592,12 +597,17 @@ impl AzureDocumentIntelligenceOcrConfig {
             )?;
             return Ok(connection.extra_headers.clone());
         }
-        let key = nonblank(connection.api_key.clone())
-            .map(|value| Sourced::new(value, connection.api_key_source))
-            .or_else(|| {
-                nonblank(self.get_api_key_env_var().and_then(env_lookup))
-                    .map(|value| Sourced::new(value, InputSource::Environment))
-            });
+        let key = nonblank(
+            connection
+                .api_key
+                .as_ref()
+                .map(|key| key.expose().to_string()),
+        )
+        .map(|value| Sourced::new(value, connection.api_key_source))
+        .or_else(|| {
+            nonblank(self.get_api_key_env_var().and_then(env_lookup))
+                .map(|value| Sourced::new(value, InputSource::Environment))
+        });
         if let Some(key) = key {
             super::super::common_utils::validate_destination(connection, key.source())?;
             return Ok(
@@ -796,7 +806,7 @@ mod tests {
     #[tokio::test]
     async fn request_endpoint_accepts_request_owned_key() {
         let connection = OcrConnection {
-            api_key: Some("request-key".into()),
+            api_key: Some(litellm_auth::SecretValue::new("request-key")),
             api_key_source: InputSource::Request,
             api_base: Some("https://request.example".into()),
             api_base_source: InputSource::Request,
