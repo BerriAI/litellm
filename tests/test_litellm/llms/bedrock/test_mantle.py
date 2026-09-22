@@ -447,6 +447,63 @@ async def test_mantle_anthropic_messages_sends_workspace_header_and_clean_body()
     assert "aws_bedrock_project_id" not in requests[0]["body"]
 
 
+async def _send_anthropic_messages_with_betas(**request_params: object) -> dict:
+    import litellm
+
+    requests = []
+
+    async def mock_post(self, url, data=None, headers=None, **kwargs):
+        requests.append(_capture_request(url=url, headers=headers or {}, data=data))
+        return _anthropic_response(url)
+
+    try:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new=mock_post,
+        ):
+            await litellm.anthropic_messages(
+                model="bedrock/mantle/anthropic.claude-mythos-preview",
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=10,
+                aws_access_key_id="fake-key",
+                aws_secret_access_key="fake-secret",
+                aws_region_name="us-east-1",
+                **request_params,
+            )
+    finally:
+        await litellm.close_litellm_async_clients()
+
+    assert len(requests) == 1
+    return requests[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_mantle_anthropic_messages_sends_every_beta_in_the_header_not_the_body():
+    sent = await _send_anthropic_messages_with_betas(
+        extra_headers={"anthropic-beta": "context-1m-2025-08-07,interleaved-thinking-2025-05-14"},
+        context_management={"edits": [{"type": "clear_tool_uses_20250919"}]},
+    )
+
+    assert (
+        sent["headers"]["anthropic-beta"]
+        == "context-1m-2025-08-07,context-management-2025-06-27,interleaved-thinking-2025-05-14"
+    )
+    assert sent["headers"]["anthropic-version"] == "2023-06-01"
+    assert sent["body"]["context_management"] == {"edits": [{"type": "clear_tool_uses_20250919"}]}
+    assert "anthropic_beta" not in sent["body"]
+    assert "anthropic_version" not in sent["body"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_mantle_anthropic_messages_drops_the_beta_header_when_mantle_rejects_every_value():
+    sent = await _send_anthropic_messages_with_betas(extra_headers={"anthropic-beta": "code-execution-2025-08-25"})
+
+    assert "anthropic-beta" not in sent["headers"]
+    assert "anthropic_beta" not in sent["body"]
+
+
 def _usageless_anthropic_response(url: str) -> httpx.Response:
     return httpx.Response(
         status_code=200,

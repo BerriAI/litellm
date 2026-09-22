@@ -81,6 +81,10 @@ class AmazonAnthropicClaudeMessagesConfig(
     def custom_llm_provider(self) -> str | None:
         return "bedrock"
 
+    @property
+    def beta_headers_provider(self) -> str:
+        return self.custom_llm_provider or "bedrock"
+
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 
     def get_error_class(
@@ -552,7 +556,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
 
-        beta_provider: Final = self.custom_llm_provider or "bedrock"
+        beta_provider: Final = self.beta_headers_provider
         filtered_betas: Final = sorted(
             filter_and_transform_beta_headers(
                 beta_headers=list(beta_set),
