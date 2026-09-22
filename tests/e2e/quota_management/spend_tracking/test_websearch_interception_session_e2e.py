@@ -8,19 +8,8 @@ the turn that asked for it. Claude Code and the Admin UI group spend by
 triggered it; before the fix it landed under a session of its own and the session
 view under-counted both requests and spend (LIT-8063).
 
-Needs a proxy booted with the callback and a real search backend, which the default
-stack does not carry, so the test sits behind ``E2E_WEBSEARCH_STACK``::
-
-    litellm_settings:
-      callbacks: ["websearch_interception"]
-      websearch_interception_params:
-        enabled_providers: ["bedrock"]
-        search_tool_name: e2e-search
-    search_tools:
-      - search_tool_name: e2e-search
-        litellm_params:
-          search_provider: perplexity
-          api_key: os.environ/PERPLEXITY_API_KEY
+Needs a proxy booted with the callback and a real search backend, which
+``gateway/stage_mirror_ci_config.yml`` carries as the ``e2e-search`` Perplexity tool.
 """
 
 from typing import Final
@@ -38,7 +27,7 @@ from models import (
 )
 from proxy_client import ProxyClient
 
-pytestmark = [pytest.mark.e2e, pytest.mark.websearch_stack]
+pytestmark = pytest.mark.e2e
 
 BEDROCK_INVOKE_BACKEND: Final = "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 SEARCH_CALL_TYPE: Final = "asearch"

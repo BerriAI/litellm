@@ -211,7 +211,6 @@ def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
         (("tests/e2e/migrations/test_startup.py", "tests/e2e/migrations/test_recovery.py"), ()),
         (("tests/e2e/batches/test_managed_files_enforcement_e2e.py",), ()),
         (("tests/e2e/guardrails/test_presidio_masking_e2e.py",), ()),
-        (("tests/e2e/quota_management/spend_tracking/test_websearch_interception_session_e2e.py",), ()),
         (("tests/e2e/llm_translation/realtime/test_realtime_pipecat_audio_e2e.py",), ()),
         (
             ("tests/e2e/llm_translation/realtime/test_realtime_e2e.py",),

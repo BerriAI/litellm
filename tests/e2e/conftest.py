@@ -34,7 +34,6 @@ from e2e_config import (
     PROVIDER_EDGE_HOST_OPT_IN_ENV,
     PROXY_BASE_URL,
     REDIS_CHAOS_OPT_IN_ENV,
-    WEBSEARCH_STACK_OPT_IN_ENV,
     WEEKLY_ANOMALY_OPT_IN_ENV,
     unique_marker,
 )
@@ -62,7 +61,6 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "cli_determinism": CLI_DETERMINISM_OPT_IN_ENV,
         "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
         "provider_edge_host": PROVIDER_EDGE_HOST_OPT_IN_ENV,
-        "websearch_stack": WEBSEARCH_STACK_OPT_IN_ENV,
     }
 )
 
@@ -151,11 +149,6 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "provider_edge_host: routes provider traffic through the pytest host's edge in every fixture mode, so the "
         "gateway must reach the pytest host; deselected unless E2E_PROVIDER_EDGE_HOST_REACHABLE is set",
-    )
-    config.addinivalue_line(
-        "markers",
-        "websearch_stack: needs a proxy running the websearch_interception callback with a configured search tool; "
-        "deselected unless E2E_WEBSEARCH_STACK is set",
     )
 
 
