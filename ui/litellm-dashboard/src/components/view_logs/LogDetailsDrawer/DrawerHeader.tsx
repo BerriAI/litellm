@@ -152,9 +152,6 @@ function ModelProviderSection({
   );
 }
 
-/**
- * Request ID display with copy functionality
- */
 function CopyableId({
   value,
   label,
