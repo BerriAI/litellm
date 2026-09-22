@@ -1,5 +1,6 @@
 import pytest
 
+import litellm
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
 
 
@@ -12,20 +13,21 @@ def _function_tool(name: str) -> dict:
 
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.parametrize(
-    ("model", "thinking", "tool_choice", "expected"),
+    ("model", "thinking", "tool_choice", "drop_params", "expected"),
     [
-        ("deepseek-v4-pro", {"type": "enabled"}, "required", "auto"),
+        ("deepseek-v4-pro", {"type": "enabled"}, "required", False, "auto"),
         (
             "deepseek-v4-pro",
             {"type": "enabled"},
             {"type": "function", "function": {"name": "shell"}},
+            True,
             "auto",
         ),
-        ("deepseek-v4-pro", {"type": "enabled"}, "none", "none"),
-        ("deepseek-v4-pro", {"type": "enabled"}, "auto", "auto"),
-        ("deepseek-v4-pro", {"type": "enabled"}, None, None),
-        ("deepseek-v4-pro", {"type": "disabled"}, "required", "required"),
-        ("deepseek-chat", {"type": "enabled"}, "required", "required"),
+        ("deepseek-v4-pro", {"type": "enabled"}, "none", False, "none"),
+        ("deepseek-v4-pro", {"type": "enabled"}, "auto", False, "auto"),
+        ("deepseek-v4-pro", {"type": "enabled"}, None, False, None),
+        ("deepseek-v4-pro", {"type": "disabled"}, "required", False, "required"),
+        ("deepseek-chat", {"type": "enabled"}, "required", False, "required"),
     ],
 )
 async def test_transform_request_normalizes_tool_choice_for_thinking(
@@ -33,6 +35,7 @@ async def test_transform_request_normalizes_tool_choice_for_thinking(
     model: str,
     thinking: dict[str, str],
     tool_choice: object | None,
+    drop_params: bool,
     expected: object | None,
 ):
     config = DeepSeekChatConfig()
@@ -42,10 +45,10 @@ async def test_transform_request_normalizes_tool_choice_for_thinking(
         "messages": [{"role": "user", "content": "hi"}],
         "optional_params": {
             "thinking": thinking,
-            "tools": [_function_tool("shell")],
+            "tools": [_function_tool("shell"), _function_tool("read_file")],
             **tool_choice_param,
         },
-        "litellm_params": {},
+        "litellm_params": {"drop_params": drop_params},
         "headers": {},
     }
 
@@ -56,3 +59,32 @@ async def test_transform_request_normalizes_tool_choice_for_thinking(
     )
 
     assert body.get("tool_choice") == expected
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_transform_request_rejects_named_tool_choice_without_drop_params(
+    is_async: bool,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = DeepSeekChatConfig()
+    request = {
+        "model": "deepseek-v4-pro",
+        "messages": [{"role": "user", "content": "hi"}],
+        "optional_params": {
+            "thinking": {"type": "enabled"},
+            "tools": [_function_tool("shell"), _function_tool("read_file")],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "shell"},
+            },
+        },
+        "litellm_params": {},
+        "headers": {},
+    }
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params=True"):
+        if is_async:
+            await config.async_transform_request(**request)
+        else:
+            config.transform_request(**request)

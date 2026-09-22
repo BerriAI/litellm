@@ -225,10 +225,22 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         )
 
     @staticmethod
-    def _normalize_thinking_tool_choice(optional_params: dict[str, object]) -> dict[str, object]:
+    def _normalize_thinking_tool_choice(
+        optional_params: dict[str, object], model: str, drop_params: bool
+    ) -> dict[str, object]:
+        """Relax named choices only when the caller opted into dropping unsupported parameters."""
         tool_choice: Final = optional_params.get("tool_choice")
         if tool_choice is None or tool_choice in ("none", "auto"):
             return optional_params
+        if tool_choice != "required" and not drop_params:
+            raise litellm.UnsupportedParamsError(
+                message=(
+                    "DeepSeek thinking mode does not support forced named `tool_choice`. "
+                    "To relax it to `auto`, set `drop_params=True`."
+                ),
+                model=model,
+                llm_provider="deepseek",
+            )
         return {**optional_params, "tool_choice": "auto"}
 
     @staticmethod
@@ -319,7 +331,11 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         """
         optional_params = self._drop_unsupported_tools(optional_params)
         if self._thinking_mode_active(model=model, optional_params=optional_params):
-            optional_params = self._normalize_thinking_tool_choice(optional_params)
+            optional_params = self._normalize_thinking_tool_choice(
+                optional_params=optional_params,
+                model=model,
+                drop_params=litellm.drop_params or litellm_params.get("drop_params") is True,
+            )
             messages = self._fill_reasoning_content(messages)
         return super().transform_request(
             model=model,
@@ -343,7 +359,11 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         """
         optional_params = self._drop_unsupported_tools(optional_params)
         if self._thinking_mode_active(model=model, optional_params=optional_params):
-            optional_params = self._normalize_thinking_tool_choice(optional_params)
+            optional_params = self._normalize_thinking_tool_choice(
+                optional_params=optional_params,
+                model=model,
+                drop_params=litellm.drop_params or litellm_params.get("drop_params") is True,
+            )
             messages = self._fill_reasoning_content(messages)
         return await super().async_transform_request(
             model=model,
