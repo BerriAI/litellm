@@ -172,6 +172,9 @@
       "other.provider_wire.anthropic.tool_history_system_cache_and_internal_fields",
       "quota_management.spend_tracking.cache_tokens.disjoint_classes_use_explicit_rates"
     ],
+    "tests/integration/providers/test_bedrock_messages_web_search_replay_wire.py::test_replayed_intercepted_web_search_turn_reaches_bedrock_as_text_and_answers": [
+      "providers.bedrock_messages.replayed_intercepted_web_search_turn_is_flattened_to_text"
+    ],
     "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_video_create_status_and_content_follow_queue_wire_contract": [
       "other.provider_wire.fal_ai.video_queue_create_status_and_content_download"
     ],
