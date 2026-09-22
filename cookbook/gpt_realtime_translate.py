@@ -176,7 +176,11 @@ async def receive_translation(
             output.setframerate(SAMPLE_RATE)
             write_stdout("Translation: ", end="", flush=True)
             while True:
-                timeout = OUTPUT_IDLE_TIMEOUT_SECONDS if sender_finished.is_set() else INITIAL_RESPONSE_TIMEOUT_SECONDS
+                timeout = (
+                    OUTPUT_IDLE_TIMEOUT_SECONDS
+                    if sender_finished.is_set() and audio_received.is_set()
+                    else INITIAL_RESPONSE_TIMEOUT_SECONDS
+                )
                 try:
                     raw_event = await asyncio.wait_for(connection.recv(), timeout=timeout)
                 except TimeoutError:

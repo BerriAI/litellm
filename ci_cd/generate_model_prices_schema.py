@@ -116,6 +116,11 @@ ARRAY_KEYS: dict[str, JsonSchema] = {
         "description": "OpenAI-style API routes this model can be called through, e.g. /v1/chat/completions.",
         "items": STRING,
     },
+    "supported_transcription_response_formats": {
+        "type": "array",
+        "description": "Response formats accepted by the model for file transcription.",
+        "items": STRING,
+    },
     "supported_modalities": {
         "type": "array",
         "description": "Input modalities the model accepts.",
