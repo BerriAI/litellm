@@ -2,6 +2,7 @@ mod buffer;
 mod caching;
 mod codec;
 mod embedding;
+mod exact;
 mod response;
 
 pub use buffer::WriteBuffer;
@@ -11,4 +12,5 @@ pub use caching::{
 };
 pub use codec::ResponseCacheCodec;
 pub use embedding::PartialHits;
+pub use exact::{ConnectionProbe, ExactResponseCache};
 pub use response::{ResponseCache, ResponseCacheRequest};

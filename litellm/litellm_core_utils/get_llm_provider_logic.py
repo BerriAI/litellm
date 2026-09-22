@@ -859,6 +859,8 @@ def _get_openai_compatible_provider_info(
     elif custom_llm_provider == "edenai":
         api_base = litellm.EdenAIChatConfig.get_api_base(api_base)  # rebind-ok: chain resolves in place
         dynamic_api_key = litellm.EdenAIChatConfig.get_api_key(api_key)  # rebind-ok: chain resolves in place
+    elif custom_llm_provider == "fal_ai":
+        dynamic_api_key = litellm.FalAIChatConfig.get_api_key(api_key)  # rebind-ok: chain resolves in place
     elif custom_llm_provider == "aiml":
         (
             api_base,

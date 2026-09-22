@@ -2261,6 +2261,37 @@ def system_messages_first(
     ]
 
 
+def _system_content_as_text_parts(content: object) -> tuple[object, ...]:
+    if isinstance(content, str):
+        return (ChatCompletionTextObject(type="text", text=content),)
+    return tuple(cast(Sequence[object], content))  # cast-ok: non-str system content is a list of content parts
+
+
+def _merge_system_message_run(run: Sequence[AllMessageValues]) -> AllMessageValues:
+    if len(run) == 1:
+        return run[0]
+    contents: Final = tuple(content for content in (message.get("content") for message in run) if content is not None)
+    if not contents:
+        return run[0]
+    if all(isinstance(content, str) for content in contents):
+        joined_text: Final = "\n\n".join(cast(tuple[str, ...], contents))  # cast-ok: every content is a str
+        return cast(AllMessageValues, {**run[0], "content": joined_text})  # cast-ok: dict spread keeps message shape
+    merged_parts: Final = [  # mutable-ok: chat message content must stay a json list
+        part for content in contents for part in _system_content_as_text_parts(content)
+    ]
+    return cast(AllMessageValues, {**run[0], "content": merged_parts})  # cast-ok: dict spread keeps message shape
+
+
+def merge_consecutive_system_messages(
+    messages: list[AllMessageValues],  # mutable-ok: message pipelines type messages as mutable lists
+) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
+    return [  # mutable-ok: pipelines mutate message lists
+        merged
+        for is_system_run, run in groupby(messages, key=lambda message: message.get("role") == "system")
+        for merged in ((_merge_system_message_run(tuple(run)),) if is_system_run else run)
+    ]
+
+
 def _attempt_json_repair(s: str) -> object | None:
     """
     Attempt to repair truncated JSON produced by LLM tool calls.

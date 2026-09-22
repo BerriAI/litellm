@@ -1,10 +1,26 @@
+use std::{future::Future, pin::Pin, sync::Arc};
+
 use litellm_core_utils::settings::Lookup;
 
-use crate::{Error, KeyManagementSettings, KeyManagementSystem, Secret, SecretValue};
+use crate::{Error, KeyManagementSettings, KeyManagementSystem, Secret};
+
+#[cfg(any(feature = "aws", feature = "google"))]
+use crate::SecretValue;
+
+pub trait ExternalSecretManager: Send + Sync {
+    fn system(&self) -> KeyManagementSystem;
+
+    fn read_secret<'a>(
+        &'a self,
+        name: &'a str,
+        settings: &'a KeyManagementSettings,
+        environment: &'a (dyn Lookup + Send + Sync),
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Secret>, Error>> + Send + 'a>>;
+}
 
 #[derive(Clone)]
 pub enum SecretManager {
-    Local,
+    External(Arc<dyn ExternalSecretManager>),
     #[cfg(feature = "aws")]
     AwsKms(crate::aws::AwsKms),
     #[cfg(feature = "aws")]
@@ -24,7 +40,7 @@ pub enum SecretManager {
 impl SecretManager {
     pub fn system(&self) -> KeyManagementSystem {
         match self {
-            Self::Local => KeyManagementSystem::Local,
+            Self::External(manager) => manager.system(),
             #[cfg(feature = "aws")]
             Self::AwsKms(_) => KeyManagementSystem::AwsKms,
             #[cfg(feature = "aws")]
@@ -50,10 +66,11 @@ pub async fn get_secret_from_manager(
     environment: &(dyn Lookup + Send + Sync),
 ) -> Result<Option<Secret>, Error> {
     match client {
-        SecretManager::Local => Ok(environment
-            .get(secret_name)
-            .map(SecretValue::new)
-            .map(Secret::String)),
+        SecretManager::External(manager) => {
+            manager
+                .read_secret(secret_name, _settings, environment)
+                .await
+        }
         #[cfg(feature = "aws")]
         SecretManager::AwsKms(client) => {
             let ciphertext = environment
@@ -97,10 +114,9 @@ pub async fn get_secret_from_manager(
             .map(|value| value.map(Secret::String))
             .map_err(Error::from),
         #[cfg(feature = "azure")]
-        SecretManager::AzureKeyVault(client) => client
-            .get_secret_from_azure_key_vault(secret_name)
-            .await
-            .map_err(Error::from),
+        SecretManager::AzureKeyVault(client) => {
+            client.get_secret(secret_name).await.map_err(Error::from)
+        }
         #[cfg(feature = "cyberark")]
         SecretManager::Cyberark(client) => client
             .async_read_secret(secret_name)

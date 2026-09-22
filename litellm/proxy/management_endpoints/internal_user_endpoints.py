@@ -47,6 +47,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     object_permission_cache_key,
     user_object_permission_id_cache_key,
 )
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_daily_activity import (
@@ -2538,6 +2540,12 @@ async def delete_user(
         prisma_client=prisma_client,
     )
     await _verification_token_table(prisma_client).delete_many(where=key_filter)
+    if keys_to_delete:
+        KeyManagementEventHooks.create_key_deleted_audit_logs(
+            keys_being_deleted=keys_to_delete,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
     await delete_cache_key_objects(
         hashed_tokens=hashed_tokens_to_delete,
         user_api_key_cache=user_api_key_cache,
@@ -2810,6 +2818,9 @@ async def ui_view_users(
     except HTTPException:
         raise
     except Exception as e:
+        if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
+            verbose_proxy_logger.warning("Database unavailable during user search: %s", type(e).__name__)
+            raise PrismaDBExceptionHandler.service_unavailable_proxy_exception(e) from e
         verbose_proxy_logger.exception("Error searching users: %s", e)
         raise HTTPException(status_code=500, detail=f"Error searching users: {e}")
 

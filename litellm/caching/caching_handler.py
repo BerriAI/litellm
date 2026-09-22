@@ -22,7 +22,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, 
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -35,7 +35,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
-from litellm.types.caching import CachedEmbedding
+from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
 from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
@@ -78,7 +78,7 @@ class CachingHandlerResponse(BaseModel):
     cached_result: object | None = None
     final_embedding_cached_response: EmbeddingResponse | None = None
     embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
-    remaining_embedding_inputs: tuple[str | int | list[int], ...] | None = None
+    embedding_uncached_input: list[str | int | list[int]] | None = None
 
 
 in_memory_cache_obj: Final = InMemoryCache()
@@ -168,6 +168,37 @@ def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "as
 def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
     """Read the caller-supplied ``cache_key`` off the request kwargs."""
     return request_kwargs.get("cache_key", None)
+
+
+class _CachedEmbeddingRecord(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    embedding: list[float] | str | None
+    index: int | None
+    object: str | None
+    model: str | None
+    prompt_tokens: int | None
+    prompt_tokens_details: dict | None
+    format_version: int
+
+
+def _current_format_embedding_entry(entry: object) -> CachedEmbedding | None:
+    try:
+        record: Final = _CachedEmbeddingRecord.model_validate(entry)
+    except ValidationError:
+        return None
+    if record.format_version != EMBEDDING_CACHE_FORMAT_VERSION:
+        return None
+    cached: Final[CachedEmbedding] = {
+        "embedding": record.embedding,
+        "index": record.index,
+        "object": record.object,
+        "model": record.model,
+        "prompt_tokens": record.prompt_tokens,
+        "prompt_tokens_details": record.prompt_tokens_details,
+        "format_version": record.format_version,
+    }
+    return cached
 
 
 class LLMCachingHandler:
@@ -328,9 +359,7 @@ class LLMCachingHandler:
                     return CachingHandlerResponse(
                         final_embedding_cached_response=final_embedding_cached_response,
                         embedding_all_elements_cache_hit=embedding_all_elements_cache_hit,
-                        remaining_embedding_inputs=(
-                            remaining_embedding_inputs if final_embedding_cached_response is not None else None
-                        ),
+                        embedding_uncached_input=list(remaining_embedding_inputs),
                     )
 
             verbose_logger.debug("CACHE RESULT: %s", cached_result)
@@ -666,31 +695,30 @@ class LLMCachingHandler:
         if _caching_handler_response.final_embedding_cached_response is None:
             return embedding_response
 
-        api_items: Final = iter(embedding_response.data)
-        final_data_list: Final = list(  # mutable-ok: EmbeddingResponse exposes data as a mutable list
-            item
-            if item is not None
-            else Embedding.model_validate(next(api_items)).model_copy(update={"index": response_index})
-            for response_index, item in enumerate(_caching_handler_response.final_embedding_cached_response.data)
+        cached: Final = _caching_handler_response.final_embedding_cached_response
+        fresh_items: Final = iter(embedding_response.data or ())
+        merged_usage: Final = (
+            self.combine_usage(usage1=cached.usage, usage2=embedding_response.usage)
+            if cached.usage is not None and embedding_response.usage is not None
+            else cached.usage
         )
-
-        _caching_handler_response.final_embedding_cached_response.data = final_data_list
-        _caching_handler_response.final_embedding_cached_response._hidden_params["cache_hit"] = True
-        _caching_handler_response.final_embedding_cached_response._response_ms = (
-            end_time - start_time
-        ).total_seconds() * 1000
-
-        ## USAGE
-        if (
-            _caching_handler_response.final_embedding_cached_response.usage is not None
-            and embedding_response.usage is not None
-        ):
-            _caching_handler_response.final_embedding_cached_response.usage = self.combine_usage(
-                usage1=_caching_handler_response.final_embedding_cached_response.usage,
-                usage2=embedding_response.usage,
-            )
-
-        return _caching_handler_response.final_embedding_cached_response
+        merged: Final = EmbeddingResponse(
+            model=cached.model,
+            data=[  # mutable-ok: EmbeddingResponse.data is a pydantic list field
+                item
+                if item is not None
+                else Embedding(embedding=next(fresh_items)["embedding"], index=position, object="embedding")
+                for position, item in enumerate(cached.data)
+            ],
+            usage=merged_usage,
+            hidden_params={  # mutable-ok: EmbeddingResponse._hidden_params is a mutable dict field
+                **cached._hidden_params,
+                "cache_hit": True,
+            },
+            _response_headers=cached._response_headers,
+        )
+        merged._response_ms = (end_time - start_time).total_seconds() * 1000
+        return merged
 
     def _async_log_cache_hit_on_callbacks(
         self,
@@ -778,7 +806,7 @@ class LLMCachingHandler:
                         dynamic_cache_object=self.dual_cache,
                     )
                 )
-            cached_result = await asyncio.gather(*tasks)
+            cached_result = [_current_format_embedding_entry(entry) for entry in await asyncio.gather(*tasks)]
             ## check if cached result is None ##
             if cached_result is not None and isinstance(cached_result, list):
                 # set cached_result to None if all elements are None
