@@ -249,6 +249,34 @@ def test_langfuse_mapper_renders_an_ocr_call_with_the_page_markdown_as_output():
     assert attrs["langfuse.observation.type"] == "generation"
 
 
+@pytest.mark.parametrize(
+    ("call_type", "response", "expected_content"),
+    [
+        ("atext_completion", {"choices": [{"text": "Paris.", "finish_reason": "stop"}]}, "Paris."),
+        ("atranscription", {"text": "What is the weather like?"}, "What is the weather like?"),
+        ("amoderation", {"results": [{"flagged": True, "categories": {"violence": True}}]}, "flagged: violence"),
+        ("aimage_generation", {"data": [{"b64_json": "QUJDRA=="}]}, "b64_json image (4 bytes)"),
+        ("aspeech", {"object": "binary", "content_type": "audio/mpeg", "num_bytes": 9}, "audio/mpeg (9 bytes)"),
+    ],
+)
+def test_langfuse_mapper_renders_every_non_chat_route_output_as_an_assistant_message(
+    call_type, response, expected_content
+):
+    payload = {
+        "call_type": call_type,
+        "custom_llm_provider": "openai",
+        "model": "m",
+        "messages": None,
+        "response": response,
+    }
+    attrs = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True))
+
+    assert json.loads(attrs["langfuse.observation.output"]) == [
+        {"role": "assistant", "content": expected_content, "refusal": None, "tool_calls": None}
+    ]
+    assert attrs["langfuse.observation.type"] == "generation"
+
+
 # --------------------------------------------------------------------------- #
 #  Weave
 # --------------------------------------------------------------------------- #
