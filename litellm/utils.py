@@ -8340,7 +8340,7 @@ class ProviderConfigManager:
                 False,
             ),
             LlmProviders.EDENAI: (litellm.EdenAIChatConfig, False),
-            LlmProviders.FAL_AI: (lambda: litellm.FalAIChatConfig(), False),
+            LlmProviders.FAL_AI: (litellm.FalAIChatConfig, False),
             LlmProviders.COMETAPI: (lambda: litellm.CometAPIConfig(), False),
             LlmProviders.DATAROBOT: (lambda: litellm.DataRobotConfig(), False),
             LlmProviders.GEMINI: (lambda: litellm.GoogleAIStudioGeminiConfig(), False),

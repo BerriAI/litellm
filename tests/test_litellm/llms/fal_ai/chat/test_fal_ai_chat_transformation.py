@@ -309,3 +309,40 @@ def test_transform_response_omits_reasoning_when_null():
     assert response.choices[0].message.content == "a red circle"
     assert getattr(response.choices[0].message, "reasoning_content", None) is None
     assert response.usage.total_tokens == 5
+
+
+def test_transform_response_rejects_body_missing_output():
+    raw = httpx.Response(
+        200,
+        json={"reasoning": "looked", "usage_info": {"input_tokens": 3, "output_tokens": 2}},
+    )
+    with pytest.raises(FalAIError) as exc_info:
+        FalAIChatConfig().transform_response(
+            model=MODEL,
+            raw_response=raw,
+            model_response=ModelResponse(),
+            logging_obj=None,
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+    assert exc_info.value.status_code == 422
+
+
+def test_transform_response_rejects_body_missing_usage_info():
+    raw = httpx.Response(200, json={"output": "a red circle"})
+    with pytest.raises(FalAIError) as exc_info:
+        FalAIChatConfig().transform_response(
+            model=MODEL,
+            raw_response=raw,
+            model_response=ModelResponse(),
+            logging_obj=None,
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+    assert exc_info.value.status_code == 422

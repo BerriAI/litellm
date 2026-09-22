@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -29,7 +29,24 @@ PASSTHROUGH_PARAMS: Final[frozenset[str]] = frozenset(("reasoning", "temperature
 REASONING_DISABLED_EFFORTS: Final[frozenset[str]] = frozenset(("none", "minimal"))
 REASONING_ENABLED_EFFORTS: Final[frozenset[str]] = frozenset(("low", "medium", "high"))
 
-_JSON_OBJECT: Final[TypeAdapter[Mapping[str, JsonValue]]] = TypeAdapter(Mapping[str, JsonValue])
+
+class _FalUsage(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    input_tokens: int
+    output_tokens: int
+
+
+class _FalChatResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    output: str
+    usage_info: _FalUsage
+    reasoning: str | None = None
+    finish_reason: str | None = None
+
+
+_CHAT_RESPONSE: Final = TypeAdapter(_FalChatResponse)
 
 
 class FalAIError(BaseLLMException):
@@ -192,33 +209,29 @@ class FalAIChatConfig(BaseConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            completion_response: Final = _JSON_OBJECT.validate_json(raw_response.content)
+            completion_response: Final = _CHAT_RESPONSE.validate_json(raw_response.content)
         except ValueError:
-            raise FalAIError(status_code=422, message=raw_response.text, headers=raw_response.headers)
-        output: Final = completion_response.get("output")
-        reasoning: Final = completion_response.get("reasoning")
-        usage_info: Final = completion_response.get("usage_info")
-        input_tokens: Final = usage_info.get("input_tokens") if isinstance(usage_info, Mapping) else None
-        output_tokens: Final = usage_info.get("output_tokens") if isinstance(usage_info, Mapping) else None
-        finish_reason: Final = completion_response.get("finish_reason")
+            raise FalAIError(
+                status_code=422,
+                message=f"fal_ai returned an unexpected response body: {raw_response.text}",
+                headers=raw_response.headers,
+            )
 
         message: Final = Message(
-            content=output if isinstance(output, str) else None,
+            content=completion_response.output,
             role="assistant",
-            reasoning_content=reasoning if isinstance(reasoning, str) else None,
+            reasoning_content=completion_response.reasoning,
         )
         model_response.choices[0].message = message  # rebind-ok: ModelResponse populated in place per contract
         model_response.choices[0].finish_reason = map_finish_reason(  # rebind-ok: same contract
-            finish_reason if isinstance(finish_reason, str) else "stop"
+            completion_response.finish_reason or "stop"
         )
         model_response.created = int(time.time())  # rebind-ok: same contract
         model_response.model = model  # rebind-ok: same contract
-        prompt_tokens: Final = input_tokens if isinstance(input_tokens, int) else 0
-        completion_tokens: Final = output_tokens if isinstance(output_tokens, int) else 0
         model_response.usage = Usage(  # rebind-ok: same contract
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens=completion_response.usage_info.input_tokens,
+            completion_tokens=completion_response.usage_info.output_tokens,
+            total_tokens=completion_response.usage_info.input_tokens + completion_response.usage_info.output_tokens,
         )
         return model_response
 
