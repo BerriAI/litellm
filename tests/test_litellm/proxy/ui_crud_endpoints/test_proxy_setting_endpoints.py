@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Final
 
 import pytest
 from fastapi.testclient import TestClient
@@ -88,6 +89,16 @@ def mock_auth():
     app.dependency_overrides[user_api_key_auth] = mock_user_api_key_auth
     yield
     app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.fixture(autouse=True)
+def fresh_settings_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.config_resolvers.settings_store import SettingsStore
+
+    store: Final = SettingsStore("general_settings")
+    monkeypatch.setattr(proxy_server.proxy_config, "settings", store)
+    monkeypatch.setattr(proxy_server, "general_settings", store)
 
 
 class TestProxySettingEndpoints:
@@ -3890,3 +3901,21 @@ class TestSyncUiSettingsToGeneralSettings:
 
         assert general_settings["forward_client_headers_to_llm_api"] is False
         assert general_settings.source("forward_client_headers_to_llm_api") == "config"
+
+
+class TestSettingsStoreIsolation:
+    def test_runtime_flags_land_in_the_store_the_endpoint_reads(self):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import apply_runtime_general_settings_flags
+
+        apply_runtime_general_settings_flags({"team_admin_editable_team_fields": []})
+
+        assert proxy_server.general_settings is proxy_server.proxy_config.settings
+        assert proxy_server.proxy_config.settings["team_admin_editable_team_fields"] == []
+
+    def test_the_next_test_starts_from_an_empty_store(self):
+        from litellm.proxy import proxy_server
+
+        assert proxy_server.general_settings is proxy_server.proxy_config.settings
+        assert "team_admin_editable_team_fields" not in proxy_server.proxy_config.settings
+        assert len(proxy_server.proxy_config.settings) == 0
