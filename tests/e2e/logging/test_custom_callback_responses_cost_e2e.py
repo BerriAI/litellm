@@ -13,7 +13,7 @@ from lifecycle import ResourceManager
 from logging_client import LoggingClient, first_ok
 from pydantic import BaseModel, ConfigDict
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.callback_cost_capture]
 
 
 class _ResponsesBody(BaseModel):
