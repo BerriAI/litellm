@@ -2877,19 +2877,6 @@ if MCP_AVAILABLE:
             old_server_record = None
             old_server_record_read_failed = True
 
-        if (
-            old_server_record is None
-            and not old_server_record_read_failed
-            and global_mcp_server_manager.is_config_declared_server(payload.server_id)
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
-                    "error": "This MCP server is defined in config and is read-only. "
-                    "Edit your YAML configuration to make changes."
-                },
-            )
-
         if payload.per_server_oauth_discovery and (old_server_record is not None or old_server_record_read_failed):
             relay_eligible: Final = old_server_record is not None and is_per_server_oauth_discovery_eligible(
                 payload.auth_type if "auth_type" in payload_fields_set else old_server_record.auth_type,

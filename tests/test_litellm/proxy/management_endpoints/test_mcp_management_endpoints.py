@@ -7828,10 +7828,10 @@ class TestDeleteMCPGatewaySessions:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role,expected_status", [
-    (LitellmUserRoles.PROXY_ADMIN, 400),
+    (LitellmUserRoles.PROXY_ADMIN, 404),
     (LitellmUserRoles.INTERNAL_USER, 403),
 ])
-async def test_config_server_edit_is_read_only_without_writes(role, expected_status):
+async def test_config_server_edit_preserves_api_contract_without_creating_rows(role, expected_status):
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 
     manager = MCPServerManager()
@@ -7854,9 +7854,11 @@ async def test_config_server_edit_is_read_only_without_writes(role, expected_sta
     assert exc.value.status_code == expected_status
     if role == LitellmUserRoles.PROXY_ADMIN:
         assert exc.value.detail == {
-            "error": "This MCP server is defined in config and is read-only. Edit your YAML configuration to make changes."
+            "error": f"MCP Server not found, passed server_id={server.server_id}"
         }
-    prisma.db.litellm_mcpservertable.update.assert_not_awaited()
+        prisma.db.litellm_mcpservertable.update.assert_awaited_once()
+    else:
+        prisma.db.litellm_mcpservertable.update.assert_not_awaited()
     prisma.db.litellm_mcpservertable.create.assert_not_called()
     prisma.db.litellm_mcpservertable.create_many.assert_not_called()
     prisma.tx.assert_not_called()
