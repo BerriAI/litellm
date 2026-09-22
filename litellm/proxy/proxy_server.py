@@ -745,6 +745,14 @@ from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
 from litellm.proxy.ui_crud_endpoints.user_banner_endpoints import (
     router as user_banner_endpoints_router,
 )
+from litellm.proxy.usage_telemetry import (
+    UsageTelemetryRecorder,
+    build_usage_telemetry_recorder,
+    compose_gateway_request_sinks,
+    resolve_instance_id,
+    shutdown_usage_telemetry_recorder,
+    usage_telemetry_enabled,
+)
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -1078,6 +1086,8 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
     if shutdown_billing_metrics_recorder is not None:
         shutdown_billing_metrics_recorder()
 
+    shutdown_usage_telemetry_recorder()
+
     # flush remaining langfuse logs
     if "langfuse" in litellm.success_callback:
         try:
@@ -1171,7 +1181,8 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         premium_user, \
         _license_check, \
         proxy_batch_polling_interval, \
-        shared_aiohttp_session
+        shared_aiohttp_session, \
+        usage_telemetry_recorder
     import json
 
     init_verbose_loggers()
@@ -1278,6 +1289,18 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         log=verbose_proxy_logger.warning,
         raise_unless_tolerated=PrismaDBExceptionHandler.handle_db_exception,
     )
+
+    ## USAGE TELEMETRY: opt-in anonymous OSS metrics (LITELLM_TELEMETRY=true) ##
+    ## Built here, after the YAML environment_variables and the prisma client
+    ## are both loaded, so the flag works from either source and the instance
+    ## id can persist in LiteLLM_Config.
+    if usage_telemetry_enabled():
+        usage_telemetry_recorder = build_usage_telemetry_recorder(
+            litellm_version=version,
+            instance_id=await resolve_instance_id(prisma_client),
+        )
+        if usage_telemetry_recorder is not None:
+            litellm.logging_callback_manager.add_litellm_callback(usage_telemetry_recorder)
 
     if prisma_client is not None:
 
@@ -2328,7 +2351,10 @@ app.add_middleware(
     # report SGR on any deployment. Gated only on a database being configured,
     # since without one the fold would never be drained. Read at call time, so
     # it sees prisma_client as of the first request rather than import time.
-    sink_factory=lambda: gateway_request_accumulator if prisma_client is not None else None,
+    sink_factory=lambda: compose_gateway_request_sinks(
+        gateway_request_accumulator if prisma_client is not None else None,
+        usage_telemetry_recorder,
+    ),
 )
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
@@ -2510,6 +2536,10 @@ open_telemetry_logger: OpenTelemetry | None = None
 # Folded in memory by BillableRequestMetricsMiddleware, drained to
 # LiteLLM_DailyGatewayRequests by the update_gateway_requests scheduler job.
 gateway_request_accumulator: Final = GatewayRequestAccumulator()
+### USAGE TELEMETRY ###
+# Built in proxy_startup_event when LITELLM_TELEMETRY=true; also a callback and
+# a second middleware sink. Module global so the sink_factory lambda can read it.
+usage_telemetry_recorder: UsageTelemetryRecorder | None = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj: ProxyLogging = ProxyLogging(user_api_key_cache=user_api_key_cache, premium_user=premium_user)
 
