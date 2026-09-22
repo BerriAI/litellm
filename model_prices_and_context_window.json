@@ -35591,6 +35591,7 @@
     },
     "gpt-5-2025-08-07": {
         "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_batches": 6.25e-08,
         "cache_read_input_token_cost_flex": 6.25e-08,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "deprecation_date": "2026-12-11",
@@ -36016,6 +36017,7 @@
     },
     "gpt-5-mini-2025-08-07": {
         "cache_read_input_token_cost": 2.5e-08,
+        "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
         "deprecation_date": "2026-12-11",
@@ -36116,6 +36118,7 @@
     },
     "gpt-5-nano-2025-08-07": {
         "cache_read_input_token_cost": 5e-09,
+        "cache_read_input_token_cost_batches": 2.5e-09,
         "cache_read_input_token_cost_flex": 2.5e-09,
         "deprecation_date": "2026-12-11",
         "input_cost_per_token": 5e-08,
