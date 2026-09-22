@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
+from litellm.types.agents import AgentCaller
 from litellm.types.integrations.compression_interception import (
     CompressionSavingsMetadata,
 )
@@ -905,6 +906,7 @@ class LiteLLMRoutes(enum.Enum):
         "/claude_code_gateway/v1/traces",
         "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/management/v1/users/bulk_delete",  # proxy admins delete anyone, org admins only their orgs' users; others 403
+        "/user/password/change",  # endpoint only ever writes the caller's own row
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
@@ -1865,6 +1867,17 @@ class NewUserRequest(GenerateRequestBase):
     send_invite_email: bool | None = None
     sso_user_id: str | None = None
     organizations: list[str] | None = None
+    password: str | None = None
+
+    @field_validator("password")
+    @classmethod
+    def password_not_supported(cls, value: str | None) -> str | None:
+        if value is not None:
+            raise ValueError(
+                "password cannot be set via /user/new. Users set their own password through an "
+                "invitation link (POST /invitation/new)."
+            )
+        return value
 
 
 class NewUserResponse(GenerateKeyResponse):
@@ -1887,7 +1900,8 @@ class NewUserResponse(GenerateKeyResponse):
 
 
 class UpdateUserRequestNoUserIDorEmail(GenerateRequestBase):  # shared with BulkUpdateUserRequest
-    password: str | None = None
+    # repr=False keeps the plaintext out of management-endpoint alerts, which str() the request model
+    password: str | None = Field(default=None, repr=False)
     spend: float | None = None
     metadata: dict | None = None
     user_alias: str | None = None
@@ -1915,6 +1929,16 @@ class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
         return values
+
+
+class ChangePasswordRequest(LiteLLMPydanticObjectBase):
+    current_password: str = Field(repr=False)
+    new_password: str = Field(repr=False)
+
+
+class ChangePasswordResponse(LiteLLMPydanticObjectBase):
+    user_id: str
+    message: str
 
 
 class DeleteUserRequest(LiteLLMPydanticObjectBase):
@@ -3239,6 +3263,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # above; a forged value could at most narrow, but the stripping keeps the field's provenance
     # single-owner so its meaning stays trustworthy.
     mcp_session_resource_server_id: str | None = Field(default=None, exclude=True)
+    mcp_toolset_id: str | None = Field(default=None, exclude=True)
     via_virtual_key: bool = Field(
         default=False,
         exclude=True,
@@ -3248,6 +3273,15 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             "claims, or key metadata cannot forge it. Gates overwrite_user_with_key_hash stamping: only "
             "a credential the proxy itself validated as a key may be forwarded as the provider-facing "
             "user id."
+        ),
+    )
+    agent_caller: AgentCaller | None = Field(
+        default=None,
+        exclude=True,
+        description=(
+            "Set per request from the x-litellm-user-id / x-litellm-team-id headers an agent echoes back on "
+            "calls made with its own key. Every check treats it as a ceiling, so a forged value can only "
+            "narrow the agent's access."
         ),
     )
     budget_reservation: dict[str, Any] | None = Field(default=None, exclude=True)
@@ -3280,7 +3314,9 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("mcp_admitted_user_subject", None)
         values.pop("mcp_source_team_rpm_limits", None)
         values.pop("mcp_session_resource_server_id", None)
+        values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
+        values.pop("agent_caller", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
             if isinstance(values.get("api_key"), str):
@@ -3938,6 +3974,12 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     )
 
 
+class HTTPExceptionErrorDetail(TypedDict):
+    """The `{"error": <message>}` shape most proxy endpoints raise as `HTTPException.detail`."""
+
+    error: ReadOnly[str]
+
+
 class SpendLogsRouterMetadata(TypedDict):
     """
     Router provenance stamped on spend logs for deployments flagged with
@@ -4230,6 +4272,11 @@ class ProxyErrorTypes(str, enum.Enum):
     Project does not have access to the model
     """
 
+    agent_model_access_denied = "agent_model_access_denied"
+    """
+    The agent behind the key does not have access to the model
+    """
+
     model_cost_map_missing = "model_cost_map_missing"
 
     expired_key = "expired_key"
@@ -4304,7 +4351,7 @@ class ProxyErrorTypes(str, enum.Enum):
 
     @classmethod
     def get_model_access_error_type_for_object(
-        cls, object_type: Literal["key", "user", "team", "org", "project"]
+        cls, object_type: Literal["key", "user", "team", "org", "project", "agent"]
     ) -> "ProxyErrorTypes":
         """
         Get the model access error type for object_type
@@ -4319,6 +4366,8 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.org_model_access_denied
         elif object_type == "project":
             return cls.project_model_access_denied
+        elif object_type == "agent":
+            return cls.agent_model_access_denied
 
     @classmethod
     def get_vector_store_access_error_type_for_object(

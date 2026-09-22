@@ -176,3 +176,10 @@ class SettingsStore(MutableMapping[str, JsonValue]):
     def _resolution_for(self, key: str) -> Resolved:
         yaml_value: Final[SettingValue] = self._yaml_values.get(key, ABSENT)
         return resolve(yaml_value, self._db_value(key))
+
+
+def source_for(settings: SettingsStore, key: str, default: object = None) -> FieldSource:
+    source: Final = settings.source(key)
+    if source == "unset":
+        return "default" if default is not None else "unset"
+    return source

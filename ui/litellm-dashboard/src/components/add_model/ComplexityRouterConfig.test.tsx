@@ -96,6 +96,56 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.queryByText("Classifier Model")).not.toBeInTheDocument();
   });
 
+  it("shows heuristic advanced sections and hides keyword overrides for capability classifiers", () => {
+    const { rerender } = renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+
+    expect(screen.getByText("Advanced: Heuristic Keyword Overrides")).toBeInTheDocument();
+    expect(screen.getByText("Advanced: Housekeeping Routing")).toBeInTheDocument();
+    expect(screen.getByText("Advanced: Reminder Markers")).toBeInTheDocument();
+
+    const capabilityValue = { ...defaultValue, classifier_type: "capability" as const };
+    rerender(<ComplexityRouterConfig {...baseProps} value={capabilityValue} />);
+    expect(screen.queryByText("Advanced: Heuristic Keyword Overrides")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["custom", true],
+    ["heuristic", false],
+  ] as const)("shows plugin timeout only for %s classifiers", (classifierType, visible) => {
+    renderWithProviders(
+      <ComplexityRouterConfig {...baseProps} value={{ ...defaultValue, classifier_type: classifierType }} />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    if (visible) {
+      expect(screen.getByLabelText("Classifier plugin timeout (ms)")).toBeInTheDocument();
+    } else {
+      expect(screen.queryByLabelText("Classifier plugin timeout (ms)")).not.toBeInTheDocument();
+    }
+  });
+
+  it.each([true, false])("shows reminder marker validation only when requested: %s", (showValidationErrors) => {
+    const value = { ...defaultValue, reminder_markers: [{ open: "", close: "x" }] };
+    renderWithProviders(
+      <ComplexityRouterConfig {...baseProps} value={value} showValidationErrors={showValidationErrors} />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Reminder Markers"));
+    const validation = screen.queryByText(/needs both/i);
+    if (showValidationErrors) {
+      expect(validation).toBeInTheDocument();
+    } else {
+      expect(validation).not.toBeInTheDocument();
+    }
+  });
+
+  it("disables housekeeping sentinels when cheapest-tier routing is off", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig {...baseProps} value={{ ...defaultValue, route_housekeeping_to_cheapest_tier: false }} />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Housekeeping Routing"));
+    const sentinelInput = screen.getByRole("combobox", { name: "e.g., conversation title" });
+    expect(sentinelInput).toBeDisabled();
+  });
+
   it("should toggle returning the raw model name", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

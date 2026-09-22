@@ -118,6 +118,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         base_openai_params: Final = [
             "logit_bias",
             "logprobs",
+            "max_completion_tokens",
             "max_tokens",
             "n",
             "parallel_tool_calls",

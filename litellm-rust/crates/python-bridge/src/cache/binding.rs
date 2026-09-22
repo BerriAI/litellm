@@ -56,12 +56,7 @@ impl ResolvedCache {
             CacheBinding::Disabled => ready_none(py)?,
             CacheBinding::Native(service) => {
                 let request = request(input)?;
-                let service = service.clone();
-                run_async(
-                    py,
-                    async move { service.async_lookup(&request, now()).await },
-                    cache_error,
-                )?
+                service.async_lookup_py(py, request)?
             }
             CacheBinding::PythonCallback(callback) => callback.async_lookup(py, kwargs)?,
         };
@@ -179,12 +174,7 @@ impl ResolvedCache {
             CacheBinding::Native(service) => {
                 let request = self::request(request)?;
                 let response: Value = from_py(response)?;
-                let service = service.clone();
-                run_async(
-                    py,
-                    async move { service.async_store(&request, response, now()).await },
-                    cache_error,
-                )
+                service.async_store_py(py, request, response)
             }
             CacheBinding::PythonCallback(callback) => {
                 callback.async_store(py, response, callback_kwargs)
@@ -241,12 +231,7 @@ impl ResolvedCache {
                     ));
                 }
                 let entries = requests.into_iter().zip(responses).collect();
-                let service = service.clone();
-                run_async(
-                    py,
-                    async move { service.async_store_batch(entries, now()).await },
-                    cache_error,
-                )
+                service.async_store_batch_py(py, entries)
             }
             CacheBinding::PythonCallback(callback) => {
                 callback.async_store_batch(py, callback_result, callback_kwargs)

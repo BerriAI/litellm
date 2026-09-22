@@ -1246,9 +1246,10 @@ export interface paths {
          * @description Benchmarks for the auto-router dashboard: session shape, savings against the configured
          *     baseline, and prompt-caching behaviour bucketed by what the router did.
          *
-         *     Reads the LiteLLM_AutoRouterSession rollup, folded once per request at spend-write time,
-         *     so this endpoint never scans LiteLLM_SpendLogs. A session is in the window when it
-         *     overlaps it: its last turn is on or after start_date and its first turn is on or before
+         *     Reads session rollups folded once per request at spend-write time, so this endpoint
+         *     never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
+         *     internal user when written; older key-only history remains outside user views. A session
+         *     is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
          *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
          *     over that bucket's turns.
          *
@@ -17350,6 +17351,7 @@ export interface paths {
          *     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *     - organizations: List[str] - List of organization id's the user is a member of
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - password: Optional[str] - Not supported; any value is rejected with a 422. Users set their own password through an invitation link (POST /invitation/new).
          *     Returns:
          *     - key: (str) The generated api key for the user
          *     - expires: (datetime) Datetime object for when key expires.
@@ -17366,6 +17368,39 @@ export interface paths {
          *     ```
          */
         post: operations["new_user_user_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user/password/change": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change Password
+         * @description Change the calling user's own password.
+         *
+         *     Only callable with the dashboard session issued by a username/password
+         *     login; SSO sessions and virtual keys are rejected with 403. Requires the
+         *     current password. The new password must differ from the
+         *     current one and satisfy the configured password policy
+         *     (`general_settings.password_policy_*`: minimum length, character classes,
+         *     and, when enabled, breached-password screening via haveibeenpwned.com).
+         *     A successful change lifts any pending forced password reset
+         *     (`password_reset_required`) on the account.
+         *
+         *     Parameters:
+         *     - current_password: str - The user's current password.
+         *     - new_password: str - The password to change to.
+         */
+        post: operations["change_password_user_password_change_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -17419,7 +17454,7 @@ export interface paths {
          *     Parameters:
          *         - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
          *         - user_email: Optional[str] - Specify a user email.
-         *         - password: Optional[str] - Specify a user password.
+         *         - password: Optional[str] - Set the user's password (admin only). Must satisfy the configured password policy. The user is required to change it at their next login. Users change their own password with POST /user/password/change.
          *         - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
          *         - teams: Optional[list] - specify a list of team id's a user belongs to.
          *         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
@@ -23605,6 +23640,8 @@ export interface components {
         };
         /** AgentConfig */
         AgentConfig: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
             agent_card_params: components["schemas"]["AgentCard"];
             /** Agent Name */
             agent_name: string;
@@ -23752,6 +23789,8 @@ export interface components {
         };
         /** AgentResponse */
         AgentResponse: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
             /** Agent Card Params */
             agent_card_params: {
                 [key: string]: unknown;
@@ -25295,6 +25334,8 @@ export interface components {
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organizations */
             organizations?: string[] | null;
+            /** Password */
+            password?: string | null;
             /**
              * Permissions
              * @default {}
@@ -25943,6 +25984,20 @@ export interface components {
              * @default 0
              */
             threshold_step: number;
+        };
+        /** ChangePasswordRequest */
+        ChangePasswordRequest: {
+            /** Current Password */
+            current_password: string;
+            /** New Password */
+            new_password: string;
+        };
+        /** ChangePasswordResponse */
+        ChangePasswordResponse: {
+            /** Message */
+            message: string;
+            /** User Id */
+            user_id: string;
         };
         /** ChatCompletionAnnotation */
         ChatCompletionAnnotation: {
@@ -31670,6 +31725,8 @@ export interface components {
             budget_reset_at?: string | null;
             /** Created At */
             created_at?: string | null;
+            /** Last Breach Check At */
+            last_breach_check_at?: string | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -31704,6 +31761,8 @@ export interface components {
             organization_id?: string | null;
             /** Organization Memberships */
             organization_memberships?: components["schemas"]["LiteLLM_OrganizationMembershipTable"][] | null;
+            /** Password Reset Required */
+            password_reset_required?: boolean | null;
             /**
              * Policies
              * @default []
@@ -31763,6 +31822,8 @@ export interface components {
              * @default 0
              */
             key_count: number;
+            /** Last Breach Check At */
+            last_breach_check_at?: string | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -31797,6 +31858,8 @@ export interface components {
             organization_id?: string | null;
             /** Organization Memberships */
             organization_memberships?: components["schemas"]["LiteLLM_OrganizationMembershipTable"][] | null;
+            /** Password Reset Required */
+            password_reset_required?: boolean | null;
             /**
              * Policies
              * @default []
@@ -34393,6 +34456,8 @@ export interface components {
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organizations */
             organizations?: string[] | null;
+            /** Password */
+            password?: string | null;
             /**
              * Permissions
              * @default {}
@@ -34922,6 +34987,8 @@ export interface components {
         };
         /** PatchAgentRequest */
         PatchAgentRequest: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
             agent_card_params?: components["schemas"]["AgentCard"];
             /** Agent Name */
             agent_name?: string;
@@ -36824,8 +36891,8 @@ export interface components {
             embedding_model?: string | null;
             /**
              * Enable Context Window Escalation
-             * @description Escalate a request off a tier whose models provably cannot hold its prompt, before dispatch. The classifier scores complexity and never prompt size, so a long agentic session whose newest ask is trivial lands on a small-window tier and the provider rejects it with a context-window 400 that nothing retries. When every model of the decided tier has a declared window smaller than the estimated prompt, the request moves to the lowest configured tier with a model whose declared window fits; when only some of the tier's models fit, the pick is restricted to those and the tier keeps the request. Models with no resolvable window are never escalated away from and never escalated onto. Set false to dispatch on complexity alone, as before.
-             * @default true
+             * @description Escalate a request off a tier whose models provably cannot hold its prompt, before dispatch. The classifier scores complexity and never prompt size, so a long agentic session whose newest ask is trivial lands on a small-window tier and the provider rejects it with a context-window 400 that nothing retries. When every model of the decided tier has a declared window smaller than the estimated prompt, the request moves to the lowest configured tier with a model whose declared window fits; when only some of the tier's models fit, the pick is restricted to those and the tier keeps the request. Models with no resolvable window are never escalated away from and never escalated onto. Disabled by default: omit or set false to dispatch on complexity alone; set true to enable context-window escalation.
+             * @default false
              */
             enable_context_window_escalation: boolean;
             /**
@@ -37183,6 +37250,13 @@ export interface components {
              */
             routing_strategy_descriptions: {
                 [key: string]: string;
+            };
+            /**
+             * Source
+             * @description Source of each current router setting
+             */
+            source: {
+                [key: string]: "config" | "db" | "env" | "default" | "unset";
             };
         };
         /**
@@ -39646,6 +39720,10 @@ export interface components {
             /** Field Schema */
             field_schema: {
                 [key: string]: unknown;
+            };
+            /** Source */
+            source: {
+                [key: string]: "config" | "db" | "env" | "default" | "unset";
             };
             /** Values */
             values: {
@@ -43821,6 +43899,8 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter to one virtual key token hash */
                 api_key?: string | null;
+                /** @description Filter to one canonical internal user recorded on each turn */
+                user_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -63742,6 +63822,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NewUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_password_user_password_change_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangePasswordResponse"];
                 };
             };
             /** @description Validation Error */
