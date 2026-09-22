@@ -2209,6 +2209,7 @@ async def test_ssrf_block_message_names_a_config_section_load_config_honors(tmp_
     section_match = re.search(r"add the host to `user_url_allowed_hosts` in (\w+)\.", str(blocked.value))
     assert section_match is not None, str(blocked.value)
     section: Final = section_match.group(1)
+    assert section == "litellm_settings", f"block message points admins at {section}, which the docs contradict"
 
     f = tmp_path / "c.yaml"
     f.write_text(f"model_list: []\n{section}:\n  user_url_allowed_hosts:\n    - '10.96.3.245:10002'\n")
