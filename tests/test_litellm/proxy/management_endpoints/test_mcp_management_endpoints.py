@@ -7878,3 +7878,25 @@ class TestDeleteMCPGatewaySessions:
         assert result.terminated_sessions == 2
         assert {s.user_id for s in result.sessions} == {"bob"}
         assert "sk-live-bob" not in result.model_dump_json()
+
+
+class TestGetMcpToolsWireShape:
+    @pytest.mark.asyncio
+    async def test_get_mcp_tools_returns_each_tool_in_mcp_wire_spelling(self):
+        from mcp.types import ListToolsResult, Tool
+
+        add_schema = {"type": "object", "properties": {"a": {"type": "integer"}}, "required": ["a"]}
+        listed = ListToolsResult(
+            tools=[Tool(name="add", description="Add", inputSchema=add_schema, outputSchema={"type": "integer"})]
+        )
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
+            AsyncMock(return_value=listed),
+        ):
+            result = await mgmt_endpoints.get_mcp_tools(user_api_key_dict=generate_mock_user_api_key_auth())
+
+        (tool,) = result["tools"]
+        assert tool["inputSchema"] == add_schema
+        assert tool["outputSchema"] == {"type": "integer"}
+        assert "_meta" in tool
+        assert not {"input_schema", "output_schema", "meta"} & tool.keys()

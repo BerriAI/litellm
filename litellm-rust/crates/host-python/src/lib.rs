@@ -20,7 +20,7 @@ pub use argument::lookup;
 pub use callable::wrap_failure;
 pub use driver::run_call;
 pub use execution::{
-    ForkedAfterNativeRuntimeStarted, ProcessReservedForForking, poll_async_value,
+    ForkedAfterNativeRuntimeStarted, ProcessReservedForForking, enter_native, poll_async_value,
     reserve_process_for_forking, run_async, run_async_value, run_sync, run_sync_value,
     runtime_started,
 };

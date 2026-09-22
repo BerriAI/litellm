@@ -5,11 +5,11 @@ mod embedder;
 mod facade;
 mod future;
 mod handle;
+mod identity;
 mod native;
 mod request;
 mod resolver;
 mod semantic;
-mod semantic_step;
 
 use litellm_cache::Error;
 use pyo3::{

@@ -760,6 +760,77 @@ class OcrResponse(BaseModel):
     pages: list[OcrPage] = []
 
 
+# ---------- completions ----------
+
+
+class CompletionBody(BaseModel):
+    model: str
+    prompt: str
+    max_tokens: int = 8
+    n: int = 1
+
+
+class CompletionChoice(BaseModel):
+    text: str = ""
+
+
+class CompletionResponse(BaseModel):
+    choices: list[CompletionChoice] = []
+
+
+# ---------- images ----------
+
+
+class ImageGenerationBody(BaseModel):
+    model: str
+    prompt: str
+    n: int = 1
+    size: str = "1024x1024"
+    quality: str = "low"
+
+
+class ImageDatum(BaseModel):
+    url: str | None = None
+    b64_json: str | None = None
+
+
+class ImageGenerationResponse(BaseModel):
+    data: list[ImageDatum] = []
+
+
+# ---------- audio ----------
+
+
+class SpeechBody(BaseModel):
+    model: str
+    input: str
+    voice: str = "alloy"
+
+
+class TranscriptionForm(BaseModel):
+    model: str
+
+
+class TranscriptionResponse(BaseModel):
+    text: str = ""
+
+
+# ---------- moderations ----------
+
+
+class ModerationBody(BaseModel):
+    model: str
+    input: str
+
+
+class ModerationResult(BaseModel):
+    flagged: bool
+
+
+class ModerationResponse(BaseModel):
+    results: list[ModerationResult] = []
+
+
 # ---------- spend logs ----------
 
 

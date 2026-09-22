@@ -4257,6 +4257,112 @@ async def test_pass_through_request_non_streaming_success_unchanged():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "upstream_status_code, claimed_by_the_success_handler",
+    [(200, True), (500, False)],
+    ids=["success-claims-the-reservation", "upstream-error-leaves-it-for-the-request-end-release"],
+)
+async def test_pass_through_request_claims_the_budget_reservation_only_when_its_success_handler_runs(
+    upstream_status_code: int, claimed_by_the_success_handler: bool
+):
+    reservation: Final = {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key="hashed")
+    user_api_key_dict.budget_reservation = reservation
+    upstream_response: Final = httpx.Response(
+        status_code=upstream_status_code,
+        headers={"content-type": "application/json"},
+        content=b'{"status": "upstream"}',
+        request=httpx.Request("POST", "http://target-api.com/api/generate"),
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client") as mock_get_client,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
+        ) as mock_processing,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as mock_worker,
+    ):
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+        mock_processing.get_custom_headers.return_value = {}
+        mock_worker.ensure_initialized_and_enqueue = MagicMock(side_effect=lambda async_coroutine: async_coroutine.close())
+        async_client = MagicMock()
+        async_client.build_request = MagicMock(return_value=MagicMock())
+        async_client.send = AsyncMock(return_value=upstream_response)
+        mock_get_client.return_value = MagicMock(client=async_client)
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.url = "http://test-proxy.com/mock-upstream/api/generate"
+        mock_request.body = AsyncMock(return_value=b'{"prompt": "hi"}')
+        mock_request.headers = Headers({"content-type": "application/json"})
+        mock_request.query_params = QueryParams({})
+
+        response = await pass_through_request(
+            request=mock_request,
+            target="http://target-api.com/api/generate",
+            custom_headers={},
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert response.status_code == upstream_status_code
+    assert reservation["callback_bound"] is claimed_by_the_success_handler
+    assert mock_worker.ensure_initialized_and_enqueue.call_count == int(claimed_by_the_success_handler)
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_leaves_the_budget_reservation_for_the_request_end_release_when_its_success_handler_cannot_be_enqueued():
+    reservation: Final = {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key="hashed")
+    user_api_key_dict.budget_reservation = reservation
+    upstream_response: Final = httpx.Response(
+        status_code=200,
+        headers={"content-type": "application/json"},
+        content=b'{"status": "upstream"}',
+        request=httpx.Request("POST", "http://target-api.com/api/generate"),
+    )
+
+    def refuse_to_enqueue(async_coroutine):
+        async_coroutine.close()
+        raise RuntimeError("logging worker is shutting down")
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client") as mock_get_client,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
+        ) as mock_processing,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as mock_worker,
+    ):
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+        mock_processing.get_custom_headers.return_value = {}
+        mock_worker.ensure_initialized_and_enqueue = MagicMock(side_effect=refuse_to_enqueue)
+        async_client = MagicMock()
+        async_client.build_request = MagicMock(return_value=MagicMock())
+        async_client.send = AsyncMock(return_value=upstream_response)
+        mock_get_client.return_value = MagicMock(client=async_client)
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.url = "http://test-proxy.com/mock-upstream/api/generate"
+        mock_request.body = AsyncMock(return_value=b'{"prompt": "hi"}')
+        mock_request.headers = Headers({"content-type": "application/json"})
+        mock_request.query_params = QueryParams({})
+
+        with pytest.raises(ProxyException):
+            await pass_through_request(
+                request=mock_request,
+                target="http://target-api.com/api/generate",
+                custom_headers={},
+                user_api_key_dict=user_api_key_dict,
+            )
+
+    assert reservation["callback_bound"] is False
+
+
+@pytest.mark.asyncio
 async def test_pass_through_request_internal_failure_still_raises_proxy_exception():
     """
     Internal proxy failures (e.g. a hook raising before any upstream request is
@@ -4649,6 +4755,90 @@ async def test_pass_through_request_upstream_error_body_stays_buffered():
     finally:
         cleanup()
         await fake_client.aclose()
+
+
+_UPSTREAM_JSON_ERROR: Final = b'{"error": {"message": "bad request", "type": "invalid_request_error"}}'
+
+
+async def _relay_upstream_through_pass_through_request(
+    general_settings, status_code, content_type, body, callback_headers=None
+):
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=status_code,
+            headers={"content-type": content_type},
+            stream=_RecordingUpstreamByteStream((body,)),
+        ),
+        timeout=313.0,
+    )
+    try:
+        with ExitStack() as stack:
+            mock_proxy_logging, _ = _enter_relay_logging_mocks(stack, {})
+            mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=callback_headers)
+            stack.enter_context(patch("litellm.proxy.proxy_server.general_settings", general_settings))
+            return await pass_through_request(
+                request=_relay_client_request(),
+                target="http://upstream.test/v1/messages",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+                timeout=313.0,
+            )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pass_through_error_body_carries_the_call_id_when_opted_in():
+    """With include_call_id_in_error_body on, a buffered upstream JSON error gets a top-level
+    litellm_call_id byte-identical to the x-litellm-call-id header, and content-length still
+    matches the rewritten body."""
+    response = await _relay_upstream_through_pass_through_request(
+        {"include_call_id_in_error_body": True}, 400, "application/json", _UPSTREAM_JSON_ERROR
+    )
+
+    call_id = response.headers["x-litellm-call-id"]
+    assert response.status_code == 400
+    assert json.loads(response.body) == {**json.loads(_UPSTREAM_JSON_ERROR), "litellm_call_id": call_id}
+    assert int(response.headers["content-length"]) == len(response.body)
+
+
+@pytest.mark.asyncio
+async def test_pass_through_error_body_call_id_follows_a_restamped_header():
+    """A post_call_response_headers_hook that rewrites x-litellm-call-id wins in the header, so the
+    body copies the emitted header value rather than the id the proxy generated."""
+    response = await _relay_upstream_through_pass_through_request(
+        {"include_call_id_in_error_body": True},
+        400,
+        "application/json",
+        _UPSTREAM_JSON_ERROR,
+        callback_headers={"x-litellm-call-id": "restamped-by-hook"},
+    )
+
+    assert response.headers["x-litellm-call-id"] == "restamped-by-hook"
+    assert json.loads(response.body)["litellm_call_id"] == "restamped-by-hook"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "general_settings, status_code, content_type, body",
+    [
+        ({}, 400, "application/json", _UPSTREAM_JSON_ERROR),
+        ({"include_call_id_in_error_body": True}, 502, "text/plain", b"upstream exploded"),
+        ({"include_call_id_in_error_body": True}, 200, "application/json", b'{"id": "msg_1", "type": "message"}'),
+    ],
+)
+async def test_pass_through_body_stays_byte_identical_outside_the_opt_in(
+    general_settings, status_code, content_type, body
+):
+    """Opted out, a non-JSON error, or a success body: the upstream bytes are relayed as-is."""
+    response = await _relay_upstream_through_pass_through_request(general_settings, status_code, content_type, body)
+
+    assert response.status_code == status_code
+    assert response.body == body
+    assert "x-litellm-call-id" in response.headers
 
 
 _PARTIAL_RELAY_WARNING_MARKER = "ended before upstream body was fully relayed"

@@ -276,9 +276,9 @@ async def load_active_user_by_id(
     database-service-unavailable error is a retryable outage (``unavailable``). Everything else fails
     closed as ``no_active_key`` (the caller maps it to invalid_grant): a ``ProxyException`` /
     ``HTTPException``, a SCIM-deactivated user, and, unlike the key path, a missing user. ``get_user_object``
-    catches every DB failure and re-raises a bare ``ValueError`` (a deleted user and a real outage look
-    identical, the original error surviving only as ``__context__``), so the outage check walks the cause
-    chain, and a missing user falls through to ``no_active_key`` rather than an opaque gateway fault.
+    lets a real outage propagate as-is and re-raises any other DB failure as a bare ``ValueError`` (the
+    original error surviving only as ``__context__``), so the outage check walks the cause chain, and a
+    missing user falls through to ``no_active_key`` rather than an opaque gateway fault.
     ``source="database"`` reads the row from the database, never the cache, so the credential mint refuses
     a user that a writer deactivated or deleted without evicting the cached row, and it leaves the fresh
     row in the cache for the requests the credential makes next. Every other caller keeps the cache read,

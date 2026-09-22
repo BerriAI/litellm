@@ -1,3 +1,4 @@
+import os
 from collections.abc import Mapping
 from math import ceil
 from types import MappingProxyType
@@ -9,7 +10,8 @@ import litellm
 from litellm.types.utils import ImageObject, ImageResponse
 
 FAL_KEYED_PRICING_DEFAULT_QUALITY: Final[str] = "high"
-FAL_TEXT_TO_IMAGE_DEFAULT_SIZE: Final[str] = "1024-x-768"
+_DEFAULT_KEYED_DIMENSIONS: Final[tuple[int, int]] = (1024, 768)
+FAL_TEXT_TO_IMAGE_DEFAULT_SIZE: Final[str] = f"{_DEFAULT_KEYED_DIMENSIONS[0]}-x-{_DEFAULT_KEYED_DIMENSIONS[1]}"
 FAL_PIXELS_PER_MEGAPIXEL: Final[int] = 1_048_576
 FAL_NAMED_IMAGE_SIZES: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -23,6 +25,12 @@ FAL_NAMED_IMAGE_SIZES: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 _OBJECT_MAP: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+FAL_AI_QUEUE_DEFAULT_BASE: Final[str] = "https://queue.fal.run"
+
+
+def fal_ai_queue_base() -> str:
+    return os.getenv("FAL_AI_QUEUE_API_BASE") or FAL_AI_QUEUE_DEFAULT_BASE
 
 
 def _keyed_size(optional_params: Mapping[str, object]) -> str | None:
@@ -55,17 +63,40 @@ def _image_dimensions(image: object) -> tuple[int, int] | None:
     return width, height
 
 
-def _response_size(image: object) -> str | None:
-    dimensions: Final = _image_dimensions(image)
-    if dimensions is None:
-        return None
-    width, height = dimensions
-    return f"{width}-x-{height}"
-
-
 def _keyed_quality(optional_params: Mapping[str, object]) -> str:
     raw_quality: Final = optional_params.get("quality")
     return raw_quality if isinstance(raw_quality, str) and raw_quality != "auto" else FAL_KEYED_PRICING_DEFAULT_QUALITY
+
+
+def _parse_keyed_dimensions(size: str | None) -> tuple[int, int] | None:
+    if size is None:
+        return None
+    parts: Final = tuple(size.split("-x-"))
+    if len(parts) != 2:
+        return None
+    try:
+        width, height = (int(part) for part in parts)
+    except ValueError:
+        return None
+    return (width, height) if width > 0 and height > 0 else None
+
+
+def _keyed_rows(model: str, quality: str) -> tuple[tuple[int, int, float], ...]:
+    prefix: Final = f"fal_ai/{quality}/"
+    suffix: Final = f"/{model}"
+    return tuple(
+        (width, height, float(raw_cost))
+        for key in litellm.model_cost
+        if isinstance(key, str) and key.startswith(prefix) and key.endswith(suffix)
+        for size in (key[len(prefix) : -len(suffix)],)
+        for dimensions in (_parse_keyed_dimensions(size),)
+        if dimensions is not None
+        for entry in (_entry(key),)
+        if entry is not None
+        for raw_cost in (entry.get("output_cost_per_image"),)
+        if isinstance(raw_cost, (int, float))
+        for width, height in (dimensions,)
+    )
 
 
 def _keyed_cost_per_image(
@@ -74,18 +105,14 @@ def _keyed_cost_per_image(
     optional_params: Mapping[str, object],
 ) -> float | None:
     quality: Final = _keyed_quality(optional_params)
-    request_size: Final = _keyed_size(optional_params) or FAL_TEXT_TO_IMAGE_DEFAULT_SIZE
-    sizes: Final = (_response_size(image), request_size, FAL_TEXT_TO_IMAGE_DEFAULT_SIZE)
-    for size in sizes:
-        if size is None:
-            continue
-        keyed_entry = _entry(f"fal_ai/{quality}/{size}/{model}")
-        if keyed_entry is None:
-            continue
-        keyed_cost = keyed_entry.get("output_cost_per_image")
-        if isinstance(keyed_cost, (int, float)):
-            return float(keyed_cost)
-    return None
+    rows: Final = _keyed_rows(model, quality)
+    if not rows:
+        return None
+    target_dimensions: Final = (
+        _image_dimensions(image) or _parse_keyed_dimensions(_keyed_size(optional_params)) or _DEFAULT_KEYED_DIMENSIONS
+    )
+    target_pixels: Final = target_dimensions[0] * target_dimensions[1]
+    return min(rows, key=lambda row: (abs(row[0] * row[1] - target_pixels), row[0] * row[1]))[2]
 
 
 def _flat_cost_per_image(
@@ -106,6 +133,16 @@ def _entry(key: str) -> Mapping[str, object] | None:
     if not isinstance(raw_entry, Mapping):
         return None
     return _OBJECT_MAP.validate_python(raw_entry)
+
+
+def fal_ai_passthrough_cost(model: str, request_body: Mapping[str, object]) -> float | None:
+    entry: Final = _entry(f"{litellm.LlmProviders.FAL_AI.value}/{model}")
+    if entry is None:
+        return None
+    resolution: Final = request_body.get("resolution")
+    keyed_cost: Final = entry.get(f"output_cost_per_image_{resolution}") if isinstance(resolution, int) else None
+    cost: Final = keyed_cost if isinstance(keyed_cost, (int, float)) else entry.get("output_cost_per_image")
+    return float(cost) if isinstance(cost, (int, float)) else None
 
 
 def cost_calculator(
@@ -129,7 +166,7 @@ def cost_calculator(
         )
         for image in images
     )
-    if all(cost is not None for cost in keyed_costs):
+    if not any(cost is None for cost in keyed_costs):
         return sum(cost for cost in keyed_costs if cost is not None)
     model_info: Final = litellm.get_model_info(
         model=normalized_model,
@@ -144,10 +181,12 @@ def cost_calculator(
         float(raw_output_cost_per_pixel) if isinstance(raw_output_cost_per_pixel, (int, float)) else None
     )
     return sum(
-        _flat_cost_per_image(
+        keyed_cost
+        if keyed_cost is not None
+        else _flat_cost_per_image(
             image=image,
             output_cost_per_image=output_cost_per_image,
             output_cost_per_pixel=output_cost_per_pixel,
         )
-        for image in images
+        for image, keyed_cost in zip(images, keyed_costs)
     )
