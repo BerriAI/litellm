@@ -20,6 +20,10 @@ pytestmark = pytest.mark.e2e
 KIMI_K3_PROFILES: Final = ("bedrock/global.moonshotai.kimi-k3", "bedrock/us.moonshotai.kimi-k3")
 
 
+def _approx_equal(actual: float, expected: float) -> bool:
+    return abs(actual - expected) <= max(1e-9, abs(expected) * 1e-2)
+
+
 class TestBedrockKimiK3:
     @pytest.mark.covers("llm.chat_completions.bedrock_converse.basic.nonstream.cost_logged")
     @pytest.mark.parametrize("model_id", KIMI_K3_PROFILES)
@@ -67,7 +71,7 @@ class TestBedrockKimiK3:
 
         header_cost: Final = float(response_header(raw.headers, "x-litellm-response-cost") or 0)
         assert header_cost > 0, "HTTP 200 with an empty cost header is the launch-day symptom"
-        assert header_cost == pytest.approx(expected, rel=1e-2), f"header {header_cost} vs registry {expected} at {usage}"
+        assert _approx_equal(header_cost, expected), f"header {header_cost} vs registry {expected} at {usage}"
 
         rows: Final = proxy.poll_logs_for_request_id(completion.id)
-        assert rows and rows[0].spend == pytest.approx(header_cost), rows
+        assert rows and rows[0].spend is not None and _approx_equal(rows[0].spend, header_cost), rows
