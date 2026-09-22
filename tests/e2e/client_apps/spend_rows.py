@@ -15,6 +15,7 @@ def recorded_request(row: SpendLogRow) -> RecordedRequest:
 
 def streamed_tool_turn_rows(proxy: ProxyClient, key: str) -> list[SpendLogRow]:
     rows = proxy.poll_logs_for_key(key, min_rows=2)
+    assert len(rows) >= 2, rows
     assert all(row.status == "success" for row in rows), rows
     assert all(row.spend is not None and row.spend > 0 for row in rows), rows
     assert all(recorded_request(row).stream for row in rows), rows
