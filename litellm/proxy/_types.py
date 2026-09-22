@@ -494,11 +494,13 @@ class LiteLLMRoutes(enum.Enum):
         "/vllm",
         "/mistral",
         "/typesafe",
+        "/openrouter",
         "/milvus",
         "/gigachat",
         "/watsonx",
         "/nvidia_nim",
         "/deepgram",
+        "/fal_ai",
     ]
 
     #########################################################

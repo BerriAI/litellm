@@ -356,6 +356,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_second_768p: ReadOnly[float | None]
     output_cost_per_second_2k: ReadOnly[float | None]
     output_cost_per_second_4k: ReadOnly[float | None]
+    output_cost_per_image_512: ReadOnly[float | None]
+    output_cost_per_image_1024: ReadOnly[float | None]
+    output_cost_per_image_1536: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
     ocr_cost_per_page_batches: ReadOnly[float | None]
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
@@ -3206,6 +3209,15 @@ class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
     custom_pricing: bool | None
 
 
+ZeroCostReason = Literal["missing_pricing_key", "pricing_not_applied", "cost_calculation_error"]
+
+
+class StandardLoggingZeroCostDiagnostic(TypedDict):
+    reason: ReadOnly[ZeroCostReason]
+    pricing_model: ReadOnly[str]
+    missing_pricing_keys: ReadOnly[tuple[str, ...]]
+
+
 class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_code: str | None
     error_class: str | None
@@ -3524,6 +3536,7 @@ class StandardLoggingPayload(ClassifierAudit):
     autorouter_savings_estimate: ReadOnly[Mapping[str, JsonValue] | None]
     autorouter_baseline_observation: ReadOnly[str | None]
     response_cost_failure_debug_info: StandardLoggingModelCostFailureDebugInformation | None
+    zero_cost_diagnostic: NotRequired[ReadOnly[StandardLoggingZeroCostDiagnostic | None]]
     status: StandardLoggingPayloadStatus
     status_fields: StandardLoggingPayloadStatusFields
     custom_llm_provider: str | None
@@ -3672,6 +3685,9 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_second_768p: float | None = None
     output_cost_per_second_2k: float | None = None
     output_cost_per_second_4k: float | None = None
+    output_cost_per_image_512: float | None = None
+    output_cost_per_image_1024: float | None = None
+    output_cost_per_image_1536: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
 
@@ -3840,6 +3856,24 @@ def echoed_cost_map_pricing_fields(model_info: Mapping[str, Any]) -> tuple[str, 
     if COST_MAP_LOOKUP_KEY not in model_info:
         return ()
     return tuple(sorted(k for k in model_info if is_server_derived_pricing_key(k)))
+
+
+def echoed_cost_map_fields(
+    model_info: Mapping[str, object], *cost_map_entries: Mapping[str, object]
+) -> tuple[str, ...]:
+    """Fields a ``/model/info`` echo copied from the cost map unchanged.
+
+    Only ``litellm.get_model_info`` emits ``key``, so a blob carrying it is an echo of that
+    response. Anything in it that still equals a resolved cost-map entry is a display value
+    nobody typed; a value the operator edited differs from every entry and stays a real override.
+    Callers pass both the live entry, which the router rewrites with each deployment's own
+    overrides, and the catalog entry as loaded, so a reset to the catalog value reads as an echo either way.
+    """
+    if COST_MAP_LOOKUP_KEY not in model_info:
+        return ()
+    return tuple(
+        sorted(k for k, v in model_info.items() if any(k in entry and entry[k] == v for entry in cost_map_entries))
+    )
 
 
 def pricing_override_fields(*sources: Mapping[str, Any]) -> tuple[str, ...]:
