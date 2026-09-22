@@ -24,7 +24,7 @@ from e2e_http import unwrap
 from lifecycle import ResourceManager
 from logging_client import LangfuseCreds, LangfuseObservation, LoggingClient, load_langfuse_creds
 from models import LiteLLMParamsBody
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 pytestmark = [pytest.mark.e2e, pytest.mark.otel_v2]
 
@@ -80,6 +80,13 @@ class _TranscriptionResponse(BaseModel):
     text: str = ""
 
 
+class _OutputMessage(BaseModel):
+    content: str = ""
+
+
+_OUTPUT_MESSAGES: Final = TypeAdapter(list[_OutputMessage])
+
+
 class _ModerationBody(BaseModel):
     model: str
     input: str
@@ -127,6 +134,16 @@ def _output_blob(observation: LangfuseObservation) -> str:
     return blob
 
 
+def _output_text(observation: LangfuseObservation) -> str:
+    assert observation.output not in (None, "", [], {}), f"generation output is empty: {observation!r}"
+    try:
+        messages: Final = _OUTPUT_MESSAGES.validate_python(observation.output)
+    except ValidationError:
+        pytest.fail(f"generation output is not a list of assistant messages: {observation!r}")
+    assert messages, f"generation output is empty: {observation!r}"
+    return "\n".join(message.content for message in messages)
+
+
 def _openai(model: str) -> LiteLLMParamsBody:
     return LiteLLMParamsBody(model=model, api_key="os.environ/OPENAI_API_KEY")
 
@@ -149,8 +166,10 @@ class TestOtelV2LangfuseGenerationOutput:
         texts: Final = tuple(choice.text.strip() for choice in response.choices)
         assert len(texts) == 2 and all(texts), f"/v1/completions returned no text: {response!r}"
 
-        blob: Final = _output_blob(_generation(client, langfuse_creds, alias=alias, started=started))
-        assert all(text in blob for text in texts), f"generation output lacks the completion texts {texts!r}: {blob}"
+        output: Final = _output_text(_generation(client, langfuse_creds, alias=alias, started=started))
+        assert all(text in output for text in texts), (
+            f"generation output lacks the completion texts {texts!r}: {output!r}"
+        )
 
     @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["images_generations"])
     def test_images_output_is_a_bounded_summary_without_base64(
@@ -213,8 +232,8 @@ class TestOtelV2LangfuseGenerationOutput:
         transcript: Final = response.text.strip()
         assert "weather" in transcript.lower(), f"transcript does not mention the weather: {transcript!r}"
 
-        blob: Final = _output_blob(_generation(client, langfuse_creds, alias=alias, started=started))
-        assert transcript in blob, f"generation output lacks the transcript {transcript!r}: {blob}"
+        output: Final = _output_text(_generation(client, langfuse_creds, alias=alias, started=started))
+        assert transcript in output, f"generation output lacks the transcript {transcript!r}: {output!r}"
 
     @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["moderations"])
     def test_moderations_output_is_the_verdict(
@@ -230,7 +249,10 @@ class TestOtelV2LangfuseGenerationOutput:
                 response_type=_ModerationResponse,
             )
         )
-        assert response.results and response.results[0].flagged, f"expected a flagged moderation: {response!r}"
+        assert response.results, f"/v1/moderations returned no results: {response!r}"
+        verdict: Final = "flagged: " if response.results[0].flagged else "not flagged"
 
-        blob: Final = _output_blob(_generation(client, langfuse_creds, alias=alias, started=started))
-        assert "flagged" in blob, f"generation output lacks the moderation verdict: {blob}"
+        output: Final = _output_text(_generation(client, langfuse_creds, alias=alias, started=started))
+        assert output.startswith(verdict), (
+            f"generation output does not carry the moderation verdict {verdict!r}: {output!r}"
+        )

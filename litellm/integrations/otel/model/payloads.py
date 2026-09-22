@@ -753,14 +753,7 @@ def _responses_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
 
 
 def _output_choices(response: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
-    """The response output as chat-shaped choices, whichever route produced it.
-
-    Chat responses pass through as-is. Every other route is folded into a single
-    assistant choice: text and Responses API output as the text itself, OCR pages
-    and transcripts as their text, moderation as its verdict, and images and
-    binary bodies (speech audio, file content) as a size summary so no base64 or
-    raw bytes reach a span.
-    """
+    """The response output as chat-shaped choices; images and binary bodies become size summaries, never bytes."""
     return (
         _completion_choices(response)
         or _responses_choices(response)
@@ -782,7 +775,6 @@ def _joined_choice(parts: tuple[str, ...]) -> tuple[_Choice, ...]:
 
 
 def _completion_choices(response: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
-    """``response.choices``, with text-completion choices (``text`` in place of ``message``) made chat-shaped."""
     return tuple(
         _text_choice(text, as_str(choice.get("finish_reason")))
         if "message" not in choice and isinstance(text := choice.get("text"), str)
