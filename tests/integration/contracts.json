@@ -159,6 +159,9 @@
     "tests/integration/routing/test_redis_recovery.py::test_owned_redis_outage_recovers_requests_and_real_response_cache": [
       "other.routing.redis.owned_outage_recovers_serving_and_response_cache"
     ],
+    "tests/integration/providers/test_anthropic_advisor_wire.py::test_advisor_sub_call_reaches_the_router_deployment_with_its_key_instead_of_anthropic_unauthenticated": [
+      "providers.anthropic_messages_advisor.sub_call_uses_the_configured_advisor_deployment"
+    ],
     "tests/integration/providers/test_anthropic_wire.py::test_anthropic_tool_history_and_cache_tokens_keep_wire_and_accounting_contracts": [
       "other.provider_wire.anthropic.tool_history_system_cache_and_internal_fields",
       "quota_management.spend_tracking.cache_tokens.disjoint_classes_use_explicit_rates"
