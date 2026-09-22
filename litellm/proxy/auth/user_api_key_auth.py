@@ -219,6 +219,97 @@ def _get_model_from_request_context(
     )
 
 
+_OSO_COMPLETION_MODEL_ROUTE_SUFFIXES: Final = (
+    "/chat/completions",
+    "/completions",
+    "/embeddings",
+    "/messages",
+    "/responses",
+)
+_OSO_IMAGE_MODEL_ROUTE_SUFFIXES: Final = ("/images/generations",)
+_OSO_IMAGE_EDIT_ROUTE_SUFFIXES: Final = ("/images/edits",)
+_OSO_MODERATION_MODEL_ROUTE_SUFFIXES: Final = ("/moderations", "/audio/transcriptions")
+
+
+def _configured_model(general_settings: Mapping[str, object], name: str) -> str | None:
+    value: Final = general_settings.get(name)
+    return value if isinstance(value, str) and value else None
+
+
+def _resolve_oso_model_alias(model: str, valid_token: UserAPIKeyAuth) -> str:
+    global_alias: Final = litellm.model_alias_map.get(model, model)
+    key_aliases: Final = valid_token.aliases
+    if isinstance(key_aliases, Mapping):
+        key_alias: Final = key_aliases.get(global_alias)
+        if isinstance(key_alias, str) and key_alias:
+            return key_alias
+    return global_alias
+
+
+def _request_model_override(request: Request) -> str | None:
+    path_params: Final = request.scope.get("path_params")
+    path_model: Final = path_params.get("model") if isinstance(path_params, Mapping) else None
+    if isinstance(path_model, str) and path_model:
+        return path_model
+    query_model: Final = _safe_get_request_query_params(request=request).get("model")
+    return query_model if isinstance(query_model, str) and query_model else None
+
+
+def _select_oso_model(
+    *,
+    requested_model: str | list[str] | None,
+    route: str,
+    general_settings: Mapping[str, object],
+    user_model: str | None,
+    request: Request,
+) -> str | list[str] | None:
+    if route.endswith(_OSO_COMPLETION_MODEL_ROUTE_SUFFIXES):
+        return _configured_model(general_settings, "completion_model") or user_model or requested_model
+    if route.endswith(_OSO_IMAGE_MODEL_ROUTE_SUFFIXES):
+        return (
+            user_model
+            or _request_model_override(request)
+            or _configured_model(general_settings, "image_generation_model")
+            or requested_model
+        )
+    if route.endswith(_OSO_IMAGE_EDIT_ROUTE_SUFFIXES):
+        return (
+            _configured_model(general_settings, "completion_model")
+            or user_model
+            or _request_model_override(request)
+            or _configured_model(general_settings, "image_generation_model")
+            or requested_model
+        )
+    if route.endswith(_OSO_MODERATION_MODEL_ROUTE_SUFFIXES):
+        return user_model or _configured_model(general_settings, "moderation_model") or requested_model
+    if route.endswith("/audio/speech"):
+        return user_model or requested_model
+    return requested_model
+
+
+def _effective_oso_model(
+    *,
+    requested_model: str | list[str] | None,
+    route: str,
+    general_settings: Mapping[str, object],
+    user_model: str | None,
+    valid_token: UserAPIKeyAuth,
+    request: Request,
+) -> str | tuple[str, ...] | None:
+    selected: Final = _select_oso_model(
+        requested_model=requested_model,
+        route=route,
+        general_settings=general_settings,
+        user_model=user_model,
+        request=request,
+    )
+    if isinstance(selected, str):
+        return _resolve_oso_model_alias(selected, valid_token)
+    if isinstance(selected, list):
+        return tuple(_resolve_oso_model_alias(item, valid_token) for item in selected if isinstance(item, str))
+    return None
+
+
 _CLAUDE_MODEL_ROUTES: Final = frozenset(
     f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
 )
@@ -3066,12 +3157,22 @@ async def _enforce_configured_oso_authorization(
 ) -> None:
     if not RouteChecks.is_llm_api_route(route=route):
         return
-    model: Final = _get_model_from_request_context(
+    requested_model: Final = _get_model_from_request_context(
         request_data=request_data,
         route=route,
         request=request,
         llm_router=llm_router,
         team_id=user_api_key_auth_obj.team_id,
+    )
+    from litellm.proxy.proxy_server import user_model
+
+    model: Final = _effective_oso_model(
+        requested_model=requested_model,
+        route=route,
+        general_settings=general_settings,
+        user_model=user_model,
+        valid_token=user_api_key_auth_obj,
+        request=request,
     )
     request_method: Final = request.method if "method" in request.scope else "POST"
     await enforce_oso_model_authorization(

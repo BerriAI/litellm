@@ -149,6 +149,23 @@ async def test_oso_missing_identity_fails_closed_without_calling_provider() -> N
 
 
 @pytest.mark.asyncio
+async def test_oso_uses_existing_hashed_key_as_api_key_actor() -> None:
+    authorizer: Final = RecordingAuthorizer()
+    hashed_key: Final = hash_token("sk-litellm-secret")
+
+    await enforce_oso_model_authorization(
+        general_settings=_enabled_settings(),
+        valid_token=UserAPIKeyAuth(token=hashed_key),
+        model="gpt-5.4",
+        route="/v1/embeddings",
+        request_method="POST",
+        authorizer=authorizer,
+    )
+
+    assert tuple((request.actor_type, request.actor_id) for request in authorizer.requests) == (("ApiKey", hashed_key),)
+
+
+@pytest.mark.asyncio
 async def test_oso_disabled_preserves_existing_behavior() -> None:
     authorizer: Final = RecordingAuthorizer(error=AssertionError("disabled integration called Oso"))
 
@@ -196,19 +213,86 @@ async def test_custom_auth_cannot_bypass_enabled_oso_authorization() -> None:
 
 @pytest.mark.asyncio
 async def test_oso_requires_every_requested_model_to_be_allowed() -> None:
-    authorizer: Final = RecordingAuthorizer(decisions=(True, False))
+    authorizer: Final = RecordingAuthorizer(decisions=(True, False, True))
     with pytest.raises(ProxyException) as exc_info:
         await enforce_oso_model_authorization(
             general_settings=_enabled_settings(),
             valid_token=UserAPIKeyAuth(team_id="team-platform"),
-            model=["model-a", "model-b", "model-a"],
-            route="/v1/chat/completions",
+            model=["model-a", "model-b", "model-c"],
+            route="/cost/predict-cache",
             request_method="POST",
             authorizer=authorizer,
         )
 
     assert exc_info.value.code == "403"
     assert tuple(request.resource_id for request in authorizer.requests) == ("model-a", "model-b")
+
+
+@pytest.mark.asyncio
+async def test_oso_rejects_list_model_on_single_model_route_without_provider_calls() -> None:
+    authorizer: Final = RecordingAuthorizer()
+    with pytest.raises(ProxyException) as exc_info:
+        await enforce_oso_model_authorization(
+            general_settings=_enabled_settings(),
+            valid_token=UserAPIKeyAuth(user_id="user-alice"),
+            model=["model-a", "model-b"],
+            route="/v1/chat/completions",
+            request_method="POST",
+            authorizer=authorizer,
+        )
+
+    assert exc_info.value.code == "400"
+    assert authorizer.requests == []
+
+
+@pytest.mark.asyncio
+async def test_oso_rejects_excessive_multi_model_authorization_without_provider_calls() -> None:
+    authorizer: Final = RecordingAuthorizer()
+    with pytest.raises(ProxyException) as exc_info:
+        await enforce_oso_model_authorization(
+            general_settings=_enabled_settings(),
+            valid_token=UserAPIKeyAuth(user_id="user-alice"),
+            model=[f"model-{index}" for index in range(11)],
+            route="/cost/predict-cache",
+            request_method="POST",
+            authorizer=authorizer,
+        )
+
+    assert exc_info.value.code == "400"
+    assert authorizer.requests == []
+
+
+@pytest.mark.asyncio
+async def test_oso_allows_model_optional_route_without_model() -> None:
+    authorizer: Final = RecordingAuthorizer()
+
+    await enforce_oso_model_authorization(
+        general_settings=_enabled_settings(),
+        valid_token=UserAPIKeyAuth(user_id="user-alice"),
+        model=None,
+        route="/v1/vector_stores",
+        request_method="POST",
+        authorizer=authorizer,
+    )
+
+    assert authorizer.requests == []
+
+
+@pytest.mark.asyncio
+async def test_oso_preserves_proxy_exception_from_authorizer() -> None:
+    expected: Final = ProxyException(message="specific denial", type="auth_error", param="model", code=401)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await enforce_oso_model_authorization(
+            general_settings=_enabled_settings(),
+            valid_token=UserAPIKeyAuth(user_id="user-alice"),
+            model="gpt-5.4",
+            route="/v1/responses",
+            request_method="POST",
+            authorizer=RecordingAuthorizer(error=expected),
+        )
+
+    assert exc_info.value is expected
 
 
 @pytest.mark.asyncio
@@ -251,6 +335,9 @@ async def test_oso_missing_model_fails_closed_on_model_endpoint() -> None:
         "/v1/messages",
         "/v1/embeddings",
         "/v1/images/generations",
+        "/v1/audio/speech",
+        "/v1/audio/transcriptions",
+        "/v1/moderations",
     ),
 )
 async def test_major_model_endpoints_share_oso_authorization(route: str) -> None:
@@ -270,6 +357,112 @@ async def test_major_model_endpoints_share_oso_authorization(route: str) -> None
     )
 
     assert tuple(decision.resource_id for decision in authorizer.requests) == ("model-for-route",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "settings_key", "configured_model"),
+    (
+        ("/v1/chat/completions", "completion_model", "server-chat-model"),
+        ("/v1/images/generations", "image_generation_model", "server-image-model"),
+        ("/v1/images/edits", "image_generation_model", "server-image-edit-model"),
+        ("/v1/moderations", "moderation_model", "server-moderation-model"),
+        ("/v1/audio/transcriptions", "moderation_model", "server-audio-model"),
+    ),
+)
+async def test_oso_authorizes_server_selected_model(
+    route: str,
+    settings_key: str,
+    configured_model: str,
+) -> None:
+    authorizer: Final = RecordingAuthorizer()
+    request: Final = Request(
+        scope={"type": "http", "method": "POST", "path": route, "headers": (), "query_string": b""}
+    )
+
+    await _enforce_configured_oso_authorization(
+        user_api_key_auth_obj=UserAPIKeyAuth(user_id="user-alice"),
+        request=request,
+        request_data={"model": "client-decoy-model"},
+        route=route,
+        general_settings={**_enabled_settings(), settings_key: configured_model},
+        llm_router=None,
+        oso_authorizer=authorizer,
+    )
+
+    assert tuple(decision.resource_id for decision in authorizer.requests) == (configured_model,)
+
+
+@pytest.mark.asyncio
+async def test_oso_image_query_model_takes_precedence_over_image_default() -> None:
+    authorizer: Final = RecordingAuthorizer()
+    request: Final = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/images/generations",
+            "headers": (),
+            "query_string": b"model=query-model",
+        }
+    )
+
+    await _enforce_configured_oso_authorization(
+        user_api_key_auth_obj=UserAPIKeyAuth(user_id="user-alice"),
+        request=request,
+        request_data={"model": "body-model"},
+        route="/v1/images/generations",
+        general_settings={**_enabled_settings(), "image_generation_model": "server-image-model"},
+        llm_router=None,
+        oso_authorizer=authorizer,
+    )
+
+    assert tuple(decision.resource_id for decision in authorizer.requests) == ("query-model",)
+
+
+@pytest.mark.asyncio
+async def test_oso_authorizes_cli_model_and_key_alias_used_for_dispatch() -> None:
+    authorizer: Final = RecordingAuthorizer()
+    request: Final = Request(
+        scope={"type": "http", "method": "POST", "path": "/v1/audio/speech", "headers": (), "query_string": b""}
+    )
+    with patch.object(litellm.proxy.proxy_server, "user_model", "cli-model"):
+        await _enforce_configured_oso_authorization(
+            user_api_key_auth_obj=UserAPIKeyAuth(user_id="user-alice", aliases={"cli-model": "aliased-model"}),
+            request=request,
+            request_data={"model": "client-decoy-model"},
+            route="/v1/audio/speech",
+            general_settings=_enabled_settings(),
+            llm_router=None,
+            oso_authorizer=authorizer,
+        )
+
+    assert tuple(decision.resource_id for decision in authorizer.requests) == ("aliased-model",)
+
+
+@pytest.mark.asyncio
+async def test_oso_audio_without_any_effective_model_fails_closed() -> None:
+    request: Final = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/audio/transcriptions",
+            "headers": (),
+            "query_string": b"",
+        }
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _enforce_configured_oso_authorization(
+            user_api_key_auth_obj=UserAPIKeyAuth(user_id="user-alice"),
+            request=request,
+            request_data={},
+            route="/v1/audio/transcriptions",
+            general_settings=_enabled_settings(),
+            llm_router=None,
+            oso_authorizer=RecordingAuthorizer(),
+        )
+
+    assert exc_info.value.code == "403"
 
 
 @pytest.mark.asyncio
@@ -305,3 +498,22 @@ async def test_oso_cloud_authorizer_uses_documented_check_api_shape() -> None:
             2.5,
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_oso_cloud_authorizer_rejects_missing_api_key_before_network_call() -> None:
+    http_client: Final = RecordingHTTPClient(httpx.Response(200, json={"allowed": True}))
+    authorizer: Final = OsoCloudAuthorizer(config=OsoAuthorizationConfig(), http_client=http_client)
+    request: Final = OsoAuthorizeRequest(
+        actor_type="User",
+        actor_id="user-alice",
+        action="invoke",
+        resource_type="Model",
+        resource_id="gpt-5.4",
+        context_facts=(),
+    )
+
+    with pytest.raises(ValueError, match="API key"):
+        await authorizer.authorize(request)
+
+    assert http_client.calls == []

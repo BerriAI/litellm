@@ -1,6 +1,5 @@
-import asyncio
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final, Protocol
 
 import httpx
@@ -19,6 +18,8 @@ from litellm.proxy._types import (
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 _HASHED_TOKEN_PATTERN: Final = re.compile(r"^[0-9a-f]{64}$")
+_MAX_MODELS_PER_REQUEST: Final = 10
+_MULTI_MODEL_ROUTES: Final = frozenset({"/cost/predict-cache"})
 _MODEL_REQUIRED_ROUTES: Final = frozenset(
     {
         "/chat/completions",
@@ -31,6 +32,12 @@ _MODEL_REQUIRED_ROUTES: Final = frozenset(
         "/v1/images/generations",
         "/images/edits",
         "/v1/images/edits",
+        "/moderations",
+        "/v1/moderations",
+        "/audio/speech",
+        "/v1/audio/speech",
+        "/audio/transcriptions",
+        "/v1/audio/transcriptions",
         "/responses",
         "/v1/responses",
         "/openai/v1/responses",
@@ -90,7 +97,10 @@ class OsoCloudAuthorizer:
         self._config: Final = config
         self._http_client: Final = http_client or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.OsoAuthorization,
-            params={"timeout": config.timeout, "client_alias": "oso_authorization"},
+            params={
+                "timeout": config.timeout,
+                "client_alias": "oso_authorization",
+            },  # mutable-ok: client API requires dict
         )
 
     async def authorize(self, request: OsoAuthorizeRequest) -> bool:
@@ -100,7 +110,7 @@ class OsoCloudAuthorizer:
         response: Final = await self._http_client.post(
             f"{str(self._config.url).rstrip('/')}/api/authorize",
             json=request.model_dump(mode="json"),
-            headers={
+            headers={  # mutable-ok: HTTP client protocol requires a concrete header dictionary
                 "Authorization": f"Bearer {api_key.get_secret_value()}",
                 "Content-Type": "application/json",
             },
@@ -152,10 +162,10 @@ def _context_facts(
     )
 
 
-def _model_names(model: str | list[str] | None) -> tuple[str, ...]:
+def _model_names(model: str | Sequence[str] | None) -> tuple[str, ...]:
     if isinstance(model, str):
         return (model,) if model else ()
-    if isinstance(model, list):
+    if isinstance(model, Sequence):
         return tuple(dict.fromkeys(item for item in model if isinstance(item, str) and item))
     return ()
 
@@ -176,7 +186,7 @@ def _config(general_settings: Mapping[str, object]) -> OsoAuthorizationConfig | 
     return config if config.enabled else None
 
 
-def _denied(model: str | list[str] | None) -> ProxyException:
+def _denied(model: str | Sequence[str] | None) -> ProxyException:
     return ProxyException(
         message=f"Oso authorization denied access to model '{model}'",
         type=ProxyErrorTypes.key_model_access_denied,
@@ -185,11 +195,30 @@ def _denied(model: str | list[str] | None) -> ProxyException:
     )
 
 
+def _invalid_model(message: str) -> ProxyException:
+    return ProxyException(
+        message=message,
+        type="bad_request",
+        param="model",
+        code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+async def _authorize_all(
+    authorizer: OsoAuthorizer,
+    requests: tuple[OsoAuthorizeRequest, ...],
+) -> bool:
+    for request in requests:
+        if not await authorizer.authorize(request):
+            return False
+    return True
+
+
 async def enforce_oso_model_authorization(
     *,
     general_settings: Mapping[str, object],
     valid_token: UserAPIKeyAuth,
-    model: str | list[str] | None,
+    model: str | Sequence[str] | None,
     route: str,
     request_method: str,
     authorizer: OsoAuthorizer | None = None,
@@ -198,7 +227,11 @@ async def enforce_oso_model_authorization(
     if config is None or request_method.upper() != "POST":
         return
 
+    if isinstance(model, Sequence) and not isinstance(model, str) and route not in _MULTI_MODEL_ROUTES:
+        raise _invalid_model("The model field must be a string for this endpoint")
     models: Final = _model_names(model)
+    if len(models) > _MAX_MODELS_PER_REQUEST:
+        raise _invalid_model(f"At most {_MAX_MODELS_PER_REQUEST} models may be authorized per request")
     if not models:
         if route in _MODEL_REQUIRED_ROUTES or route.endswith(("/chat/completions", "/embeddings", "/messages")):
             raise _denied(model)
@@ -211,24 +244,19 @@ async def enforce_oso_model_authorization(
 
     oso_authorizer: Final = authorizer or OsoCloudAuthorizer(config=config)
     context_facts: Final = _context_facts(actor=actor, valid_token=valid_token, key_id=key_id)
-    try:
-        decisions: Final = tuple(
-            await asyncio.gather(
-                *(
-                    oso_authorizer.authorize(
-                        OsoAuthorizeRequest(
-                            actor_type=actor.type,
-                            actor_id=actor.id,
-                            action="invoke",
-                            resource_type="Model",
-                            resource_id=model_name,
-                            context_facts=context_facts,
-                        )
-                    )
-                    for model_name in models
-                )
-            )
+    authorization_requests: Final = tuple(
+        OsoAuthorizeRequest(
+            actor_type=actor.type,
+            actor_id=actor.id,
+            action="invoke",
+            resource_type="Model",
+            resource_id=model_name,
+            context_facts=context_facts,
         )
+        for model_name in models
+    )
+    try:
+        allowed: Final = await _authorize_all(oso_authorizer, authorization_requests)
     except ProxyException:
         raise
     except Exception as exc:
@@ -240,5 +268,5 @@ async def enforce_oso_model_authorization(
             code=status.HTTP_503_SERVICE_UNAVAILABLE,
         ) from exc
 
-    if not all(decisions):
+    if not allowed:
         raise _denied(model)
