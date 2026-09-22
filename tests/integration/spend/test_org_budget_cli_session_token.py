@@ -4,9 +4,9 @@ from typing import Final
 
 import httpx
 import pytest
-
 from integration._support.client import Gateway, eventually, string_value
 from integration._support.database import read_rows
+
 from litellm.proxy._types import LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
@@ -41,7 +41,10 @@ def test_cli_session_token_without_org_id_charges_and_caps_the_team_organization
         prompt: Final = f"org budget {uuid.uuid4().hex}"
         upstream.get("/__observations").raise_for_status()
         first: Final = gateway.request(
-            "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": prompt}]}, key=token
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": prompt}]},
+            key=token,
         )
         assert first.status_code == 200 and first.json()["usage"]["total_tokens"] == 40, first.text
         reached_upstream: Final = upstream.get("/__observations").json()["requests"]

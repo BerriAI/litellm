@@ -1,8 +1,8 @@
-from collections.abc import Iterator, Mapping
-from typing import Final
-from pathlib import Path
 import json
 import uuid
+from collections.abc import Iterator, Mapping
+from pathlib import Path
+from typing import Final
 
 import pytest
 import yaml

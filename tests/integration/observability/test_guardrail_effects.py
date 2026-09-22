@@ -5,9 +5,7 @@ from typing import Final
 
 import pytest
 import yaml
-
-from integration._support.client import Gateway, eventually
-from integration._support.database import read_rows
+from integration._support.client import Gateway
 from integration._support.mcp import mcp_peer, register_mcp, tool_names
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
@@ -184,9 +182,9 @@ def test_bedrock_passthrough_converse_guardrail_ignores_denied_term_in_tool_defi
 
     def runtime(request: Request) -> Reply:
         assert request.target == "/model/anthropic.claude-3-haiku-20240307-v1:0/converse"
-        assert request.headers["authorization"].startswith(
-            f"AWS4-HMAC-SHA256 Credential={access_key}/"
-        ), request.headers
+        assert request.headers["authorization"].startswith(f"AWS4-HMAC-SHA256 Credential={access_key}/"), (
+            request.headers
+        )
         return Reply(
             body=json.dumps(
                 {

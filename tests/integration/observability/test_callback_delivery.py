@@ -6,7 +6,6 @@ from typing import Final
 
 import pytest
 import yaml
-
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
