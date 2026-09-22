@@ -33,21 +33,20 @@ else:
     FastAPI = Any
 
 
-def _deprioritize_script_dir_in_sys_path() -> None:
+def _drop_script_dir_from_sys_path() -> None:
     """Stop ``litellm/proxy`` modules from shadowing installed packages.
 
     Running this file as a script puts its own directory at ``sys.path[0]``, so
     ``import a2a`` resolves to ``litellm/proxy/a2a`` instead of the ``a2a`` SDK
-    and A2A agent calls fail. The entry is moved to the end rather than dropped,
-    because the sibling-import fallbacks in this module (``from proxy_server
-    import ...``) still need it. No-op under the ``litellm`` console script.
+    and ``proxy_server`` resolves to a second copy of
+    ``litellm.proxy.proxy_server``. No-op under the ``litellm`` console script.
     """
     script_dir: Final = os.path.dirname(os.path.abspath(__file__))
     if sys.path and os.path.abspath(sys.path[0]) == script_dir:
-        sys.path.append(sys.path.pop(0))
+        sys.path.pop(0)
 
 
-_deprioritize_script_dir_in_sys_path()
+_drop_script_dir_from_sys_path()
 sys.path.append(os.getcwd())
 
 config_filename: Final = "litellm.secrets"
@@ -881,7 +880,7 @@ class ProxyInitializationHelpers:
     default=False,
     help="Use prisma db push instead of prisma migrate for database schema updates",
 )
-@click.option("--local", is_flag=True, default=False, help="for local debugging")
+@click.option("--local", is_flag=True, default=False, help="no-op, kept for backwards compatibility")
 @click.option(
     "--skip_server_startup",
     is_flag=True,
@@ -1058,35 +1057,15 @@ def run_server(
         return
 
     args: Final = locals()
-    if local:
-        from proxy_server import (
+    try:
+        from litellm.proxy.proxy_server import (
             KeyManagementSettings,
             ProxyConfig,
             app,
             save_worker_config,
         )
-    else:
-        try:
-            from .proxy_server import (
-                KeyManagementSettings,
-                ProxyConfig,
-                app,
-                save_worker_config,
-            )
-        except ModuleNotFoundError as e:
-            raise ModuleNotFoundError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
-        except ImportError as e:
-            if "litellm[proxy]" in str(e):
-                # user is missing a proxy dependency, ask them to pip install litellm[proxy]
-                raise e
-            else:
-                # this is just a local/relative import error, user git cloned litellm
-                from proxy_server import (
-                    KeyManagementSettings,
-                    ProxyConfig,
-                    app,
-                    save_worker_config,
-                )
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`") from e
     if version is True:
         ProxyInitializationHelpers._echo_litellm_version()
         return
