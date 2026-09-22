@@ -89,7 +89,7 @@ fn semantic_context_reaches_backend_for_store_and_lookup() {
     });
     let cache = ResponseCache::new(backend.clone());
     let context = SemanticCacheContext {
-        messages: vec![json!({"role": "user", "content": "hello"})],
+        messages: Some(json!([{"role": "user", "content": "hello"}])),
         ..Default::default()
     };
     let request = request().with_context(context.clone());

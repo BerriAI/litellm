@@ -1,15 +1,14 @@
 use std::{sync::Arc, time::Duration};
 
 use litellm_cache::{
-    BaseCache, BatchCache, BatchEntry, CacheConnectionResult, CacheContext, Error,
-    ExactCacheContext, FlushCache,
+    BaseCache, BatchCache, BatchEntry, CacheConnectionResult, CacheContext, Error, FlushCache,
 };
 use serde_json::Value;
 
 use crate::{CacheControls, CacheEntry, CacheKeyInput, PartialHits, cache_key};
 
 #[derive(Clone)]
-pub struct ResponseCacheRequest<C: CacheContext = ExactCacheContext> {
+pub struct ResponseCacheRequest<C: CacheContext = litellm_cache::ExactCacheContext> {
     pub key: CacheKeyInput,
     pub controls: CacheControls,
     pub context: C,
@@ -61,6 +60,10 @@ where
     }
 
     pub fn backend(&self) -> &B {
+        &self.backend
+    }
+
+    pub fn backend_arc(&self) -> &Arc<B> {
         &self.backend
     }
 
@@ -267,9 +270,9 @@ where
         Ok(())
     }
 
-    fn partial_hits<C: CacheContext>(
-        requests: &[ResponseCacheRequest<C>],
-        readable: Vec<(usize, &ResponseCacheRequest<C>)>,
+    fn partial_hits(
+        requests: &[ResponseCacheRequest<B::Context>],
+        readable: Vec<(usize, &ResponseCacheRequest<B::Context>)>,
         entries: Vec<BatchEntry<CacheEntry>>,
         now: Duration,
     ) -> Result<PartialHits, Error> {

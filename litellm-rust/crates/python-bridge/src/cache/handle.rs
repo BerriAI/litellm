@@ -1,19 +1,27 @@
-use std::env;
-
+use litellm_auth_aws::AwsAuthConfig;
 use litellm_cache_gcs::{DEFAULT_ENDPOINT, GcsConfig};
-use litellm_cache_redis::{RedisNode, RedisTopology};
-use litellm_http::ClientVariant;
-
 use litellm_cache_qdrant_semantic::{OpenAiEmbedderConfig, Quantization};
+use litellm_cache_redis::{RedisNode, RedisTopology};
+use litellm_cache_redis_semantic::RedisSemanticConfig;
+use litellm_cache_s3::{S3CacheConfig, S3Endpoint};
 use litellm_host_python::{release_gil, run_sync_value};
-use pyo3::{PyTraverseError, PyVisit, exceptions::PyRuntimeError, prelude::*, types::PyDict};
+use litellm_http::ClientVariant;
+use pyo3::{
+    PyTraverseError, PyVisit,
+    exceptions::{PyRuntimeError, PyTypeError},
+    prelude::*,
+    types::PyDict,
+};
 use url::Url;
 
 use super::{
-    cache_error, config::QdrantSemanticCacheConfig, facade::FacadeGuard,
-    native::NativeResponseCache, request::duration,
+    cache_error,
+    config::{QdrantSemanticCacheConfig, project_redis_semantic},
+    embedder::PythonEmbedder,
+    facade::FacadeGuard,
+    native::NativeResponseCache,
+    request::duration,
 };
-use crate::http;
 
 #[pyclass(frozen, name = "_CacheTestHandle")]
 pub(crate) struct CacheTestHandle {
@@ -68,6 +76,40 @@ impl CacheTestHandle {
             NativeResponseCache::redis(&url, &topology, ttl, namespace)
         })
         .map_err(cache_error)?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
+    #[staticmethod]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (bucket, *, region, endpoint_url=None, key_prefix="", access_key_id=None, secret_access_key=None, session_token=None))]
+    fn s3(
+        py: Python<'_>,
+        bucket: String,
+        region: String,
+        endpoint_url: Option<String>,
+        key_prefix: &str,
+        access_key_id: Option<String>,
+        secret_access_key: Option<String>,
+        session_token: Option<String>,
+    ) -> PyResult<Self> {
+        let config = S3CacheConfig {
+            bucket,
+            key_prefix: key_prefix.to_string(),
+            region: region.clone(),
+            endpoint: endpoint_url.map(|url| S3Endpoint { url }),
+            auth: AwsAuthConfig {
+                access_key_id,
+                secret_access_key,
+                session_token,
+                region_name: Some(region),
+                ..Default::default()
+            },
+        };
+        let service = run_sync_value(py, async move { Ok(NativeResponseCache::s3(config).await) })?;
         Ok(Self {
             service,
             guard: None,
@@ -140,7 +182,7 @@ impl CacheTestHandle {
             || (!parsed.path().is_empty() && parsed.path() != "/")
             || parsed.query().is_some()
             || parsed.host_str().is_none()
-            || parsed.port().is_some_and(|port| port != 6333)
+            || parsed.port() != Some(6333)
         {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "native Qdrant requires the default REST port so the gRPC port can be derived",
@@ -156,7 +198,7 @@ impl CacheTestHandle {
         grpc_url.set_query(None);
         let embedding_api_key = embedding_api_key
             .or_else(|| {
-                env::var("OPENAI_API_KEY")
+                std::env::var("OPENAI_API_KEY")
                     .ok()
                     .filter(|value| !value.is_empty())
             })
@@ -166,8 +208,8 @@ impl CacheTestHandle {
                 )
             })?;
         let embedding_api_base = embedding_api_base.unwrap_or_else(|| {
-            env::var("OPENAI_BASE_URL")
-                .or_else(|_| env::var("OPENAI_API_BASE"))
+            std::env::var("OPENAI_BASE_URL")
+                .or_else(|_| std::env::var("OPENAI_API_BASE"))
                 .unwrap_or_else(|_| "https://api.openai.com/v1".to_owned())
         });
         let quantization = match quantization {
@@ -194,16 +236,39 @@ impl CacheTestHandle {
             },
             quantization,
         };
-        let http_config = http::call_config(py, &PyDict::new(py), true)?;
-        let client = http::pool()
+        let http_config = crate::http::call_config(py, &PyDict::new(py), true)?;
+        let client = crate::http::pool()
             .client(&http_config, ClientVariant::Provider)
-            .map_err(http::client_error)?;
+            .map_err(crate::http::client_error)?;
         let service = run_sync_value(py, async move {
             let handle = tokio::runtime::Handle::current();
             NativeResponseCache::qdrant_semantic(config, client, handle)
                 .await
                 .map_err(cache_error)
         })?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (url, similarity_threshold, index_name, embedder))]
+    fn valkey_semantic(
+        url: String,
+        similarity_threshold: f64,
+        index_name: String,
+        embedder: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let python_embedder = PythonEmbedder::from_backend(embedder)?;
+        let service = NativeResponseCache::valkey_semantic(
+            &url,
+            similarity_threshold,
+            index_name,
+            python_embedder,
+        )
+        .map_err(cache_error)?;
         Ok(Self {
             service,
             guard: None,
@@ -226,6 +291,36 @@ impl CacheTestHandle {
         })
     }
 
+    #[staticmethod]
+    fn redis_semantic(py: Python<'_>, backend: Bound<'_, PyAny>) -> PyResult<Self> {
+        let class = py
+            .import("litellm.caching.redis_semantic_cache")?
+            .getattr("RedisSemanticCache")?;
+        if !backend.get_type().is(&class) {
+            return Err(PyTypeError::new_err(
+                "native redis-semantic handles require the built-in RedisSemanticCache",
+            ));
+        }
+        let config = project_redis_semantic(&backend)?;
+        let embedder = PythonEmbedder::new(backend.unbind());
+        let service = release_gil(py, move || {
+            NativeResponseCache::redis_semantic(
+                &config.redis_url,
+                embedder,
+                RedisSemanticConfig {
+                    index_name: config.index_name,
+                    similarity_threshold: config.similarity_threshold as f32,
+                },
+            )
+        })
+        .map_err(cache_error)?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
     #[getter]
     fn backend(&self) -> &'static str {
         self.service.kind()
@@ -234,11 +329,17 @@ impl CacheTestHandle {
     fn _bind_facade(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<()> {
         let service = self.service()?;
         let guard = FacadeGuard::capture(py, facade, &service)?;
-        let service = service.with_redis_flush_size(
-            facade
-                .getattr("redis_flush_size")?
-                .extract::<Option<usize>>()?,
-        );
+        let service = service
+            .with_scope(
+                facade
+                    .getattr("semantic_cache_scope")?
+                    .extract::<String>()?,
+            )
+            .with_redis_flush_size(
+                facade
+                    .getattr("redis_flush_size")?
+                    .extract::<Option<usize>>()?,
+            );
         let handle = Py::new(
             py,
             Self {
@@ -251,6 +352,7 @@ impl CacheTestHandle {
     }
 
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        self.service.traverse(&visit)?;
         if let Some(guard) = &self.guard {
             guard.traverse(visit)?;
         }

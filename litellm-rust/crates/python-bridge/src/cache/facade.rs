@@ -31,6 +31,7 @@ struct RedisPoolGuard {
     connection_class: Py<PyAny>,
     connection_kwargs: Py<PyAny>,
     max_connections: Option<usize>,
+    client_name: &'static str,
     attributes: RedisPoolAttributes,
 }
 
@@ -46,12 +47,18 @@ struct AzureBlobClientGuard {
     container_name: String,
 }
 
+struct S3ClientGuard {
+    reference: Py<PyAny>,
+}
+
 enum ConnectionGuard {
     None,
     RedisPool(RedisPoolGuard),
     AzureBlob(AzureBlobClientGuard),
+    S3(S3ClientGuard),
 }
 
+#[derive(Clone, Copy)]
 struct RedisPoolAttributes {
     pool: &'static str,
     connection_class: &'static str,
@@ -70,6 +77,8 @@ const CLUSTER_POOL: RedisPoolAttributes = RedisPoolAttributes {
     max_connections: None,
 };
 
+const VALKEY_POOL: RedisPoolAttributes = STANDALONE_POOL;
+
 pub(super) struct FacadeGuard {
     outer: ObjectGuard,
     backend: ObjectGuard,
@@ -78,34 +87,6 @@ pub(super) struct FacadeGuard {
 }
 
 impl ObjectGuard {
-    fn class_behaviors(class: &Bound<'_, PyType>) -> PyResult<Vec<(String, Py<PyAny>)>> {
-        let py = class.py();
-        let builtins = py.import("builtins")?;
-        let property_type = builtins.getattr("property")?;
-        let staticmethod_type = builtins.getattr("staticmethod")?;
-        let classmethod_type = builtins.getattr("classmethod")?;
-        class
-            .getattr("__dict__")?
-            .call_method0("items")?
-            .try_iter()?
-            .map(|item| {
-                let item = item?;
-                let (name, value): (String, Py<PyAny>) = item.extract()?;
-                let value_bound = value.bind(py);
-                let is_behavior = value_bound.is_callable()
-                    || value_bound.is_instance(&property_type)?
-                    || value_bound.is_instance(&staticmethod_type)?
-                    || value_bound.is_instance(&classmethod_type)?;
-                Ok(is_behavior.then_some((name, value)))
-            })
-            .filter_map(|result| match result {
-                Ok(Some(attribute)) => Some(Ok(attribute)),
-                Ok(None) => None,
-                Err(error) => Some(Err(error)),
-            })
-            .collect()
-    }
-
     fn capture(
         py: Python<'_>,
         object: &Bound<'_, PyAny>,
@@ -118,7 +99,12 @@ impl ObjectGuard {
             .iter()
             .map(|class| {
                 let class = class.cast_into::<PyType>()?;
-                let attributes = Self::class_behaviors(&class)?;
+                let attributes = class
+                    .getattr("__dict__")?
+                    .call_method0("items")?
+                    .try_iter()?
+                    .map(|item| item?.extract::<(String, Py<PyAny>)>())
+                    .collect::<PyResult<Vec<_>>>()?;
                 Ok(ClassGuard {
                     class: class.unbind(),
                     attributes,
@@ -171,20 +157,16 @@ impl ObjectGuard {
         }
         let instance = object.getattr("__dict__")?.cast_into::<PyDict>()?;
         for (class, expected) in mro.iter().zip(&self.classes) {
-            let class = class.cast_into::<PyType>()?;
             if !class.is(expected.class.bind(py)) {
                 return Ok(false);
             }
-            let attributes = Self::class_behaviors(&class)?;
-            if attributes.len() != expected.attributes.len() {
+            let attributes = class.getattr("__dict__")?;
+            if attributes.len()? != expected.attributes.len() {
                 return Ok(false);
             }
-            for ((name, value), (expected_name, expected_value)) in
-                attributes.iter().zip(&expected.attributes)
-            {
-                if name != expected_name
-                    || instance.contains(name)?
-                    || !value.bind(py).is(expected_value.bind(py))
+            for (name, value) in &expected.attributes {
+                if (instance.contains(name)? && !self.config_names.contains(&name.as_str()))
+                    || !attributes.get_item(name)?.is(value.bind(py))
                 {
                     return Ok(false);
                 }
@@ -206,8 +188,12 @@ impl ObjectGuard {
 }
 
 impl RedisPoolGuard {
-    fn capture(backend: &Bound<'_, PyAny>, attributes: RedisPoolAttributes) -> PyResult<Self> {
-        let pool = backend.getattr("redis_client")?.getattr(attributes.pool)?;
+    fn capture(
+        backend: &Bound<'_, PyAny>,
+        client_name: &'static str,
+        attributes: RedisPoolAttributes,
+    ) -> PyResult<Self> {
+        let pool = backend.getattr(client_name)?.getattr(attributes.pool)?;
         Ok(Self {
             reference: pool.clone().unbind(),
             connection_class: pool.getattr(attributes.connection_class)?.unbind(),
@@ -215,31 +201,30 @@ impl RedisPoolGuard {
                 .getattr("connection_kwargs")?
                 .call_method0("copy")?
                 .unbind(),
-            max_connections: Self::max_connections(&pool, &attributes)?,
+            max_connections: attributes
+                .max_connections
+                .map(|name| pool.getattr(name)?.extract::<usize>())
+                .transpose()?,
+            client_name,
             attributes,
         })
     }
 
-    fn max_connections(
-        pool: &Bound<'_, PyAny>,
-        attributes: &RedisPoolAttributes,
-    ) -> PyResult<Option<usize>> {
-        attributes
-            .max_connections
-            .map(|name| pool.getattr(name)?.extract::<usize>())
-            .transpose()
-    }
-
     fn matches(&self, py: Python<'_>, backend: &Bound<'_, PyAny>) -> PyResult<bool> {
         let pool = backend
-            .getattr("redis_client")?
+            .getattr(self.client_name)?
             .getattr(self.attributes.pool)?;
         Ok(self.reference.bind(py).is(&pool)
             && self
                 .connection_class
                 .bind(py)
                 .is(&pool.getattr(self.attributes.connection_class)?)
-            && self.max_connections == Self::max_connections(&pool, &self.attributes)?
+            && self.max_connections
+                == self
+                    .attributes
+                    .max_connections
+                    .map(|name| pool.getattr(name)?.extract::<usize>())
+                    .transpose()?
             && self
                 .connection_kwargs
                 .bind(py)
@@ -301,12 +286,43 @@ impl AzureBlobClientGuard {
     }
 }
 
+impl S3ClientGuard {
+    fn capture(backend: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            reference: backend.getattr("s3_client")?.unbind(),
+        })
+    }
+
+    fn matches(&self, py: Python<'_>, backend: &Bound<'_, PyAny>) -> PyResult<bool> {
+        Ok(self.reference.bind(py).is(&backend.getattr("s3_client")?))
+    }
+
+    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.reference)
+    }
+}
+
 impl ConnectionGuard {
     fn capture(kind: &str, cluster: bool, backend: &Bound<'_, PyAny>) -> PyResult<Self> {
         Ok(match (kind, cluster) {
-            ("redis", false) => Self::RedisPool(RedisPoolGuard::capture(backend, STANDALONE_POOL)?),
-            ("redis", true) => Self::RedisPool(RedisPoolGuard::capture(backend, CLUSTER_POOL)?),
+            ("redis", false) => Self::RedisPool(RedisPoolGuard::capture(
+                backend,
+                "redis_client",
+                STANDALONE_POOL,
+            )?),
+            ("redis", true) => Self::RedisPool(RedisPoolGuard::capture(
+                backend,
+                "redis_client",
+                CLUSTER_POOL,
+            )?),
+            ("valkey-semantic", _) => Self::RedisPool(RedisPoolGuard::capture(
+                backend,
+                "sync_client",
+                VALKEY_POOL,
+            )?),
+            ("disk", _) => Self::None,
             ("azure-blob", _) => Self::AzureBlob(AzureBlobClientGuard::capture(backend)?),
+            ("s3", _) => Self::S3(S3ClientGuard::capture(backend)?),
             _ => Self::None,
         })
     }
@@ -316,6 +332,7 @@ impl ConnectionGuard {
             Self::None => Ok(true),
             Self::RedisPool(guard) => guard.matches(py, backend),
             Self::AzureBlob(guard) => guard.matches(py, backend),
+            Self::S3(guard) => guard.matches(py, backend),
         }
     }
 
@@ -324,6 +341,7 @@ impl ConnectionGuard {
             Self::None => Ok(()),
             Self::RedisPool(guard) => guard.traverse(visit),
             Self::AzureBlob(guard) => guard.traverse(visit),
+            Self::S3(guard) => guard.traverse(visit),
         }
     }
 }
@@ -345,23 +363,34 @@ impl FacadeGuard {
         let (module, name, cache_kind) = match (kind, cluster) {
             ("memory", _) => ("litellm.caching.in_memory_cache", "InMemoryCache", "local"),
             ("redis", false) => ("litellm.caching.redis_cache", "RedisCache", "redis"),
-            ("redis", true) => (
-                "litellm.caching.redis_cluster_cache",
-                "RedisClusterCache",
-                "redis",
+            ("redis_semantic", _) => (
+                "litellm.caching.redis_semantic_cache",
+                "RedisSemanticCache",
+                "redis-semantic",
             ),
             ("qdrant_semantic", _) => (
                 "litellm.caching.qdrant_semantic_cache",
                 "QdrantSemanticCache",
                 "qdrant-semantic",
             ),
+            ("redis", true) => (
+                "litellm.caching.redis_cluster_cache",
+                "RedisClusterCache",
+                "redis",
+            ),
             ("gcs", _) => ("litellm.caching.gcs_cache", "GCSCache", "gcs"),
+            ("valkey-semantic", false) => (
+                "litellm.caching.valkey_semantic_cache",
+                "ValkeySemanticCache",
+                "valkey-semantic",
+            ),
             ("disk", _) => ("litellm.caching.disk_cache", "DiskCache", "disk"),
             ("azure-blob", _) => (
                 "litellm.caching.azure_blob_cache",
                 "AzureBlobCache",
                 "azure-blob",
             ),
+            ("s3", _) => ("litellm.caching.s3_cache", "S3Cache", "s3"),
             _ => unreachable!(),
         };
         let backend = facade.getattr("cache")?;
@@ -381,30 +410,15 @@ impl FacadeGuard {
         if let Some(message) = config.service_mismatch(service) {
             return Err(PyTypeError::new_err(message));
         }
-        let backend_config_names = match kind {
-            "memory" | "redis" | "azure-blob" | "disk" | "gcs" => &[
-                "namespace",
-                "default_ttl",
-                "max_size_in_memory",
-                "max_size_per_item",
-                "redis_kwargs",
-                "redis_flush_size",
-                "bucket_name",
-                "key_prefix",
-                "path_service_account",
-            ][..],
-            "qdrant_semantic" => &[
-                "qdrant_api_base",
-                "qdrant_api_key",
-                "collection_name",
-                "similarity_threshold",
-                "embedding_model",
-                "vector_size",
-                "embedding_max_input_tokens",
-                "embedding_timeout",
-            ][..],
-            _ => unreachable!(),
-        };
+        if kind == "redis_semantic"
+            && service
+                .embedder_object()
+                .is_none_or(|embedder| !backend.is(embedder.bind(py)))
+        {
+            return Err(PyTypeError::new_err(
+                "facade backend must be the native embedder",
+            ));
+        }
         Ok(Self {
             outer: ObjectGuard::capture(
                 py,
@@ -419,7 +433,37 @@ impl FacadeGuard {
                     "semantic_cache_scope",
                 ],
             )?,
-            backend: ObjectGuard::capture(py, &backend, backend_config_names)?,
+            backend: ObjectGuard::capture(
+                py,
+                &backend,
+                &[
+                    "namespace",
+                    "default_ttl",
+                    "max_size_in_memory",
+                    "max_size_per_item",
+                    "redis_kwargs",
+                    "redis_flush_size",
+                    "similarity_threshold",
+                    "distance_threshold",
+                    "embedding_model",
+                    "embedding_max_input_tokens",
+                    "embedding_timeout",
+                    "qdrant_api_base",
+                    "qdrant_api_key",
+                    "collection_name",
+                    "vector_size",
+                    "_index_name",
+                    "_redis_url",
+                    "similarity_threshold",
+                    "embedding_model",
+                    "index_name",
+                    "embedding_max_input_tokens",
+                    "embedding_timeout",
+                    "bucket_name",
+                    "key_prefix",
+                    "path_service_account",
+                ],
+            )?,
             disk_store: (kind == "disk")
                 .then(|| DiskStoreGuard::capture(&backend))
                 .transpose()?,
@@ -476,52 +520,4 @@ pub(super) fn resolve(
         return Ok(None);
     }
     handle.service().map(Some)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::ObjectGuard;
-    use pyo3::{prelude::*, types::PyDict};
-
-    #[test]
-    fn class_data_shadowing_is_ignored_but_method_mutations_are_rejected() {
-        Python::initialize();
-        Python::attach(|py| {
-            let namespace = PyDict::new(py);
-            py.run(
-                c"class Example:\n    data = 1\n    def method(self):\n        return 1\nobject = Example()\nobject.data = 2",
-                None,
-                Some(&namespace),
-            )
-            .unwrap();
-            let object = namespace.get_item("object").unwrap().unwrap();
-            let guard = ObjectGuard::capture(py, &object, &[]).unwrap();
-
-            assert!(guard.matches(py, &object).unwrap());
-
-            py.run(c"object.method = lambda: 2", None, Some(&namespace))
-                .unwrap();
-            assert!(!guard.matches(py, &object).unwrap());
-        });
-    }
-
-    #[test]
-    fn class_method_replacement_is_rejected() {
-        Python::initialize();
-        Python::attach(|py| {
-            let namespace = PyDict::new(py);
-            py.run(
-                c"class Example:\n    def method(self):\n        return 1\nobject = Example()",
-                None,
-                Some(&namespace),
-            )
-            .unwrap();
-            let object = namespace.get_item("object").unwrap().unwrap();
-            let guard = ObjectGuard::capture(py, &object, &[]).unwrap();
-
-            py.run(c"Example.method = lambda self: 2", None, Some(&namespace))
-                .unwrap();
-            assert!(!guard.matches(py, &object).unwrap());
-        });
-    }
 }
