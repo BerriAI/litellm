@@ -4,12 +4,18 @@ Tests for get_litellm_params and related helpers.
 Ensures backward compatibility after sparse kwargs extraction optimization.
 """
 
+from typing import Final
+
 import pytest
 
 from litellm.litellm_core_utils.get_litellm_params import (
     _OPTIONAL_KWARGS_KEYS,
     _get_base_model_from_litellm_call_metadata,
     get_litellm_params,
+)
+
+NAMED_PRICE_PARAMS: Final = frozenset(
+    {"input_cost_per_token", "output_cost_per_token", "input_cost_per_second", "output_cost_per_second"}
 )
 
 
@@ -40,10 +46,12 @@ class TestGetLitellmParamsKwargsExtraction:
     """Verify that optional kwargs are correctly extracted via sparse extraction."""
 
     def test_no_kwargs_omits_optional_keys(self):
-        """When no kwargs passed, optional keys carry no value."""
+        """When no kwargs passed, optional keys are absent; the named price params are present as None."""
         result = get_litellm_params(api_key="test-key")
-        for key in _OPTIONAL_KWARGS_KEYS:
-            assert result.get(key) is None
+        for key in _OPTIONAL_KWARGS_KEYS - NAMED_PRICE_PARAMS:
+            assert key not in result
+        for key in NAMED_PRICE_PARAMS:
+            assert result[key] is None
 
     def test_custom_pricing_kwargs_are_extracted(self):
         from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
