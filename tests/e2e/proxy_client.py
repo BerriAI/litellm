@@ -99,6 +99,9 @@ from models import (
     ToolsetUpdateBody,
     UserDeleteBody,
     UserDeleteResponse,
+    VideoCreateBody,
+    VideoCreateResponse,
+    VideoStatusResponse,
 )
 from provider_cache_routing import route_cache_model
 from pydantic import BaseModel
@@ -954,6 +957,24 @@ class ProxyClient:
             headers=self.transport.bearer(key),
             json=body,
             response_type=OcrResponse,
+            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
+        )
+
+    def create_video(self, key: str, body: VideoCreateBody) -> Result[VideoCreateResponse]:
+        return self.transport.post(
+            "/v1/videos",
+            headers=self.transport.bearer(key),
+            json=body,
+            response_type=VideoCreateResponse,
+            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
+        )
+
+    def video_status(self, key: str, video_id: str) -> Result[VideoStatusResponse]:
+        return self.transport.get(
+            f"/v1/videos/{video_id}",
+            headers=self.transport.bearer(key),
+            params=NoBody(),
+            response_type=VideoStatusResponse,
             timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
         )
 

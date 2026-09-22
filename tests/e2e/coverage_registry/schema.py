@@ -44,6 +44,7 @@ LlmEndpoint = Literal[
     "vector_stores",
     "ocr",
     "bedrock_native",
+    "videos",
 ]
 
 LlmRoute = Literal[
@@ -53,6 +54,7 @@ LlmRoute = Literal[
     "bedrock_converse",
     "bedrock_invoke",
     "cohere",
+    "fal_ai",
     "gemini",
     "hosted_vllm",
     "openai",
@@ -77,6 +79,7 @@ LlmCapability = Literal[
     "prompt_cache_5m",
     "response_headers",
     "service_tier",
+    "status_retrieve",
     "structured_output",
     "thinking",
     "thinking_with_tool_use",

@@ -705,11 +705,23 @@ class VideoCreateBody(BaseModel):
     model: str
     prompt: str
     seconds: str | None = None
+    size: str | None = None
 
 
 class VideoCreateResponse(BaseModel):
     id: str
     status: str | None = None
+
+
+class VideoError(BaseModel):
+    code: str | None = None
+    message: str | None = None
+
+
+class VideoStatusResponse(BaseModel):
+    id: str
+    status: str
+    error: VideoError | None = None
 
 
 # ---------- rerank ----------
@@ -1128,6 +1140,7 @@ class LiteLLMParamsBody(BaseModel):
     input_cost_per_token_priority: float | None = None
     output_cost_per_token_priority: float | None = None
     extra_headers: dict[str, str] | None = None
+    ssl_verify: bool | None = None
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
     auto_router_config: str | None = None
