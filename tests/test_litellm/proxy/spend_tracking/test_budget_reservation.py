@@ -4,7 +4,7 @@ import json
 import math
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
@@ -26,12 +26,14 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
     count_request_input_tokens,
     estimate_request_max_cost,
+    release_unbound_budget_reservation,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.rust_bridge import bindings, configuration
 from litellm.rust_bridge import token_counter as rust_token_counter
+from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 TOKEN_COUNTING_ROUTES: Final = (
@@ -238,6 +240,22 @@ class _FakeUpstream(Exception):
     pass
 
 
+class _FakeTokenizer:
+    """Stands in for one shared native `Tokenizer`; only its name identifies it."""
+
+    def __init__(self, name: str, json: str | None = None) -> None:
+        self.name = name
+        self.json = json
+
+
+def _fake_native_tokenizers(monkeypatch: pytest.MonkeyPatch, anthropic_json: str | None = None) -> None:
+    """Point the counter's tokenizer lookups at fakes; the codec path keeps falling back to Python."""
+    fakes: Final = {name: _FakeTokenizer(name) for name in ("cl100k_base", "o200k_base")}
+    anthropic: Final = _FakeTokenizer("anthropic", anthropic_json)
+    monkeypatch.setattr(tokenizer_dispatch, "native_encoding", fakes.__getitem__)
+    monkeypatch.setattr(tokenizer_dispatch, "native_anthropic", lambda: anthropic)
+
+
 class _FakeNative:
     RustBridgeDeclined = _FakeDeclined
     RustUpstreamError = _FakeUpstream
@@ -256,19 +274,13 @@ class _RecordingCounter:
 
 
 class _RecordingFactory:
-    """Stands in for the native `TokenCounter` class: called with tokenizer JSON, or `from_*_ranks`."""
+    """Stands in for the native `TokenCounter` class, built over a loaded `Tokenizer`."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[rust_token_counter.RustTokenizer, bytes]] = []
 
-    def __call__(self, tokenizer_json: str) -> _RecordingCounter:
-        return _RecordingCounter(self, "anthropic")
-
-    def from_cl100k_ranks(self, rank_file: str) -> _RecordingCounter:
-        return _RecordingCounter(self, "cl100k_base")
-
-    def from_o200k_ranks(self, rank_file: str) -> _RecordingCounter:
-        return _RecordingCounter(self, "o200k_base")
+    def from_tokenizer(self, tokenizer: _FakeTokenizer, fast: bool = False) -> _RecordingCounter:
+        return _RecordingCounter(self, cast(rust_token_counter.RustTokenizer, tokenizer.name))
 
 
 class _DecliningCounter:
@@ -277,19 +289,14 @@ class _DecliningCounter:
 
 
 class _DecliningFactory:
-    def __call__(self, tokenizer_json: str) -> _DecliningCounter:
-        return _DecliningCounter()
-
-    def from_cl100k_ranks(self, rank_file: str) -> _DecliningCounter:
-        return _DecliningCounter()
-
-    def from_o200k_ranks(self, rank_file: str) -> _DecliningCounter:
+    def from_tokenizer(self, tokenizer: _FakeTokenizer, fast: bool = False) -> _DecliningCounter:
         return _DecliningCounter()
 
 
 @pytest.fixture
 def rust_counter(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: _FakeNative())
+    _fake_native_tokenizers(monkeypatch)
     rust_token_counter._counter.cache_clear()
     configuration.reset_rust_configuration()
     yield
@@ -546,3 +553,41 @@ async def test_team_member_reservation_counter_adds_temp_increase_to_live_team_d
     assert counter is not None
     assert counter.max_budget == expected_max_budget
     assert counter.fallback_spend == 0.5
+
+
+@pytest.mark.asyncio
+async def test_reservation_starts_unbound_to_any_callback():
+    reservation: Final = await _reserve("/v1/responses")
+
+    assert reservation is not None
+    assert reservation["callback_bound"] is False
+
+
+@pytest.mark.asyncio
+async def test_release_unbound_budget_reservation_frees_the_counter(spend_counter_cache: DualCache):
+    counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
+    reservation: Final = await _reserve_for_tiny_budget_key(
+        "/v1/chat/completions", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
+    )
+    assert reservation is not None
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reservation["reserved_cost"])
+
+    await release_unbound_budget_reservation(reservation)
+
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(0.0)
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_callback(spend_counter_cache: DualCache):
+    counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
+    reservation: Final = await _reserve_for_tiny_budget_key(
+        "/v1/chat/completions", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
+    )
+    assert reservation is not None
+    reservation["callback_bound"] = True
+
+    await release_unbound_budget_reservation(reservation)
+
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reservation["reserved_cost"])
+    assert reservation["finalized"] is False

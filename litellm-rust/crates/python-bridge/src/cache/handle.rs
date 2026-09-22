@@ -261,7 +261,7 @@ impl CacheTestHandle {
         index_name: String,
         embedder: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
-        let python_embedder = PythonEmbedder::from_backend(embedder)?;
+        let python_embedder = PythonEmbedder::new(embedder.clone().unbind());
         let service = NativeResponseCache::valkey_semantic(
             &url,
             similarity_threshold,

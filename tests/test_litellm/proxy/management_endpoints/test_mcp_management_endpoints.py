@@ -7878,3 +7878,65 @@ class TestDeleteMCPGatewaySessions:
         assert result.terminated_sessions == 2
         assert {s.user_id for s in result.sessions} == {"bob"}
         assert "sk-live-bob" not in result.model_dump_json()
+
+
+class TestGetMcpToolsWireShape:
+    @pytest.mark.asyncio
+    async def test_get_mcp_tools_returns_each_tool_in_mcp_wire_spelling(self):
+        from mcp.types import ListToolsResult, Tool
+
+        add_schema = {"type": "object", "properties": {"a": {"type": "integer"}}, "required": ["a"]}
+        listed = ListToolsResult(
+            tools=[Tool(name="add", description="Add", inputSchema=add_schema, outputSchema={"type": "integer"})]
+        )
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
+            AsyncMock(return_value=listed),
+        ):
+            result = await mgmt_endpoints.get_mcp_tools(user_api_key_dict=generate_mock_user_api_key_auth())
+
+        (tool,) = result["tools"]
+        assert tool["inputSchema"] == add_schema
+        assert tool["outputSchema"] == {"type": "integer"}
+        assert "_meta" in tool
+        assert not {"input_schema", "output_schema", "meta"} & tool.keys()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role,expected_status", [
+    (LitellmUserRoles.PROXY_ADMIN, 404),
+    (LitellmUserRoles.INTERNAL_USER, 403),
+])
+async def test_config_server_edit_preserves_api_contract_without_creating_rows(role, expected_status):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager = MCPServerManager()
+    server = generate_mock_mcp_server_config_record(server_id="read-only-config")
+    manager.config_mcp_servers = {server.server_id: server}
+    original = server.model_dump()
+    prisma = MagicMock()
+    prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=None)
+    with (
+        patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+        patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await mgmt_endpoints.edit_mcp_server(
+                payload=UpdateMCPServerRequest(server_id=server.server_id, description="UI edit"),
+                user_api_key_dict=UserAPIKeyAuth(user_id="actor", user_role=role),
+            )
+
+    assert exc.value.status_code == expected_status
+    if role == LitellmUserRoles.PROXY_ADMIN:
+        assert exc.value.detail == {
+            "error": f"MCP Server not found, passed server_id={server.server_id}"
+        }
+        prisma.db.litellm_mcpservertable.update.assert_awaited_once()
+    else:
+        prisma.db.litellm_mcpservertable.update.assert_not_awaited()
+    prisma.db.litellm_mcpservertable.create.assert_not_called()
+    prisma.db.litellm_mcpservertable.create_many.assert_not_called()
+    prisma.tx.assert_not_called()
+    assert server.model_dump() == original
+    assert manager.registry == {}

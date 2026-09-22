@@ -11,7 +11,7 @@ use pyo3::{
     types::{PyAny, PyBool, PyDict, PyList, PyString},
 };
 
-use super::{native::NativeResponseCache, request::duration};
+use super::{identity::BackendIdentity, native::NativeResponseCache, request::duration};
 
 #[allow(dead_code, reason = "consumed by the cache activation follow-up")]
 pub(super) struct CachePolicy {
@@ -293,161 +293,58 @@ impl NativeCacheConfig {
     }
 
     pub(super) fn service_mismatch(&self, service: &NativeResponseCache) -> Option<&'static str> {
-        let default_ttl = match &self.backend {
-            CacheBackendConfig::Memory(config) => Some(config.default_ttl),
-            CacheBackendConfig::Redis(config) => Some(config.default_ttl),
-            CacheBackendConfig::S3(_) => None,
-            CacheBackendConfig::ValkeySemantic(_) => Some(Duration::ZERO),
-            CacheBackendConfig::Disk(_)
-            | CacheBackendConfig::AzureBlob(_)
-            | CacheBackendConfig::Gcs(_)
-            | CacheBackendConfig::RedisSemantic(_)
-            | CacheBackendConfig::QdrantSemantic(_) => None,
-        };
-        if !matches!(self.backend, CacheBackendConfig::ValkeySemantic(_))
-            && service.default_ttl() != default_ttl
-        {
-            return Some("facade and native backend default TTLs must match");
-        }
-        match &self.backend {
-            CacheBackendConfig::Memory(config) if service.kind() != "memory" => {
-                Some("facade and native backend types must match")
-            }
-            CacheBackendConfig::Memory(config) if service.capacity() != Some(config.capacity) => {
-                Some("facade and native backend capacities must match")
-            }
-            CacheBackendConfig::Memory(config)
-                if service.max_entry_bytes() != Some(config.max_entry_bytes) =>
-            {
-                Some("facade and native backend item limits must match")
-            }
-            CacheBackendConfig::Memory(_) => None,
-            CacheBackendConfig::Redis(_) if service.kind() != "redis" => {
-                Some("facade and native backend types must match")
-            }
-            CacheBackendConfig::Redis(config) if service.topology() != Some(&config.topology) => {
-                Some("facade and native backend topologies must match")
-            }
-            CacheBackendConfig::Redis(config) => (service.namespace()
-                != config.namespace.as_deref())
-            .then_some("facade and native backend namespaces must match"),
-            CacheBackendConfig::S3(_) if service.kind() != "s3" => {
-                Some("facade and native backend types must match")
-            }
-            CacheBackendConfig::S3(config) if service.bucket() != Some(config.bucket.as_str()) => {
-                Some("facade and native backend buckets must match")
-            }
-            CacheBackendConfig::S3(config)
-                if service.key_prefix() != Some(config.key_prefix.as_str()) =>
-            {
-                Some("facade and native backend key prefixes must match")
-            }
-            CacheBackendConfig::S3(config) if service.region() != Some(config.region.as_str()) => {
-                Some("facade and native backend regions must match")
-            }
-            CacheBackendConfig::S3(config)
-                if service.endpoint()
-                    != config
-                        .endpoint
-                        .as_ref()
-                        .map(|endpoint| endpoint.url.as_str()) =>
-            {
-                Some("facade and native backend endpoints must match")
-            }
-            CacheBackendConfig::S3(_) => None,
-            CacheBackendConfig::Gcs(_) if service.kind() != "gcs" => {
-                Some("facade and native backend types must match")
-            }
-            CacheBackendConfig::Gcs(config)
-                if service
-                    .gcs_backend()
-                    .is_none_or(|backend| backend.bucket_name() != config.bucket_name) =>
-            {
-                Some("facade and native backend buckets must match")
-            }
-            CacheBackendConfig::Gcs(config)
-                if service
-                    .gcs_backend()
-                    .is_none_or(|backend| backend.key_prefix() != config.key_prefix) =>
-            {
-                Some("facade and native backend key prefixes must match")
-            }
-            CacheBackendConfig::Gcs(config)
-                if service.gcs_backend().is_none_or(|backend| {
-                    backend.path_service_account() != config.path_service_account.as_deref()
-                }) =>
-            {
-                Some("facade and native backend credentials must match")
-            }
-            CacheBackendConfig::Gcs(_) => None,
-            CacheBackendConfig::ValkeySemantic(config) => {
-                if service.kind() != "valkey-semantic" {
-                    return Some("facade and native backend types must match");
-                }
-                let Some((threshold, index_name)) = service.semantic_config() else {
-                    return Some("facade and native backend types must match");
-                };
-                (threshold != config.similarity_threshold || index_name != config.index_name)
-                    .then_some("facade and native semantic settings must match")
-            }
-            CacheBackendConfig::Disk(_) if service.kind() != "disk" => {
-                Some("facade and native backend types must match")
-            }
-            CacheBackendConfig::Disk(config) => {
-                let Some(directory) = service.directory() else {
-                    return Some("facade and native backend types must match");
-                };
-                let native = std::fs::canonicalize(directory).ok();
-                let facade = std::fs::canonicalize(&config.directory).ok();
-                (native != facade).then_some("facade and native backend directories must match")
-            }
-            CacheBackendConfig::RedisSemantic(_) if service.kind() != "redis_semantic" => {
-                Some("facade and native backend types must match")
-            }
-            CacheBackendConfig::RedisSemantic(config)
-                if service.index_name() != Some(config.index_name.as_str()) =>
-            {
-                Some("facade and native backend index names must match")
-            }
-            CacheBackendConfig::RedisSemantic(config)
-                if service.similarity_threshold()
-                    != Some(f64::from(config.similarity_threshold as f32)) =>
-            {
-                Some("facade and native backend similarity thresholds must match")
-            }
-            CacheBackendConfig::RedisSemantic(_) => None,
-            CacheBackendConfig::QdrantSemantic(config) if service.kind() != "qdrant_semantic" => {
-                Some("facade and native backend types must match")
-            }
-            CacheBackendConfig::QdrantSemantic(config)
-                if service.collection_name() != Some(config.collection_name.as_str()) =>
-            {
-                Some("facade and native backend collections must match")
-            }
-            CacheBackendConfig::QdrantSemantic(config)
-                if service.similarity_threshold() != Some(config.similarity_threshold) =>
-            {
-                Some("facade and native backend similarity thresholds must match")
-            }
-            CacheBackendConfig::QdrantSemantic(config)
-                if service.vector_size() != Some(config.vector_size) =>
-            {
-                Some("facade and native backend vector sizes must match")
-            }
-            CacheBackendConfig::QdrantSemantic(config)
-                if service.embedding_model() != Some(config.embedding.model.as_str()) =>
-            {
-                Some("facade and native backend embedding models must match")
-            }
-            CacheBackendConfig::QdrantSemantic(_) => None,
-            CacheBackendConfig::AzureBlob(config) => match service.azure_blob_identity() {
-                None => Some("facade and native backend types must match"),
-                Some((account_url, container))
-                    if account_url != config.account_url || container != config.container =>
-                {
-                    Some("facade and native backend containers must match")
-                }
-                Some(_) => None,
+        self.backend.identity().mismatch(&service.identity())
+    }
+}
+
+impl CacheBackendConfig {
+    /// The identity a native backend must have for this facade configuration to describe it.
+    pub(super) fn identity(&self) -> BackendIdentity {
+        match self {
+            Self::Memory(config) => BackendIdentity::Memory {
+                capacity: config.capacity,
+                max_entry_bytes: Some(config.max_entry_bytes),
+                default_ttl: Some(config.default_ttl),
+            },
+            Self::Redis(config) => BackendIdentity::Redis {
+                topology: config.topology.clone(),
+                namespace: config.namespace.clone(),
+                default_ttl: Some(config.default_ttl),
+            },
+            Self::S3(config) => BackendIdentity::S3 {
+                bucket: config.bucket.clone(),
+                key_prefix: config.key_prefix.clone(),
+                region: config.region.clone(),
+                endpoint: config
+                    .endpoint
+                    .as_ref()
+                    .map(|endpoint| endpoint.url.clone()),
+            },
+            Self::Gcs(config) => BackendIdentity::Gcs {
+                bucket_name: config.bucket_name.clone(),
+                key_prefix: config.key_prefix.clone(),
+                path_service_account: config.path_service_account.clone(),
+            },
+            Self::ValkeySemantic(config) => BackendIdentity::ValkeySemantic {
+                index_name: config.index_name.clone(),
+                similarity_threshold: config.similarity_threshold,
+            },
+            Self::Disk(config) => BackendIdentity::Disk {
+                directory: config.directory.clone(),
+            },
+            Self::AzureBlob(config) => BackendIdentity::AzureBlob {
+                account_url: config.account_url.clone(),
+                container: config.container.clone(),
+            },
+            Self::RedisSemantic(config) => BackendIdentity::RedisSemantic {
+                index_name: config.index_name.clone(),
+                similarity_threshold: config.similarity_threshold as f32,
+            },
+            Self::QdrantSemantic(config) => BackendIdentity::QdrantSemantic {
+                collection_name: config.collection_name.clone(),
+                similarity_threshold: config.similarity_threshold,
+                vector_size: config.vector_size,
+                embedding_model: config.embedding.model.clone(),
             },
         }
     }
