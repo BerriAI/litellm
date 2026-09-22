@@ -215,7 +215,7 @@ async def get_cost_discount_config(
         config: Final = await proxy_config.get_config()
 
         # Get cost_discount_config from litellm_settings
-        litellm_settings: Final = config.get("litellm_settings", {})
+        litellm_settings: Final = config.litellm_settings
         cost_discount_config: Final = litellm_settings.get("cost_discount_config", {})
 
         return {"values": cost_discount_config}
@@ -294,15 +294,16 @@ async def update_cost_discount_config(
         # Load existing config
         config: Final = await proxy_config.get_config()
 
-        # Ensure litellm_settings exists
-        if "litellm_settings" not in config:
-            config["litellm_settings"] = {}
-
-        # Update cost_discount_config
-        config["litellm_settings"]["cost_discount_config"] = cost_discount_config
-
-        # Save the updated config to DB
-        await proxy_config.save_config(new_config=config)
+        # Update cost_discount_config and save
+        await proxy_config.save_config(
+            new_config=config.with_section(
+                "litellm_settings",
+                {
+                    **config.litellm_settings,
+                    "cost_discount_config": cost_discount_config,
+                },  # mutable-ok: replacement section for save_config
+            )
+        )
 
         # Update in-memory litellm.cost_discount_config
         litellm.cost_discount_config = cost_discount_config
@@ -348,7 +349,7 @@ async def get_cost_margin_config(
         config: Final = await proxy_config.get_config()
 
         # Get cost_margin_config from litellm_settings
-        litellm_settings: Final = config.get("litellm_settings", {})
+        litellm_settings: Final = config.litellm_settings
         cost_margin_config: Final = litellm_settings.get("cost_margin_config", {})
 
         return {"values": cost_margin_config}
@@ -468,15 +469,16 @@ async def update_cost_margin_config(
         # Load existing config
         config: Final = await proxy_config.get_config()
 
-        # Ensure litellm_settings exists
-        if "litellm_settings" not in config:
-            config["litellm_settings"] = {}
-
-        # Update cost_margin_config
-        config["litellm_settings"]["cost_margin_config"] = cost_margin_config
-
-        # Save the updated config to DB
-        await proxy_config.save_config(new_config=config)
+        # Update cost_margin_config and save
+        await proxy_config.save_config(
+            new_config=config.with_section(
+                "litellm_settings",
+                {
+                    **config.litellm_settings,
+                    "cost_margin_config": cost_margin_config,
+                },  # mutable-ok: replacement section for save_config
+            )
+        )
 
         # Update in-memory litellm.cost_margin_config
         litellm.cost_margin_config = cost_margin_config
@@ -546,11 +548,16 @@ async def update_block_requests_for_models_without_pricing(
         )
 
     try:
-        config = await proxy_config.get_config()
-        if "litellm_settings" not in config:
-            config["litellm_settings"] = {}  # mutable-ok: config is a plain-dict payload for save_config
-        config["litellm_settings"]["block_requests_for_models_without_pricing"] = request.enabled
-        await proxy_config.save_config(new_config=config)
+        config: Final = await proxy_config.get_config()
+        await proxy_config.save_config(
+            new_config=config.with_section(
+                "litellm_settings",
+                {
+                    **config.litellm_settings,
+                    "block_requests_for_models_without_pricing": request.enabled,
+                },  # mutable-ok: replacement section for save_config
+            )
+        )
 
         litellm.block_requests_for_models_without_pricing = request.enabled
         verbose_proxy_logger.info("Updated block_requests_for_models_without_pricing: %s", request.enabled)

@@ -529,7 +529,7 @@ class WebSearchInterceptionSettingsResponse(SettingsResponse):
     )
 
 
-def _with_websearch_enabled_resolved(config: Mapping[str, object]) -> dict[str, object]:
+def _with_websearch_enabled_resolved(config: ProxyRuntimeConfig) -> ProxyRuntimeConfig:
     """
     Answer with the stored flag when there is one, and only otherwise with what
     this process is running.
@@ -547,19 +547,22 @@ def _with_websearch_enabled_resolved(config: Mapping[str, object]) -> dict[str, 
         WebSearchInterceptionLogger,
     )
 
-    litellm_settings: Final[Mapping[str, object]] = _as_settings_section(config.get("litellm_settings"))
+    litellm_settings: Final[Mapping[str, object]] = config.litellm_settings
     stored: Final[Mapping[str, object]] = _as_settings_section(litellm_settings.get("websearch_interception_params"))
     if "enabled" in stored:
-        return dict(config)
+        return config
 
-    resolved: Final = {
+    resolved: Final = {  # mutable-ok: replacement value for the stored section
         **stored,
         "enabled": bool(litellm.logging_callback_manager.get_custom_loggers_for_type(WebSearchInterceptionLogger)),
     }
-    return {
-        **config,
-        "litellm_settings": {**litellm_settings, "websearch_interception_params": resolved},
-    }
+    return config.with_section(
+        "litellm_settings",
+        {
+            **litellm_settings,
+            "websearch_interception_params": resolved,
+        },  # mutable-ok: replacement section for save_config
+    )
 
 
 def _as_settings_section(value: object) -> Mapping[str, object]:
@@ -628,24 +631,27 @@ async def add_allowed_ip(
     # Load existing config
     config: Final = await proxy_config.get_config()
     verbose_proxy_logger.debug("Loaded config: %s", config)
-    if "general_settings" not in config:
-        config["general_settings"] = {}
 
-    if "allowed_ips" not in config["general_settings"]:
-        config["general_settings"]["allowed_ips"] = []
+    before_allowed_ips: Final = tuple(config.general_settings.get("allowed_ips") or ())
+    updated_allowed_ips: Final = (
+        (*before_allowed_ips, ip_address.ip) if ip_address.ip not in before_allowed_ips else before_allowed_ips
+    )
+    updated: Final = config.with_section(
+        "general_settings",
+        {
+            **config.general_settings,
+            "allowed_ips": list(updated_allowed_ips),
+        },  # mutable-ok: replacement section for save_config
+    )
 
-    before_allowed_ips: Final = list(config["general_settings"]["allowed_ips"])
-    if ip_address.ip not in config["general_settings"]["allowed_ips"]:
-        config["general_settings"]["allowed_ips"].append(ip_address.ip)
-
-    await proxy_config.save_config(new_config=config)
+    await proxy_config.save_config(new_config=updated)
 
     asyncio.create_task(
         create_config_audit_log(
             param_name="general_settings",
             action="updated",
-            before_value={"allowed_ips": before_allowed_ips},
-            after_value={"allowed_ips": config["general_settings"]["allowed_ips"]},
+            before_value={"allowed_ips": list(before_allowed_ips)},  # mutable-ok: audit log wants a JSON list
+            after_value={"allowed_ips": list(updated_allowed_ips)},  # mutable-ok: audit log wants a JSON list
             user_api_key_dict=user_api_key_dict,
         )
     )
@@ -679,24 +685,25 @@ async def delete_allowed_ip(
     # Load existing config
     config: Final = await proxy_config.get_config()
     verbose_proxy_logger.debug("Loaded config: %s", config)
-    if "general_settings" not in config:
-        config["general_settings"] = {}
 
-    if "allowed_ips" not in config["general_settings"]:
-        config["general_settings"]["allowed_ips"] = []
+    before_allowed_ips: Final = tuple(config.general_settings.get("allowed_ips") or ())
+    updated_allowed_ips: Final = tuple(ip for ip in before_allowed_ips if ip != ip_address.ip)
+    updated: Final = config.with_section(
+        "general_settings",
+        {
+            **config.general_settings,
+            "allowed_ips": list(updated_allowed_ips),
+        },  # mutable-ok: replacement section for save_config
+    )
 
-    before_allowed_ips: Final = list(config["general_settings"]["allowed_ips"])
-    if ip_address.ip in config["general_settings"]["allowed_ips"]:
-        config["general_settings"]["allowed_ips"].remove(ip_address.ip)
-
-    await proxy_config.save_config(new_config=config)
+    await proxy_config.save_config(new_config=updated)
 
     asyncio.create_task(
         create_config_audit_log(
             param_name="general_settings",
             action="deleted",
-            before_value={"allowed_ips": before_allowed_ips},
-            after_value={"allowed_ips": config["general_settings"]["allowed_ips"]},
+            before_value={"allowed_ips": list(before_allowed_ips)},  # mutable-ok: audit log wants a JSON list
+            after_value={"allowed_ips": list(updated_allowed_ips)},  # mutable-ok: audit log wants a JSON list
             user_api_key_dict=user_api_key_dict,
         )
     )
@@ -782,7 +789,7 @@ def _ui_setting_source(
 async def _get_settings_with_schema(
     settings_key: str,
     settings_class: type[BaseModel],
-    config: dict,
+    config: ProxyRuntimeConfig | Mapping[str, object],
 ) -> dict:
     """
     Common utility function to get settings with schema information.
@@ -790,10 +797,15 @@ async def _get_settings_with_schema(
     Args:
         settings_key: The key in litellm_settings to get
         settings_class: The Pydantic class to use for schema
-        config: The config dictionary
+        config: The resolved proxy config, or a config-shaped mapping
     """
-    litellm_settings: Final = config.get("litellm_settings", {}) or {}
-    settings_data: Final = litellm_settings.get(settings_key, {}) or {}
+    litellm_settings: Final[Mapping[str, object]] = (
+        config.litellm_settings
+        if isinstance(config, ProxyRuntimeConfig)
+        else _as_settings_section(config.get("litellm_settings"))
+    )
+    raw_settings_data: Final = litellm_settings.get(settings_key, {}) or {}
+    settings_data: Final = raw_settings_data if isinstance(raw_settings_data, Mapping) else MappingProxyType({})
 
     # Create the settings object
     settings: Final = settings_class(**(settings_data))
@@ -1021,19 +1033,18 @@ async def _update_litellm_setting(
     # because get_config() may overwrite litellm.<key> with stale DB values
     # via LITELLM_SETTINGS_SAFE_DB_OVERRIDES.
     config: Final = await proxy_config.get_config()
-    before_value: Final = config.get("litellm_settings", {}).get(settings_key)
+    before_value: Final = config.litellm_settings.get(settings_key)
 
     # Update the in-memory settings (after get_config to avoid stale override)
     setattr(litellm, settings_key, in_memory_var)
 
-    # Update config with new settings
-    if "litellm_settings" not in config:
-        config["litellm_settings"] = {}
-
-    config["litellm_settings"][settings_key] = in_memory_var
-
     # Save the updated config
-    await proxy_config.save_config(new_config=config)
+    await proxy_config.save_config(
+        new_config=config.with_section(
+            "litellm_settings",
+            {**config.litellm_settings, settings_key: in_memory_var},  # mutable-ok: replacement section for save_config
+        )
+    )
 
     # Fire-and-forget so an audit-log failure (transient DB blip, etc.)
     # never surfaces as a 500 after save_config has already committed,
@@ -1216,18 +1227,7 @@ async def update_sso_settings(
         if isinstance(stored, dict):
             before_sso_data = proxy_config._decrypt_db_variables(stored)
 
-    # Load existing config
-    config: Final = await proxy_config.get_config()
-
-    # Update config with new environment variables
-    if "environment_variables" not in config:
-        config["environment_variables"] = {}
-
-    # Update general_settings for user_email (admin email)
-    if "general_settings" not in config:
-        config["general_settings"] = {}
-
-    # Update environment variables in config and in memory
+    # Update environment variables in memory
     sso_data: Final = sso_config.model_dump()
     for field_name, value in sso_data.items():
         if field_name in SSO_FIELD_ENV_VARS:
@@ -1394,15 +1394,16 @@ async def update_ui_theme_settings(
 
     # Load existing config
     config: Final = await proxy_config.get_config()
-    before_theme: Final = config.get("litellm_settings", {}).get("ui_theme_config")
+    before_theme: Final = config.litellm_settings.get("ui_theme_config")
 
     # Convert theme config to dict
     theme_data: Final = theme_config.model_dump(exclude_none=True)
 
     # Store UI theme config in litellm_settings (where it's retrieved from)
-    if "litellm_settings" not in config:
-        config["litellm_settings"] = {}
-    config["litellm_settings"]["ui_theme_config"] = theme_data
+    updated: Final = config.with_section(
+        "litellm_settings",
+        {**config.litellm_settings, "ui_theme_config": theme_data},  # mutable-ok: replacement section for save_config
+    )
 
     # The vars below are the only environment variables this endpoint owns, and
     # they must stay in step with _UI_THEME_FIELD_ENV_VARS. A non-empty value
@@ -1426,7 +1427,7 @@ async def update_ui_theme_settings(
 
     # Persist the theme config (litellm_settings). save_config defaults to
     # include_env_vars=False, so it does not snapshot environment_variables.
-    await proxy_config.save_config(new_config=config)
+    await proxy_config.save_config(new_config=updated)
     # Persist only the two owned env vars, merged against the existing DB row.
     await proxy_config.save_environment_variables(env_updates)
 

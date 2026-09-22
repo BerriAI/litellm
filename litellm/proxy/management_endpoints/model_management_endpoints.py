@@ -2826,14 +2826,16 @@ async def update_public_model_groups(
         # from DB values via _update_config_from_db), so set the in-memory value AFTER
         config: Final = await proxy_config.get_config()
 
-        # Update config with new settings
-        if "litellm_settings" not in config:
-            config["litellm_settings"] = {}
-
-        config["litellm_settings"]["public_model_groups"] = request.model_groups
-
         # Save the updated config
-        await proxy_config.save_config(new_config=config)
+        await proxy_config.save_config(
+            new_config=config.with_section(
+                "litellm_settings",
+                {
+                    **config.litellm_settings,
+                    "public_model_groups": request.model_groups,
+                },  # mutable-ok: replacement section for save_config
+            )
+        )
 
         # Set in-memory value AFTER get_config() and save_config() to avoid
         # get_config() overwriting with stale DB value
@@ -2893,14 +2895,16 @@ async def update_useful_links(
         # from DB values via _update_config_from_db), so set the in-memory value AFTER
         config: Final = await proxy_config.get_config()
 
-        # Update config with new settings
-        if "litellm_settings" not in config:
-            config["litellm_settings"] = {}
-
-        config["litellm_settings"]["public_model_groups_links"] = request.useful_links
-
         # Save the updated config
-        await proxy_config.save_config(new_config=config)
+        await proxy_config.save_config(
+            new_config=config.with_section(
+                "litellm_settings",
+                {
+                    **config.litellm_settings,
+                    "public_model_groups_links": request.useful_links,
+                },  # mutable-ok: replacement section for save_config
+            )
+        )
 
         # Set in-memory value AFTER get_config() and save_config() to avoid
         # get_config() overwriting with stale DB value

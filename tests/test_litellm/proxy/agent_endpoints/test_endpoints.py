@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from litellm.constants import REDACTED_BY_LITELM_STRING
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth, ProxyRuntimeConfig
 from litellm.proxy.agent_endpoints import endpoints as agent_endpoints
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     RestrictedAgentAccess,
@@ -1075,20 +1075,19 @@ class _DbBackedProxyConfig:
     def __init__(self, stored_litellm_settings: dict[str, object] | None = None) -> None:
         self.stored_litellm_settings_json: str = json.dumps(stored_litellm_settings or {})
 
-    async def get_config(self) -> dict[str, dict[str, object]]:
+    async def get_config(self) -> ProxyRuntimeConfig:
         from litellm.proxy.proxy_server import ProxyConfig
 
-        config: Final[dict[str, dict[str, object]]] = {"litellm_settings": {}}
         db_param_value: Final[dict[str, object]] = json.loads(self.stored_litellm_settings_json)
         if not db_param_value:
-            return config
+            return ProxyRuntimeConfig()
         proxy_config: Final = ProxyConfig()
         db_values: Final = proxy_config._prepared_db_settings_values("litellm_settings", db_param_value)
         proxy_config._apply_litellm_settings_db_values(db_values)
-        return {"litellm_settings": dict(proxy_config.litellm_settings.resolved())}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": dict(proxy_config.litellm_settings.resolved())})
 
-    async def save_config(self, new_config: dict[str, dict[str, object]]) -> None:
-        self.stored_litellm_settings_json = json.dumps(new_config.get("litellm_settings") or {})
+    async def save_config(self, new_config: ProxyRuntimeConfig) -> None:
+        self.stored_litellm_settings_json = json.dumps(new_config.litellm_settings)
 
 
 def test_make_agent_public_twice_keeps_both_agents_public(monkeypatch: pytest.MonkeyPatch) -> None:

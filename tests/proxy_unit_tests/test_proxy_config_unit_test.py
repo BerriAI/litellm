@@ -16,6 +16,7 @@ import io
 import asyncio
 import logging
 
+from litellm.proxy._types import ProxyRuntimeConfig
 from litellm.proxy.proxy_server import ProxyConfig
 
 INVALID_FILES = ["config_with_missing_include.yaml"]
@@ -88,11 +89,11 @@ async def test_read_config_file_with_os_environ_vars():
     print(config)
 
     # Add assertions
-    assert config["litellm_settings"]["default_internal_user_params"]["user_role"] == "admin"
-    assert config["litellm_settings"]["s3_callback_params"]["s3_aws_access_key_id"] == "1234567890"
-    assert config["litellm_settings"]["s3_callback_params"]["s3_aws_secret_access_key"] == "1234567890"
+    assert config.litellm_settings["default_internal_user_params"]["user_role"] == "admin"
+    assert config.litellm_settings["s3_callback_params"]["s3_aws_access_key_id"] == "1234567890"
+    assert config.litellm_settings["s3_callback_params"]["s3_aws_secret_access_key"] == "1234567890"
 
-    for model in config["model_list"]:
+    for model in config.model_list:
         if "azure" in model["litellm_params"]["model"]:
             assert model["litellm_params"]["api_key"] == "1234567890"
         elif "fireworks" in model["litellm_params"]["model"]:
@@ -118,11 +119,11 @@ async def test_basic_include_directive():
     config = await proxy_config_instance.get_config(config_file_path=config_path)
 
     # Verify the included model list was merged
-    assert len(config["model_list"]) > 0
-    assert any(model["model_name"] == "included-model" for model in config["model_list"])
+    assert len(config.model_list) > 0
+    assert any(model["model_name"] == "included-model" for model in config.model_list)
 
     # Verify original config settings remain
-    assert config["litellm_settings"]["callbacks"] == ["prometheus"]
+    assert list(config.litellm_settings["callbacks"]) == ["prometheus"]
 
 
 @pytest.mark.asyncio
@@ -150,12 +151,12 @@ async def test_multiple_includes():
     config = await proxy_config_instance.get_config(config_file_path=config_path)
 
     # Verify models from both included files are present
-    assert len(config["model_list"]) == 2
-    assert any(model["model_name"] == "included-model-1" for model in config["model_list"])
-    assert any(model["model_name"] == "included-model-2" for model in config["model_list"])
+    assert len(config.model_list) == 2
+    assert any(model["model_name"] == "included-model-1" for model in config.model_list)
+    assert any(model["model_name"] == "included-model-2" for model in config.model_list)
 
     # Verify original config settings remain
-    assert config["litellm_settings"]["callbacks"] == ["prometheus"]
+    assert list(config.litellm_settings["callbacks"]) == ["prometheus"]
 
 
 def test_add_callbacks_from_db_config():
@@ -179,7 +180,7 @@ def test_add_callbacks_from_db_config():
         }
     }
 
-    proxy_config._add_callbacks_from_db_config(config_data)
+    proxy_config._add_callbacks_from_db_config(ProxyRuntimeConfig.from_resolved(config_data))
 
     # 1 instance of LangfusePromptManagement should exist in litellm.success_callback
     num_langfuse_instances = sum(
@@ -190,7 +191,7 @@ def test_add_callbacks_from_db_config():
     assert len(litellm.failure_callback) == 1
 
     # Test Case 2: Try adding duplicate callbacks
-    proxy_config._add_callbacks_from_db_config(config_data)
+    proxy_config._add_callbacks_from_db_config(ProxyRuntimeConfig.from_resolved(config_data))
 
     # Verify no duplicates were added
     assert len(litellm.success_callback) == 2
@@ -218,7 +219,7 @@ def test_add_callbacks_invalid_input():
         }
     }
 
-    proxy_config._add_callbacks_from_db_config(config_data)
+    proxy_config._add_callbacks_from_db_config(ProxyRuntimeConfig.from_resolved(config_data))
 
     # Verify no callbacks were added with invalid input
     assert len(litellm.success_callback) == 0
@@ -226,7 +227,7 @@ def test_add_callbacks_invalid_input():
 
     # Test Case 2: Missing litellm_settings
     config_data = {}
-    proxy_config._add_callbacks_from_db_config(config_data)
+    proxy_config._add_callbacks_from_db_config(ProxyRuntimeConfig.from_resolved(config_data))
 
     # Verify no callbacks were added
     assert len(litellm.success_callback) == 0

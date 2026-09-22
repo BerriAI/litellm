@@ -15,7 +15,13 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
-from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.proxy._types import (
+    AddTeamCallback,
+    ProxyException,
+    ProxyRuntimeConfig,
+    TeamCallbackMetadata,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
@@ -8171,18 +8177,20 @@ def test_default_team_settings_bool_turn_off_message_logging_redacts():
     from litellm.proxy.proxy_server import ProxyConfig
 
     pc = ProxyConfig()
-    pc.config = {
-        "litellm_settings": {
-            "default_team_settings": [
-                {
-                    "team_id": "team-redact",
-                    "success_callback": ["gcs_bucket"],
-                    "failure_callback": ["gcs_bucket"],
-                    "turn_off_message_logging": True,
-                }
-            ]
+    pc.config = ProxyRuntimeConfig.from_resolved(
+        {
+            "litellm_settings": {
+                "default_team_settings": [
+                    {
+                        "team_id": "team-redact",
+                        "success_callback": ["gcs_bucket"],
+                        "failure_callback": ["gcs_bucket"],
+                        "turn_off_message_logging": True,
+                    }
+                ]
+            }
         }
-    }
+    )
 
     callback_metadata = LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
         team_id="team-redact",

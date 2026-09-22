@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-from litellm.proxy._types import DefaultInternalUserParams, LitellmUserRoles
+from litellm.proxy._types import DefaultInternalUserParams, LitellmUserRoles, ProxyRuntimeConfig
 from litellm.proxy.proxy_server import app
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -18,7 +18,7 @@ client = TestClient(app)
 @pytest.fixture
 def mock_proxy_config(monkeypatch):
     """Mock the proxy_config to avoid actual file operations during tests"""
-    mock_config = {
+    mock_config = ProxyRuntimeConfig.from_resolved({
         "litellm_settings": {
             "default_internal_user_params": {
                 "user_role": LitellmUserRoles.INTERNAL_USER,
@@ -42,7 +42,7 @@ def mock_proxy_config(monkeypatch):
             "MICROSOFT_CLIENT_SECRET": "test_microsoft_client_secret",
             "PROXY_BASE_URL": "https://example.com",
         },
-    }
+    })
 
     async def mock_get_config():
         return mock_config
@@ -70,7 +70,7 @@ def mock_proxy_config(monkeypatch):
     # Return the config, the save_config call counter, and any env-var updates
     # the endpoint routed through the dedicated save_environment_variables path
     return {
-        "config": mock_config,
+        "config": lambda: mock_config,
         "save_call_count": lambda: save_config_call_count,
         "env_updates": lambda: saved_env_updates,
     }
@@ -104,7 +104,7 @@ class TestProxySettingEndpoints:
 
         # Check values match our mock config
         values = data["values"]
-        mock_params = mock_proxy_config["config"]["litellm_settings"][
+        mock_params = mock_proxy_config["config"]().litellm_settings[
             "default_internal_user_params"
         ]
         assert values["user_role"] == mock_params["user_role"]
@@ -185,7 +185,7 @@ class TestProxySettingEndpoints:
         assert settings["models"] == new_settings["models"]
 
         # Verify the config was updated
-        updated_config = mock_proxy_config["config"]["litellm_settings"][
+        updated_config = mock_proxy_config["config"]().litellm_settings[
             "default_internal_user_params"
         ]
         assert updated_config["user_role"] == new_settings["user_role"]
@@ -207,7 +207,7 @@ class TestProxySettingEndpoints:
 
         # Check values match our mock config
         values = data["values"]
-        mock_params = mock_proxy_config["config"]["litellm_settings"][
+        mock_params = mock_proxy_config["config"]().litellm_settings[
             "default_team_params"
         ]
         assert values["models"] == mock_params["models"]
@@ -258,7 +258,7 @@ class TestProxySettingEndpoints:
         assert settings["rpm_limit"] == new_settings["rpm_limit"]
 
         # Verify the config was updated
-        updated_config = mock_proxy_config["config"]["litellm_settings"][
+        updated_config = mock_proxy_config["config"]().litellm_settings[
             "default_team_params"
         ]
         assert updated_config["models"] == new_settings["models"]
@@ -1216,7 +1216,7 @@ class TestProxySettingEndpoints:
 
     def test_get_ui_theme_settings_with_favicon_configured(self, mock_proxy_config):
         """Test getting UI theme settings when favicon is configured"""
-        mock_proxy_config["config"]["litellm_settings"]["ui_theme_config"] = {
+        mock_proxy_config["config"]().litellm_settings["ui_theme_config"] = {
             "logo_url": "https://example.com/logo.png",
             "favicon_url": "https://example.com/favicon.ico",
         }
@@ -2676,7 +2676,7 @@ def test_add_allowed_ip_hands_save_config_only_the_changed_general_setting(monke
     save_config: Final = AsyncMock(side_effect=lambda new_config: new_config)
 
     async def _get_config():
-        return {"general_settings": dict(file_settings)}
+        return ProxyRuntimeConfig.from_resolved({"general_settings": dict(file_settings)})
 
     monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
     monkeypatch.setattr(proxy_server_module, "store_model_in_db", True)
@@ -2698,10 +2698,13 @@ def test_add_allowed_ip_hands_save_config_only_the_changed_general_setting(monke
         assert resp.status_code == 200, resp.text
 
         save_config.assert_awaited_once()
-        persisted: Final = save_config.await_args.kwargs["new_config"]["general_settings"]
-        changed, removed = changed_section_keys(file_settings, persisted)
+        persisted: Final = save_config.await_args.kwargs["new_config"]
+        changed, removed = changed_section_keys(file_settings, persisted.general_settings)
         assert dict(changed) == {"allowed_ips": ["203.0.113.77"]}
         assert removed == frozenset()
+        # the frozen model save_config was handed still carries the loaded
+        # baseline, so the write is provably an add of just the new ip
+        assert "allowed_ips" not in persisted.baseline["general_settings"]
         assert store["allowed_ips"] == ["203.0.113.77"]
     finally:
         app.dependency_overrides.pop(user_api_key_auth, None)
@@ -2721,7 +2724,9 @@ def test_delete_allowed_ip_writes_deleted_audit_log(monkeypatch):
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_auditlog.create = audit_create
 
-    config = {"general_settings": {"allowed_ips": ["203.0.113.77", "198.51.100.1"]}}
+    config = ProxyRuntimeConfig.from_resolved(
+        {"general_settings": {"allowed_ips": ["203.0.113.77", "198.51.100.1"]}}
+    )
 
     async def _get_config():
         return config
@@ -2782,7 +2787,7 @@ def test_allowed_ip_routes_refuse_a_config_owned_list_with_a_clear_400(route, mo
     fake_prisma.db.litellm_auditlog.create = AsyncMock()
 
     async def _get_config():
-        return {"general_settings": {"allowed_ips": ["203.0.113.77"]}}
+        return ProxyRuntimeConfig.from_resolved({"general_settings": {"allowed_ips": ["203.0.113.77"]}})
 
     async def _save_config(new_config=None):
         saved.append(new_config)
@@ -3172,7 +3177,7 @@ class TestMcpToolSearchSettingsEndpoints:
 
     def test_get_returns_stored_values_and_field_schema(self, mock_proxy_config, mock_auth, monkeypatch):
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
-        mock_proxy_config["config"]["litellm_settings"]["mcp_tool_search"] = {
+        mock_proxy_config["config"]().litellm_settings["mcp_tool_search"] = {
             "embedding_model": "text-embedding-3-small",
             "core_tools": ["treasury-get_rates"],
         }
@@ -3217,7 +3222,7 @@ class TestMcpToolSearchSettingsEndpoints:
         assert resp.status_code == 200, resp.text
         assert mock_proxy_config["save_call_count"]() == 1
         assert litellm.mcp_tool_search == payload
-        assert mock_proxy_config["config"]["litellm_settings"]["mcp_tool_search"] == payload
+        assert mock_proxy_config["config"]().litellm_settings["mcp_tool_search"] == payload
 
     def test_update_rejects_out_of_range_top_k(self, mock_proxy_config, monkeypatch):
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
@@ -3248,7 +3253,7 @@ class TestWebSearchInterceptionSettingsEndpoints:
 
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
         monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(search_tool_name="running")])
-        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
+        mock_proxy_config["config"]().litellm_settings["websearch_interception_params"] = {
             "enabled": True,
             "enabled_providers": ["bedrock", "vertex_ai"],
             "search_tool_name": "my-perplexity-search",
@@ -3291,7 +3296,7 @@ class TestWebSearchInterceptionSettingsEndpoints:
 
         assert resp.status_code == 200, resp.text
         assert mock_proxy_config["save_call_count"]() == 1
-        assert mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] == payload
+        assert mock_proxy_config["config"]().litellm_settings["websearch_interception_params"] == payload
 
     def test_get_reports_enabled_while_the_callback_is_running_without_a_stored_flag(
         self, mock_proxy_config, mock_auth, monkeypatch
@@ -3303,7 +3308,7 @@ class TestWebSearchInterceptionSettingsEndpoints:
 
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
         monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(search_tool_name="from-config")])
-        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
+        mock_proxy_config["config"]().litellm_settings["websearch_interception_params"] = {
             "enabled_providers": ["bedrock"],
             "search_tool_name": "my-perplexity-search",
         }
@@ -3320,7 +3325,7 @@ class TestWebSearchInterceptionSettingsEndpoints:
 
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
         monkeypatch.setattr(litellm, "callbacks", [])
-        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
+        mock_proxy_config["config"]().litellm_settings["websearch_interception_params"] = {
             "enabled_providers": ["bedrock"],
         }
 
@@ -3356,7 +3361,7 @@ class TestWebSearchInterceptionSettingsEndpoints:
 
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
         monkeypatch.setattr(litellm, "callbacks", [])
-        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
+        mock_proxy_config["config"]().litellm_settings["websearch_interception_params"] = {
             "enabled": True,
             "search_tool_name": "cluster-search",
         }
@@ -3373,7 +3378,7 @@ class TestWebSearchInterceptionSettingsEndpoints:
 
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
         monkeypatch.setattr(litellm, "callbacks", [])
-        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {"enabled": True}
+        mock_proxy_config["config"]().litellm_settings["websearch_interception_params"] = {"enabled": True}
 
         resp = client.get("/get/websearch_interception_settings")
 
@@ -3391,7 +3396,7 @@ class TestWebSearchInterceptionSettingsEndpoints:
 
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
         monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(search_tool_name="running")])
-        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {"enabled": True}
+        mock_proxy_config["config"]().litellm_settings["websearch_interception_params"] = {"enabled": True}
 
         resp = client.get("/get/websearch_interception_settings")
 

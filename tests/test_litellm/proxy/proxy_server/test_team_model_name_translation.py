@@ -18,6 +18,7 @@ import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import (
     LiteLLM_UserTable,
     LitellmUserRoles,
+    ProxyRuntimeConfig,
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.model_listing_utils import (
@@ -119,7 +120,7 @@ async def test_model_info_v2_translates_team_model_name(monkeypatch):
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "prisma_client", MagicMock())
-    monkeypatch.setattr(ps.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(ps.proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({})))
     monkeypatch.setattr(
         ps,
         "_apply_search_filter_to_models",
@@ -175,7 +176,7 @@ async def test_model_info_v2_exact_model_filter_matches_team_public_name(monkeyp
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "prisma_client", MagicMock())
-    monkeypatch.setattr(ps.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(ps.proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({})))
     monkeypatch.setattr(
         ps,
         "_apply_search_filter_to_models",

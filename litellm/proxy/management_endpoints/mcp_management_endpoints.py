@@ -3017,14 +3017,16 @@ if MCP_AVAILABLE:
 
             litellm.public_mcp_servers = request.mcp_server_ids
 
-            # Update config with new settings
-            if "litellm_settings" not in config or config["litellm_settings"] is None:
-                config["litellm_settings"] = {}
-
-            config["litellm_settings"]["public_mcp_servers"] = litellm.public_mcp_servers
-
             # Save the updated config
-            await proxy_config.save_config(new_config=config)
+            await proxy_config.save_config(
+                new_config=config.with_section(
+                    "litellm_settings",
+                    {
+                        **config.litellm_settings,
+                        "public_mcp_servers": litellm.public_mcp_servers,
+                    },  # mutable-ok: replacement section for save_config
+                )
+            )
 
             verbose_proxy_logger.debug(
                 "Updated public mcp servers to: %s by user: %s", litellm.public_mcp_servers, user_api_key_dict.user_id

@@ -1,5 +1,5 @@
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
@@ -86,7 +86,7 @@ class MCPToolRegistry:
 
     def load_tools_from_config(
         self,
-        mcp_tools_config: dict[str, Any] | None = None,
+        mcp_tools_config: Iterable[Mapping[str, Any]] | None = None,
         config_file_path: str | None = None,
     ) -> None:
         """
@@ -105,7 +105,7 @@ class MCPToolRegistry:
 
         for tool_config in mcp_tools_config:
             if not isinstance(tool_config, dict):
-                raise ValueError("mcp_tools_config must be a list of dictionaries")
+                raise ValueError("mcp_tools_config must be a list of dictionaries")  # pyright: ignore[reportUnnecessaryIsInstance]  # entries arrive as raw YAML dicts at runtime
 
             name = tool_config.get("name")
             description = tool_config.get("description")

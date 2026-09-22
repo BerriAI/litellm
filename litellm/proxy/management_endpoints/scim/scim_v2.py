@@ -373,7 +373,7 @@ async def _get_scim_upsert_user_setting() -> bool:
         from litellm.proxy.proxy_server import proxy_config
 
         config: Final = await proxy_config.get_config()
-        litellm_settings: Final = config.get("litellm_settings", {}) or {}
+        litellm_settings: Final = config.litellm_settings
         scim_upsert_user: Final = litellm_settings.get("scim_upsert_user", True)
 
         # Default to True if not set (backward compatibility)
@@ -412,7 +412,7 @@ async def _get_scim_admin_group() -> str | None:
         from litellm.proxy.proxy_server import proxy_config
 
         config: Final = await proxy_config.get_config()
-        litellm_settings: Final = config.get("litellm_settings", {}) or {}
+        litellm_settings: Final = config.litellm_settings
         return litellm_settings.get("scim_admin_group") or None
     except Exception as e:
         verbose_proxy_logger.warning("Error reading scim_admin_group setting, defaulting to None: %s", e)
