@@ -9,7 +9,7 @@ import os
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeVar, cast
 
 from pydantic import BaseModel
 
@@ -3627,29 +3627,30 @@ class PrometheusLogger(CustomLogger):
         from litellm.proxy.auth.auth_checks import get_team_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
-        _total_team_spend: Final = (spend or 0) + response_cost
-        team_object: Final = LiteLLM_TeamTable(
-            team_id=team_id,
-            team_alias=team_alias,
-            spend=_total_team_spend,
-            max_budget=max_budget,
-        )
+        team_info: Optional[LiteLLM_TeamTable] = None
         try:
-            team_info: Final = await get_team_object(
+            team_info = await get_team_object(
                 team_id=team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
             )
         except Exception as e:
             verbose_logger.debug("[Non-Blocking] Prometheus: Error getting team info: %s", e)
-            return team_object
 
+        _base_spend: Final = (
+            spend if spend is not None else (team_info.spend if team_info and team_info.spend is not None else 0)
+        )
+        _resolved_max_budget: Final = (
+            max_budget if max_budget is not None else (team_info.max_budget if team_info else None)
+        )
+        team_object: Final = LiteLLM_TeamTable(
+            team_id=team_id,
+            team_alias=team_alias,
+            spend=_base_spend + response_cost,
+            max_budget=_resolved_max_budget,
+        )
         if team_info:
             team_object.budget_reset_at = team_info.budget_reset_at
-            if team_object.max_budget is None and team_info.max_budget is not None:
-                team_object.max_budget = team_info.max_budget
-            if spend is None and team_info.spend is not None:
-                team_object.spend = team_info.spend + response_cost
 
         return team_object
 

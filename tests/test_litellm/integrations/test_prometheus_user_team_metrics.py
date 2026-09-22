@@ -377,7 +377,7 @@ async def test_assemble_team_object_uses_db_spend_when_metadata_is_none(
         team_object = await prometheus_logger._assemble_team_object(
             team_id="team-1",
             team_alias="team-a",
-            spend=None,  # simulates None coming from request metadata
+            spend=None,
             max_budget=1000.0,
             response_cost=0.5,
         )
@@ -404,7 +404,7 @@ async def test_assemble_team_object_does_not_override_metadata_spend(
         team_object = await prometheus_logger._assemble_team_object(
             team_id="team-1",
             team_alias="team-a",
-            spend=50.0,  # metadata has a real value
+            spend=50.0,
             max_budget=1000.0,
             response_cost=1.0,
         )
