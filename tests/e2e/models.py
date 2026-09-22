@@ -705,23 +705,11 @@ class VideoCreateBody(BaseModel):
     model: str
     prompt: str
     seconds: str | None = None
-    size: str | None = None
 
 
 class VideoCreateResponse(BaseModel):
     id: str
     status: str | None = None
-
-
-class VideoError(BaseModel):
-    code: str | None = None
-    message: str | None = None
-
-
-class VideoStatusResponse(BaseModel):
-    id: str
-    status: str
-    error: VideoError | None = None
 
 
 # ---------- rerank ----------
@@ -759,6 +747,12 @@ class OcrDocument(BaseModel):
 class OcrBody(BaseModel):
     model: str
     document: OcrDocument
+
+
+class OcrForm(BaseModel):
+    """Multipart /v1/ocr form fields; the document travels as the `file` part."""
+
+    model: str
 
 
 class OcrPage(BaseModel):
@@ -808,6 +802,51 @@ class ImageDatum(BaseModel):
 
 class ImageGenerationResponse(BaseModel):
     data: list[ImageDatum] = []
+
+
+class ImageEditForm(BaseModel):
+    """POST /v1/images/edits form fields; the image travels as the `image` multipart part."""
+
+    model: str
+    prompt: str
+    size: str = "1024x1024"
+    quality: str = "low"
+
+
+class SearchBody(BaseModel):
+    """POST /v1/search/{search_tool_name} body (Perplexity-compatible)."""
+
+    query: str
+    max_results: int = 2
+
+
+class SearchResultItem(BaseModel):
+    title: str = ""
+    url: str = ""
+    snippet: str = ""
+
+
+class SearchResponse(BaseModel):
+    results: list[SearchResultItem] = []
+
+
+class SearchToolLiteLLMParamsBody(BaseModel):
+    search_provider: str
+
+
+class SearchToolBody(BaseModel):
+    search_tool_name: str
+    litellm_params: SearchToolLiteLLMParamsBody
+
+
+class SearchToolCreateBody(BaseModel):
+    """POST /search_tools body: the tool as it would sit under `search_tools:` in the config."""
+
+    search_tool: SearchToolBody
+
+
+class SearchToolCreateResponse(BaseModel):
+    search_tool_id: str
 
 
 # ---------- audio ----------
@@ -1140,7 +1179,6 @@ class LiteLLMParamsBody(BaseModel):
     input_cost_per_token_priority: float | None = None
     output_cost_per_token_priority: float | None = None
     extra_headers: dict[str, str] | None = None
-    ssl_verify: bool | None = None
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
     auto_router_config: str | None = None

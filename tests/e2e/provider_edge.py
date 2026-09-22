@@ -44,25 +44,18 @@ import functools
 import hashlib
 import os
 import re
-import ssl
 import threading
 from collections import deque
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from ipaddress import ip_address
 from itertools import islice
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, assert_never
 from urllib.parse import parse_qsl, urlsplit
 
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
 from e2e_http import (
     NetworkError,
     StreamChunk,
@@ -546,13 +539,8 @@ class ReplayEdge:
 
 @dataclass(frozen=True, slots=True)
 class LiveEdge:
-    """``hang_up`` gets (method, upstream url) and answers True for a request the
-    edge must close mid-message instead of forwarding, which the proxy sees as the
-    provider dropping the connection."""
-
     observe_request: Callable[[str, Mapping[str, str], bytes | None], None] | None = None
     sign: RequestSigner | None = None
-    hang_up: Callable[[str, str], bool] | None = None
 
 
 type EdgeBackend = RecordEdge | ReplayEdge | LiveEdge | CacheEdge
@@ -803,15 +791,12 @@ def _handle_live(
     cache: CacheEdge | None = None, mount: str = "", test_key: str | None = None,
     observe_request: Callable[[str, Mapping[str, str], bytes | None], None] | None = None,
     sign: RequestSigner | None = None,
-    hang_up: Callable[[str, str], bool] | None = None,
 ) -> EdgeOutcome:
     forwarded: Final = {
         name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS
     }
     if observe_request is not None:
         observe_request(url, forwarded, body)
-    if hang_up is not None and hang_up(method, url):
-        return EdgeStream(200, {}, (step for step in (StreamTruncation(reason="edge hang-up"),)))
     outbound: Final = forwarded if sign is None else sign(method, url, forwarded, body)
     head: Final = (
         forward_stream(method, url, headers=outbound, body=body, timeout=timeout)
@@ -890,10 +875,10 @@ def handle_edge_request(
                 method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
                 backend, mount, test_key,
             )
-        case LiveEdge(observe_request=observe_request, sign=sign, hang_up=hang_up):
+        case LiveEdge(observe_request=observe_request, sign=sign):
             return _handle_live(
                 method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
-                observe_request=observe_request, sign=sign, hang_up=hang_up,
+                observe_request=observe_request, sign=sign,
             )
         case RecordEdge():
             return _handle_record(
@@ -1030,49 +1015,9 @@ class _EdgeHTTPServer(ThreadingHTTPServer):
 class ProviderEdge:
     port: int
     advertise_host: str
-    scheme: Literal["http", "https"] = "http"
 
     def api_base(self, mount: str) -> str:
-        return f"{self.scheme}://{self.advertise_host}:{self.port}/{mount}"
-
-
-@dataclass(frozen=True, slots=True)
-class EdgeTls:
-    certificate_path: Path
-    key_path: Path
-
-
-def _subject_alternative_name(host: str) -> x509.GeneralName:
-    try:
-        return x509.IPAddress(ip_address(host))
-    except ValueError:
-        return x509.DNSName(host)
-
-
-def self_signed_tls(directory: Path, host: str) -> EdgeTls:
-    key: Final = ec.generate_private_key(ec.SECP256R1())
-    name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)])
-    now: Final = datetime.now(UTC)
-    certificate: Final = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - timedelta(minutes=5))
-        .not_valid_after(now + timedelta(days=1))
-        .add_extension(x509.SubjectAlternativeName([_subject_alternative_name(host)]), critical=False)
-        .sign(key, hashes.SHA256())
-    )
-    certificate_path: Final = directory / "edge.crt"
-    key_path: Final = directory / "edge.key"
-    certificate_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
-    key_path.write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
-        )
-    )
-    return EdgeTls(certificate_path=certificate_path, key_path=key_path)
+        return f"http://{self.advertise_host}:{self.port}/{mount}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1093,7 +1038,6 @@ def start_provider_edge(
     advertise_host: str | None = None,
     forward_timeout: float = 60.0,
     observation: ProviderRequestObservation | None = None,
-    tls: EdgeTls | None = None,
 ) -> RunningEdge:
     """Boot an edge server on an OS-assigned port in a daemon thread.
     ``advertise_host`` is what api_base URLs name (it differs from the bind
@@ -1102,18 +1046,10 @@ def start_provider_edge(
     server: Final = _EdgeHTTPServer(
         (bind_host, 0), backend=backend, mounts=mounts, forward_timeout=forward_timeout, observation=observation
     )
-    if tls is not None:
-        context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(certfile=tls.certificate_path, keyfile=tls.key_path)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
     thread: Final = threading.Thread(target=server.serve_forever, name="e2e-provider-edge", daemon=True)
     thread.start()
     return RunningEdge(
-        edge=ProviderEdge(
-            port=server.server_address[1],
-            advertise_host=advertise_host or bind_host,
-            scheme="http" if tls is None else "https",
-        ),
+        edge=ProviderEdge(port=server.server_address[1], advertise_host=advertise_host or bind_host),
         server=server,
     )
 

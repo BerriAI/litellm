@@ -85,6 +85,8 @@ from models import (
     RerankResponse,
     RouterCurrentValues,
     RouterSettingsResponse,
+    SearchToolCreateBody,
+    SearchToolCreateResponse,
     SpendLogRow,
     SpendLogs,
     SpendLogsPage,
@@ -99,9 +101,6 @@ from models import (
     ToolsetUpdateBody,
     UserDeleteBody,
     UserDeleteResponse,
-    VideoCreateBody,
-    VideoCreateResponse,
-    VideoStatusResponse,
 )
 from provider_cache_routing import route_cache_model
 from pydantic import BaseModel
@@ -862,6 +861,30 @@ class ProxyClient:
             response_type=NoBody,
         )
 
+    def create_search_tool(self, body: SearchToolCreateBody) -> str:
+        """POST /search_tools: register a search tool on the running proxy and return its id
+        once every worker has had a config-reload window to pick it up from the DB."""
+        search_tool_id: Final = unwrap(
+            self.transport.post(
+                "/search_tools",
+                headers=self.management_headers(),
+                json=body,
+                response_type=SearchToolCreateResponse,
+            )
+        ).search_tool_id
+        settle_propagation(time.monotonic())
+        return search_tool_id
+
+    def delete_search_tool(self, search_tool_id: str) -> None:
+        result = self.transport.delete(
+            f"/search_tools/{search_tool_id}",
+            headers=self.management_headers(),
+            json=NoBody(),
+            response_type=NoBody,
+        )
+        if not is_ok(result):
+            warnings.warn(f"delete_search_tool({search_tool_id!r}) failed: {result}", stacklevel=2)
+
     def create_credential(self, body: CredentialCreateBody) -> None:
         unwrap(
             self.transport.post(
@@ -957,24 +980,6 @@ class ProxyClient:
             headers=self.transport.bearer(key),
             json=body,
             response_type=OcrResponse,
-            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
-        )
-
-    def create_video(self, key: str, body: VideoCreateBody) -> Result[VideoCreateResponse]:
-        return self.transport.post(
-            "/v1/videos",
-            headers=self.transport.bearer(key),
-            json=body,
-            response_type=VideoCreateResponse,
-            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
-        )
-
-    def video_status(self, key: str, video_id: str) -> Result[VideoStatusResponse]:
-        return self.transport.get(
-            f"/v1/videos/{video_id}",
-            headers=self.transport.bearer(key),
-            params=NoBody(),
-            response_type=VideoStatusResponse,
             timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
         )
 
