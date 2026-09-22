@@ -69,7 +69,7 @@ impl Codec {
     }
 
     #[cfg(feature = "fast")]
-    fn fast_counter(&self) -> Result<FastTokenizer, Error> {
+    fn fast_counter(&self) -> Option<FastTokenizer> {
         match *self {
             #[cfg(feature = "tiktoken")]
             Self::Tiktoken(ref tokenizer) => tokenizer.fast_counter(),
@@ -85,7 +85,7 @@ impl Codec {
 pub(crate) struct Tokenizer {
     inner: Arc<Codec>,
     #[cfg(feature = "fast")]
-    fast: OnceLock<Arc<FastTokenizer>>,
+    fast: OnceLock<Option<Arc<FastTokenizer>>>,
 }
 
 #[pymethods]
@@ -170,19 +170,15 @@ impl Tokenizer {
             .map_err(token_count_error_to_pyerr)
     }
 
-    /// Token count of `text`. `fast` opts into the count-only counter, which shares this
-    /// tokenizer's model; it declines when the build lacks the `fast` feature.
     #[pyo3(signature = (text, fast = false))]
     fn count(&self, py: Python<'_>, text: &Bound<'_, PyString>, fast: bool) -> PyResult<usize> {
         enter_native()?;
         let text = self.text(text)?;
-        if fast {
-            let counter = self.fast_counter(py)?;
-            return release_gil(py, || counter.count_tokens(&text))
-                .map_err(|error| token_count_error_to_pyerr(error.into()));
-        }
-        release_gil(py, || self.inner.codec().count_tokens(&text))
-            .map_err(token_count_error_to_pyerr)
+        let counter = self.counter(py, fast);
+        release_gil(py, || {
+            litellm_token_counter::Tokenizer::count_tokens(&counter, &text)
+        })
+        .map_err(token_count_error_to_pyerr)
     }
 
     #[getter]
@@ -443,27 +439,22 @@ impl Tokenizer {
         }
     }
 
-    pub(crate) fn codec(&self) -> Arc<Codec> {
-        Arc::clone(&self.inner)
-    }
-
-    /// The count-only counter over this tokenizer's model, built on first use. Two first
-    /// uses racing may both build it; one result is kept, and a failure is never cached.
-    #[cfg(feature = "fast")]
-    pub(crate) fn fast_counter(&self, py: Python<'_>) -> PyResult<Arc<FastTokenizer>> {
-        if let Some(counter) = self.fast.get() {
-            return Ok(Arc::clone(counter));
+    pub(crate) fn counter(&self, py: Python<'_>, fast: bool) -> SharedCounter {
+        #[cfg(feature = "fast")]
+        if fast {
+            let counter = self.fast.get().unwrap_or_else(|| {
+                release_gil(py, || {
+                    self.fast
+                        .get_or_init(|| self.inner.fast_counter().map(Arc::new))
+                })
+            });
+            if let Some(counter) = counter {
+                return SharedCounter::Fast(Arc::clone(counter));
+            }
         }
-        let built = release_gil(py, || self.inner.fast_counter().map(Arc::new))
-            .map_err(token_count_error_to_pyerr)?;
-        Ok(Arc::clone(self.fast.get_or_init(|| built)))
-    }
-
-    #[cfg(not(feature = "fast"))]
-    pub(crate) fn fast_counter(&self, _py: Python<'_>) -> PyResult<Arc<SharedCodec>> {
-        Err(RustBridgeDeclined::new_err(
-            "fast token counting requires the fast feature",
-        ))
+        #[cfg(not(feature = "fast"))]
+        let _ = (py, fast);
+        SharedCounter::Codec(Arc::clone(&self.inner))
     }
 
     /// A Python `str` as UTF-8. tiktoken replaces lone surrogates the way its Python `encode`
@@ -510,23 +501,19 @@ impl Tokenizer {
     }
 }
 
-/// A codec shared with a `TokenCounter`, counting through the exact encode path.
-pub(crate) struct SharedCodec(pub(crate) Arc<Codec>);
-
-impl litellm_token_counter::Tokenizer for SharedCodec {
-    fn count_tokens(&self, text: &str) -> Result<usize, Error> {
-        self.0.codec().count_tokens(text)
-    }
+pub(crate) enum SharedCounter {
+    Codec(Arc<Codec>),
+    #[cfg(feature = "fast")]
+    Fast(Arc<FastTokenizer>),
 }
 
-/// A count-only counter shared with a `TokenCounter`.
-#[cfg(feature = "fast")]
-pub(crate) struct SharedFast(pub(crate) Arc<FastTokenizer>);
-
-#[cfg(feature = "fast")]
-impl litellm_token_counter::Tokenizer for SharedFast {
+impl litellm_token_counter::Tokenizer for SharedCounter {
     fn count_tokens(&self, text: &str) -> Result<usize, Error> {
-        self.0.count_tokens(text).map_err(Error::from)
+        match self {
+            Self::Codec(codec) => codec.codec().count_tokens(text),
+            #[cfg(feature = "fast")]
+            Self::Fast(counter) => counter.count_tokens(text).map_err(Error::from),
+        }
     }
 }
 

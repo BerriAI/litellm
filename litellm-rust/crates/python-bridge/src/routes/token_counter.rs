@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::{num::NonZero, thread::available_parallelism};
 
-use litellm_host_python::run_async;
+use litellm_host_python::{enter_native, run_async};
 use litellm_token_counter::{
     CountableRequest, Error, InputTokenCount, TokenCounter as CoreTokenCounter,
 };
@@ -13,9 +13,7 @@ use pyo3::{
 use tokio::sync::Semaphore;
 
 use crate::errors::RustBridgeDeclined;
-#[cfg(feature = "fast")]
-use crate::tokenizer::SharedFast;
-use crate::tokenizer::{SharedCodec, Tokenizer};
+use crate::tokenizer::Tokenizer;
 
 /// Counts the input tokens of a raw request body off the Python event loop with
 /// the GIL released. Python owns which requests get here and what to do with
@@ -30,27 +28,11 @@ pub(crate) struct TokenCounter {
 
 #[pymethods]
 impl TokenCounter {
-    /// A counter over an already loaded `Tokenizer`, sharing its model. `fast` opts into
-    /// the count-only counter derived from that model; it declines when the build lacks
-    /// the `fast` feature.
     #[staticmethod]
     #[pyo3(signature = (tokenizer, fast = false))]
     fn from_tokenizer(py: Python<'_>, tokenizer: &Tokenizer, fast: bool) -> PyResult<Self> {
-        let inner = if fast {
-            #[cfg(feature = "fast")]
-            {
-                CoreTokenCounter::new(SharedFast(tokenizer.fast_counter(py)?))
-            }
-            #[cfg(not(feature = "fast"))]
-            {
-                let _ = py;
-                return Err(RustBridgeDeclined::new_err(
-                    "fast token counting requires the fast feature",
-                ));
-            }
-        } else {
-            CoreTokenCounter::new(SharedCodec(tokenizer.codec()))
-        };
+        enter_native()?;
+        let inner = CoreTokenCounter::new(tokenizer.counter(py, fast));
         Ok(Self {
             inner: Arc::new(inner),
             encode_slots: Arc::new(Semaphore::new(encode_parallelism())),

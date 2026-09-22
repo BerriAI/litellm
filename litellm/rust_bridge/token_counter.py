@@ -5,13 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import (  # noqa: TID251  # native extension exposes untyped callables
-    TYPE_CHECKING,
-    Final,
-    Literal,
-    Protocol,
-    cast,
-)
+from typing import TYPE_CHECKING, Final, Literal, Protocol, cast  # noqa: TID251  # PyO3 binding validation
 
 from pydantic import TypeAdapter
 from typing_extensions import assert_never
@@ -85,9 +79,7 @@ def rust_tokenizer(model: str) -> RustTokenizer | None:
 
 @lru_cache(maxsize=4)
 def _counter(factory: RustTokenCounterFactory, tokenizer: RustTokenizer) -> RustTokenCounter:
-    """One counter per tokenizer, over the native tokenizer the codec path shares, counting
-    with the count-only counter derived from it."""
-    return factory.from_tokenizer(_native_tokenizer(tokenizer), fast=True)
+    return factory.from_tokenizer(_native_tokenizer(tokenizer))
 
 
 def _native_tokenizer(tokenizer: RustTokenizer) -> NativeTokenizer:

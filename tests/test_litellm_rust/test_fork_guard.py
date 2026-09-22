@@ -148,7 +148,8 @@ def test_sdk_call_in_a_child_forked_after_native_use_raises_instead_of_hanging()
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="fork only")
-def test_tokenizers_share_the_native_process_guard() -> None:
+@pytest.mark.parametrize("warm_fast_counter", (False, True))
+def test_tokenizers_share_the_native_process_guard(warm_fast_counter: bool) -> None:
     script: Final = """
 import asyncio
 import os
@@ -177,6 +178,8 @@ pid = os.fork()
 if pid == 0:
     tokenizer = HuggingFaceTokenizer.from_str(claude_json_str)
     encoding = _native.Tokenizer.from_tiktoken("cl100k_base")
+    if os.environ["WARM_FAST_COUNTER"] == "True":
+        _native.TokenCounter.from_tokenizer(encoding, fast=True)
     expected = [item.ids for item in tokenizer.encode_batch(["hello", "world"])]
     assert _native.process_state_started()
     grandchild = os.fork()
@@ -185,6 +188,9 @@ if pid == 0:
             lambda: tokenizer.encode_batch(["hello", "world"]),
             lambda: tokenizer.encode("hello"),
             lambda: encoding.count("hello"),
+            lambda: encoding.count("hello", fast=True),
+            lambda: _native.TokenCounter.from_tokenizer(encoding),
+            lambda: _native.TokenCounter.from_tokenizer(encoding, fast=True),
             lambda: _native.Tokenizer.from_tiktoken("cl100k_base"),
             lambda: asyncio.run(count_input_tokens({"prompt": "hello"}, b'{"prompt": "hello"}', ("counter-fork-fixture",))),
         ):
@@ -202,7 +208,12 @@ assert os.waitpid(pid, 0)[1] == 0
 """
     result: Final = run_child_interpreter(
         script,
-        env={**os.environ, "OBJC_DISABLE_INITIALIZE_FORK_SAFETY": "YES", "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
+        env={
+            **os.environ,
+            "OBJC_DISABLE_INITIALIZE_FORK_SAFETY": "YES",
+            "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+            "WARM_FAST_COUNTER": str(warm_fast_counter),
+        },
         timeout=30,
     )
 

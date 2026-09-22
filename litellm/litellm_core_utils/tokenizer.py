@@ -150,7 +150,7 @@ class OpenAIEncoding:
         return self._native.encode_single_token(piece)
 
     def count(self, text: str, fast: bool = False) -> int:
-        """Token count of `text`; `fast` opts into the count-only counter over this encoding's ranks."""
+        """Count ordinary text; `fast` accelerates supported encodings and otherwise counts normally."""
         return self._native.count(text, fast)
 
     # ---- decoding -------------------------------------------------------------------------
@@ -345,7 +345,7 @@ class HuggingFaceTokenizer:
         return self._native.encode_batch_huggingface(sequences, is_pretokenized, add_special_tokens, fast)
 
     def count(self, text: str, fast: bool = False) -> int:
-        """Token count of `text`; `fast` opts into the count-only counter over this tokenizer's model."""
+        """Count with this tokenizer's configuration; `fast` uses acceleration where supported."""
         return self._native.count(text, fast)
 
     def decode(self, ids: Sequence[int], skip_special_tokens: bool = True) -> str:

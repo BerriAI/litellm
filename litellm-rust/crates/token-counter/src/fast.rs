@@ -1,34 +1,29 @@
 use litellm_token_counter_fast::Error as BackendError;
 pub use litellm_token_counter_fast::FastTokenizer;
 
-use crate::{Error, TokenCounter, Tokenizer};
+use crate::{Error, TextCodec, TokenCounter, Tokenizer};
 
-/// A count-only counter derived from a loaded codec, sharing its parsed model rather than
-/// loading the artifact twice. Opt-in: it trades the codec's generality for count speed.
-pub trait FastCounter {
-    fn fast_counter(&self) -> Result<FastTokenizer, Error>;
+pub trait FastCounter: TextCodec {
+    fn fast_counter(&self) -> Option<FastTokenizer>;
 }
 
 #[cfg(feature = "huggingface")]
 impl FastCounter for crate::huggingface::HuggingFaceTokenizer {
-    fn fast_counter(&self) -> Result<FastTokenizer, Error> {
-        Ok(FastTokenizer::from_shared(self.shared()))
+    fn fast_counter(&self) -> Option<FastTokenizer> {
+        Some(FastTokenizer::from_shared(self.shared()))
     }
 }
 
 #[cfg(feature = "tiktoken")]
 impl FastCounter for crate::tiktoken::TiktokenTokenizer {
-    /// Only the encodings the fast scanner reproduces; the rest stay on the codec.
-    fn fast_counter(&self) -> Result<FastTokenizer, Error> {
-        let vocabulary = self.vocabulary().ok_or_else(|| {
-            Error::Ranks("this encoding was built without its vocabulary".to_owned())
-        })?;
+    fn fast_counter(&self) -> Option<FastTokenizer> {
+        let vocabulary = self.vocabulary()?;
         match self.name() {
             "cl100k_base" => FastTokenizer::from_cl100k_pairs(vocabulary.ranks()),
             "o200k_base" | "o200k_harmony" => FastTokenizer::from_o200k_pairs(vocabulary.ranks()),
-            name => return Err(Error::UnsupportedTokenizer(name.to_owned())),
+            _ => return None,
         }
-        .map_err(Error::from)
+        .ok()
     }
 }
 
@@ -118,18 +113,15 @@ mod tests {
     }
 
     #[test]
-    fn encodings_without_a_fast_scanner_are_refused() {
+    fn encodings_without_a_fast_scanner_keep_the_codec() {
         let tiktoken =
             TiktokenTokenizer::from_cached_ranks("p50k_base", |file| Ok(packaged(file))).unwrap();
-        assert!(matches!(
-            tiktoken.fast_counter(),
-            Err(Error::UnsupportedTokenizer(name)) if name == "p50k_base"
-        ));
-        assert!(matches!(
+        assert!(tiktoken.fast_counter().is_none());
+        assert!(
             TiktokenTokenizer::from_name("cl100k_base")
                 .unwrap()
-                .fast_counter(),
-            Err(Error::Ranks(_))
-        ));
+                .fast_counter()
+                .is_none()
+        );
     }
 }
