@@ -3042,6 +3042,45 @@ class TestExtraBodyCannotOverrideModel:
 
         assert result["extra_body"] == {"top_k": 5}, result
 
+    def test_nested_drop_paths_do_not_break_extra_body_filtering(self) -> None:
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params={},
+            passed_params={
+                "model": "hosted_vllm/my-vllm-model",
+                "extra_body": {"model": "hosted_vllm/other", "top_k": 5, "kept": True},
+            },
+            custom_llm_provider="hosted_vllm",
+            openai_params=["model", "temperature"],
+            additional_drop_params=[["tools", "function", "strict"], "top_k"],
+        )
+
+        assert result == {"extra_body": {"kept": True}}, result
+
+    def test_a_list_entry_does_not_break_a_supported_nested_drop_path(self) -> None:
+        def tools() -> list[dict]:
+            return [
+                {
+                    "type": "function",
+                    "function": {"name": "f", "custom_marker": "LEAK", "parameters": {"type": "object"}},
+                }
+            ]
+
+        untouched = litellm.get_optional_params(
+            model="my-vllm-model", custom_llm_provider="hosted_vllm", tools=tools()
+        )
+        assert untouched["tools"][0]["function"]["custom_marker"] == "LEAK", untouched
+
+        result = litellm.get_optional_params(
+            model="my-vllm-model",
+            custom_llm_provider="hosted_vllm",
+            tools=tools(),
+            additional_drop_params=["tools[*].function.custom_marker", ["tools", "function", "custom_marker"]],
+        )
+
+        assert "custom_marker" not in result["tools"][0]["function"], result
+
 
 class TestDropParamsWithPromptCacheKey:
     """
