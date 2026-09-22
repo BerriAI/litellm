@@ -39,6 +39,7 @@ def make_router(
     window: int | None = 512, settings: Mapping[str, object] | None = None, *, compactor_window: int = 32000,
     conflict: bool = False, output: int | None = 64,
     answer_defaults: Mapping[str, object] | None = None,
+    context_fallback: bool = False,
 ) -> litellm.Router:
     config: Final = {
         "tiers": {"SIMPLE": "small", "MEDIUM": "large", "COMPLEX": "large", "REASONING": "large"},
@@ -62,7 +63,8 @@ def make_router(
             "model": "anthropic/summary-fixture", "api_base": "https://compact.test", "api_key": "backup-test",
         }, "model_info": {"id": "backup-compactor", "max_input_tokens": 32000, "max_output_tokens": 4096}},
     ], enable_pre_call_checks=True, num_retries=0, disable_cooldowns=True,
-        retry_policy={"InternalServerErrorRetries": 1})
+        retry_policy={"InternalServerErrorRetries": 1},
+        context_window_fallbacks=[{"auto": ["large"]}] if context_fallback else [])
 
 
 def exchange(surface: Surface, phase: str) -> list[dict[str, object]]:
@@ -175,7 +177,10 @@ async def test_all_surfaces_compact_and_keep_selected_answerer(
     if retry:
         answer.mock(side_effect=answer_after_retry)
 
-    async def execute(protocol: native.CompactionProtocol, request: Mapping[str, object]) -> Mapping[str, object]:
+    async def execute(
+        protocol: native.CompactionProtocol, request: Mapping[str, object], parent_model: str | None = None
+    ) -> Mapping[str, object]:
+        assert parent_model == "auto"
         result: Final = await native.dispatch(router, protocol, request)
         captured.put_nowait(result)
         return result
@@ -229,6 +234,59 @@ async def test_fitting_and_disabled_requests_do_not_compact(
     assert compactor.call_count == 0 and answer.call_count == 1
     assert "Background detail" in answer.calls[0].request.content.decode()
     assert payload == original
+
+
+@pytest.mark.parametrize("surface", ["chat", "messages", "responses"])
+@pytest.mark.parametrize("reason", ["single", "unclosed", "no_compactor"])
+async def test_fitting_request_survives_unavailable_compaction(
+    wire: tuple[respx.Route, respx.Route], surface: Surface, reason: str,
+) -> None:
+    key: Final = "input" if surface == "responses" else "messages"
+    items: Final = [{"role": "user", "content": "Answer with MAPLE-47. Detail. " * 80}]
+    payload: Final = history(surface) if reason == "no_compactor" else {key: (
+        items if reason == "single" else [*items, *exchange(surface, "open")[:1], {"role": "user", "content": "Answer"}]
+    )}
+    counted: Final = make_router()._count_pre_call_check_tokens(payload.get("messages"), payload.get("input"), payload)
+    settings: Final = {"tiers": {"SIMPLE": "small", "MEDIUM": "small", "COMPLEX": "small", "REASONING": "small"}} if reason == "no_compactor" else {}
+    await invoke(make_router(counted + 1, settings), surface, payload)
+    compactor, answer = wire
+    assert compactor.call_count == 0 and answer.call_count == 1
+    assert "Detail" in str(answer.calls[0].request.content) or "Background detail" in str(answer.calls[0].request.content)
+
+
+@pytest.mark.parametrize("surface", ["chat", "messages", "responses"])
+async def test_uncompactable_overflow_uses_explicit_context_fallback(
+    wire: tuple[respx.Route, respx.Route], surface: Surface,
+) -> None:
+    compactor, answer = wire
+    compactor.mock(return_value=httpx.Response(200, json={**native_reply().json(),
+        "content": [{"type": "text", "text": "MAPLE-47"}], "stop_reason": "end_turn"}))
+    payload: Final = {"input" if surface == "responses" else "messages": [
+        {"role": "user", "content": "Answer with MAPLE-47. Detail. " * 150},
+    ]}
+    await invoke(make_router(context_fallback=True), surface, payload)
+    assert answer.call_count == 0 and compactor.call_count == 1
+    assert "compaction" not in json.loads(compactor.calls[0].request.content)
+
+
+@pytest.mark.parametrize("escalate", [False, True])
+async def test_no_native_compactor_respects_explicit_escalation(
+    wire: tuple[respx.Route, respx.Route], monkeypatch: pytest.MonkeyPatch, escalate: bool,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost["summary-fixture"], "supports_anthropic_compaction", False)
+    router: Final = make_router(settings={"enable_context_window_escalation": escalate})
+    compactor, answer = wire
+    compactor.mock(return_value=httpx.Response(200, json={**native_reply().json(),
+        "content": [{"type": "text", "text": "MAPLE-47"}], "stop_reason": "end_turn"}))
+    if not escalate:
+        with pytest.raises(litellm.ContextWindowExceededError, match="No configured compactor"):
+            await invoke(router, "chat", history("chat"))
+        assert compactor.call_count == 0
+    else:
+        await invoke(router, "chat", history("chat"))
+        assert compactor.call_count == 1
+        assert "compaction" not in json.loads(compactor.calls[0].request.content)
+    assert answer.call_count == 0
 
 
 @pytest.mark.parametrize(
@@ -390,7 +448,9 @@ async def test_retry_reuses_summary_or_terminal_cancellation(outcome: Literal["s
     started: Final = asyncio.Event()
     stopped: Final = asyncio.Event()
 
-    async def execute(protocol: native.CompactionProtocol, payload: Mapping[str, object]) -> Mapping[str, object]:
+    async def execute(
+        protocol: native.CompactionProtocol, payload: Mapping[str, object], parent_model: str | None = None
+    ) -> Mapping[str, object]:
         calls.put_nowait(None)
         started.set()
         try:

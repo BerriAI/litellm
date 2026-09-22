@@ -14,6 +14,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.proxy import common_request_processing, proxy_server
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import can_key_call_model
+from litellm.proxy._types import ProxyException
 from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash, get_request_stash
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.router import Router
@@ -28,7 +30,9 @@ _HEADERS: Final = (
 )
 
 
-async def _child(protocol: Literal["chat", "messages"] = "chat", forged: bool = False) -> Mapping[str, object]:
+async def _child(
+    protocol: Literal["chat", "messages"] = "chat", forged: bool = False, parent_model: str | None = None
+) -> Mapping[str, object]:
     executor: Final = compaction_executor.get()
     assert executor is not None
     payload: Final = TypeAdapter(Mapping[str, object]).validate_json(
@@ -39,7 +43,7 @@ async def _child(protocol: Literal["chat", "messages"] = "chat", forged: bool = 
     return await executor(protocol, MappingProxyType({
         "litellm_metadata" if protocol == "messages" and key == "metadata" else key: value
         for key, value in payload.items() if forged or key != "metadata"
-    }))
+    }), parent_model)
 
 
 def _request(app: FastAPI) -> Request:
@@ -77,23 +81,27 @@ async def test_child_preserves_credentials_and_isolates_context(protocol: Litera
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ("chat", "messages"))
-@pytest.mark.parametrize("policy", ("allowed", "denied", "forged"))
+@pytest.mark.parametrize("policy", ("allowed", "denied", "forged", "router_alias", "unrelated_alias"))
 async def test_real_proxy_child_auth_privacy_and_body_policy(
     monkeypatch: pytest.MonkeyPatch, protocol: Literal["chat", "messages"], policy: str,
 ) -> None:
     cache: Final = DualCache()
     token: Final = proxy_server.hash_token("sk-compaction-fixture")
-    await cache.async_set_cache(key=token, value=UserAPIKeyAuth.model_validate(
-        MappingProxyType({"token": token, "models": ("answer",) if policy == "denied" else ("compactor",)})
-    ))
+    models: Final = {"denied": ("answer",), "router_alias": ("auto",), "unrelated_alias": ("other-auto",)}.get(policy, ("compactor",))
+    auth: Final = UserAPIKeyAuth.model_validate(MappingProxyType({"token": token, "models": models}))
+    await cache.async_set_cache(key=token, value=auth)
     dispatched: Final = asyncio.Event()
+    allowed: Final = policy in ("allowed", "router_alias")
 
     async def route(
         data: Mapping[str, object], llm_router: Router | None, user_model: str | None,
         route_type: str, user_api_key_dict: UserAPIKeyAuth | None,
     ) -> Awaitable[ModelResponse]:
         dispatched.set()
-        assert policy == "allowed"
+        assert allowed
+        if policy == "router_alias":
+            with pytest.raises(ProxyException):
+                await can_key_call_model("unrelated-compactor", None, auth, None)
         assert (data["num_retries"], data["timeout"], data["stream_timeout"]) == (0, 7, 7)
         assert data["disable_fallbacks"] is True and data["stream"] is False
         logging: Final = data["litellm_logging_obj"]
@@ -112,15 +120,20 @@ async def test_real_proxy_child_auth_privacy_and_body_policy(
     monkeypatch.setattr(proxy_server, "general_settings", {})
     monkeypatch.setattr(common_request_processing, "route_request", route)
     with inherit_message_logging_privacy(True):
-        call: Final = with_proxy_compaction_executor(_child(protocol, policy == "forged"), _request(proxy_server.app))
-        if policy == "allowed":
+        call: Final = with_proxy_compaction_executor(
+            _child(protocol, policy == "forged", "auto" if policy.endswith("alias") else None), _request(proxy_server.app)
+        )
+        if allowed:
             assert (await call)["id"] == "private-summary"
         else:
-            status: Final = 403 if policy == "denied" else 401
+            status: Final = 401 if policy == "forged" else 403
             with pytest.raises(BadRequestError, match=rf"child request failed \(HTTP {status}\)"):
                 await call
-    assert dispatched.is_set() is (policy == "allowed")
+    assert dispatched.is_set() is allowed
     assert compaction_executor.get() is None
+    if policy.endswith("alias"):
+        with pytest.raises(ProxyException):
+            await can_key_call_model("compactor", None, auth, None)
 
 
 @pytest.mark.asyncio

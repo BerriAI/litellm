@@ -13570,6 +13570,10 @@ class Router:
             )
             if isinstance(selected_strategy.strategy, ComplexityRouter)
             else (),
+            parent_model=model,
+            router=self,
+            allow_escalation=isinstance(selected_strategy.strategy, ComplexityRouter)
+            and selected_strategy.strategy.config.enable_context_window_escalation,
         )
 
         await authorize_member_auto_router_inference(

@@ -36,7 +36,9 @@ _REMOVED_HEADERS: Final = frozenset(
 
 
 async def with_proxy_compaction_executor(call: Awaitable[_ResultT], request: Request) -> _ResultT:
-    async def execute(protocol: Literal["chat", "messages"], payload: Mapping[str, object]) -> Mapping[str, object]:
+    async def execute(
+        protocol: Literal["chat", "messages"], payload: Mapping[str, object], parent_model: str | None = None
+    ) -> Mapping[str, object]:
         logging_disabled: Final = initialize_standard_callback_dynamic_params().get("turn_off_message_logging") is True
 
         async def dispatch() -> Mapping[str, object]:
@@ -50,7 +52,10 @@ async def with_proxy_compaction_executor(call: Awaitable[_ResultT], request: Req
                 if name.lower() not in _REMOVED_HEADERS
                 and not (logging_disabled and name.decode("latin-1").lower() in UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS)
             )
-            with native_compaction_call(), inherit_message_logging_privacy(logging_disabled):
+            with (
+                native_compaction_call(parent_model, str(payload["model"])),
+                inherit_message_logging_privacy(logging_disabled),
+            ):
                 with get_async_asgi_client(
                     app=_ASGI_APP.validate_python(scope["app"]),
                     root_path=root_path,
