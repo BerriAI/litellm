@@ -2303,8 +2303,8 @@ def test_optionally_handle_anthropic_oauth_invalid_url():
     api_key = "sk-ant-oat01-token"
     
     # Test with a URL that will trigger ValueError in urllib.parse.urlparse
-    # In Python 3.12, urlparse(']') raises ValueError: Invalid IPv6 URL
-    updated_headers, updated_api_key = optionally_handle_anthropic_oauth(headers, api_key, api_base="]")
+    # In Python 3.12, urlparse('http://[::1') raises ValueError: Invalid IPv6 URL
+    updated_headers, updated_api_key = optionally_handle_anthropic_oauth(headers, api_key, api_base="http://[::1")
     
     # Since it raises ValueError, _is_anthropic_host returns False.
     # Thus, it strips OAuth headers and sets api_key to None.
