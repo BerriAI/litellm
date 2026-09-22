@@ -207,7 +207,9 @@ async def test_get_agent_with_read_through_recovers_agent_by_name(clean_agent_re
 
 
 @pytest.mark.asyncio
-async def test_get_agent_with_read_through_returns_none_for_unknown_agent(clean_agent_registry, monkeypatch):
+async def test_get_agent_with_read_through_returns_none_for_unknown_agent(
+    clean_agent_registry, fresh_agent_read_through, monkeypatch
+):
     from unittest.mock import AsyncMock, MagicMock
 
     import litellm.proxy.proxy_server as proxy_server
