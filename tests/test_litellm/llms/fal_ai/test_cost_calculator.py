@@ -4,12 +4,9 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
-from litellm.llms.fal_ai.cost_calculator import (
-    cost_calculator,
-    fal_ai_passthrough_cost,
-    fal_ai_passthrough_is_priceable,
-)
+from litellm.llms.fal_ai.cost_calculator import cost_calculator, fal_ai_passthrough_cost
 from litellm.types.utils import ImageObject, ImageResponse
+
 
 @pytest.fixture(autouse=True)
 def _use_local_model_cost_map(monkeypatch):
@@ -228,7 +225,7 @@ def test_passthrough_string_resolution_is_priced_like_the_integer(monkeypatch: p
     assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": 512.0}) == 0.3
 
 
-def test_passthrough_priceable_only_when_the_pricer_returns_a_cost(monkeypatch: pytest.MonkeyPatch):
+def test_passthrough_cost_is_none_only_when_no_price_applies_to_the_request(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(
         litellm.model_cost,
         "fal_ai/fal-ai/priceless-model",
@@ -236,10 +233,12 @@ def test_passthrough_priceable_only_when_the_pricer_returns_a_cost(monkeypatch: 
     )
     monkeypatch.setitem(
         litellm.model_cost,
-        "fal_ai/fal-ai/priced-model",
-        {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_image": 0.01},
+        "fal_ai/fal-ai/keyed-only-model",
+        {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_image_512": 0.02},
     )
     assert fal_ai_passthrough_cost("fal-ai/priceless-model", {}) is None
-    assert fal_ai_passthrough_is_priceable("fal-ai/priceless-model") is False
-    assert fal_ai_passthrough_is_priceable("fal-ai/no-such-model") is False
-    assert fal_ai_passthrough_is_priceable("fal-ai/priced-model") is True
+    assert fal_ai_passthrough_cost("fal-ai/priceless-model", {"resolution": 512}) is None
+    assert fal_ai_passthrough_cost("fal-ai/no-such-model", {}) is None
+    assert fal_ai_passthrough_cost("fal-ai/keyed-only-model", {}) is None
+    assert fal_ai_passthrough_cost("fal-ai/keyed-only-model", {"resolution": 1024}) is None
+    assert fal_ai_passthrough_cost("fal-ai/keyed-only-model", {"resolution": "512"}) == 0.02

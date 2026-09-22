@@ -53,7 +53,7 @@ from litellm.llms.deepgram.common_utils import (
     deepgram_listen_requested_model,
     deepgram_listen_websocket_target,
 )
-from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_is_priceable, fal_ai_queue_base
+from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
@@ -460,10 +460,10 @@ async def fal_ai_proxy_route(
             status_code=401,
             detail="FAL_AI_API_KEY is not set and no fal_ai pass-through deployment credentials are configured",
         )
-    if "/requests/" not in endpoint and not fal_ai_passthrough_is_priceable(endpoint):
+    if "/requests/" not in endpoint and fal_ai_passthrough_cost(endpoint, await _read_request_body(request)) is None:
         raise HTTPException(
             status_code=400,
-            detail=f"fal_ai/{endpoint} has no pricing entry; only priced Fal endpoints can be submitted through /fal_ai",
+            detail=f"fal_ai/{endpoint} has no pricing entry for this request; only priced Fal requests can be submitted through /fal_ai",
         )
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,

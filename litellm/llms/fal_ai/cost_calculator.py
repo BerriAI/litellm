@@ -151,10 +151,6 @@ def fal_ai_passthrough_cost(model: str, request_body: Mapping[str, object]) -> f
     return float(cost) if isinstance(cost, (int, float)) else None
 
 
-def fal_ai_passthrough_is_priceable(model: str) -> bool:
-    return fal_ai_passthrough_cost(model, MappingProxyType({})) is not None
-
-
 def cost_calculator(
     model: str,
     image_response: object,
