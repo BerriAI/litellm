@@ -225,11 +225,13 @@ def master_key_admin_auth(key_hash: str) -> "UserAPIKeyAuth | None":
 
     if not master_key or not secrets.compare_digest(key_hash, hash_token(master_key)):
         return None
-    return UserAPIKeyAuth(
+    auth: Final = UserAPIKeyAuth(
         api_key=LITELLM_PROXY_MASTER_KEY_ALIAS,
         user_role=LitellmUserRoles.PROXY_ADMIN,
         user_id=litellm_proxy_admin_name,
     )
+    auth.via_virtual_key = True
+    return auth
 
 
 async def _reload_active_key_by_hash(key_hash: str) -> "_ResolvedKey | _KeyResolutionFailure":

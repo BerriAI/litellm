@@ -6548,6 +6548,34 @@ class TestMCPDcrBridgeDelegateAdmission:
                 await MCPRequestHandler._reload_admitted_key("not-the-master-hash")
         assert exc_info.value.status_code == 500
 
+    @pytest.mark.parametrize(
+        "flag_enabled, scope, expected",
+        [(True, "scoped", []), (False, "scoped", ["public"]), (True, "unscoped", ["public"])],
+    )
+    async def test_master_envelope_respects_allow_all_scope(self, flag_enabled, scope, expected):
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPServerAccess
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy._types import hash_token
+
+        manager = MCPServerManager()
+        with patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY):
+            admitted = await MCPRequestHandler._reload_admitted_key(hash_token(self._MASTER_KEY))
+        with (
+            patch.object(manager, "get_allow_all_keys_server_ids", return_value=["public"]),
+            patch.object(manager, "_get_active_submitted_mcp_server_ids_for_user", new=AsyncMock(return_value=[])),
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_user",
+                new=AsyncMock(return_value=["granted"] if scope == "scoped" else []),
+            ),
+        ):
+            servers = await manager.get_allowed_mcp_servers(
+                admitted,
+                access=MCPServerAccess(server_ids=(), scope=scope),
+                general_settings={"mcp_allow_all_keys_respects_mcp_scope": flag_enabled},
+            )
+        assert servers == expected
+
     async def test_envelope_for_key_barred_from_mcp_routes_is_rejected_403(self):
         """A key whose allowed_routes exclude MCP must not reach tools via an envelope: the arm runs
         RouteChecks.should_call_route before admitting, exactly as the standard pipeline does between
