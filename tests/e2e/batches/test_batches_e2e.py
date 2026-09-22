@@ -25,6 +25,7 @@ from typing import Final
 
 import pytest
 from batch_cleanup import cleanup_batch, cleanup_file
+from bedrock_env_gateway import BedrockEnvGateway
 from batch_client import (
     AZURE_FILE_EXPIRY_SECONDS,
     UPLOAD_FILENAME,
@@ -1173,6 +1174,68 @@ class TestBedrockBatchGovCloud:
 
         fetched: Final = unwrap(client.retrieve_batch(batch.id, key=key))
         assert fetched.id == batch.id
+
+
+BLANK_S3_RAW_MODEL: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+class TestBedrockBatchBlankS3EnvVars:
+    """Bedrock batch create with AWS_S3_* env vars exported but blank.
+
+    Regression: a blank AWS_S3_ENCRYPTION_KEY_ID or AWS_S3_BUCKET_OWNER env var
+    resolved to "" and was serialized into the create-job request, which Bedrock
+    rejects. The owned gateway exports both vars empty, so the unified lifecycle
+    only passes when blank is treated as unset.
+    """
+
+    @pytest.mark.covers(
+        "llm.batches.bedrock.blank_s3_env.nonstream.works",
+        "llm.files.bedrock.upload.nonstream.works",
+        exercised_on=["batches", "files"],
+    )
+    def test_unified_batch_create_ignores_blank_s3_env_vars(
+        self, resources: ResourceManager
+    ) -> None:
+        gateway: Final = BedrockEnvGateway.start()
+        resources.defer(gateway.stop)
+        client: Final = BatchClient(proxy=gateway.proxy)
+
+        key: Final = client.proxy.generate_key(
+            KeyGenerateBody(models=[], user_id="e2e-test-user")
+        )
+        resources.defer(lambda: client.proxy.delete_key(key))
+
+        file: Final = unwrap(
+            client.upload_file(
+                content=render_jsonl(BLANK_S3_RAW_MODEL),
+                form=FileUploadForm(
+                    purpose="batch", target_model_names="bedrock-blank-s3-batch"
+                ),
+                key=key,
+            )
+        )
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
+        assert_file_object(file, provider="bedrock")
+
+        created: Final = client.create_batch(
+            body=BatchCreateBody(input_file_id=file.id), key=key
+        )
+        assert created.status_code < 400, (
+            f"blank AWS_S3_ENCRYPTION_KEY_ID / AWS_S3_BUCKET_OWNER must be treated as "
+            f"unset; Bedrock rejected the job: {created.body[:400]}"
+        )
+        require_successful_call(created)
+        batch: Final = BatchObject.model_validate_json(created.body)
+        resources.defer(lambda: cleanup_batch(client, batch.id, key=key))
+
+        assert is_managed_id(batch.id), (
+            f"blank-S3-env create via target_model_names must return a managed batch id, "
+            f"got {batch.id!r}"
+        )
+        assert batch.status in CREATED_BATCH_STATUSES, (
+            f"blank-S3-env batch has non-transitional status {batch.status!r}"
+        )
+        assert_batch_object(batch)
 
 
 GEMINI_FILES_RAW_MODEL = "gemini-2.5-flash"
