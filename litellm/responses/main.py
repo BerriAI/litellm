@@ -101,6 +101,63 @@ def _has_file_search_tool(tools: Iterable[Mapping[str, object]] | None) -> bool:
     return any(isinstance(t, dict) and t.get("type") == "file_search" for t in tools)
 
 
+def _litellm_model_responses_request(
+    *,
+    include: list[ResponseIncludable] | None,  # mutable-ok: public SDK boundary
+    instructions: str | None,
+    max_output_tokens: int | None,
+    prompt: PromptObject | None,
+    metadata: dict[str, object] | None,  # mutable-ok: public SDK boundary
+    parallel_tool_calls: bool | None,
+    previous_response_id: str | None,
+    reasoning: Reasoning | None,
+    store: bool | None,
+    background: bool | None,
+    temperature: float | None,
+    text: object,
+    tool_choice: ToolChoice | None,
+    tools: Iterable[ToolParam] | None,
+    top_p: float | None,
+    truncation: Literal["auto", "disabled"] | None,
+    user: str | None,
+    service_tier: str | None,
+    safety_identifier: str | None,
+    extra_headers: dict[str, object] | None,  # mutable-ok: public SDK boundary
+    extra_query: dict[str, object] | None,  # mutable-ok: public SDK boundary
+    extra_body: dict[str, object] | None,  # mutable-ok: public SDK boundary
+    timeout: float | httpx.Timeout | None,
+    custom_llm_provider: str | None,
+    kwargs: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: public SDK adapter requires a native keyword mapping
+    return {  # mutable-ok: public SDK adapter requires a native keyword mapping
+        **kwargs,
+        "include": include,
+        "instructions": instructions,
+        "max_output_tokens": max_output_tokens,
+        "prompt": prompt,
+        "metadata": metadata,
+        "parallel_tool_calls": parallel_tool_calls,
+        "previous_response_id": previous_response_id,
+        "reasoning": reasoning,
+        "store": store,
+        "background": background,
+        "temperature": temperature,
+        "text": text,
+        "tool_choice": tool_choice,
+        "tools": list(tools) if tools is not None else None,  # mutable-ok: adapter requires a native list
+        "top_p": top_p,
+        "truncation": truncation,
+        "user": user,
+        "service_tier": service_tier,
+        "safety_identifier": safety_identifier,
+        "extra_headers": extra_headers,
+        "extra_query": extra_query,
+        "extra_body": extra_body,
+        "timeout": timeout,
+        "custom_llm_provider": custom_llm_provider,
+    }
+
+
 def mock_responses_api_response(
     mock_response: str = "In a peaceful grove beneath a silver moon, a unicorn named Lumina discovered a hidden pool that reflected the stars. As she dipped her horn into the water, the pool began to shimmer, revealing a pathway to a magical realm of endless night skies. Filled with wonder, Lumina whispered a wish for all who dream to find their own hidden magic, and as she glanced back, her hoofprints sparkled like stardust.",
 ):
@@ -617,6 +674,47 @@ async def aresponses(
         if text is not None:
             # Update local_vars to include the converted text parameter
             local_vars["text"] = text
+
+        from litellm.llms.litellm import is_litellm_model
+
+        if is_litellm_model(model):
+            from litellm.llms.litellm.adapters import adispatch_responses
+
+            return cast(  # cast-ok: LiteLLM model adapter returns the declared Responses union
+                ResponsesAPIResponse | BaseResponsesAPIStreamingIterator,
+                await adispatch_responses(
+                    model=model,
+                    input=input,
+                    stream=bool(stream),
+                    request_kwargs=_litellm_model_responses_request(
+                        include=include,
+                        instructions=instructions,
+                        max_output_tokens=max_output_tokens,
+                        prompt=prompt,
+                        metadata=metadata,
+                        parallel_tool_calls=parallel_tool_calls,
+                        previous_response_id=previous_response_id,
+                        reasoning=reasoning,
+                        store=store,
+                        background=background,
+                        temperature=temperature,
+                        text=text,
+                        tool_choice=tool_choice,
+                        tools=tools,
+                        top_p=top_p,
+                        truncation=truncation,
+                        user=user,
+                        service_tier=service_tier,
+                        safety_identifier=safety_identifier,
+                        extra_headers=extra_headers,
+                        extra_query=extra_query,
+                        extra_body=extra_body,
+                        timeout=timeout,
+                        custom_llm_provider=custom_llm_provider,
+                        kwargs=kwargs,
+                    ),
+                ),
+            )
 
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
@@ -1194,6 +1292,44 @@ def responses(
         model = _stripped_model
         local_vars["model"] = model
         use_chat_completions_api = use_chat_completions_api or _from_chat_completions_prefix
+
+        from litellm.llms.litellm import is_litellm_model
+
+        if is_litellm_model(model):
+            from litellm.llms.litellm.adapters import dispatch_responses
+
+            return dispatch_responses(
+                model=model,
+                input=input,
+                stream=bool(stream),
+                request_kwargs=_litellm_model_responses_request(
+                    include=include,
+                    instructions=instructions,
+                    max_output_tokens=max_output_tokens,
+                    prompt=prompt,
+                    metadata=metadata,
+                    parallel_tool_calls=parallel_tool_calls,
+                    previous_response_id=previous_response_id,
+                    reasoning=reasoning,
+                    store=store,
+                    background=background,
+                    temperature=temperature,
+                    text=text,
+                    tool_choice=tool_choice,
+                    tools=tools,
+                    top_p=top_p,
+                    truncation=truncation,
+                    user=user,
+                    service_tier=service_tier,
+                    safety_identifier=safety_identifier,
+                    extra_headers=extra_headers,
+                    extra_query=extra_query,
+                    extra_body=extra_body,
+                    timeout=timeout,
+                    custom_llm_provider=custom_llm_provider,
+                    kwargs=kwargs,
+                ),
+            )
 
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(

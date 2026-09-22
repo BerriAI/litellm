@@ -477,6 +477,37 @@ def anthropic_messages_handler(
 
     local_vars: Final = locals()
     is_async: Final = kwargs.pop("is_async", False)
+
+    from litellm.llms.litellm import is_litellm_model
+
+    if is_litellm_model(model):
+        from litellm.llms.litellm.adapters import (
+            adispatch_anthropic_messages,
+            dispatch_anthropic_messages,
+        )
+
+        dispatch = adispatch_anthropic_messages if is_async else dispatch_anthropic_messages
+        return dispatch(
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            metadata=metadata,
+            stop_sequences=stop_sequences,
+            stream=bool(stream),
+            system=system,
+            temperature=temperature,
+            thinking=thinking,
+            tool_choice=tool_choice,
+            tools=tools,
+            top_k=top_k,
+            top_p=top_p,
+            request_kwargs={  # mutable-ok: public SDK boundary
+                **kwargs,
+                "api_key": api_key,
+                "api_base": api_base,
+                "custom_llm_provider": custom_llm_provider,
+            },
+        )
     # Use provided client or create a new one
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
 
