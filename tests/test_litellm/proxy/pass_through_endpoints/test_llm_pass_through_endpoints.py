@@ -7188,6 +7188,27 @@ class TestFalAIPassthroughRoute:
             is_streaming_request=False,
         )
 
+    def test_submit_to_unpriced_endpoint_returns_400_without_upstream_call(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post("https://queue.fal.run/fal-ai/unpriced-model").mock(
+                return_value=httpx.Response(200, json={"request_id": "req-1"})
+            )
+            response = client.post("/fal_ai/fal-ai/unpriced-model", json={"image_url": "https://example.com/in.png"})
+
+            assert response.status_code == 400, response.text
+            assert "no pricing entry" in response.text
+            assert not route.calls
+
+    def test_status_get_on_unpriced_endpoint_forwards(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.get("https://queue.fal.run/fal-ai/unpriced-model/requests/req-9/status").mock(
+                return_value=httpx.Response(200, json={"status": "IN_PROGRESS"})
+            )
+            response = client.get("/fal_ai/fal-ai/unpriced-model/requests/req-9/status")
+
+            assert response.status_code == 200, response.text
+            assert response.json() == {"status": "IN_PROGRESS"}
+
     def test_missing_fal_key_returns_401(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("FAL_AI_API_KEY", raising=False)
         response = client.post("/fal_ai/fal-ai/trellis", json={})

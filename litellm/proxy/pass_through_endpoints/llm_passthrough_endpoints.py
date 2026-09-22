@@ -52,6 +52,7 @@ from litellm.llms.deepgram.common_utils import (
     deepgram_listen_requested_model,
     deepgram_listen_websocket_target,
 )
+from litellm.llms.fal_ai.cost_calculator import fal_ai_queue_base
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
@@ -422,7 +423,7 @@ async def cohere_proxy_route(
 
 
 def _fal_target(endpoint: str) -> httpx.URL:
-    base_target_url: Final = os.getenv("FAL_AI_QUEUE_API_BASE") or "https://queue.fal.run"
+    base_target_url: Final = fal_ai_queue_base()
     encoded_endpoint: Final = httpx.URL(endpoint).path
     normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
     base_url: Final = httpx.URL(base_target_url)
@@ -452,6 +453,13 @@ async def fal_ai_proxy_route(
             status_code=401,
             detail="FAL_AI_API_KEY is not set and no fal_ai pass-through deployment credentials are configured",
         )
+    if "/requests/" not in endpoint:
+        priced_model: Final = f"fal_ai/{endpoint}"
+        if priced_model not in (litellm.model_cost or {}):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{priced_model} has no pricing entry; only priced Fal endpoints can be submitted through /fal_ai",
+            )
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),

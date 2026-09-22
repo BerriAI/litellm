@@ -101,6 +101,22 @@ def test_handler_charges_for_queue_submit():
     )
 
 
+def test_handler_strips_queue_base_path_prefix(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("FAL_AI_QUEUE_API_BASE", "https://gw.example/fal/queue")
+    handler_result = FalAIPassthroughLoggingHandler().fal_ai_passthrough_handler(
+        response_body={"request_id": "req-1", "status": "IN_QUEUE"},
+        request_body={"image_url": "https://example.com/in.png", "resolution": 1536},
+        logging_obj=_logging_obj(),
+        url_route="https://gw.example/fal/queue/fal-ai/trellis-2",
+        kwargs={},
+    )
+
+    assert handler_result["kwargs"]["model"] == "fal-ai/trellis-2"
+    assert handler_result["kwargs"]["response_cost"] == pytest.approx(
+        litellm.model_cost["fal_ai/fal-ai/trellis-2"]["output_cost_per_image_1536"]
+    )
+
+
 def test_handler_without_url_values_returns_empty_image_response_and_no_cost():
     handler_result = FalAIPassthroughLoggingHandler().fal_ai_passthrough_handler(
         response_body={"status": "COMPLETED"},

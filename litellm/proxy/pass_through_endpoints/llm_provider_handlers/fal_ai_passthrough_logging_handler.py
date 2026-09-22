@@ -2,10 +2,12 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 from urllib.parse import urlparse
 
+import httpx
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost
+from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.utils import ImageObject, ImageResponse
 
@@ -33,7 +35,9 @@ class FalAIPassthroughLoggingHandler:
         url_route: str,
         kwargs: Mapping[str, object],
     ) -> PassThroughEndpointLoggingTypedDict:
-        upstream_path: Final = urlparse(url_route).path.lstrip("/")
+        base_path: Final = httpx.URL(fal_ai_queue_base()).path.strip("/")
+        raw_path: Final = urlparse(url_route).path.strip("/")
+        upstream_path: Final = raw_path.removeprefix(f"{base_path}/") if base_path else raw_path
         model: Final = upstream_path.partition("/requests/")[0]
         is_submit: Final = "/requests/" not in upstream_path
         response: Final = ImageResponse(

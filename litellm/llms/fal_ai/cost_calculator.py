@@ -1,3 +1,4 @@
+import os
 from collections.abc import Mapping
 from math import ceil
 from types import MappingProxyType
@@ -23,6 +24,12 @@ FAL_NAMED_IMAGE_SIZES: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 _OBJECT_MAP: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+FAL_AI_QUEUE_DEFAULT_BASE: Final[str] = "https://queue.fal.run"
+
+
+def fal_ai_queue_base() -> str:
+    return os.getenv("FAL_AI_QUEUE_API_BASE") or FAL_AI_QUEUE_DEFAULT_BASE
 
 
 def _keyed_size(optional_params: Mapping[str, object]) -> str | None:
