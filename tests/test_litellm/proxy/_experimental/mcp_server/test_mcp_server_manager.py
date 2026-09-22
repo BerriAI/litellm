@@ -14574,6 +14574,92 @@ async def test_catalog_database_failure_keeps_registry_but_rejects_operation(mon
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failed", [False, True])
+async def test_catalog_coalesces_waiters_only_behind_a_read_started_after_their_arrival(monkeypatch, failed):
+    started = asyncio.Event()
+    release = asyncio.Event()
+    old_row = _catalog_row()
+    new_row = _catalog_row("updated")
+    read_rows = AsyncMock(return_value=[old_row])
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    previous = await manager.catalog.list()
+    read_rows.reset_mock()
+
+    async def read_current_rows(**kwargs):
+        first = not started.is_set()
+        if first:
+            started.set()
+            await release.wait()
+        if failed:
+            raise RuntimeError("unavailable database")
+        return [old_row if first else new_row]
+
+    read_rows.side_effect = read_current_rows
+    first = asyncio.create_task(manager.catalog.list())
+    await started.wait()
+    followers = [asyncio.create_task(manager.catalog.list()) for _ in range(8)]
+    await asyncio.sleep(0)
+    release.set()
+    results = await asyncio.gather(first, *followers, return_exceptions=True)
+    if failed:
+        assert all(isinstance(result, HTTPException) and result.status_code == 503 for result in results)
+        assert manager.registry == dict(previous)
+    else:
+        assert results[0]["catalog-server"].name == "initial"
+        assert all(result["catalog-server"].name == "updated" for result in results[1:])
+    assert read_rows.await_count == 2
+
+    read_rows.side_effect = None
+    read_rows.return_value = [new_row]
+    assert (await manager.catalog.list())["catalog-server"].name == "updated"
+    assert read_rows.await_count == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interruption", ["background", "cancel_reader", "cancel_waiter"])
+async def test_catalog_queued_refresh_preserves_freshness_through_cancellation(monkeypatch, interruption):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def read_current_rows(**kwargs):
+        first = not started.is_set()
+        if first:
+            started.set()
+            await release.wait()
+        return [_catalog_row("initial" if first else "updated")]
+
+    read_rows = AsyncMock(side_effect=read_current_rows)
+    _catalog_database(monkeypatch, read_rows)
+    manager = MCPServerManager()
+    first = asyncio.create_task(manager.catalog.list())
+    await started.wait()
+    background = asyncio.create_task(manager.reload_servers_from_database()) if interruption == "background" else None
+    waiter = asyncio.create_task(manager.catalog.list())
+    survivors = [asyncio.create_task(manager.catalog.list()) for _ in range(4)]
+    await asyncio.sleep(0)
+    if interruption == "cancel_reader":
+        first.cancel()
+    elif interruption == "cancel_waiter":
+        waiter.cancel()
+    release.set()
+    first_result, waiter_result, *results = await asyncio.gather(first, waiter, *survivors, return_exceptions=True)
+    if background is not None:
+        await background
+    if interruption == "cancel_reader":
+        assert isinstance(first_result, asyncio.CancelledError)
+    else:
+        assert first_result["catalog-server"].name == "initial"
+    if interruption == "cancel_waiter":
+        assert isinstance(waiter_result, asyncio.CancelledError)
+    else:
+        assert waiter_result["catalog-server"].name == "updated"
+    assert all(result["catalog-server"].name == "updated" for result in results)
+    assert read_rows.await_count == 2
+    assert manager.catalog.current is None
+
+
+@pytest.mark.asyncio
 async def test_catalog_serializes_background_and_operation_refreshes(monkeypatch):
     entered = asyncio.Event()
     release = asyncio.Event()

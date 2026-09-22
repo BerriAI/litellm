@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 _P: Final = ParamSpec("_P")
 _R: Final = TypeVar("_R")
+_REFRESH_FAILURE: Final = "MCP server configuration could not be refreshed"
 
 
 @dataclass(slots=True)
@@ -29,6 +30,9 @@ class TargetCatalog:
         self._manager = manager
         self._reload_lock = asyncio.Lock()
         self._scope: ContextVar[_CatalogScope | None] = ContextVar("mcp_catalog_scope", default=None)
+        self._arrival_ticket = 0
+        self._completed_ticket = 0
+        self._snapshot: Mapping[str, MCPServer] | None = None
 
     @property
     def current(self) -> Mapping[str, MCPServer] | None:
@@ -41,8 +45,17 @@ class TargetCatalog:
 
     async def _reload(self, *, reuse_unchanged: bool = False) -> None:
         token: Final = self._scope.set(None)
+        # A shared read must start after each covered operation arrives.
+        covered_ticket: Final = self._arrival_ticket
         try:
             await self._manager._reload_servers_from_database(reuse_unchanged=reuse_unchanged)  # pyright: ignore[reportPrivateUsage]  # existing staged loader
+        except Exception:
+            self._snapshot = None
+            self._completed_ticket = covered_ticket
+            raise
+        else:
+            self._snapshot = MappingProxyType(self._manager.config_mcp_servers | self._manager.registry)
+            self._completed_ticket = covered_ticket
         finally:
             self._scope.reset(token)
 
@@ -64,22 +77,26 @@ class TargetCatalog:
             raise HTTPException(status_code=503, detail="MCP server configuration changed; retry the operation")
 
     async def list(self) -> Mapping[str, MCPServer]:
+        from fastapi import HTTPException  # noqa: PLC0415  # optional proxy dependency
+
         from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime proxy dependency
 
         scope: Final = self._scope.get()
         if scope is not None and scope.active and scope.owner_task_id == id(asyncio.current_task()):
             return scope.servers
+        self._arrival_ticket += 1
+        arrival_ticket: Final = self._arrival_ticket
         async with self._reload_lock:
-            if prisma_client is not None:
+            if prisma_client is None:
+                return MappingProxyType(self._manager.config_mcp_servers | self._manager.registry)
+            if arrival_ticket > self._completed_ticket:
                 try:
                     await self._reload(reuse_unchanged=True)
                 except Exception as exc:  # noqa: BLE001  # never serve an unverified database snapshot
-                    from fastapi import HTTPException  # noqa: PLC0415  # optional proxy dependency
-
-                    raise HTTPException(
-                        status_code=503, detail="MCP server configuration could not be refreshed"
-                    ) from exc
-            return MappingProxyType(self._manager.config_mcp_servers | self._manager.registry)
+                    raise HTTPException(status_code=503, detail=_REFRESH_FAILURE) from exc
+            if self._snapshot is None:
+                raise HTTPException(status_code=503, detail=_REFRESH_FAILURE)
+            return self._snapshot
 
     @asynccontextmanager
     async def operation(self) -> AsyncIterator[Mapping[str, MCPServer]]:
