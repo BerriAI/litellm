@@ -11,6 +11,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.otel import (
     BAGGAGE_PROMOTED_KEYS,
     DB,
@@ -1234,6 +1235,70 @@ def test_llm_span_data_carries_the_caller_trace_controls():
 
     assert data.trace == controls
     assert LLMCallSpanData.from_standard_logging_payload(_sample_payload()).trace == TraceControls()
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "expected"),
+    [
+        ({"litellm_session_id": "conv-body"}, "conv-body"),
+        ({"metadata": {"session_id": "conv-meta"}}, "conv-meta"),
+        ({"litellm_metadata": {"session_id": "conv-anthropic"}}, "conv-anthropic"),
+        ({"proxy_server_request": {"headers": {"langfuse_session_id": "conv-header"}}}, "conv-header"),
+        ({"litellm_session_id": "conv-body", "metadata": {"session_id": "conv-meta"}}, "conv-body"),
+        ({"litellm_session_id": "", "metadata": {"session_id": ""}}, None),
+        ({"litellm_trace_id": "trace-only", "metadata": {"trace_id": "trace-only"}}, None),
+        (
+            {
+                "litellm_session_id": "0" * 32,
+                "litellm_trace_id": "0" * 32,
+                "metadata": {"trace_id": "0" * 32},
+            },
+            None,
+        ),
+        (
+            {
+                "litellm_session_id": "0" * 32,
+                "litellm_trace_id": "0" * 32,
+                "metadata": {"trace_id": "0" * 32},
+                "proxy_server_request": {"headers": {"langfuse_session_id": "conv-header"}},
+            },
+            "conv-header",
+        ),
+        (
+            {
+                "litellm_session_id": "minted-by-proxy",
+                "metadata": {"session_id": "minted-by-proxy", SESSION_ID_GENERATED_METADATA_KEY: True},
+            },
+            None,
+        ),
+        ({}, None),
+    ],
+    ids=[
+        "litellm_session_id",
+        "metadata",
+        "anthropic-metadata",
+        "langfuse-header",
+        "litellm_session_id-beats-metadata",
+        "blank-values",
+        "trace-id-is-not-a-session",
+        "backfilled-from-otel-trace-id-is-not-a-conversation",
+        "backfilled-trace-id-does-not-shadow-the-header",
+        "proxy-generated-is-not-a-conversation",
+        "empty",
+    ],
+)
+def test_llm_call_event_resolves_the_callers_conversation_id(litellm_params, expected):
+    kwargs: Final = {"litellm_params": litellm_params, "litellm_trace_id": "per-request-uuid"}
+    assert LLMCallEvent.from_dict(kwargs).session_id == expected
+
+
+def test_llm_span_stamps_gen_ai_conversation_id_only_when_the_caller_sent_one():
+    with_session: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload(), session_id="conv-1")
+    assert GenAIMapper().map(with_session)[GenAI.CONVERSATION_ID] == "conv-1"
+
+    without: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload(trace_id="per-request-uuid"))
+    assert without.session_id is None
+    assert GenAI.CONVERSATION_ID not in GenAIMapper().map(without)
 
 
 def test_llm_span_carries_proxy_request_route():

@@ -175,6 +175,33 @@ def test_async_log_success_event_emits_llm_call_span():
     assert span.status.status_code is StatusCode.UNSET
 
 
+def test_llm_call_span_carries_the_callers_conversation_id():
+    logger, exporter = _logger()
+    kwargs = {**_kwargs(), "litellm_params": {"litellm_session_id": "conv-42", "metadata": {}}}
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[GenAI.CONVERSATION_ID] == "conv-42"
+
+
+def test_llm_call_span_without_a_caller_session_has_no_conversation_id():
+    """The proxy stamps ``metadata.trace_id`` with the OTel trace id and
+    ``get_litellm_params`` back-fills ``litellm_session_id`` from it."""
+    logger, exporter = _logger()
+    otel_trace_id = "6ca5745ef6780d958f62925747f7a5ee"
+    kwargs = {
+        **_kwargs(payload=_payload(trace_id=otel_trace_id)),
+        "litellm_trace_id": otel_trace_id,
+        "litellm_params": {
+            "litellm_session_id": otel_trace_id,
+            "litellm_trace_id": otel_trace_id,
+            "metadata": {"trace_id": otel_trace_id},
+        },
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.CONVERSATION_ID not in span.attributes
+
+
 def test_streaming_span_carries_time_to_first_chunk():
     logger, exporter = _logger()
     kwargs = {
