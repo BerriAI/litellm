@@ -426,6 +426,20 @@ class TestAnthropicBetaHeadersFiltering:
 
         assert filtered == ["fine-grained-tool-streaming-2025-05-14"]
 
+    @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "vertex_ai"])
+    def test_dangerous_tool_use_forwarded(self, provider):
+        """Claude Code's server-side auto-mode classifier sends `safeguards` together with
+        dangerous-tool-use-2026-09-03. Bedrock Invoke and Vertex rawPredict both answer
+        "safeguards: Extra inputs are not permitted" when the body field arrives without
+        the beta (probed 2026-09-21), so dropping the header turned every auto-mode turn
+        into a 400 on Vertex and silently disabled the classifier on Bedrock."""
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=["dangerous-tool-use-2026-09-03"],
+            provider=provider,
+        )
+
+        assert filtered == ["dangerous-tool-use-2026-09-03"]
+
     def test_null_value_headers_filtered(self):
         """Test that headers with null values are always filtered out."""
         for provider in [
