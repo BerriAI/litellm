@@ -156,6 +156,9 @@
     "tests/integration/providers/test_bedrock_role_configuration.py::test_role_reference_from_db_and_yaml_reaches_real_sts_http_and_bedrock": [
       "other.provider_wire.bedrock.db_yaml_role_reference_reaches_sts_and_signed_request"
     ],
+    "tests/integration/providers/test_bedrock_batch_files_wire.py::test_completions_and_responses_batch_records_upload_as_anthropic_user_messages": [
+      "other.provider_wire.bedrock.batch_file_completions_and_responses_records_reach_s3_as_user_messages"
+    ],
     "tests/integration/routing/test_redis_recovery.py::test_owned_redis_outage_recovers_requests_and_real_response_cache": [
       "other.routing.redis.owned_outage_recovers_serving_and_response_cache"
     ],
