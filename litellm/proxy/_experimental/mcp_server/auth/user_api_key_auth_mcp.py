@@ -1228,9 +1228,15 @@ class MCPRequestHandler:
         project, org, and budget state are NOT re-checked here; the caller runs the admitted
         identity through ``_enforce_admitted_live_policy`` for those.
         """
+        from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
+            master_key_admin_auth,  # noqa: PLC0415  # inline import avoids a module-load circular import
+        )
         from litellm.proxy.auth.auth_checks import get_key_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
+        admin: Final = master_key_admin_auth(key_hash)
+        if admin is not None:
+            return admin
         if prisma_client is None:
             raise HTTPException(status_code=500, detail="Server misconfigured: no database connection")
         try:

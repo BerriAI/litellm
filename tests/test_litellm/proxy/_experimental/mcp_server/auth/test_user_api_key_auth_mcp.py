@@ -6529,6 +6529,25 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         assert exc_info.value.status_code == 503
 
+    async def test_reload_admitted_key_returns_admin_for_master_key_hash(self):
+        """An envelope sealed under the master key has no DB row to reload; the reload resolves it
+        to the PROXY_ADMIN auth context (api_key is the alias, never the hash) rather than failing.
+        A hash that is NOT the master key's still reaches the prisma gate and fails the same as
+        before (500 with no database connection)."""
+        from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+        from litellm.proxy._types import LitellmUserRoles, hash_token
+
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+        ):
+            admitted = await MCPRequestHandler._reload_admitted_key(hash_token(self._MASTER_KEY))
+            assert admitted.user_role == LitellmUserRoles.PROXY_ADMIN
+            assert admitted.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler._reload_admitted_key("not-the-master-hash")
+        assert exc_info.value.status_code == 500
+
     async def test_envelope_for_key_barred_from_mcp_routes_is_rejected_403(self):
         """A key whose allowed_routes exclude MCP must not reach tools via an envelope: the arm runs
         RouteChecks.should_call_route before admitting, exactly as the standard pipeline does between
@@ -7253,9 +7272,14 @@ class TestMCPDcrBridgeDualCredential:
                     assert exc_info.value.status_code == expected_status
                     assert exc_info.value.detail == {"error": "oauth_principal_mismatch"}
                 else:
-                    (auth_result, _h, _s, mcp_server_auth_headers, _o, _r) = (
-                        await MCPRequestHandler.process_mcp_request(self._dual_scope(envelope, "sk-key"))
-                    )
+                    (
+                        auth_result,
+                        _h,
+                        _s,
+                        mcp_server_auth_headers,
+                        _o,
+                        _r,
+                    ) = await MCPRequestHandler.process_mcp_request(self._dual_scope(envelope, "sk-key"))
                     assert auth_result.user_id == "sso-user-7"
                     assert mcp_server_auth_headers == {
                         "bridge_delegate_server": {"Authorization": "Bearer inner-upstream-access-token"}

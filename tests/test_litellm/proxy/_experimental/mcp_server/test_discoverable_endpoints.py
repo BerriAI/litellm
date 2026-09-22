@@ -6925,6 +6925,44 @@ async def test_jwt_mapped_to_blocked_key_is_rejected():
 
 
 @pytest.mark.asyncio
+async def test_master_key_at_token_endpoint_mints_key_hash_envelope():
+    """The master key has no row in LiteLLM_VerificationTokenTable, but it is the proxy's root
+    credential: presented at the bridge /token endpoint it must mint a key_hash-subject envelope
+    (sealed under hash_token(master_key)) even with no database connection at all. A presented key
+    that is NOT the master key still hits the unresolvable gate when prisma is down, unchanged."""
+    from litellm.proxy._experimental.mcp_server import bridge_token_flow
+    from litellm.proxy._types import hash_token
+    from litellm.types.mcp import MCPAuth
+
+    master = "sk-test-master-key-mint-0000"
+    request = _bridge_mock_request()
+    request.headers = {"x-litellm-api-key": master}
+    with (
+        patch("litellm.proxy.proxy_server.master_key", master),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        mint = await bridge_token_flow._prepare_bridge_mint(
+            request=request,
+            mcp_server=_bridge_server(auth_type=MCPAuth.oauth_delegate),
+        )
+    assert isinstance(mint, bridge_token_flow._BridgeMintReady)
+    assert mint.identity.subject_type == "key_hash"
+    assert mint.identity.subject == hash_token(master)
+
+    other = _bridge_mock_request()
+    other.headers = {"x-litellm-api-key": "sk-not-the-master-key"}
+    with (
+        patch("litellm.proxy.proxy_server.master_key", master),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        mint = await bridge_token_flow._prepare_bridge_mint(
+            request=other,
+            mcp_server=_bridge_server(auth_type=MCPAuth.oauth_delegate),
+        )
+    assert mint == "identity_unresolvable"
+
+
+@pytest.mark.asyncio
 async def test_bridge_mint_upstream_expired_lifetime_is_502():
     """An upstream token response reporting an already-elapsed lifetime (a parseable non-positive
     expires_in) is rejected with 502 rather than sealed into an hour-long envelope around a dead

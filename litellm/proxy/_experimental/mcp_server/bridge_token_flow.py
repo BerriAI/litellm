@@ -209,6 +209,29 @@ async def _resolve_active_litellm_key(request: Request) -> "_ResolvedKey | _KeyR
     return await _reload_active_key_by_hash(hash_token(token))
 
 
+def master_key_admin_auth(key_hash: str) -> "UserAPIKeyAuth | None":
+    from litellm.constants import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        LITELLM_PROXY_MASTER_KEY_ALIAS,
+    )
+    from litellm.proxy._types import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+        hash_token,
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        litellm_proxy_admin_name,
+        master_key,
+    )
+
+    if not master_key or not secrets.compare_digest(key_hash, hash_token(master_key)):
+        return None
+    return UserAPIKeyAuth(
+        api_key=LITELLM_PROXY_MASTER_KEY_ALIAS,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id=litellm_proxy_admin_name,
+    )
+
+
 async def _reload_active_key_by_hash(key_hash: str) -> "_ResolvedKey | _KeyResolutionFailure":
     """Reload the live key record for ``key_hash`` (cache first, then DB) and gate it on active state,
     returning the resolved key or a precise failure. Shared by the token request's presented-key
@@ -233,6 +256,8 @@ async def _reload_active_key_by_hash(key_hash: str) -> "_ResolvedKey | _KeyResol
         user_api_key_cache,
     )
 
+    if (admin := master_key_admin_auth(key_hash)) is not None:
+        return _ResolvedKey(key_hash=key_hash, key=admin)
     if prisma_client is None:
         return "unresolvable"
     try:
