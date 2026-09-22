@@ -307,6 +307,7 @@ async def test_embedding_cache_skips_write_when_one_input_yields_many_embeddings
 
     batch = '{"query": "q", "documents": ["a", "b", "c", "d", "e"]}'
     first = await litellm.aembedding(model="score-every-doc/m", input=[batch])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
     second = await litellm.aembedding(model="score-every-doc/m", input=[batch])
 
     assert scorer.provider_calls == 2

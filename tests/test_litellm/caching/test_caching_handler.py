@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-from litellm.caching.caching_handler import LLMCachingHandler
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES, LLMCachingHandler
 
 
 @pytest.mark.asyncio
@@ -809,8 +809,10 @@ async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_ord
     monkeypatch.setattr(litellm, "cache", Cache(type="local"))
 
     await litellm.aembedding(model="recording-embedder/m", input=["aa", "bbbb"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
     mixed_input = ["c", "aa", "ddd", "bbbb", "eeeee"]
     response = await litellm.aembedding(model="recording-embedder/m", input=mixed_input)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
 
     assert embedder.provider_inputs == (("aa", "bbbb"), ("c", "ddd", "eeeee")), embedder.provider_inputs
     assert [item["index"] for item in response.data] == [0, 1, 2, 3, 4]
