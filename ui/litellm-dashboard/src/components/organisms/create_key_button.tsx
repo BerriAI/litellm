@@ -161,7 +161,7 @@ interface CreateKeyProps {
 
 interface User {
   user_id: string;
-  user_email: string;
+  user_email: string | null;
   role?: string;
 }
 
@@ -570,7 +570,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setUserSearchLoading(true);
     try {
       const params = new URLSearchParams();
-      params.append("user_email", searchText); // Always search by email
+      params.append("search", searchText);
       if (accessToken == null) {
         return;
       }
@@ -579,7 +579,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
       const data: User[] = response;
       const options: SearchSelectOption[] = data.map((user) => ({
-        label: `${user.user_email} (${user.user_id})`,
+        label: user.user_email ? `${user.user_email} (${user.user_id})` : user.user_id,
         value: user.user_id,
       }));
 
@@ -729,7 +729,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             onValueChange={control.onChange}
                             onSearchChange={fetchUsers}
                             isLoading={userSearchLoading}
-                            placeholder="Type email to search for users"
+                            placeholder="Type email or user ID to search for users"
                             emptyText="No users found"
                             loadingText="Searching..."
                             inputId={control.id}
@@ -741,7 +741,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             Create User
                           </Button>
                         </div>
-                        <div className="text-xs text-muted-foreground">Search by email to find users</div>
+                        <div className="text-xs text-muted-foreground">Search by email or user ID to find users</div>
                       </div>
                     )}
                   </MountedFormField>
