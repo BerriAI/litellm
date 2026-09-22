@@ -11,6 +11,7 @@ from typing import Final, Literal
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, settle_propagation, unique_marker
 from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
+from e2e_metadata import step
 from lifecycle import ResourceManager
 from models import (
     AnthropicMessagesBody,
@@ -154,6 +155,7 @@ class _ResponsesGuardrailBody(BaseModel):
 class GuardrailsClient:
     proxy: ProxyClient
 
+    @step("register content-filter guardrail")
     def create_content_filter_guardrail(self, name: str, blocked_keyword: str, *, default_on: bool = True) -> str:
         return self.register(
             name,
@@ -164,6 +166,7 @@ class GuardrailsClient:
             ),
         )
 
+    @step("register Bedrock guardrail")
     def create_bedrock_guardrail(
         self,
         name: str,
@@ -191,6 +194,7 @@ class GuardrailsClient:
             ),
         )
 
+    @step("register deployment")
     def create_backend_model(
         self,
         resources: ResourceManager,
@@ -211,6 +215,7 @@ class GuardrailsClient:
         resources.defer(lambda: self.proxy.delete_model(model_id))
         return model_name
 
+    @step("register guardrail")
     def register(self, name: str, params: GuardrailParamsBody) -> str:
         """Register any guardrail via POST /guardrails and return its id, once every
         replica can be expected to serve it. New built-ins register with
@@ -235,6 +240,7 @@ class GuardrailsClient:
         settle_propagation(time.monotonic())
         return guardrail_id
 
+    @step("delete guardrail")
     def delete_guardrail(self, guardrail_id: str) -> None:
         _ = self.proxy.transport.delete(
             f"/guardrails/{guardrail_id}",
@@ -243,6 +249,7 @@ class GuardrailsClient:
             response_type=NoBody,
         )
 
+    @step("create team opted out of global guardrails")
     def create_team_opted_out_of_global_guardrails(self, alias: str) -> str:
         team_id = unwrap(
             self.proxy.transport.post(
@@ -258,6 +265,7 @@ class GuardrailsClient:
         self._await_team(team_id)
         return team_id
 
+    @step("delete team")
     def delete_team(self, team_id: str) -> None:
         _ = self.proxy.transport.post(
             "/team/delete",
@@ -266,9 +274,11 @@ class GuardrailsClient:
             response_type=NoBody,
         )
 
+    @step("generate virtual key in the team")
     def create_key_in_team(self, team_id: str) -> str:
         return self.proxy.generate_key(KeyGenerateBody(team_id=team_id, user_id="e2e-guardrails-user"))
 
+    @step("generate virtual key with guardrails")
     def create_key_with_guardrails(self, resources: ResourceManager, guardrails: list[str]) -> str:
         key = self.proxy.generate_key(
             KeyGenerateBody(user_id="e2e-guardrails-user", metadata=KeyMetadata(guardrails=guardrails))
@@ -276,6 +286,7 @@ class GuardrailsClient:
         resources.defer(lambda: self.proxy.delete_key(key))
         return key
 
+    @step("POST /v1/videos")
     def create_video(self, key: str, model: str, prompt: str) -> Result[VideoCreateResponse]:
         return self.proxy.transport.post(
             "/v1/videos",
@@ -284,6 +295,7 @@ class GuardrailsClient:
             response_type=VideoCreateResponse,
         )
 
+    @step("POST /chat/completions")
     def chat(
         self,
         key: str,
@@ -310,6 +322,7 @@ class GuardrailsClient:
             ),
         )
 
+    @step("POST /chat/completions")
     def chat_raw(
         self,
         key: str,
@@ -338,6 +351,7 @@ class GuardrailsClient:
             ),
         )
 
+    @step("POST /chat/completions (streaming)")
     def chat_stream_raw(
         self,
         key: str,
@@ -362,6 +376,7 @@ class GuardrailsClient:
             ),
         )
 
+    @step("POST /v1/messages")
     def messages(
         self,
         key: str,
@@ -381,6 +396,7 @@ class GuardrailsClient:
             ),
         )
 
+    @step("POST /v1/responses")
     def responses(
         self,
         key: str,
@@ -395,6 +411,7 @@ class GuardrailsClient:
             json=_ResponsesGuardrailBody(model=model, input=text, guardrails=guardrails),
         )
 
+    @step("POST /guardrails/apply_guardrail")
     def apply_guardrail(self, key: str, *, name: str, text: str) -> Result[ApplyGuardrailResponse]:
         return self.proxy.transport.post(
             "/guardrails/apply_guardrail",
@@ -423,6 +440,7 @@ def build_client(proxy: ProxyClient) -> GuardrailsClient:
     return GuardrailsClient(proxy=proxy)
 
 
+@step("poll the request for the applied guardrail")
 def poll_until_guardrail_applied(
     call: Callable[[], StreamingResponse],
     guardrail_name: str,
@@ -446,6 +464,7 @@ def poll_until_guardrail_applied(
     return result
 
 
+@step("poll the request for a guardrail block")
 def poll_until_blocked[R: BaseModel](call: Callable[[], Result[R]]) -> Result[R]:
     """Retry a call that a guardrail should reject until it is, returning the last result.
 
@@ -473,6 +492,7 @@ def poll_until_blocked[R: BaseModel](call: Callable[[], Result[R]]) -> Result[R]
 _TRANSIENT_STREAM_STATUSES = frozenset({-1, 401, 429})
 
 
+@step("poll the request for a guardrail block")
 def poll_until_blocked_stream(call: Callable[[], StreamingResponse]) -> StreamingResponse:
     """poll_until_blocked for raw/streamed sends, which return a StreamingResponse
     instead of a Result: retry while the call still succeeds (the data-plane worker

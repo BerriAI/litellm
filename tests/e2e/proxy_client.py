@@ -42,6 +42,7 @@ from e2e_http import (
     is_ok,
     unwrap,
 )
+from e2e_metadata import STEP_FRAMES, step
 from models import (
     AnthropicMessagesBody,
     AnthropicMessagesResponse,
@@ -467,6 +468,7 @@ class ProxyClient:
 
     # ---- keys / customers (satisfies lifecycle.ResourceClient) ----------
 
+    @step("generate virtual key")
     def generate_key(self, body: KeyGenerateBody) -> str:
         return unwrap(
             self.transport.post(
@@ -477,6 +479,7 @@ class ProxyClient:
             )
         ).key
 
+    @step("delete virtual key")
     def delete_key(self, key: str) -> None:
         _ = self.transport.post(
             "/key/delete",
@@ -485,6 +488,7 @@ class ProxyClient:
             response_type=NoBody,
         )
 
+    @step("delete end users")
     def delete_customers(self, user_ids: list[str]) -> None:
         if not user_ids:
             return
@@ -495,6 +499,7 @@ class ProxyClient:
             response_type=NoBody,
         )
 
+    @step("read /key/info")
     def key_info(self, key: str) -> KeyInfo:
         return unwrap(
             self.transport.get(
@@ -505,6 +510,7 @@ class ProxyClient:
             )
         ).info
 
+    @step("read /debug/memory/summary on every replica")
     def memory_summary_everywhere(self) -> Mapping[str, Result[MemorySummaryResponse]]:
         return {
             url: transport.get(
@@ -516,6 +522,7 @@ class ProxyClient:
             for url, transport in self.replicas.items()
         }
 
+    @step("poll every replica for the converged read")
     def read_back_everywhere[R: BaseModel](
         self,
         path: str,
@@ -563,6 +570,7 @@ class ProxyClient:
             path, headers=self.management_headers(transport=transport), params=params, response_type=response_type
         )
 
+    @step("read /model/info")
     def model_info(self) -> list[ModelInfoEntry]:
         """Every configured deployment with the price the proxy resolved for it
         (config override merged over cost-map defaults)."""
@@ -575,6 +583,7 @@ class ProxyClient:
             )
         ).data
 
+    @step("read /router/settings")
     def router_settings(self) -> RouterCurrentValues:
         """The router knobs the proxy is running with, for a test whose behavior
         needs one of them switched on in the proxy config."""
@@ -587,6 +596,7 @@ class ProxyClient:
             )
         ).current_values
 
+    @step("read the public model cost map")
     def model_cost_map(self) -> dict[str, CostMapEntry]:
         return unwrap(
             self.transport.get(
@@ -597,6 +607,7 @@ class ProxyClient:
             )
         ).root
 
+    @step("GET /v1/files")
     def list_files(self, key: str) -> Result[FileListResponse]:
         return self.transport.get(
             "/v1/files",
@@ -605,6 +616,7 @@ class ProxyClient:
             response_type=FileListResponse,
         )
 
+    @step("GET /v1/fine_tuning/jobs")
     def list_fine_tuning_jobs(self, key: str, params: FineTuningJobsParams) -> Result[FineTuningJobsResponse]:
         return self.transport.get(
             "/v1/fine_tuning/jobs",
@@ -613,6 +625,7 @@ class ProxyClient:
             response_type=FineTuningJobsResponse,
         )
 
+    @step("register deployment")
     def create_model(
         self,
         model_name: str,
@@ -632,6 +645,7 @@ class ProxyClient:
             provider_live=provider_live,
         )
 
+    @step("check a general_settings flag")
     def general_setting_enabled(self, field_name: str) -> bool:
         """Whether the proxy is running with the named general_settings flag on, for
         a test whose behavior only exists under a config flag the stack has to carry."""
@@ -645,6 +659,7 @@ class ProxyClient:
         ).root
         return any(entry.field_name == field_name and entry.field_value is True for entry in fields)
 
+    @step("register deployment")
     def register_model(
         self, body: ModelNewBody, listed_for: str | None = None, *, provider_live: bool = False
     ) -> str:
@@ -727,6 +742,7 @@ class ProxyClient:
             timeout=poll_timeout,
         )
 
+    @step("update deployment")
     def update_model(self, model_id: str, litellm_params: LiteLLMParamsBody) -> None:
         """Merge `litellm_params` over the deployment `model_id`'s stored params via
         POST /model/update. The proxy overlays only the non-null fields and clears
@@ -744,6 +760,7 @@ class ProxyClient:
             )
         )
 
+    @step("delete deployment")
     def delete_model(self, model_id: str) -> None:
         result = self.transport.post(
             "/model/delete",
@@ -752,7 +769,7 @@ class ProxyClient:
             response_type=NoBody,
         )
         if not is_ok(result):
-            warnings.warn(f"delete_model({model_id!r}) failed: {result}", stacklevel=2)
+            warnings.warn(f"delete_model({model_id!r}) failed: {result}", stacklevel=2 + STEP_FRAMES)
 
     # ---- replica read-back ----------------------------------------------
 
@@ -770,6 +787,7 @@ class ProxyClient:
         assert replicas, f"no replica is configured to serve {path}, so a read-back there would prove nothing"
         return replicas
 
+    @step("poll every replica for the settled body")
     def read_body_back_everywhere[R: BaseModel](
         self, path: str, response_type: type[R], *, settled: Callable[[R], bool]
     ) -> Mapping[str, R]:
@@ -795,6 +813,7 @@ class ProxyClient:
                     f"last read: {last}"
                 )
 
+    @step("poll every replica for a 404")
     def gone_everywhere(self, path: str) -> Mapping[str, int]:
         """Poll GET `path` on every replica that serves it until each stops serving
         it, and fail naming the first replica that still does at poll_timeout.
@@ -827,6 +846,7 @@ class ProxyClient:
 
     # ---- mcp toolsets ---------------------------------------------------
 
+    @step("create MCP toolset")
     def create_toolset(self, body: ToolsetCreateBody) -> ToolsetRow:
         return unwrap(
             self.transport.post(
@@ -837,6 +857,7 @@ class ProxyClient:
             )
         )
 
+    @step("update MCP toolset")
     def update_toolset(self, body: ToolsetUpdateBody) -> ToolsetRow:
         """PUT /v1/mcp/toolset: a partial update where a field left unset keeps its
         stored value and None clears it."""
@@ -849,6 +870,7 @@ class ProxyClient:
             )
         )
 
+    @step("delete MCP toolset")
     def delete_toolset(self, toolset_id: str) -> Result[NoBody]:
         """DELETE /v1/mcp/toolset/{toolset_id}. Returns the outcome so the act phase
         can unwrap it while a deferred teardown can ignore an already-deleted row."""
@@ -859,6 +881,7 @@ class ProxyClient:
             response_type=NoBody,
         )
 
+    @step("create credential")
     def create_credential(self, body: CredentialCreateBody) -> None:
         unwrap(
             self.transport.post(
@@ -869,6 +892,7 @@ class ProxyClient:
             )
         )
 
+    @step("delete credential")
     def delete_credential(self, credential_name: str) -> None:
         result = self.transport.delete(
             f"/credentials/{credential_name}",
@@ -877,8 +901,9 @@ class ProxyClient:
             response_type=NoBody,
         )
         if not is_ok(result):
-            warnings.warn(f"delete_credential({credential_name!r}) failed: {result}", stacklevel=2)
+            warnings.warn(f"delete_credential({credential_name!r}) failed: {result}", stacklevel=2 + STEP_FRAMES)
 
+    @step("create team")
     def create_team(self, body: TeamNewBody) -> str:
         return unwrap(
             self.transport.post(
@@ -889,6 +914,7 @@ class ProxyClient:
             )
         ).team_id
 
+    @step("update team")
     def update_team(self, body: TeamUpdateBody) -> None:
         unwrap(
             self.transport.post(
@@ -899,6 +925,7 @@ class ProxyClient:
             )
         )
 
+    @step("delete team")
     def delete_team(self, team_id: str) -> None:
         result = self.transport.post(
             "/team/delete",
@@ -907,8 +934,9 @@ class ProxyClient:
             response_type=NoBody,
         )
         if not is_ok(result):
-            warnings.warn(f"delete_team({team_id!r}) failed: {result}", stacklevel=2)
+            warnings.warn(f"delete_team({team_id!r}) failed: {result}", stacklevel=2 + STEP_FRAMES)
 
+    @step("delete internal user")
     def delete_user(self, user_id: str) -> None:
         """Best-effort teardown; a 404 is not a leak, since JWT tests defer this for
         a user the proxy only upserts after a successful auth."""
@@ -922,10 +950,11 @@ class ProxyClient:
             case Success() | UnknownApiError(status_code=404):
                 return
             case _:
-                warnings.warn(f"delete_user({user_id!r}) failed: {result}", stacklevel=2)
+                warnings.warn(f"delete_user({user_id!r}) failed: {result}", stacklevel=2 + STEP_FRAMES)
 
     # ---- LLM calls ------------------------------------------------------
 
+    @step("POST /chat/completions")
     def chat(self, key: str, body: ChatBody) -> Result[ChatResponse]:
         return self.transport.post(
             "/chat/completions",
@@ -934,12 +963,15 @@ class ProxyClient:
             response_type=ChatResponse,
         )
 
+    @step("POST /chat/completions (streaming)")
     def chat_stream(self, key: str, body: ChatBody) -> StreamingResponse:
         return self.transport.stream("/chat/completions", headers=self.transport.bearer(key), json=body)
 
+    @step("POST /v1/messages (streaming)")
     def messages_stream(self, key: str, body: AnthropicMessagesBody) -> StreamingResponse:
         return self.transport.stream("/v1/messages", headers=self.transport.bearer(key), json=body)
 
+    @step("POST /embeddings")
     def embed(self, key: str, body: EmbedBody) -> Result[EmbedResponse]:
         return self.transport.post(
             "/embeddings",
@@ -948,6 +980,7 @@ class ProxyClient:
             response_type=EmbedResponse,
         )
 
+    @step("POST /v1/ocr")
     def ocr(self, key: str, body: OcrBody) -> Result[OcrResponse]:
         return self.transport.post(
             "/v1/ocr",
@@ -957,6 +990,7 @@ class ProxyClient:
             timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
         )
 
+    @step("POST /v1/rerank")
     def rerank(self, key: str, body: RerankBody) -> Result[RerankResponse]:
         """POST /v1/rerank (Cohere-format). No official OpenAI/Anthropic SDK
         covers this route, so it stays on the shared typed transport."""
@@ -967,6 +1001,7 @@ class ProxyClient:
             response_type=RerankResponse,
         )
 
+    @step("POST /v1/messages/count_tokens")
     def count_tokens(self, key: str, body: CountTokensBody) -> Result[CountTokensResponse]:
         """POST /v1/messages/count_tokens (Anthropic-native). Sends the
         anthropic-version header so the native path accepts it; harmless on the
@@ -978,6 +1013,7 @@ class ProxyClient:
             response_type=CountTokensResponse,
         )
 
+    @step("POST /v1/messages")
     def messages(self, key: str, body: AnthropicMessagesBody) -> Result[AnthropicMessagesResponse]:
         """POST /v1/messages (Anthropic-native). The response is either the
         Anthropic-shape passthrough (`content`) or the OpenAI-normalized shape
@@ -994,6 +1030,7 @@ class ProxyClient:
 
     # ---- spend read-back ------------------------------------------------
 
+    @step("GET /spend/logs")
     def spend_logs(self, params: SpendLogsParams) -> list[SpendLogRow]:
         result = self.transport.get(
             "/spend/logs",
@@ -1007,6 +1044,7 @@ class ProxyClient:
             case _:
                 return []
 
+    @step("read spend logs for a time window")
     def spend_logs_window(self, *, start: datetime, end: datetime) -> list[SpendLogRow]:
         def fetch(page: int) -> SpendLogsPage:
             return unwrap(
@@ -1029,11 +1067,13 @@ class ProxyClient:
             *(row for page in range(2, first.total_pages + 1) for row in fetch(page).data),
         ]
 
+    @step("poll /spend/logs for the key")
     def poll_logs_for_key(
         self, key: str, *, min_rows: int = 1, predicate: RowsPredicate | None = None
     ) -> list[SpendLogRow]:
         return self._poll(lambda: self.spend_logs(SpendLogsParams(api_key=key)), min_rows, predicate)
 
+    @step("poll /spend/logs for the request id")
     def poll_logs_for_request_id(
         self,
         request_id: str,
@@ -1064,6 +1104,7 @@ class ProxyClient:
 
     # ---- route probe ----------------------------------------------------
 
+    @step("probe a management route")
     def probe(self, path: str, *, params: NoBody) -> ProbeResult:
         return self.transport.probe(path, params=params, headers=self.management_headers())
 

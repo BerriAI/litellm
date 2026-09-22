@@ -11,6 +11,7 @@ from typing import Final
 from uuid import uuid4
 
 from e2e_http import NoBody, Success, unwrap
+from e2e_metadata import step
 from models import KeyGenerateBody, KeyGenerateResponse, KeyInfoParams, KeyInfoResponse
 from transport import HttpTransport
 
@@ -20,12 +21,14 @@ from .startup_models import ContainerState, Migration, Observation, Readiness
 MASTER_KEY: Final = "sk-migration-ci-fixture"
 
 
+@step("run a docker command")
 def docker(*args: str) -> str:
     result: Final = subprocess.run(("docker", *args), capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, f"Docker operation failed: {result.stderr}"
     return result.stdout.strip()
 
 
+@step("poll until the condition holds")
 def until(description: str, condition: Callable[[], bool], seconds: float = 150) -> None:
     deadline: Final = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -41,9 +44,11 @@ class Replica:
     transport: HttpTransport
     output: Path
 
+    @step("inspect the replica container")
     def state(self) -> ContainerState:
         return ContainerState.model_validate_json(docker("inspect", "--format", "{{json .State}}", self.name))
 
+    @step("probe the replica's state and readiness")
     def observe(self) -> Observation:
         state: Final = self.state()
         result: Final = self.transport.get(
@@ -52,15 +57,18 @@ class Replica:
         ready: Final = isinstance(result, Success) and result.data.status == "healthy" and result.data.db == "connected"
         return Observation(None if state.Running else state.ExitCode, ready)
 
+    @step("read the replica container logs")
     def logs(self) -> str:
         result: Final = subprocess.run(("docker", "logs", self.name), capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, result.stderr
         return result.stdout + result.stderr
 
+    @step("kill the replica container")
     def kill(self) -> None:
         if self.state().Running:
             docker("kill", self.name)
 
+    @step("confirm the replica mints a usable key")
     def usable(self, database: Database) -> None:
         alias: Final = f"migration-{uuid4().hex}"
         key: Final = unwrap(
@@ -86,6 +94,7 @@ class Replica:
         ) == ((alias,),)
 
 
+@step("poll replicas for readiness")
 def ready(replicas: tuple[Replica, ...], database: Database) -> None:
     def all_ready() -> bool:
         observations: Final = tuple(replica.observe() for replica in replicas)
@@ -97,6 +106,7 @@ def ready(replicas: tuple[Replica, ...], database: Database) -> None:
         replica.usable(database)
 
 
+@step("poll replicas for a rejected startup")
 def failed(replicas: tuple[Replica, ...], marker: str) -> None:
     def all_stopped() -> bool:
         observations: Final = tuple(replica.observe() for replica in replicas)
@@ -109,6 +119,7 @@ def failed(replicas: tuple[Replica, ...], marker: str) -> None:
         assert marker in replica.logs(), f"Startup failed outside the expected migration: {marker}"
 
 
+@step("poll replicas to confirm they keep waiting")
 def waiting(replicas: tuple[Replica, ...], seconds: float) -> None:
     deadline: Final = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -126,6 +137,7 @@ class Containers:
     def using(self, image: str) -> "Containers":
         return replace(self, image=image)
 
+    @step("start a proxy replica container")
     @contextmanager
     def start(
         self,

@@ -3,6 +3,7 @@ from contextlib import ExitStack
 from typing import Final
 from uuid import uuid4
 
+from e2e_metadata import step
 from psycopg import sql
 
 from .containers import Containers, Replica, failed, until
@@ -21,12 +22,14 @@ GATED: Final = Migration(
 )
 
 
+@step("start several proxy replica containers")
 def start_replicas(
     stack: ExitStack, containers: Containers, database: Database, migrations: tuple[Migration, ...] = (), count: int = 3
 ) -> tuple[Replica, ...]:
     return tuple(stack.enter_context(containers.start(database, migrations)) for _ in range(count))
 
 
+@step("assert the migration completed exactly once")
 def assert_completed(database: Database, migration: Migration = COMPLETE) -> None:
     assert database.query(
         'SELECT finished_at IS NOT NULL, rolled_back_at IS NULL, applied_steps_count FROM '
@@ -36,6 +39,7 @@ def assert_completed(database: Database, migration: Migration = COMPLETE) -> Non
     assert database.query("SELECT id FROM migration_effect") == ((1,),)
 
 
+@step("seed a confirmed migration history row")
 def confirmed_history(database: Database) -> str:
     database.execute(COMPLETE_SQL)
     row_id: Final = str(uuid4())
@@ -46,6 +50,7 @@ def confirmed_history(database: Database) -> str:
     return row_id
 
 
+@step("assert the original migration proof survived")
 def assert_original_proof(database: Database, row_id: str, finished: bool) -> None:
     assert database.query(
         'SELECT id, applied_steps_count, finished_at IS NOT NULL, rolled_back_at IS NULL FROM '
@@ -55,6 +60,7 @@ def assert_original_proof(database: Database, row_id: str, finished: bool) -> No
     assert database.query("SELECT id FROM migration_effect") == ((1,),)
 
 
+@step("pause migration completion with a trigger")
 def pause_completion(database: Database) -> None:
     database.execute(
         sql.SQL(
@@ -67,6 +73,7 @@ def pause_completion(database: Database) -> None:
     )
 
 
+@step("crash the migration owner mid-migration")
 def interrupt_owner(
     containers: Containers, database: Database, after_commit: bool, *, stop_database_session: bool = True
 ) -> None:
@@ -104,6 +111,7 @@ def interrupt_owner(
         )
 
 
+@step("assert replicas refuse an unconfirmed migration")
 def unconfirmed(replicas: tuple[Replica, ...], database: Database) -> None:
     failed(replicas, "Migration completion could not be verified")
     started: Final = str(

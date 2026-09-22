@@ -32,6 +32,7 @@ from e2e_config import (
     POLL_TIMEOUT,
 )
 from e2e_http import URL, Headers, StreamingResponse, send
+from e2e_metadata import step
 
 type SearchCall = Callable[[str, float], StreamingResponse]
 
@@ -115,6 +116,7 @@ class DdLogsReader:
     sleep: Callable[[float], None] = field(default=time.sleep, repr=False)
     jitter: Callable[[], float] = field(default=random.random, repr=False)
 
+    @step("search DataDog logs for the marker")
     def events_for_marker(self, marker: str) -> list[DdLogEvent]:
         """Every ingested event whose attributes carry the marker. DataDog
         consumes the shipped JSON message into ``attributes`` and leaves the
@@ -124,6 +126,7 @@ class DdLogsReader:
         it)."""
         return self.events_for_query(f"*:*{marker}*")
 
+    @step("search DataDog logs for the query")
     def events_for_query(self, query: str) -> list[DdLogEvent]:
         """Every ingested event the search query matches (failure payloads
         carry no prompt to mark, so failure scenarios query indexed attributes
@@ -156,10 +159,12 @@ class DdLogsReader:
             timeout=timeout,
         )
 
+    @step("poll DataDog logs for the marker")
     def poll_events_for_marker(self, marker: str) -> list[DdLogEvent]:
         """``poll_events_for_query`` over the every-attribute marker scan."""
         return self.poll_events_for_query(f"*:*{marker}*")
 
+    @step("poll DataDog logs for the query")
     def poll_events_for_query(self, query: str) -> list[DdLogEvent]:
         """Poll until at least one matching event is searchable (the callback
         flushes in periodic batches and DataDog ingestion adds seconds of lag),

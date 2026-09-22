@@ -25,6 +25,7 @@ from e2e_http import (
     StreamingResponse,
     UnknownApiError,
 )
+from e2e_metadata import step
 from models import LiteLLMParamsBody
 
 UPLOAD_FILENAME = "batch_input.jsonl"
@@ -136,12 +137,15 @@ def is_result_access_denied[R: BaseModel](result: Result[R]) -> bool:
 class BatchClient:
     proxy: ProxyClient
 
+    @step("register batch deployment")
     def create_model(self, model_name: str, litellm_params: LiteLLMParamsBody) -> str:
         return self.proxy.create_model(model_name, litellm_params, mode="batch")
 
+    @step("delete batch deployment")
     def delete_model(self, model_id: str) -> None:
         self.proxy.delete_model(model_id)
 
+    @step("POST /v1/files")
     def upload_file(
         self,
         *,
@@ -161,6 +165,7 @@ class BatchClient:
             response_type=FileObject,
         )
 
+    @step("GET /v1/files/{id}")
     def retrieve_file(
         self, file_id: str, *, key: str, provider: str | None = None
     ) -> Result[FileObject]:
@@ -171,6 +176,7 @@ class BatchClient:
             response_type=FileObject,
         )
 
+    @step("GET /v1/files")
     def list_files(self, *, key: str, provider: str | None = None) -> Result[FileList]:
         return self.proxy.transport.get(
             _files_path(provider),
@@ -179,6 +185,7 @@ class BatchClient:
             response_type=FileList,
         )
 
+    @step("POST /v1/batches")
     def create_batch(
         self, *, body: BatchCreateBody, key: str, provider: str | None = None
     ) -> StreamingResponse:
@@ -188,6 +195,7 @@ class BatchClient:
             json=body,
         )
 
+    @step("GET /v1/batches/{id}")
     def retrieve_batch(
         self, batch_id: str, *, key: str, provider: str | None = None
     ) -> Result[BatchObject]:
@@ -198,6 +206,7 @@ class BatchClient:
             response_type=BatchObject,
         )
 
+    @step("POST /v1/batches/{id}/cancel")
     def cancel_batch(
         self, batch_id: str, *, key: str, provider: str | None = None
     ) -> Result[BatchObject]:
@@ -208,6 +217,7 @@ class BatchClient:
             response_type=BatchObject,
         )
 
+    @step("GET /v1/batches")
     def list_batches(
         self,
         *,
@@ -223,6 +233,7 @@ class BatchClient:
             response_type=BatchList,
         )
 
+    @step("DELETE /v1/files/{id}")
     def delete_file(
         self, file_id: str, *, key: str, provider: str | None = None
     ) -> Result[FileDeleteResponse]:
@@ -233,6 +244,7 @@ class BatchClient:
             response_type=FileDeleteResponse,
         )
 
+    @step("DELETE /v1/files/{id} (admin)")
     def delete_file_as_admin(self, file_id: str, *, provider: str | None = None) -> Result[FileDeleteResponse]:
         return self.proxy.transport.delete(
             f"{_files_path(provider)}/{file_id}",

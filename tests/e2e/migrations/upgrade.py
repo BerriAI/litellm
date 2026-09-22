@@ -8,6 +8,7 @@ from typing import Final
 from uuid import uuid4
 
 from e2e_http import Result, Success, unwrap
+from e2e_metadata import step
 from models import (
     KeyGenerateBody,
     KeyGenerateResponse,
@@ -24,6 +25,7 @@ from .database import Database
 CACHED_PLAN: Final = "cached plan must not change result type"
 
 
+@step("generate a virtual key on the replica")
 def provision(replica: Replica) -> tuple[str, str]:
     alias: Final = f"upgrade-{uuid4().hex}"
     key: Final = unwrap(
@@ -37,6 +39,7 @@ def provision(replica: Replica) -> tuple[str, str]:
     return key, alias
 
 
+@step("confirm the key resolves on the replica")
 def confirm(replica: Replica, key: str, alias: str) -> None:
     info: Final = unwrap(
         replica.transport.get(
@@ -62,6 +65,7 @@ class Outcomes:
                 self.failures.append(result.model_dump_json())
 
 
+@step("drive virtual-key auth traffic")
 @contextmanager
 def auth_traffic(replica: Replica, key: str, interval: float = 0.05) -> Generator[Outcomes]:
     outcomes: Final = Outcomes()
@@ -93,6 +97,7 @@ def auth_traffic(replica: Replica, key: str, interval: float = 0.05) -> Generato
     )
 
 
+@step("poll auth traffic for more served requests")
 def keep_serving(outcomes: Outcomes, description: str, calls: int = 20) -> int:
     target: Final = outcomes.served + calls
     until(description, lambda: outcomes.served >= target or bool(outcomes.failures))
@@ -100,10 +105,12 @@ def keep_serving(outcomes: Outcomes, description: str, calls: int = 20) -> int:
     return outcomes.served
 
 
+@step("read applied migration names")
 def migration_names(database: Database) -> frozenset[str]:
     return frozenset(str(row[0]) for row in database.query("SELECT migration_name FROM _prisma_migrations"))
 
 
+@step("assert migration history is clean")
 def assert_history_clean(database: Database) -> None:
     assert database.query(
         "SELECT count(*) FROM _prisma_migrations WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL"

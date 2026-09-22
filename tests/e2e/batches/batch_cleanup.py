@@ -7,6 +7,7 @@ from typing import Final, Protocol
 from batch_client import BatchObject, FileDeleteResponse
 from capabilities import is_cloud_storage_id, is_managed_id
 from e2e_http import NetworkError, RateLimitedError, Result, Success, UnknownApiError
+from e2e_metadata import step
 from pydantic import BaseModel
 
 CLEANUP_DELAYS: Final = (1.0, 2.0, 4.0)
@@ -50,6 +51,7 @@ def _require_cleanup_success[R: BaseModel](result: Result[R], operation: str) ->
             raise AssertionError(f"{operation} failed: {result.kind}")
 
 
+@step("delete uploaded file")
 def cleanup_file(client: BatchCleanupClient, file_id: str, *, key: str, provider: str | None = None) -> None:
     delete: Final[Callable[[], Result[FileDeleteResponse]]] = (
         (lambda: client.delete_file_as_admin(file_id, provider=provider))
@@ -65,6 +67,7 @@ def cleanup_file(client: BatchCleanupClient, file_id: str, *, key: str, provider
     ), f"Delete file {file_id} did not confirm deletion"
 
 
+@step("cancel batch and wait for a terminal status")
 def cleanup_batch(
     client: BatchCleanupClient,
     batch_id: str,

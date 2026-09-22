@@ -12,6 +12,7 @@ from builtins import ExceptionGroup
 from dataclasses import dataclass, field
 from typing import Callable, Final, List, Protocol, runtime_checkable
 
+from e2e_metadata import step
 from proxy_client import ProxyClient
 from models import KeyGenerateBody
 
@@ -69,6 +70,7 @@ class ResourceManager:
         response model can be deferred directly."""
         self._cleanups.append(cleanup)
 
+    @step("generate virtual key")
     def key(self, models: list[str] | None = None, user_id: str | None = "e2e-test-user") -> str:
         """Create a virtual key; delete it on teardown. `models` restricts which
         models the key may call (None/[] means all). `user_id` is required for
@@ -78,6 +80,7 @@ class ResourceManager:
         self.defer(lambda: self.client.delete_key(key))
         return key
 
+    @step("register end user")
     def customer(self, customer_id: str) -> str:
         """Track an end-user id (from the `user` param); delete it on teardown."""
         self.defer(lambda: self.client.delete_customers([customer_id]))

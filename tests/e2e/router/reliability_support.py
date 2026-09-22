@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from proxy_client import ProxyClient
 from e2e_config import CHEAP_OPENAI_MODEL, PROXY_BASE_URL, unique_marker
 from e2e_http import NetworkError, StreamHead, StreamingResponse
+from e2e_metadata import step
 from models import (
     CacheControl,
     ChatMessage,
@@ -78,6 +79,7 @@ def cached_system_turn(marker: str) -> ChatMessage:
     return ChatMessage(role="system", content=[TextContentPart(text=filler, cache_control=CacheControl())])
 
 
+@step("register deployment with an unreachable base")
 def create_bad_base_deployment(proxy: ProxyClient, name: str) -> str:
     """Register a deployment pointing at an unreachable base, so every call to it
     fails with a real connection error the fallback can reroute around."""
@@ -86,6 +88,7 @@ def create_bad_base_deployment(proxy: ProxyClient, name: str) -> str:
     )
 
 
+@step("register never-benched unreachable deployment")
 def create_never_benched_refusing_deployment(proxy: ProxyClient, name: str) -> str:
     return proxy.create_model(
         name,
@@ -93,17 +96,20 @@ def create_never_benched_refusing_deployment(proxy: ProxyClient, name: str) -> s
     )
 
 
+@step("register deployment with a 1ms timeout")
 def create_timeout_deployment(proxy: ProxyClient, name: str) -> str:
     """Register a deployment with a 1ms deadline the real backend always exceeds."""
     return proxy.create_model(name, LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, timeout=0.001))
 
 
+@step("register small-context deployment")
 def create_small_context_deployment(proxy: ProxyClient, name: str) -> str:
     """Register a deployment on the smallest-context model OpenAI still serves, so an
     oversized prompt earns a real context-window refusal from the provider."""
     return proxy.create_model(name, LiteLLMParamsBody(model=SMALL_CONTEXT_MODEL, api_key=REAL_KEY))
 
 
+@step("register content-filtered Azure deployment")
 def create_content_filtered_deployment(proxy: ProxyClient, name: str) -> str:
     """Register the Azure OpenAI deployment whose content filter refuses
     CONTENT_POLICY_PROMPT with a real policy-violation 400 (the one live trigger
@@ -121,6 +127,7 @@ def create_content_filtered_deployment(proxy: ProxyClient, name: str) -> str:
     )
 
 
+@step("register Azure deployment with zero allowed fails")
 def create_azure_benched_on_first_failure_deployment(proxy: ProxyClient, name: str, cooldown_time: float) -> str:
     """The live Azure OpenAI deployment holding all of the group's shuffle weight,
     benched on its first failure of any class, with the client's own retries off."""
@@ -141,6 +148,7 @@ def create_azure_benched_on_first_failure_deployment(proxy: ProxyClient, name: s
     )
 
 
+@step("register prompt-caching Anthropic deployment")
 def create_caching_deployment(proxy: ProxyClient, name: str) -> str:
     """Register the Anthropic deployment whose prompt cache the affinity check pins to."""
     return proxy.create_model(name, LiteLLMParamsBody(model=CACHING_MODEL, api_key=CACHING_KEY, weight=1))
@@ -161,6 +169,7 @@ def _register_benched_on_first_failure(
     )
 
 
+@step("register always-timing-out deployment")
 def create_always_timing_out_deployment(proxy: ProxyClient, name: str, cooldown_time: float | None = None) -> str:
     """A 1ms deadline the real backend always exceeds, benched on its first Timeout."""
     return _register_benched_on_first_failure(
@@ -171,6 +180,7 @@ def create_always_timing_out_deployment(proxy: ProxyClient, name: str, cooldown_
     )
 
 
+@step("register always-401 deployment")
 def create_always_unauthorized_deployment(proxy: ProxyClient, name: str, cooldown_time: float | None = None) -> str:
     """A key the real backend rejects with a 401, benched on its first AuthenticationError."""
     return _register_benched_on_first_failure(
@@ -199,6 +209,7 @@ def _nested_proxy_params(upstream_group: str, upstream_key: str, cooldown_time: 
     )
 
 
+@step("register always-5xx deployment")
 def create_always_5xx_deployment(
     proxy: ProxyClient, name: str, upstream_group: str, upstream_key: str, cooldown_time: float | None = None
 ) -> str:
@@ -212,6 +223,7 @@ def create_always_5xx_deployment(
     )
 
 
+@step("register always-429 deployment")
 def create_always_rate_limited_deployment(
     proxy: ProxyClient, name: str, upstream_group: str, upstream_key: str, cooldown_time: float | None = None
 ) -> str:
@@ -222,6 +234,7 @@ def create_always_rate_limited_deployment(
     )
 
 
+@step("use up the rpm-limited key's one request")
 def spend_only_request_of(proxy: ProxyClient, spent_key: str) -> None:
     """Uses up the one request an rpm_limit=1 key allows. The proxy's rate limiter
     opens the key's 60s window on this call, so it goes right before the calls that
@@ -234,6 +247,7 @@ def spend_only_request_of(proxy: ProxyClient, spent_key: str) -> None:
     )
 
 
+@step("register always-picked small-context deployment")
 def create_always_picked_small_context_deployment(proxy: ProxyClient, name: str) -> str:
     """The always-picked half of a retry pair on the smallest-context model OpenAI
     still serves: it holds all of the model group's shuffle weight, so an oversized
@@ -248,6 +262,7 @@ def create_always_picked_small_context_deployment(proxy: ProxyClient, name: str)
     )
 
 
+@step("register zero-weight backup deployment")
 def create_zero_weight_backup_deployment(proxy: ProxyClient, name: str) -> str:
     """The other half of a retry pair: healthy, but weight 0, so the weighted shuffle
     never opens on it. It is reachable only once its sibling is out of the running,
@@ -262,6 +277,7 @@ def create_zero_weight_backup_deployment(proxy: ProxyClient, name: str) -> str:
     )
 
 
+@step("POST /chat/completions")
 def chat_turns_override(
     proxy: ProxyClient,
     key: str,
@@ -289,6 +305,7 @@ def chat_turns_override(
     )
 
 
+@step("POST /chat/completions")
 def chat_override(
     proxy: ProxyClient,
     key: str,
@@ -311,6 +328,7 @@ def chat_override(
     )
 
 
+@step("POST /chat/completions (stream held open)")
 def open_chat_stream(
     proxy: ProxyClient,
     key: str,

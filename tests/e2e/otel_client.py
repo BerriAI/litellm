@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from e2e_config import OTEL_QUERY_URL, POLL_INTERVAL, POLL_TIMEOUT
 from e2e_http import URL, NetworkError, NoBody, Result, Success, get
+from e2e_metadata import step
 
 #: OTEL resource service.name the proxy exports under (OTEL_SERVICE_NAME default).
 JAEGER_SERVICE = "litellm"
@@ -109,6 +110,7 @@ class OtelReader:
             timeout=30.0,
         )
 
+    @step("query Jaeger for the call's traces")
     def traces_for_call(self, call_id: str) -> list[JaegerTrace]:
         """Every trace holding a span tagged with this call id. Jaeger matches
         spans server-side and returns their full traces; more than one hit for
@@ -119,6 +121,7 @@ class OtelReader:
             case failure:
                 pytest.fail(f"Jaeger query API at {self.query_url} failed: {failure}")
 
+    @step("poll Jaeger for the call's settled trace")
     def poll_traces_for_call(
         self, *, call_id: str, settled_names: set[str], settled_prefixes: set[str]
     ) -> list[JaegerTrace]:

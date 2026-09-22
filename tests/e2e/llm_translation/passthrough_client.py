@@ -20,6 +20,7 @@ from websockets.sync.client import connect
 from e2e_config import ws_base_url
 from proxy_client import ProxyClient
 from e2e_http import FileUploadForm, Headers, NoBody, Result, StreamingResponse
+from e2e_metadata import step
 from models import ChatMessage
 
 
@@ -246,6 +247,7 @@ class PassthroughClient:
 
     # ---- Gemini native passthrough (/gemini/v1beta/...) -----------------
 
+    @step("call Gemini generateContent via /gemini")
     def gemini_generate(
         self,
         key: str,
@@ -263,6 +265,7 @@ class PassthroughClient:
             ),
         )
 
+    @step("call Gemini streamGenerateContent via /gemini")
     def gemini_stream(
         self, key: str, model: str, text: str, *, tags: list[str] | None = None
     ) -> StreamingResponse:
@@ -278,6 +281,7 @@ class PassthroughClient:
 
     # ---- Vertex AI native passthrough (/vertex_ai/v1/projects/...) -------
 
+    @step("call Vertex generateContent via /vertex_ai")
     def vertex_generate(
         self, key: str, project: str, location: str, model: str, text: str
     ) -> StreamingResponse:
@@ -295,6 +299,7 @@ class PassthroughClient:
 
     # ---- Anthropic native passthrough (/anthropic/v1/messages) ----------
 
+    @step("POST /anthropic/v1/messages")
     def anthropic_message(
         self,
         key: str,
@@ -324,6 +329,7 @@ class PassthroughClient:
     # Relayed to OpenAI untouched, which is the whole point of the prefix: the
     # customer opts out of the gateway's managed-file handling here.
 
+    @step("POST /openai_passthrough/v1/files")
     def openai_passthrough_upload_file(
         self, key: str, *, content: bytes, filename: str
     ) -> Result[PassthroughFileObject]:
@@ -336,6 +342,7 @@ class PassthroughClient:
             response_type=PassthroughFileObject,
         )
 
+    @step("DELETE /openai_passthrough/v1/files/{id}")
     def openai_passthrough_delete_file(
         self, key: str, file_id: str
     ) -> Result[PassthroughFileDeleted]:
@@ -346,6 +353,7 @@ class PassthroughClient:
             response_type=PassthroughFileDeleted,
         )
 
+    @step("GET /openai_passthrough/v1/batches")
     def openai_passthrough_list_batches(self, key: str) -> Result[PassthroughBatchList]:
         return self.proxy.transport.get(
             "/openai_passthrough/v1/batches",
@@ -360,6 +368,7 @@ class PassthroughClient:
     # budgets against this traffic, so a 200 that logs no spend is money the
     # gateway never sees.
 
+    @step("POST /openai_passthrough/v1/responses")
     def openai_passthrough_responses(
         self, key: str, model: str, text: str, *, stream: bool = False
     ) -> StreamingResponse:
@@ -370,6 +379,7 @@ class PassthroughClient:
             stream=stream,
         )
 
+    @step("POST /openai_passthrough/v1/embeddings")
     def openai_passthrough_embed(
         self, key: str, model: str, text: str
     ) -> StreamingResponse:
@@ -379,6 +389,7 @@ class PassthroughClient:
             json=OpenAIEmbeddingBody(model=model, input=text),
         )
 
+    @step("POST /openai/v1/chat/completions")
     def openai_chat(
         self, key: str, model: str, text: str, *, max_completion_tokens: int = 64
     ) -> StreamingResponse:
@@ -397,6 +408,7 @@ class PassthroughClient:
     # The same prefixes over an upgrade instead of a POST, for the provider APIs
     # that only speak websocket (realtime, responses.connect).
 
+    @step("open a passthrough websocket")
     def openai_passthrough_websocket(
         self,
         key: str,

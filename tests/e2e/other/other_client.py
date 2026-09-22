@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from e2e_http import NoBody, ProbeResult, Result
+from e2e_metadata import step
 from idp import Keycloak, keycloak_from_env
 from models import (
     ReadinessDetailsResponse,
@@ -35,11 +36,13 @@ class OtherClient:
         """Resolved per use, so the suite's non-JWT tests never need the IdP env."""
         return keycloak_from_env()
 
+    @step("GET /health/liveliness")
     def liveness(self) -> ProbeResult:
         """GET /health/liveliness. Unauthenticated; the probe returns status +
         raw body so the test can assert the worker reports itself alive."""
         return self.proxy.transport.probe("/health/liveliness", params=NoBody())
 
+    @step("GET /health/readiness without auth")
     def readiness_public(self) -> Result[ReadinessResponse]:
         """GET /health/readiness with no credential at all, proving the probe is
         safe to expose to an unauthenticated load balancer."""
@@ -50,6 +53,7 @@ class OtherClient:
             response_type=ReadinessResponse,
         )
 
+    @step("GET /health/readiness/details")
     def readiness_details(self, key: str) -> Result[ReadinessDetailsResponse]:
         return self.proxy.transport.get(
             "/health/readiness/details",
@@ -58,6 +62,7 @@ class OtherClient:
             response_type=ReadinessDetailsResponse,
         )
 
+    @step("GET /health/readiness/details without auth")
     def readiness_details_unauthenticated(self) -> Result[ReadinessDetailsResponse]:
         return self.proxy.transport.get(
             "/health/readiness/details",
@@ -66,6 +71,7 @@ class OtherClient:
             response_type=ReadinessDetailsResponse,
         )
 
+    @step("GET /user/list")
     def list_users_as(self, key: str) -> Result[UserListResponse]:
         """GET /user/list under `key`. Admin-only, so it doubles as the master
         key's authorization proof: the master key (proxy admin) reads it, a

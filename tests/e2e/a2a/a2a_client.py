@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from e2e_config import settle_propagation
 from e2e_http import NoBody, Result, Success, get_external, is_ok
+from e2e_metadata import STEP_FRAMES, step
 from proxy_client import ProxyClient
 
 
@@ -291,6 +292,7 @@ class A2AResponse(BaseModel):
 class A2AClient:
     proxy: ProxyClient
 
+    @step("register A2A agent")
     def register_agent(self, body: AgentRegisterBody) -> Result[AgentResponse]:
         """Register an agent and, on success, wait until the data plane serves it.
 
@@ -337,6 +339,7 @@ class A2AClient:
                 )
             time.sleep(self.proxy.poll_interval)
 
+    @step("get A2A agent")
     def get_agent(self, agent_id: str) -> Result[AgentResponse]:
         return self.proxy.transport.get(
             f"/v1/agents/{agent_id}",
@@ -345,6 +348,7 @@ class A2AClient:
             response_type=AgentResponse,
         )
 
+    @step("delete A2A agent")
     def delete_agent(self, agent_id: str) -> None:
         result = self.proxy.transport.delete(
             f"/v1/agents/{agent_id}",
@@ -353,8 +357,9 @@ class A2AClient:
             response_type=NoBody,
         )
         if not is_ok(result):
-            warnings.warn(f"delete_agent({agent_id!r}) failed: {result}", stacklevel=2)
+            warnings.warn(f"delete_agent({agent_id!r}) failed: {result}", stacklevel=2 + STEP_FRAMES)
 
+    @step("GET /a2a/{id}/.well-known/agent-card.json")
     def agent_card(self, agent_id: str, key: str) -> Result[ServedAgentCard]:
         return self.proxy.transport.get(
             f"/a2a/{agent_id}/.well-known/agent-card.json",
@@ -363,6 +368,7 @@ class A2AClient:
             response_type=ServedAgentCard,
         )
 
+    @step("POST /a2a/{id} (message/send)")
     def send_message(self, agent_id: str, key: str, body: A2AJsonRpcRequest) -> Result[A2AResponse]:
         return self.proxy.transport.post(
             f"/a2a/{agent_id}",
@@ -376,6 +382,7 @@ def build_a2a_client(proxy: ProxyClient) -> A2AClient:
     return A2AClient(proxy=proxy)
 
 
+@step("fetch the published upstream agent card")
 def fetch_agent_card(url: str, *, timeout: float = 20.0) -> Result[UpstreamAgentCard]:
     """Fetch a live A2A agent card from its /.well-known endpoint and parse it into the
     registration model, so a test can register a real published card verbatim rather

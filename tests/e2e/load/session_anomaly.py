@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import Result, Success
+from e2e_metadata import step
 from models import CacheControl, RichMessage, TextBlock
 from transport import Transport
 
@@ -213,6 +214,7 @@ def _drive_turns(
     )
 
 
+@step("run a cached /v1/messages session")
 def run_session(
     transport: Transport, key: str, model: str, turns: int, attempts_per_turn: int
 ) -> tuple[TurnMetric, ...]:
@@ -230,6 +232,7 @@ def run_session(
     )
 
 
+@step("run concurrent cached /v1/messages sessions")
 def run_concurrent_sessions(
     transport: Transport,
     key: str,
