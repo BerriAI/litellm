@@ -5,6 +5,7 @@ mod capabilities;
 mod codec;
 mod dual;
 mod error;
+pub mod semantic;
 
 pub use base_cache::{
     BaseCache, BatchEntry, CacheConnectionResult, CacheConnectionStatus, CacheContext,
@@ -13,9 +14,13 @@ pub use base_cache::{
 pub use cache_type::CacheType;
 pub use caching::{Cache, CacheBackend, get_cache, set_cache};
 pub use capabilities::{
-    BatchCache, CacheScript, ClaimCache, ClientInfoCache, CounterCache, DeleteCache, FlushCache,
-    IncrementOperation, QueueCache, ScanCache, ScriptCache, SetCache, TtlCache,
+    BatchCache, BoundedCounterCache, BulkDeleteCache, CacheScript, ClaimCache, ClientInfoCache,
+    ConnectionCache, CountReadCache, CounterCache, DeleteCache, DisconnectCache, FlushAllCache,
+    FlushCache, IncrementOperation, PingCache, PopOperation, PushOperation, QueueCache,
+    RefreshTtlCache, ScanCache, ScriptCache, SetCache, TtlCache, TtlPipelineCache,
 };
 pub use codec::{CacheCodec, JsonCodec};
-pub use dual::{DualCache, ReadPolicy, RemoteFailurePolicy, WritePolicy};
+pub use dual::{
+    DEFAULT_DELETE_BATCH_SIZE, DualCache, ReadPolicy, RemoteFailurePolicy, WritePolicy,
+};
 pub use error::Error;

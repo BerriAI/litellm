@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
     update_responses_tools_with_model_file_ids,
 )
+from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
@@ -1218,6 +1219,27 @@ def responses(
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        try:
+            effective_extra_headers: Final = (
+                add_provider_affinity_header(
+                    headers=extra_headers or MappingProxyType({}),
+                    litellm_params=MappingProxyType(
+                        {
+                            "provider_affinity_header": litellm_params.provider_affinity_header,
+                            "litellm_session_id": kwargs.get("litellm_session_id"),
+                            "session_id": kwargs.get("session_id"),
+                            "metadata": metadata,
+                            "litellm_metadata": kwargs.get("litellm_metadata"),
+                        }
+                    ),
+                )
+                if litellm_params.provider_affinity_header is not None
+                else extra_headers
+            )
+        except ValueError as affinity_error:
+            raise litellm.BadRequestError(
+                message=str(affinity_error), model=model, llm_provider=custom_llm_provider
+            ) from affinity_error
 
         #########################################################
         # MOCK RESPONSE LOGIC
@@ -1261,7 +1283,7 @@ def responses(
             top_p=top_p,
             truncation=truncation,
             user=user,
-            extra_headers=extra_headers,
+            extra_headers=effective_extra_headers,
             extra_query=extra_query,
             extra_body=extra_body,
             timeout=timeout,
@@ -1332,7 +1354,7 @@ def responses(
             safety_identifier=safety_identifier,
             text_format=text_format,
             allowed_openai_params=allowed_openai_params,
-            extra_headers=extra_headers,
+            extra_headers=effective_extra_headers,
             extra_query=extra_query,
             extra_body=extra_body,
             timeout=timeout,
@@ -1352,7 +1374,7 @@ def responses(
                 custom_llm_provider=custom_llm_provider,
                 _is_async=_is_async,
                 stream=stream,
-                extra_headers=extra_headers,
+                extra_headers=effective_extra_headers,
                 extra_body=extra_body,
                 timeout=timeout if timeout is not None else request_timeout,
                 allowed_openai_params=allowed_openai_params,
@@ -1381,6 +1403,7 @@ def responses(
                 "model_info": kwargs.get("model_info"),
                 "data_residency": infer_openai_data_residency(custom_llm_provider, litellm_params.api_base),
                 "metadata": (kwargs["litellm_metadata"] if "litellm_metadata" in kwargs else kwargs.get("metadata")),
+                "provider_affinity_header": litellm_params.provider_affinity_header,
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -1400,7 +1423,7 @@ def responses(
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
-            extra_headers=extra_headers,
+            extra_headers=effective_extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,

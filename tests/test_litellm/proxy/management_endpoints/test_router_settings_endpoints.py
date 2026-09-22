@@ -6,20 +6,22 @@ Tests the GET endpoints for router settings and router fields.
 
 from collections.abc import Mapping
 from typing import Any, Final
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.config_resolvers import SettingsStore
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
+    RouterFieldsResponse,
+    RouterSettingsResponse,
+    get_router_fields,
     get_router_settings,
 )
-from litellm.proxy.config_resolvers import SettingsStore
 from litellm.proxy.proxy_server import app
 from litellm.router import Router
+from litellm.types.router import RoutingGroup
 
 client = TestClient(app)
 
@@ -157,3 +159,91 @@ class TestRouterSettingsEndpoints:
 
         rg_field = next(f for f in response.fields if f.field_name == "routing_groups")
         assert rg_field.field_value == groups
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("metadata_only", (True, False))
+    async def test_priority_is_advertised_for_groups_only(
+        self, monkeypatch: pytest.MonkeyPatch, metadata_only: bool
+    ) -> None:
+        monkeypatch.setattr(proxy_server, "llm_router", None)
+        monkeypatch.setattr(
+            proxy_server,
+            "proxy_config",
+            _StubProxyConfig(SettingsStore("router_settings"), {}),
+        )
+        admin_user: Final = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test"
+        )
+
+        response: Final[RouterFieldsResponse | RouterSettingsResponse] = (
+            await get_router_fields(user_api_key_dict=admin_user)
+            if metadata_only
+            else await get_router_settings(user_api_key_dict=admin_user)
+        )
+
+        global_options: Final = next(
+            field.options
+            for field in response.fields
+            if field.field_name == "routing_strategy"
+        )
+        assert global_options is not None
+        assert "priority" not in global_options
+        assert response.model_dump(mode="json")["routing_group_strategies"] == [*global_options, "priority"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("from_config", (False, True))
+    async def test_settings_retains_explicit_model_priorities(
+        self, monkeypatch: pytest.MonkeyPatch, from_config: bool
+    ) -> None:
+        group: Final = RoutingGroup(
+            group_name="ordered-chat",
+            models=["primary", "backup"],
+            routing_strategy="priority",
+            model_priorities={"primary": 1, "backup": 2},
+        )
+        llm_router: Final = Router(
+            model_list=[
+                {
+                    "model_name": model,
+                    "litellm_params": {
+                        "model": "openai/gpt-5.4-nano",
+                        "api_key": "sk-test",
+                    },
+                }
+                for model in group.models
+            ],
+            routing_groups=[group],
+        )
+        expected: Final = [
+            {
+                "group_name": "ordered-chat",
+                "models": ["primary", "backup"],
+                "routing_strategy": "priority",
+                "routing_strategy_args": None,
+                "model_priorities": (
+                    {"primary": 8, "backup": 3}
+                    if from_config
+                    else {"primary": 1, "backup": 2}
+                ),
+            }
+        ]
+        config: Final = {"routing_groups": expected} if from_config else {}
+        store: Final = SettingsStore("router_settings")
+        store.load_yaml(config)
+        monkeypatch.setattr(proxy_server, "llm_router", llm_router)
+        monkeypatch.setattr(
+            proxy_server, "proxy_config", _StubProxyConfig(store, config)
+        )
+        admin_user: Final = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test"
+        )
+
+        response: Final[RouterSettingsResponse] = await get_router_settings(
+            user_api_key_dict=admin_user
+        )
+
+        assert response.current_values["routing_groups"] == expected
+        groups_field: Final = next(
+            field for field in response.fields if field.field_name == "routing_groups"
+        )
+        assert groups_field.field_value == expected
