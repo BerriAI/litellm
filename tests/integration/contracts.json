@@ -269,6 +269,9 @@
     "tests/integration/compatibility/test_openai_consumer.py::test_retained_openai_clients_parse_real_proxy_tool_and_usage_responses": [
       "other.compatibility.openai.retained_client_parses_tools_and_usage"
     ],
+    "tests/integration/spend/test_daily_rollup_retry.py::test_failed_daily_user_rollup_commit_is_retried_so_spend_report_and_daily_activity_agree": [
+      "spend.daily_rollup.failed_user_commit_is_retried_until_report_and_daily_activity_agree"
+    ],
     "tests/integration/spend/test_filtered_ledger.py::test_rotated_keys_users_and_model_groups_preserve_success_failure_cache_ledger": [
       "quota_management.spend_tracking.filtered_ledger_preserves_owner_identity_and_totals"
     ],
