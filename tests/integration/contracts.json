@@ -211,6 +211,12 @@
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_flux_lora_depth_edit_sends_single_image_url_and_charges_flat_row": [
       "other.provider_wire.fal_ai.flux_lora_depth_edit_single_image_url_and_flat_pricing"
     ],
+    "tests/integration/providers/test_fireworks_ai_router_slug_wire.py::test_fireworks_router_slug_chat_sends_router_resource_not_models_path": [
+      "other.provider_wire.fireworks_ai.router_slug_chat_sends_router_resource_name"
+    ],
+    "tests/integration/providers/test_fireworks_ai_router_slug_wire.py::test_fireworks_router_slug_text_completion_sends_router_resource_not_models_path": [
+      "other.provider_wire.fireworks_ai.router_slug_text_completion_sends_router_resource_name"
+    ],
     "tests/integration/providers/test_fal_ai_chat_wire.py::test_fal_moondream3_chat_sends_prompt_image_and_reasoning": [
       "other.provider_wire.fal_ai.moondream3_chat_query_wire_and_token_pricing"
     ],
