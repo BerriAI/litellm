@@ -40,8 +40,12 @@ than as a GitHub Action or on a dedicated VM. Trade-offs:
    own.
 3. **Clones the worktree** at `~/litellm-cron-worktree/` (a
    `--filter=blob:none` clone, so only the checked-out tag's blobs are
-   fetched), `git checkout --force <tag>`, then `uv sync --frozen`
-   against a uv-managed CPython 3.12. Then **shims the test suite**:
+   fetched), `git checkout --force <tag>`, then `uv sync --frozen
+   --no-install-project` against a uv-managed CPython 3.12 followed by
+   `uv pip install --no-build litellm==<version>`, so the proxy under
+   test is the published PyPI wheel (what users install) rather than a
+   source build: the tag builds a Rust extension through maturin, and
+   the image ships no C or Rust toolchain. Then **shims the test suite**:
    `tests/e2e/` in the worktree is rebuilt from the image's copy of
    this tree — the `claude_code/` suite plus the five shared transport
    helpers it imports (`proxy_client.py`, `e2e_http.py`, `models.py`,
@@ -177,8 +181,13 @@ docker run --rm --platform linux/amd64 \
   developer running the script locally next to their own `:4000` proxy
   doesn't collide. Override with `PROXY_PORT=...`.
 - **`uv sync --frozen` requires the resolved tag to be tagged on
-  GitHub.** If the latest stable release was made but not pushed as a
-  git tag, the `git checkout` step fails. Push the tag, then rerun.
+  GitHub, and the wheel install requires it on PyPI.** If the latest
+  stable release was made but not pushed as a git tag, the `git
+  checkout` step fails; push the tag, then rerun. PyPI has had every
+  stable version days before its GitHub release so far (1.102.0 was
+  uploaded 2026-09-20, released on GitHub 2026-09-22), so the
+  `--no-build` install failing means the wheel is genuinely missing,
+  not late.
 - **Publish-token rotation is your problem.** The cron does not
   refresh the token; if `mateo-berri`'s PAT in the `github-token`
   secret file expires, the run fails at the `git push`/`gh pr create`

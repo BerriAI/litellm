@@ -305,10 +305,18 @@ fi
 # actually serve. `--group proxy-dev` brings in pytest and the rest of
 # what tests/e2e/claude_code/ needs. `--python` pins the venv to
 # ${CRON_PYTHON_VERSION}; the first run after a version bump recreates
-# the venv from scratch (a one-time cold sync).
+# the venv from scratch (a one-time cold sync). `--no-install-project`
+# leaves litellm itself out: the tag builds a Rust extension through
+# maturin, which needs a C and Rust toolchain the image does not carry,
+# so the published PyPI wheel (what users install) goes in right after,
+# and every later `uv run` passes `--no-sync` so uv never tries to put
+# the source build back.
 export UV_PYTHON_INSTALL_DIR="${WORKTREE}/.uv-python"
-log "uv sync --frozen --group proxy-dev --extra proxy --python ${CRON_PYTHON_VERSION} (uv ${PINNED_UV_VERSION:-system})"
-(cd "${WORKTREE}" && "${WORKTREE_UV}" sync --frozen --group proxy-dev --extra proxy --python "${CRON_PYTHON_VERSION}")
+log "uv sync --frozen --group proxy-dev --extra proxy --no-install-project --python ${CRON_PYTHON_VERSION} (uv ${PINNED_UV_VERSION:-system})"
+(cd "${WORKTREE}" && "${WORKTREE_UV}" sync --frozen --group proxy-dev --extra proxy --no-install-project --python "${CRON_PYTHON_VERSION}")
+LITELLM_WHEEL_VERSION="${LITELLM_VERSION#v}"
+log "installing the published litellm==${LITELLM_WHEEL_VERSION} wheel from PyPI"
+"${WORKTREE_UV}" pip install --python "${WORKTREE}/.venv/bin/python" --no-deps --no-build "litellm==${LITELLM_WHEEL_VERSION}"
 
 PROXY_CONFIG="${WORKTREE}/tests/e2e/claude_code/test_config.yaml"
 [[ -f "${PROXY_CONFIG}" ]] || die "proxy config not found at ${PROXY_CONFIG} (shim incomplete?)"
@@ -334,7 +342,7 @@ log "starting proxy on 127.0.0.1:${PROXY_PORT}"
 setsid env LITELLM_MASTER_KEY="${PROXY_API_KEY}" bash -c '
   echo "$$" > "$0"
   cd "$1"
-  exec "$2" run litellm --config "$3" --host 127.0.0.1 --port "$4"
+  exec "$2" run --no-sync litellm --config "$3" --host 127.0.0.1 --port "$4"
 ' "${PROXY_PID_FILE}" "${WORKTREE}" "${WORKTREE_UV}" "${PROXY_CONFIG}" "${PROXY_PORT}" \
   >"${WORKDIR}/proxy.log" 2>&1 &
 disown
@@ -373,7 +381,7 @@ set +e
     && LITELLM_PROXY_URL="http://127.0.0.1:${PROXY_PORT}" \
        LITELLM_MASTER_KEY="${PROXY_API_KEY}" \
        COMPAT_RESULTS_PATH="${RESULTS_JSON}" \
-       "${WORKTREE_UV}" run pytest "${PYTEST_ARGS[@]}"
+       "${WORKTREE_UV}" run --no-sync pytest "${PYTEST_ARGS[@]}"
 )
 PYTEST_EXIT=$?
 set -e
@@ -392,7 +400,7 @@ MATRIX_JSON="${WORKDIR}/compatibility-matrix.json"
 log "building ${MATRIX_JSON}"
 (
   cd "${WORKTREE}" \
-    && "${WORKTREE_UV}" run python "${POPULATOR_DIR}/build_matrix.py" \
+    && "${WORKTREE_UV}" run --no-sync python "${POPULATOR_DIR}/build_matrix.py" \
        --manifest "${WORKTREE}/tests/e2e/claude_code/manifest.yaml" \
        --results "${RESULTS_JSON}" \
        --output "${MATRIX_JSON}" \
@@ -452,7 +460,7 @@ log "checking for green->red regressions vs the published matrix"
 set +e
 REGRESSION_REPORT="$(
   cd "${WORKTREE}" \
-    && "${WORKTREE_UV}" run python "${POPULATOR_DIR}/check_regressions.py" \
+    && "${WORKTREE_UV}" run --no-sync python "${POPULATOR_DIR}/check_regressions.py" \
        --old "${PUBLISHED_MATRIX}" \
        --new "${MATRIX_JSON}"
 )"
