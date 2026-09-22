@@ -208,9 +208,12 @@ async def _check_summary_model_access(
     (``ProxyException`` from ``_can_object_call_model`` / ``can_*_model``).
     Unexpected errors during an access check fail closed but are logged
     separately so operators can distinguish them from a real access-denied
-    response. DB-lookup failures (object missing from cache or DB) skip the
-    corresponding scope — matching ``common_checks``, which only enforces a
-    scope when its backing object can be loaded.
+    response. User and project lookup failures (object missing from cache or
+    DB) skip the corresponding scope — matching ``common_checks``, which only
+    enforces a scope when its backing object can be loaded. A failed team
+    membership read (a database outage) fails closed instead, since a member
+    whose limits cannot be read must not have the summary model invoked with
+    those limits dropped.
     """
     if user_api_key_auth is None:
         return True
@@ -346,13 +349,12 @@ async def _check_summary_model_access(
                 proxy_logging_obj=proxy_logging_obj,
             )
         except Exception as e:
-            verbose_logger.debug(
-                "compact_20260112: team membership lookup failed for "
-                "summary_model=%s access check; skipping member-level scope: %s",
+            verbose_logger.warning(
+                "compact_20260112: team membership lookup failed for summary_model=%s access check; denying access: %s",
                 summary_model,
                 e,
             )
-            team_membership = None
+            return False
         member_allowed_models: Final = (
             team_membership.litellm_budget_table.allowed_models
             if team_membership is not None and team_membership.litellm_budget_table is not None

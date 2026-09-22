@@ -2099,8 +2099,11 @@ class JWTAuthManager:
         spend / metadata can be attributed correctly.
 
         Returns (team_id, team_object, team_membership_object).
-        Any DB error is debug-logged and the tuple is (None, None, None) — no
-        exception ever propagates from this helper.
+        A team that cannot be loaded (HTTPException from get_team_object) is
+        debug-logged and the tuple is (None, None, None), the same as the DB
+        team fallback. A failed membership read propagates, so a database
+        outage surfaces as the 503 the rest of auth answers with instead of
+        serving the request with the member's limits dropped.
         """
         if user_object is None or not user_object.teams or len(user_object.teams) != 1:
             return None, None, None
@@ -2115,28 +2118,28 @@ class JWTAuthManager:
                 proxy_logging_obj=proxy_logging_obj,
                 team_id_upsert=team_id_upsert,
             )
-            if team_row is None:
-                return None, None, None
-
-            if not user_id:
-                return _tid, team_row, None
-
-            team_membership: Final = await get_team_membership(
-                user_id=user_id,
-                team_id=_tid,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            return _tid, team_row, team_membership
-        except Exception:
+        except HTTPException:
             verbose_proxy_logger.debug(
-                "JWT single-team fallback error, skipping. team_id=%s",
+                "JWT single-team fallback: team could not be loaded, skipping. team_id=%s",
                 _tid,
                 exc_info=True,
             )
             return None, None, None
+        if team_row is None:
+            return None, None, None
+
+        if not user_id:
+            return _tid, team_row, None
+
+        team_membership: Final = await get_team_membership(
+            user_id=user_id,
+            team_id=_tid,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        return _tid, team_row, team_membership
 
     @staticmethod
     async def _resolve_db_team_fallback(
