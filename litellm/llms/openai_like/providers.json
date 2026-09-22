@@ -200,5 +200,9 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "yolo-auto": {
+    "base_url": "https://yolo-auto.com/v1",
+    "api_key_env": "YOLO_AUTO_API_KEY"
   }
 }
