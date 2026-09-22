@@ -3216,7 +3216,9 @@ def _match_and_track_policies(
     attachment_registry: Final = (
         attachment_registry_override if attachment_registry_override is not None else get_attachment_registry()
     )
-    matches_with_reasons: Final = attachment_registry.get_attached_policies_with_reasons(context)
+    matches_with_reasons: Final = attachment_registry.get_attached_policies_with_reasons(
+        context, PolicyMatcher.policy_applies(context, policies_override)
+    )
     matching_policy_names: Final = [m["policy_name"] for m in matches_with_reasons]
     policy_reasons: Final = {m["policy_name"]: m["matched_via"] for m in matches_with_reasons}
 
@@ -3418,7 +3420,12 @@ async def add_guardrails_from_policy_engine(
 
 
 _ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
-    (LlmProviders.ANTHROPIC.value, LlmProviders.BEDROCK.value, LlmProviders.VERTEX_AI.value)
+    (
+        LlmProviders.ANTHROPIC.value,
+        LlmProviders.BEDROCK.value,
+        LlmProviders.BEDROCK_MANTLE.value,
+        LlmProviders.VERTEX_AI.value,
+    )
 )
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.ANTHROPIC.value
 

@@ -43,6 +43,7 @@ from lifecycle import ResourceManager
 from models import KeyGenerateBody, RouterSettingsOverride
 from reliability_support import (
     COOLDOWN_SECONDS,
+    REPLICA_PROPAGATION_SECONDS,
     chat_override,
     create_always_5xx_deployment,
     create_always_rate_limited_deployment,
@@ -57,7 +58,6 @@ from reliability_support import (
 pytestmark = pytest.mark.e2e
 
 RECOVERY_GRACE_SECONDS = 10
-REPLICA_PROPAGATION_SECONDS = 15.0
 PROPAGATION_POLL_SECONDS = 0.25
 BENCH_MARGIN_SECONDS = 4.0
 

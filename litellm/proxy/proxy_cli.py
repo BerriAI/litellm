@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import click
 import httpx
+from click.core import ParameterSource
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict
 
@@ -179,6 +180,23 @@ def append_query_params(url: str | None, params: dict) -> str:
     encoded_query: Final = urlparse.urlencode(parsed_query, doseq=True)
     modified_url: Final = urlparse.urlunparse(parsed_url._replace(query=encoded_query))
     return modified_url
+
+
+def resolve_v2_migration_resolver(*, use_legacy_flag: bool, env_value: str | None) -> bool:
+    from litellm_proxy_extras.utils import str_to_bool
+
+    if use_legacy_flag:
+        return False
+    if env_value is None:
+        return True
+    return bool(str_to_bool(env_value))
+
+
+def deprecated_v2_flag_passed_on_cli() -> bool:
+    ctx: Final = click.get_current_context(silent=True)
+    if ctx is None:
+        return False
+    return ctx.get_parameter_source("use_v2_migration_resolver") is ParameterSource.COMMANDLINE
 
 
 class ProxyInitializationHelpers:
@@ -932,11 +950,23 @@ class ProxyInitializationHelpers:
     is_flag=True,
     default=False,
     help=(
-        "Opt into the v2 migration resolver. Avoids the diff-and-force recovery "
-        "path that can cause schema thrashing during rolling deploys where two "
-        "LiteLLM versions contend for the same DB. Default is the v1 resolver."
+        "Deprecated and ignored: the v2 migration resolver is now the default, "
+        "so this flag has no effect. It is still accepted so existing commands "
+        "keep working. Pass --use_legacy_migration_resolver, or set "
+        "USE_V2_MIGRATION_RESOLVER=false, to opt back into v1."
     ),
     envvar="USE_V2_MIGRATION_RESOLVER",
+)
+@click.option(
+    "--use_legacy_migration_resolver",
+    is_flag=True,
+    default=False,
+    help=(
+        "Fall back to the legacy v1 migration resolver. By default the proxy "
+        "uses the v2 resolver, which avoids the diff-and-force recovery path "
+        "that can cause schema thrashing during rolling deploys where two "
+        "LiteLLM versions contend for the same DB."
+    ),
 )
 @click.option(
     "--reload",
@@ -1005,6 +1035,7 @@ def run_server(
     limit_concurrency: int | None,
     enforce_prisma_migration_check: bool,
     use_v2_migration_resolver: bool,
+    use_legacy_migration_resolver: bool,
     reload: bool,
     prometheus_metrics_port: int | None,
 ):
@@ -1346,17 +1377,29 @@ def run_server(
                 if should_update_prisma_schema(general_settings.get("disable_prisma_schema_update")) is False:
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    if not use_v2_migration_resolver:
+                    use_v2_resolver: Final = resolve_v2_migration_resolver(
+                        use_legacy_flag=use_legacy_migration_resolver,
+                        env_value=os.getenv("USE_V2_MIGRATION_RESOLVER"),
+                    )
+                    if deprecated_v2_flag_passed_on_cli() and use_v2_resolver:
                         print(
-                            "\033[1;33mLiteLLM Proxy: Using default (v1) migration resolver. "
-                            "If your deployment has seen schema thrashing during rolling "
-                            "deploys, try --use_v2_migration_resolver (safer: avoids the "
-                            "diff-and-force recovery that caused the thrash).\033[0m"
+                            "\033[1;33mLiteLLM Proxy: --use_v2_migration_resolver is "
+                            "deprecated and has no effect, because the v2 migration "
+                            "resolver is now the default. You can safely remove it. To "
+                            "opt back into the legacy v1 resolver, pass "
+                            "--use_legacy_migration_resolver.\033[0m"
+                        )
+                    if not use_v2_resolver:
+                        print(
+                            "\033[1;33mLiteLLM Proxy: Using the legacy (v1) migration "
+                            "resolver. It performs the diff-and-force recovery that can "
+                            "cause schema thrashing during rolling deploys where two "
+                            "LiteLLM versions contend for the same DB.\033[0m"
                         )
                     try:
                         setup_ok: Final = PrismaManager.setup_database(
                             use_migrate=not use_prisma_db_push,
-                            use_v2_resolver=use_v2_migration_resolver,
+                            use_v2_resolver=use_v2_resolver,
                         )
                     except RuntimeError as e:
                         # Raised on unrecoverable migration errors: the v2

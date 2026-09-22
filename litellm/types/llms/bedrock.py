@@ -4,7 +4,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict
-from typing_extensions import ReadOnly, Required, TypedDict, override
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, override
 
 from .openai import ChatCompletionToolCallChunk
 
@@ -1081,6 +1081,7 @@ class BedrockS3InputDataConfig(TypedDict):
     """S3 input data configuration for Bedrock batch jobs."""
 
     s3Uri: str
+    s3BucketOwner: NotRequired[ReadOnly[str]]
 
 
 class BedrockInputDataConfig(TypedDict):
@@ -1094,6 +1095,7 @@ class BedrockS3OutputDataConfig(TypedDict, total=False):
 
     s3Uri: str
     s3EncryptionKeyId: str | None
+    s3BucketOwner: ReadOnly[str]
 
 
 class BedrockOutputDataConfig(TypedDict):
@@ -1235,6 +1237,7 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     thinking: dict
     metadata: dict
     output_config: dict
+    safeguards: list
 
     # `context_management` is allowed for Bedrock InvokeModel only when it
     # carries `compact_20260112` edits paired with the `compact-2026-01-12`

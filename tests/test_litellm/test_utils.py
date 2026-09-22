@@ -178,6 +178,14 @@ def test_potential_model_names_keeps_provider_prefixed_candidate():
     assert bare["provider_prefixed_model_name"] == bare["combined_model_name"] == "perplexity/glm-5.2"
 
 
+@pytest.mark.parametrize("capability", [True, False, None])
+def test_get_model_info_anthropic_compaction(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, capability: bool | None
+) -> None:
+    monkeypatch.setitem(litellm.model_cost["claude-sonnet-5"], "supports_anthropic_compaction", capability)
+    assert litellm.get_model_info("claude-sonnet-5")["supports_anthropic_compaction"] is capability
+
+
 def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local_model_cost_map):
     info = litellm.get_model_info(model="ft:gpt-4o-2024-08-06:my-org::abc123", custom_llm_provider="openai")
     assert info["key"] == "ft:gpt-4o-2024-08-06"
@@ -619,6 +627,8 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_second",
         "output_cost_per_second_480p",
         "output_cost_per_second_720p",
+        "output_cost_per_second_768p",
+        "output_cost_per_second_2k",
         "output_cost_per_second_1080p",
         "output_cost_per_second_4k",
         "input_cost_per_query",
@@ -652,6 +662,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "cache_creation_input_audio_token_cost",
         "cache_read_input_token_cost",
         "cache_read_input_audio_token_cost",
+        "cache_read_input_image_token_cost",
         "input_dbu_cost_per_token",
         "output_db_cost_per_token",
         "output_dbu_cost_per_token",
@@ -740,6 +751,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_image_token_cost": {"type": "number"},
                 "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
@@ -836,6 +848,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_second_480p": {"type": "number"},
                 "output_cost_per_second_720p": {"type": "number"},
+                "output_cost_per_second_768p": {"type": "number"},
+                "output_cost_per_second_2k": {"type": "number"},
                 "output_cost_per_second_1080p": {"type": "number"},
                 "output_cost_per_second_4k": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
@@ -855,6 +869,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "source": {"type": "string"},
                 "comment": {"type": "string"},
                 "supports_assistant_prefill": {"type": "boolean"},
+                "supports_anthropic_compaction": {"type": "boolean"},
                 "supports_audio_input": {"type": "boolean"},
                 "supports_audio_output": {"type": "boolean"},
                 "gemini_native_audio": {"type": "boolean"},
@@ -941,6 +956,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
+                            "/v1/videos",
                             "/vertex_ai/live",
                             "/v1/listen",
                             "/v1beta/interactions",
@@ -1070,6 +1086,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         # Add any model IDs that should be exempt from the cost validation
         # Example: "expensive-model-id",
         "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
+        "fal_ai/bytedance/seedance-2.0/text-to-video",
+        "fal_ai/bytedance/seedance-2.0/image-to-video",
+        "fal_ai/bytedance/seedance-2.0/reference-to-video",
     ]
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
@@ -1155,6 +1174,21 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
 
     control = litellm.get_model_info(model="au.anthropic.claude-opus-4-8", custom_llm_provider="bedrock")
     assert control["key"] == "au.anthropic.claude-opus-4-8"
+
+
+def test_get_model_info_bedrock_mantle_region_prefix_falls_back_to_the_mantle_row(local_model_cost_map):
+    """A Mantle deployment name may carry the region as a prefix (bedrock_mantle/us-east-2/<model>).
+    That name has no cost row of its own, so pricing must fall through to the region-free
+    bedrock_mantle/<model> row instead of raising, while a region that has its own row keeps it."""
+    for model, expected_key in (
+        ("bedrock_mantle/us-east-2/anthropic.claude-haiku-4-5", "bedrock_mantle/anthropic.claude-haiku-4-5"),
+        ("bedrock_mantle/us-east-2/openai.gpt-5.6-sol", "bedrock_mantle/openai.gpt-5.6-sol"),
+        ("bedrock_mantle/us-gov-west-1/openai.gpt-5.4", "bedrock_mantle/us-gov-west-1/openai.gpt-5.4"),
+    ):
+        info = litellm.get_model_info(model=model, custom_llm_provider="bedrock_mantle")
+        assert info["key"] == expected_key, model
+        assert info["input_cost_per_token"] == litellm.model_cost[expected_key]["input_cost_per_token"], model
+        assert info["input_cost_per_token"] > 0, model
 
 
 def test_openai_models_in_model_info(monkeypatch):
@@ -2973,6 +3007,35 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
         assert result.get("custom_param") == "value"
 
 
+class TestExtraBodyCannotOverrideModel:
+    @pytest.mark.parametrize("custom_llm_provider", ["edenai", "openai", "azure"])
+    def test_extra_body_model_is_dropped_for_openai_compatible_providers(self, custom_llm_provider: str) -> None:
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params={"extra_body": {"model": "edenai/openai/gpt-4o", "provider_flag": True}},
+            passed_params={
+                "model": "edenai/openai/gpt-4o-mini",
+                "extra_body": {"model": "edenai/anthropic/claude-3-opus", "top_k": 5},
+                "custom_param": "kept",
+            },
+            custom_llm_provider=custom_llm_provider,
+            openai_params=["model", "temperature"],
+            additional_drop_params=None,
+        )
+
+        assert result == {"extra_body": {"provider_flag": True, "top_k": 5, "custom_param": "kept"}}, result
+
+    def test_get_optional_params_strips_extra_body_model_for_edenai(self) -> None:
+        result = litellm.get_optional_params(
+            model="openai/gpt-4o-mini",
+            custom_llm_provider="edenai",
+            extra_body={"model": "anthropic/claude-opus-4-1", "top_k": 5},
+        )
+
+        assert result["extra_body"] == {"top_k": 5}, result
+
+
 class TestDropParamsWithPromptCacheKey:
     """
     Test that drop_params: true correctly drops prompt_cache_key for non-OpenAI providers.
@@ -3639,6 +3702,28 @@ class TestGetOptionalParamsTencent:
         )
         assert isinstance(config, TencentAnthropicMessagesConfig)
         assert config.custom_llm_provider == "tencent"
+
+    def test_bedrock_mantle_claude_messages_config_routing(self):
+        import litellm
+        from litellm.llms.bedrock_mantle.messages.transformation import (
+            BedrockMantleAnthropicMessagesConfig,
+        )
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="anthropic.claude-sonnet-5",
+            provider=litellm.LlmProviders.BEDROCK_MANTLE,
+        )
+        assert isinstance(config, BedrockMantleAnthropicMessagesConfig)
+        assert config.custom_llm_provider == "bedrock_mantle"
+
+    def test_bedrock_mantle_openai_models_keep_the_messages_bridge(self):
+        import litellm
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="openai.gpt-5.6-sol",
+            provider=litellm.LlmProviders.BEDROCK_MANTLE,
+        )
+        assert config is None
 
 
 class TestValidateEnvironmentTencent:
@@ -4606,6 +4691,33 @@ def test_bedrock_batch_params_never_reach_the_provider():
     )
 
 
+def test_documented_batch_s3_credentials_never_reach_the_provider():
+    """The Bedrock batch docs tell users to put s3_access_key_id, s3_secret_access_key
+    and s3_encryption_key_id on the deployment. Left unregistered they are swept into
+    additionalModelRequestFields, Bedrock 400s ordinary chat on that deployment with
+    `s3_secret_access_key: Extra inputs are not permitted`, and the S3 secret is sent
+    to the provider and printed in the debug log (LIT-8290).
+    """
+    configured = {
+        "s3_access_key_id": "configured-access-key-id",
+        "s3_secret_access_key": "configured-secret-access-key",
+        "s3_encryption_key_id": "arn:aws:kms:us-east-1:000000000000:key/configured",
+    }
+    kwargs = {"a_real_provider_specific_param": 1, **configured}
+
+    non_default = get_non_default_completion_params(dict(kwargs))
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "documented batch S3 credentials leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+
+    batch_params = dict(GenericLiteLLMParams(**kwargs))
+    assert {field: batch_params.get(field) for field in configured} == configured, (
+        "registering these must not strip them from the batch path"
+    )
+
+
 def test_client_side_timeout_marker_never_reaches_the_provider():
     """The proxy stamps kwargs["client_side_timeout"] = True whenever a request carries
     a caller-supplied timeout (body timeout / request_timeout / stream_timeout or the
@@ -4879,6 +4991,100 @@ async def test_wrapper_async_fires_post_call_failure_deployment_hook_on_internal
 
     assert len(recorder.calls) == 1
     assert isinstance(recorder.calls[0][1], litellm.AuthenticationError)
+
+
+def _budget_reservation(callback_bound: bool = False) -> dict:
+    return {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": callback_bound}
+
+
+_BUDGET_RESERVATION_CALL_KWARGS: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
+_BUDGET_RESERVATION_REFUSAL: Final = litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o")
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_claims_the_budget_reservation_for_the_cost_callback() -> None:
+    reservation = _budget_reservation()
+
+    await litellm.acompletion(
+        **_BUDGET_RESERVATION_CALL_KWARGS,
+        mock_response="ok",
+        metadata={"user_api_key_budget_reservation": reservation},
+    )
+
+    assert reservation["callback_bound"] is True
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_claims_the_budget_reservation_before_the_stream_is_consumed() -> None:
+    reservation = _budget_reservation()
+
+    stream = await litellm.acompletion(
+        **_BUDGET_RESERVATION_CALL_KWARGS,
+        mock_response="ok",
+        stream=True,
+        metadata={"user_api_key_budget_reservation": reservation},
+    )
+
+    assert reservation["callback_bound"] is True
+    async for _ in stream:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_claims_the_budget_reservation_a_supplied_logging_object_already_saw() -> None:
+    reservation = _budget_reservation()
+    logging_obj, kwargs = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        **_BUDGET_RESERVATION_CALL_KWARGS,
+        litellm_call_id="proxy-pre-call-setup",
+        metadata={"user_api_key_budget_reservation": reservation},
+    )
+    assert reservation["callback_bound"] is False
+
+    await litellm.acompletion(**kwargs, litellm_logging_obj=logging_obj, mock_response="ok")
+
+    assert reservation["callback_bound"] is True
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_hands_the_budget_reservation_back_when_the_call_fails() -> None:
+    reservation = _budget_reservation()
+
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.acompletion(
+            **_BUDGET_RESERVATION_CALL_KWARGS,
+            mock_response=_BUDGET_RESERVATION_REFUSAL,
+            metadata={"user_api_key_budget_reservation": reservation},
+        )
+
+    assert reservation["callback_bound"] is False
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_leaves_the_budget_reservation_alone_on_internal_calls() -> None:
+    claimed_by_the_outer_call = _budget_reservation(callback_bound=True)
+    never_claimed = _budget_reservation()
+
+    token = is_internal_call.set(True)
+    try:
+        await litellm.acompletion(
+            **_BUDGET_RESERVATION_CALL_KWARGS,
+            mock_response="ok",
+            metadata={"user_api_key_budget_reservation": never_claimed},
+        )
+        with pytest.raises(litellm.AuthenticationError):
+            await litellm.acompletion(
+                **_BUDGET_RESERVATION_CALL_KWARGS,
+                mock_response=_BUDGET_RESERVATION_REFUSAL,
+                metadata={"user_api_key_budget_reservation": claimed_by_the_outer_call},
+            )
+    finally:
+        is_internal_call.reset(token)
+
+    assert never_claimed["callback_bound"] is False
+    assert claimed_by_the_outer_call["callback_bound"] is True
 
 
 @pytest.mark.asyncio

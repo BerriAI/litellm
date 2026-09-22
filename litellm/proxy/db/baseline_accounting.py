@@ -171,6 +171,7 @@ class _Change(BaseModel):
     request_id: str
     publication: BaselinePublication
     api_key: str
+    user_id: str = ""
     session_id: str
     router_name: str
     baseline_model: str
@@ -256,40 +257,52 @@ SET publication = x.publication::text
 FROM jsonb_to_recordset($1::jsonb) AS x(request_id text, publication jsonb)
 WHERE observations.request_id = x.request_id
 """
-_UPDATE_SESSIONS: Final = """
+
+
+def _session_correction_sql(*, user_scoped: bool) -> str:
+    table_name: Final = "LiteLLM_AutoRouterUserSession" if user_scoped else "LiteLLM_AutoRouterSession"
+    identity_columns: Final = ("user_id, " if user_scoped else "") + "api_key, session_id, router_name"
+    user_filter: Final = "WHERE user_id <> ''" if user_scoped else ""
+    user_match: Final = "session.user_id = totals.user_id AND " if user_scoped else ""
+    return f"""
 WITH changes AS (
     SELECT * FROM jsonb_to_recordset($1::jsonb) AS x(
-        api_key text, session_id text, router_name text, baseline_model text,
+        user_id text, api_key text, session_id text, router_name text, baseline_model text,
         covered_delta int, actual_delta float8, savings_delta float8
     )
+    {user_filter}
 ), totals AS (
-    SELECT api_key, session_id, router_name, SUM(covered_delta)::int AS covered_delta,
+    SELECT {identity_columns}, SUM(covered_delta)::int AS covered_delta,
         SUM(actual_delta) AS actual_delta, SUM(savings_delta) AS savings_delta
-    FROM changes GROUP BY api_key, session_id, router_name
+    FROM changes GROUP BY {identity_columns}
 ), models AS (
-    SELECT api_key, session_id, router_name, jsonb_object_agg(baseline_model, delta) AS deltas
+    SELECT {identity_columns}, jsonb_object_agg(baseline_model, delta) AS deltas
     FROM (
-        SELECT api_key, session_id, router_name, baseline_model, SUM(covered_delta)::int AS delta
-        FROM changes GROUP BY api_key, session_id, router_name, baseline_model
-    ) grouped GROUP BY api_key, session_id, router_name
+        SELECT {identity_columns}, baseline_model, SUM(covered_delta)::int AS delta
+        FROM changes GROUP BY {identity_columns}, baseline_model
+    ) grouped GROUP BY {identity_columns}
 )
-UPDATE "LiteLLM_AutoRouterSession" AS session
+UPDATE "{table_name}" AS session
 SET saved_spend = session.saved_spend + totals.savings_delta,
     savings_estimated_turns = session.savings_estimated_turns + totals.covered_delta,
     savings_estimated_actual_spend = session.savings_estimated_actual_spend + totals.actual_delta,
     savings_estimated_saved_spend = session.savings_estimated_saved_spend + totals.savings_delta,
     savings_estimated_baseline_models = (
-        SELECT COALESCE(jsonb_object_agg(key, value), '{}'::jsonb) FROM (
+        SELECT COALESCE(jsonb_object_agg(key, value), '{{}}'::jsonb) FROM (
             SELECT key, SUM(value::int)::int AS value FROM (
                 SELECT * FROM jsonb_each_text(session.savings_estimated_baseline_models)
                 UNION ALL SELECT * FROM jsonb_each_text(models.deltas)
             ) combined GROUP BY key HAVING SUM(value::int) > 0
         ) counts
     )
-FROM totals JOIN models USING (api_key, session_id, router_name)
-WHERE session.api_key = totals.api_key AND session.session_id = totals.session_id
+FROM totals JOIN models USING ({identity_columns})
+WHERE {user_match}session.api_key = totals.api_key AND session.session_id = totals.session_id
     AND session.router_name = totals.router_name
 """
+
+
+_UPDATE_SESSIONS: Final = _session_correction_sql(user_scoped=False)
+_UPDATE_USER_SESSIONS: Final = _session_correction_sql(user_scoped=True)
 
 
 def _primary_transaction(client: PrismaClient) -> _TransactionManager:
@@ -308,6 +321,7 @@ def _change(record: BaselineAccountingRecord, old: BaselinePublication | None, n
         request_id=record.observation.request_id,
         publication=new,
         api_key=record.api_key,
+        user_id=record.turn.user_id if record.turn is not None else "",
         session_id=record.session_id,
         router_name=record.router_name,
         baseline_model=record.baseline_model,
@@ -357,6 +371,8 @@ async def _publish(db: SupportsRawQueries, changes: Sequence[_Change]) -> None:
     serialized: Final = json.dumps(tuple(change.model_dump(mode="json") for change in changes), separators=(",", ":"))
     await db.execute_raw(_UPDATE_LOGS, serialized)
     await db.execute_raw(_UPDATE_SESSIONS, serialized)
+    if any(change.user_id for change in changes):
+        await db.execute_raw(_UPDATE_USER_SESSIONS, serialized)
     for entity, table in DAILY_SPEND_TABLES.items():
         if adjustments := tuple(
             change.daily.adjustment(target, change.savings_delta, change.request_id)

@@ -12,6 +12,7 @@ from starlette.datastructures import Headers
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
     UnloadableEntitlementError,
+    _agent_capped_servers,
     _is_mcp_admitted_user_subject,
 )
 from litellm.proxy._types import (
@@ -21,6 +22,7 @@ from litellm.proxy._types import (
     SpecialMCPServerNames,
     UserAPIKeyAuth,
 )
+from litellm.types.agents import AgentCaller
 
 
 @pytest.mark.asyncio
@@ -4169,9 +4171,113 @@ async def test_get_allowed_mcp_servers_for_key_prefers_in_memory_permission():
         global_mcp_server_manager.registry.pop("direct-server", None)
 
 
+@pytest.mark.parametrize(
+    ("agent_servers", "group_ceiling", "expected"),
+    [
+        ([], frozenset({"server_1"}), ("server_1",)),
+        ([], frozenset({"server_1", "server_2", "server_3"}), ("server_1", "server_2")),
+        ([], frozenset(), ()),
+        (["server_2"], frozenset({"server_1", "server_2"}), ("server_2",)),
+        (["server_1"], frozenset({"server_2"}), ()),
+        (["server_1"], None, ("server_1",)),
+    ],
+)
+def test_agent_capped_servers_intersects_agent_config_and_access_groups(agent_servers, group_ceiling, expected):
+    """The agent's attached access groups cap the key/team servers alongside its own
+    object_permission; groups naming no server deny all."""
+    assert _agent_capped_servers(["server_1", "server_2"], agent_servers, group_ceiling) == expected
+
+
+def test_agent_capped_servers_without_agent_restrictions_is_uncapped():
+    assert _agent_capped_servers(["server_1", "server_2"], [], None) is None
+
+
 @pytest.mark.asyncio
 class TestAgentMCPPermissions:
     """Test agent-level MCP server and tool permission intersection."""
+
+    @staticmethod
+    def _agent_key_acting_for(user_id: str, team_id: str | None) -> UserAPIKeyAuth:
+        agent_key = UserAPIKeyAuth(api_key="agent-key", user_id="agent-owner", team_id="agent-team", agent_id="agent-1")
+        agent_key.agent_caller = AgentCaller(user_id=user_id, team_id=team_id)
+        return agent_key
+
+    @staticmethod
+    def _team_servers(grants: dict[str, list[str]]) -> AsyncMock:
+        async def by_team(user_api_key_auth: UserAPIKeyAuth | None = None) -> list[str]:
+            assert user_api_key_auth is not None
+            return grants.get(user_api_key_auth.team_id or "", [])
+
+        return AsyncMock(side_effect=by_team)
+
+    @staticmethod
+    def _user_servers(grants: dict[str, list[str] | None]) -> AsyncMock:
+        async def by_user(user_api_key_auth: UserAPIKeyAuth | None = None) -> list[str] | None:
+            assert user_api_key_auth is not None
+            return grants.get(user_api_key_auth.user_id or "", [])
+
+        return AsyncMock(side_effect=by_user)
+
+    async def test_agent_key_acting_for_a_user_is_capped_at_the_invoking_teams_servers(self):
+        """LIT-8014: the agent's own key reaches server_1 and server_2, but the human who invoked it
+        belongs to a team granted only server_2, so on their behalf the agent reaches only server_2."""
+        agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
+
+        with (
+            patch.object(  # test-quality-ok: the level resolvers read proxy_server globals with no injection seam
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server_1", "server_2"])
+            ),
+            patch.object(  # test-quality-ok: same seam, keyed by which team is being asked about
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_team",
+                self._team_servers({"callers": ["server_2", "server_3"]}),
+            ),
+            patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
+            ),
+            patch.object(  # test-quality-ok: neither the agent's owner nor the caller has a personal grant
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_user", self._user_servers({})
+            ),
+        ):
+            assert await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=agent_key) == ["server_2"]
+
+    async def test_agent_key_acting_for_a_teamless_user_is_capped_at_that_users_servers(self):
+        agent_key = self._agent_key_acting_for(user_id="alice", team_id=None)
+
+        with (
+            patch.object(  # test-quality-ok: the level resolvers read proxy_server globals with no injection seam
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server_1", "server_2"])
+            ),
+            patch.object(  # test-quality-ok: same seam
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_team", self._team_servers({})
+            ),
+            patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
+            ),
+            patch.object(  # test-quality-ok: same seam, keyed by which user is being asked about
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_user", self._user_servers({"alice": ["server_1"]})
+            ),
+        ):
+            assert await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=agent_key) == ["server_1"]
+
+    async def test_agent_key_acting_for_a_caller_whose_entitlement_is_unreadable_reaches_nothing(self):
+        agent_key = self._agent_key_acting_for(user_id="alice", team_id=None)
+
+        with (
+            patch.object(  # test-quality-ok: the level resolvers read proxy_server globals with no injection seam
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server_1"])
+            ),
+            patch.object(  # test-quality-ok: same seam
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_team", self._team_servers({})
+            ),
+            patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
+            ),
+            patch.object(  # test-quality-ok: None is the resolver's own "entitlement unresolvable" signal
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_user", self._user_servers({"alice": None})
+            ),
+        ):
+            assert await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=agent_key) == []
 
     async def test_get_allowed_mcp_servers_agent_intersection(self):
         """Key/team allow [server_1, server_2]; agent allows [server_1]. Result = [server_1]."""
@@ -4207,6 +4313,46 @@ class TestAgentMCPPermissions:
                     result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=user_api_key_auth)
                     assert sorted(result) == ["server_1", "server_2"]
                     mock_agent.assert_called_once_with(user_api_key_auth)
+
+    async def test_agent_access_group_server_ceiling_expands_group_servers(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+        from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling
+        from litellm.types.mcp import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        asked: list[str] = []
+
+        async def resolve(agent_id: str) -> AgentAccessGroupCeiling | None:
+            asked.append(agent_id)
+            return AgentAccessGroupCeiling(
+                access_group_ids=("ag-1",),
+                models=frozenset(),
+                mcp_server_ids=frozenset({"aliased-server"}),
+                agent_ids=frozenset(),
+            )
+
+        global_mcp_server_manager.registry["ag-server-id"] = MCPServer(
+            server_id="ag-server-id",
+            name="ag-server",
+            server_name="ag-server",
+            alias="aliased-server",
+            url="https://ag-server.example.com",
+            transport=MCPTransport.http,
+        )
+        try:
+            result = await MCPRequestHandler._get_agent_access_group_server_ceiling(
+                UserAPIKeyAuth(api_key="test-key", agent_id="agent-ag"), resolve
+            )
+        finally:
+            global_mcp_server_manager.registry.pop("ag-server-id", None)
+
+        assert result == frozenset({"ag-server-id"})
+        assert asked == ["agent-ag"]
+        assert (
+            await MCPRequestHandler._get_agent_access_group_server_ceiling(UserAPIKeyAuth(api_key="k"), resolve)
+            is None
+        )
+        assert asked == ["agent-ag"]
 
     async def test_get_allowed_mcp_servers_key_team_agent_intersection(self):
         """Key allows [1, 2], agent allows [2, 3]. Result = [2]."""
@@ -5790,12 +5936,13 @@ class TestMCPDcrBridgeDelegateAdmission:
 
     @staticmethod
     def _wrapped_user_lookup_error(original: BaseException) -> ValueError:
-        """Reproduce get_user_object's real exception contract (litellm/proxy/auth/auth_checks.py): it
-        catches every DB failure in a broad ``except`` and re-raises a bare ``ValueError``, so the
-        original error (a missing-user Exception or a real outage) survives only as ``__context__``.
-        Injecting a raw ConnectionError/Exception instead would exercise a shape production never
-        produces and let a chain-blind outage classifier pass. That wrapping fidelity is itself pinned by
-        test_get_user_object_wraps_db_outage_as_valueerror_preserving_context in test_auth_checks."""
+        """Reproduce get_user_object's exception contract (litellm/proxy/auth/auth_checks.py): a read
+        failure that is not a database outage is re-raised as a bare ``ValueError`` with the original
+        error only as ``__context__``, while an outage propagates raw (pinned by
+        test_get_user_object_surfaces_a_db_outage_as_503_not_as_a_missing_user and
+        test_get_user_object_still_reports_a_non_outage_read_failure_as_a_missing_user in
+        test_auth_checks). The wrapped shape is the harder one for the outage classifier, so injecting
+        it here keeps a chain-blind classifier from passing."""
         try:
             raise original
         except BaseException:
@@ -6339,15 +6486,15 @@ class TestMCPDcrBridgeDelegateAdmission:
                 )
         return exc_info.value
 
-    async def test_over_budget_admission_surfaces_429_not_401(self):
-        """A validly-authenticated but over-budget identity surfaces the standard pipeline's 429, not
+    async def test_over_budget_admission_surfaces_422_not_401(self):
+        """A validly-authenticated but over-budget identity surfaces the standard pipeline's 422, not
         a misleading 401. Flattening budget to 401 told the caller their credential was invalid, which
         on a DCR client reads as broken auth and triggers a re-authorize that cannot fix a budget
         problem. Regression for the status-flattening finding on the live-policy gate."""
         import litellm
 
         mapped = await self._enforce_with_gate_error(litellm.BudgetExceededError(current_cost=10.0, max_budget=1.0))
-        assert mapped.status_code == 429
+        assert mapped.status_code == 422
 
     async def test_db_outage_during_policy_surfaces_503_not_401(self):
         """A transient database outage during the live-policy gate surfaces a retryable 503, not a 401

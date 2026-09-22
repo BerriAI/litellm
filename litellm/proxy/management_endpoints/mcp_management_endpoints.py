@@ -22,7 +22,14 @@ import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Final,
+    Literal,
+    Protocol,
+    cast,  # noqa: TID251  # validated JSON values need explicit narrowing
+)
 
 from fastapi import (
     APIRouter,
@@ -628,8 +635,8 @@ if MCP_AVAILABLE:
 
     def _preserved_admin_config_credentials(
         credentials: "MCPCredentials | str | None",
-    ) -> "dict[str, str] | None":
-        """Keep only the non-secret admin-config keys, which are stored unencrypted so they lift out
+    ) -> "dict[str, str | list[str]] | None":  # mutable-ok: API response payload
+        """Keep non-secret admin-config keys and scopes, which are stored unencrypted so they lift out
         as plaintext; every secret and minted-token key is dropped.
 
         Total over every stored shape: a dict is read directly, a JSON-object string is parsed, and
@@ -639,15 +646,30 @@ if MCP_AVAILABLE:
         parsed: object = credentials
         if isinstance(credentials, str):
             try:
-                parsed = json.loads(credentials)
+                parsed = cast(object, json.loads(credentials))  # cast-ok: JSON parse result is validated below
             except (ValueError, TypeError):
                 return None
         if not isinstance(parsed, dict):
             return None
-        preserved: Final = {
-            key: value
-            for key in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS
-            if isinstance((value := parsed.get(key)), str) and value
+        parsed_credentials: Final = cast(Mapping[str, object], parsed)  # cast-ok: dict shape validated above
+        scopes: Final[object] = parsed_credentials.get("scopes")
+        scopes_as_objects: Final = (
+            cast(Sequence[object], scopes)  # cast-ok: list shape validated above
+            if isinstance(scopes, list)
+            else ()
+        )
+        preserved_scopes: Final = (
+            {"scopes": cast(list[str], scopes_as_objects)}  # cast-ok: every scope is validated below
+            if scopes_as_objects and all(isinstance(scope, str) and scope for scope in scopes_as_objects)
+            else {}
+        )
+        preserved: Final = {  # mutable-ok: API response payload
+            **{
+                key: value
+                for key in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS
+                if isinstance((value := parsed_credentials.get(key)), str) and value
+            },
+            **preserved_scopes,
         }
         return preserved or None
 
@@ -827,7 +849,9 @@ if MCP_AVAILABLE:
         if not credentials:
             return False
         as_dict: Final[dict[str, object]] = dict(credentials)
-        return any(value for key, value in as_dict.items() if key not in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS)
+        return any(
+            value for key, value in as_dict.items() if key not in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS and key != "scopes"
+        )
 
     def _inherit_credentials_from_existing_server(
         payload: NewMCPServerRequest,
@@ -959,7 +983,7 @@ if MCP_AVAILABLE:
             mcp_server_auth_headers=None,
         )
         tools: Final = listing.tools
-        dumped_tools: Final = [dict(tool) for tool in tools]
+        dumped_tools: Final = [tool.model_dump(by_alias=True) for tool in tools]
 
         return {"tools": dumped_tools}
 
@@ -1054,6 +1078,9 @@ if MCP_AVAILABLE:
         return {"servers": registry_servers}
 
     ## FastAPI Routes
+    def _mcp_server_display_order(server: LiteLLM_MCPServerTable) -> tuple[str, str]:
+        return ((server.server_name or server.alias or server.server_id).lower(), server.server_id)
+
     def _get_user_mcp_management_mode() -> UserMCPManagementMode:
         from litellm.proxy.proxy_server import (
             general_settings as proxy_general_settings,
@@ -1204,10 +1231,12 @@ if MCP_AVAILABLE:
                         detail="You do not have permission to view MCP servers for this team.",
                     )
 
-            redacted_mcp_servers = await _get_team_scoped_mcp_server_list(sanitized_team_id)
+            redacted_mcp_servers = sorted(
+                await _get_team_scoped_mcp_server_list(sanitized_team_id), key=_mcp_server_display_order
+            )
         else:
             servers: Final = await _resolve_accessible_mcp_servers(user_api_key_dict)
-            redacted_mcp_servers = _redact_mcp_credentials_list(servers)
+            redacted_mcp_servers = sorted(_redact_mcp_credentials_list(servers), key=_mcp_server_display_order)
 
         if connected_app_view is True and is_ui_session_credential(user_api_key_dict):
             reachable_ids: Final = await _connected_app_reachable_server_ids(user_api_key_dict)
