@@ -28,6 +28,7 @@ from litellm.proxy._types import (
 )
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+from litellm.proxy.auth.auth_checks import TeamNotFoundError
 from litellm.proxy.auth.handle_jwt import (
     JWKS_FETCH_ATTEMPTS,
     STALE_CACHE_KEY_PREFIX,
@@ -5828,11 +5829,12 @@ def _teams_by_alias(aliases: Mapping[str, str]):
 
 
 def _teams_by_id(team_ids: frozenset[str]):
-    """A team lookup that knows exactly `team_ids` and 404s like the real one otherwise."""
+    """A team lookup that knows exactly `team_ids` and, like the real one, reports
+    any other id as provably absent."""
 
     async def lookup(team_id, **kwargs):
         if team_id not in team_ids:
-            return await _team_lookup_404(team_id)
+            raise TeamNotFoundError(team_id=team_id)
         return LiteLLM_TeamTable(team_id=team_id)
 
     return lookup
@@ -7079,6 +7081,39 @@ async def test_resolve_team_from_header_under_db_fallback_tries_the_id_before_th
         await _resolve_header("ghost", set(), True, _teams_by_id(known_ids), _teams_by_alias(aliases))
     assert neither.value.status_code == 403
     assert neither.value.detail == ("Team 'ghost' (from x-litellm-team-id header) is not in your team memberships.")
+
+
+@pytest.mark.asyncio
+async def test_resolve_team_from_header_under_db_fallback_never_aliases_a_team_id_it_could_not_read():
+    """Only a team row the database provably lacks falls through to the alias
+    lookup. When the id read fails for any other reason (the generic 404 the
+    team lookup uses for an unreadable database) the value keeps the id path's
+    membership denial, so an outage can never turn a team id into the team
+    that happens to carry it as an alias."""
+    aliases = {"team_a": "team_b"}
+
+    with (
+        patch("litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock, side_effect=_team_lookup_404),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object_by_alias",
+            new_callable=AsyncMock,
+            side_effect=_teams_by_alias(aliases),
+        ) as lookups_by_alias,
+        pytest.raises(HTTPException) as unreadable,
+    ):
+        await JWTAuthManager.resolve_team_from_header(
+            request_headers={"x-litellm-team-id": "team_a"},
+            allowed_team_ids=set(),
+            fallback_to_db_teams=True,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert unreadable.value.status_code == 403
+    assert unreadable.value.detail == ("Team 'team_a' (from x-litellm-team-id header) is not in your team memberships.")
+    lookups_by_alias.assert_not_awaited()
 
 
 @pytest.mark.asyncio

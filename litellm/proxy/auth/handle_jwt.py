@@ -70,6 +70,7 @@ from litellm.types.agents import AgentResponse
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
 from .auth_checks import (
+    TeamNotFoundError,
     _allowed_routes_check,
     allowed_routes_check,
     get_actual_routes,
@@ -149,9 +150,6 @@ class _JWTProvisioning:
 
 @dataclass(frozen=True, slots=True)
 class HeaderTeam:
-    """The team an ``x-litellm-team-id`` header selected: the raw header value (a
-    team id or a team alias) and the team id it resolved to."""
-
     header_value: str
     team_id: str
 
@@ -1918,27 +1916,6 @@ class JWTAuthManager:
         return team.team_id
 
     @staticmethod
-    async def _team_exists(
-        team_id: str,
-        prisma_client: PrismaClient | None,
-        user_api_key_cache: UserApiKeyCache,
-        parent_otel_span: Span | None,
-        proxy_logging_obj: ProxyLogging,
-    ) -> bool:
-        try:
-            await get_team_object(
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-                team_id_upsert=False,
-            )
-        except HTTPException:
-            return False
-        return True
-
-    @staticmethod
     async def resolve_team_from_header(
         request_headers: Mapping[str, str] | None,
         allowed_team_ids: set[str],
@@ -1953,6 +1930,9 @@ class JWTAuthManager:
         alias. A value that is already an allowed team id (or, under the DB
         fallback, an existing team id) never costs an alias lookup; an alias is
         accepted only when the team it names would have been accepted by id.
+        Under the DB fallback only a team row that is provably absent falls
+        through to the alias lookup; a read that failed for any other reason
+        keeps the membership denial the id path already gives.
 
         Raises:
             HTTPException: 403 when neither the value nor the team it aliases is
@@ -1965,16 +1945,25 @@ class JWTAuthManager:
             return None
 
         if fallback_to_db_teams and not allowed_team_ids:
-            if await JWTAuthManager._team_exists(
-                header_value, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj
-            ):
-                return HeaderTeam(header_value=header_value, team_id=header_value)
-            aliased_team_id: Final = await JWTAuthManager._team_id_by_alias(
-                header_value, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj
-            )
-            if aliased_team_id is None:
+            try:
+                await get_team_object(
+                    team_id=header_value,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                    team_id_upsert=False,
+                )
+            except TeamNotFoundError:
+                aliased_team_id: Final = await JWTAuthManager._team_id_by_alias(
+                    header_value, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj
+                )
+                if aliased_team_id is None:
+                    JWTAuthManager._raise_header_team_membership_denial(header_value)
+                return HeaderTeam(header_value=header_value, team_id=aliased_team_id)
+            except HTTPException:
                 JWTAuthManager._raise_header_team_membership_denial(header_value)
-            return HeaderTeam(header_value=header_value, team_id=aliased_team_id)
+            return HeaderTeam(header_value=header_value, team_id=header_value)
 
         if header_value in allowed_team_ids:
             verbose_proxy_logger.debug("Using team_id from x-litellm-team-id header: %s", header_value)
