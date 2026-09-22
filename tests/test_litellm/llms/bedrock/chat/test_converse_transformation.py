@@ -7572,3 +7572,76 @@ def test_mid_conversation_multi_system_run_after_multiple_tool_results():
     ]
     assert out_messages[4]["content"][1]["text"] == "reminder 1"
     assert out_messages[5]["content"][1]["text"] == "reminder 2"
+
+
+def test_opens_with_tool_result_rejects_non_dict():
+    config = AmazonConverseConfig()
+    assert config._opens_with_tool_result("not-a-dict") is False
+    assert config._opens_with_tool_result(None) is False
+    assert config._opens_with_tool_result([{"role": "tool"}]) is False
+
+
+def test_mid_conversation_system_without_tools_stays_in_place():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "system", "content": "reminder"},
+        {"role": "user", "content": "thanks"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages)
+    assert [b["text"] for b in system_blocks if "text" in b] == ["You are helpful."]
+    assert [m["role"] for m in out_messages] == ["user", "assistant", "user", "user"]
+    assert out_messages[2]["content"][1]["text"] == "reminder"
+    assert out_messages[3]["content"] == "thanks"
+
+
+def test_mid_conversation_system_str_with_cache_control():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "system",
+            "content": "reminder",
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages)
+    assert system_blocks == []
+    assert out_messages[1]["role"] == "user"
+    assert out_messages[1]["content"][1] == {
+        "type": "text",
+        "text": "reminder",
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
+def test_mid_conversation_system_list_content_with_cache_control():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "keep this", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "plain"},
+                {"type": "text", "text": ""},
+                {"type": "image", "source": "x"},
+                "raw-string",
+            ],
+        },
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages)
+    assert system_blocks == []
+    blocks = out_messages[1]["content"]
+    assert blocks[0]["text"] == config._CONVERTED_MID_CONVERSATION_SYSTEM_NOTE
+    assert blocks[1] == {
+        "type": "text",
+        "text": "keep this",
+        "cache_control": {"type": "ephemeral"},
+    }
+    assert blocks[2] == {"type": "text", "text": "plain"}
+    assert len(blocks) == 3
