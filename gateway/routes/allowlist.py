@@ -96,6 +96,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/langfuse/",
     "/vllm/",
     "/mistral/",
+    "/typesafe/",
     "/groq/",
     "/voyage/",
     "/cursor/",

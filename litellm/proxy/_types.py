@@ -479,6 +479,7 @@ class LiteLLMRoutes(enum.Enum):
         "/eu.assemblyai",
         "/vllm",
         "/mistral",
+        "/typesafe",
         "/milvus",
         "/gigachat",
         "/watsonx",
