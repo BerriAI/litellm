@@ -254,8 +254,9 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None, api_ba
 
     if api_base is not None and "api.anthropic.com" not in api_base:
         if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
-            # Strip the OAuth token if routing to a third-party host
-            headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
+            for key in list(headers.keys()):
+                if key.lower() == "authorization":
+                    headers.pop(key)
         return headers, api_key
 
     if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):

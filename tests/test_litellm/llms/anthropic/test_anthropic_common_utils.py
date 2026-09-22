@@ -153,6 +153,21 @@ class TestOptionallyHandleAnthropicOAuth:
         assert returned_api_key is None
         assert "authorization" not in updated_headers
 
+    def test_oauth_stripped_for_third_party_api_base(self):
+        """OAuth token should be stripped from headers when routing to a non-Anthropic api_base."""
+        from litellm.llms.anthropic.common_utils import (
+            optionally_handle_anthropic_oauth,
+        )
+
+        headers = {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
+            headers, None, api_base="https://custom-gateway.com/v1"
+        )
+
+        assert extracted_api_key is None
+        assert "authorization" not in updated_headers
+        assert "anthropic-beta" not in updated_headers
+
 
 class TestGetAnthropicHeaders:
     """Tests for get_anthropic_headers method with OAuth support."""
