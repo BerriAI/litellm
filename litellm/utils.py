@@ -286,6 +286,8 @@ import importlib.metadata
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
 
+from typing_extensions import assert_never
+
 from litellm import utils as litellm_utils
 
 # These are lazy loaded via __getattr__
@@ -2334,6 +2336,8 @@ def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind, backend: Decisio
             return tokenizer_dispatch.from_pretrained("hf-internal-testing/llama-tokenizer")
         case "llama3":
             return tokenizer_dispatch.from_pretrained("Xenova/llama-3-tokenizer")
+        case _:
+            assert_never(kind)
 
 
 def encode(model="", text="", custom_tokenizer: dict | None = None):

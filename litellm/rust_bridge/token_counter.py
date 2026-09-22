@@ -8,6 +8,7 @@ from functools import lru_cache
 from typing import Final, Literal, Protocol, cast  # noqa: TID251  # native extension exposes untyped callables
 
 from pydantic import TypeAdapter
+from typing_extensions import assert_never
 
 import litellm
 from litellm.litellm_core_utils.default_encoding import cl100k_base_rank_file, o200k_base_rank_file
@@ -88,6 +89,8 @@ def _counter(factory: RustTokenCounterFactory, tokenizer: RustTokenizer) -> Rust
             return factory.from_cl100k_ranks(cl100k_base_rank_file())
         case "o200k_base":
             return factory.from_o200k_ranks(o200k_base_rank_file())
+        case _:
+            assert_never(tokenizer)
 
 
 async def native_count(factory: RustTokenCounterFactory, tokenizer: RustTokenizer, body: bytes) -> InputTokenCount:
