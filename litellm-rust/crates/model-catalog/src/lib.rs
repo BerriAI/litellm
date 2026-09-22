@@ -1,7 +1,17 @@
+mod error;
+mod model_info;
+
+pub use error::Error;
+pub use model_info::{
+    AudioFormat, FallbackGeneralizations, FallbackRule, InputModality, Mode, ModelInfo,
+    OffPeakPricing, OffPeakWindow, OutputModality, ReasoningEffort, SearchContextCostPerQuery,
+    TieredRate, UtcHours, VertexAiAudioApi, WebSearchBillingUnit, Weekday,
+};
+
 use indexmap::IndexMap;
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
-use thiserror::Error;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Provenance {
@@ -27,26 +37,6 @@ impl IntegrityLimits {
     }
 }
 
-#[derive(Debug, Error)]
-pub enum CatalogError {
-    #[error("invalid JSON: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("catalog is empty")]
-    Empty,
-    #[error("model {model:?} must be an object")]
-    EntryNotObject { model: String },
-    #[error("catalog has {actual} models, below minimum {minimum}")]
-    BelowMinimum { actual: usize, minimum: usize },
-    #[error("catalog has {actual} models, below {ratio} of backup count {backup}")]
-    Shrunk {
-        actual: usize,
-        backup: usize,
-        ratio: f64,
-    },
-    #[error("minimum backup ratio must be finite and between zero and one")]
-    InvalidRatio,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AliasIssue {
     InvalidList { model: String },
@@ -58,6 +48,7 @@ pub enum AliasIssue {
 #[derive(Clone, Debug)]
 pub struct ModelEntry {
     fields: Map<String, Value>,
+    info: ModelInfo,
 }
 
 impl ModelEntry {
@@ -66,6 +57,10 @@ impl ModelEntry {
     }
     pub fn fields(&self) -> &Map<String, Value> {
         &self.fields
+    }
+    /// The entry deserialized into the typed mirror of the catalog schema.
+    pub fn info(&self) -> &ModelInfo {
+        &self.info
     }
 }
 
@@ -82,16 +77,16 @@ pub struct Catalog {
     aliases: IndexMap<String, String>,
     lowercase_keys: HashMap<String, String>,
     sample_spec: Option<Value>,
-    fallback_generalizations: Option<Value>,
+    fallback_generalizations: Option<FallbackGeneralizations>,
     provenance: Provenance,
     alias_issues: Vec<AliasIssue>,
 }
 
 impl Catalog {
-    pub fn parse(body: &[u8], provenance: Provenance) -> Result<Self, CatalogError> {
+    pub fn parse(body: &[u8], provenance: Provenance) -> Result<Self, Error> {
         let root: IndexMap<String, Value> = serde_json::from_slice(body)?;
         if root.is_empty() {
-            return Err(CatalogError::Empty);
+            return Err(Error::Empty);
         }
 
         let mut entries = IndexMap::with_capacity(root.len());
@@ -106,13 +101,18 @@ impl Catalog {
                     continue;
                 }
                 "fallback_generalizations" => {
-                    fallback_generalizations = Some(value);
+                    fallback_generalizations =
+                        serde_json::from_value::<FallbackGeneralizations>(value).ok();
                     continue;
                 }
                 _ => {}
             }
+            let Value::Object(ref object) = value else {
+                return Err(Error::EntryNotObject { model: name });
+            };
+            let info = ModelInfo::deserialize(object)?;
             let Value::Object(mut fields) = value else {
-                return Err(CatalogError::EntryNotObject { model: name });
+                unreachable!("value checked is_object above")
             };
             if let Some(aliases) = fields.remove("aliases")
                 && !aliases.is_null()
@@ -124,7 +124,7 @@ impl Catalog {
                     }),
                 }
             }
-            entries.insert(name, ModelEntry { fields });
+            entries.insert(name, ModelEntry { fields, info });
         }
 
         let mut aliases = IndexMap::new();
@@ -168,13 +168,13 @@ impl Catalog {
         })
     }
 
-    pub fn validate(&self, limits: IntegrityLimits) -> Result<(), CatalogError> {
+    pub fn validate(&self, limits: IntegrityLimits) -> Result<(), Error> {
         if !limits.min_backup_ratio.is_finite() || !(0.0..=1.0).contains(&limits.min_backup_ratio) {
-            return Err(CatalogError::InvalidRatio);
+            return Err(Error::InvalidRatio);
         }
         let actual = self.entries.len();
         if actual < limits.min_model_count {
-            return Err(CatalogError::BelowMinimum {
+            return Err(Error::BelowMinimum {
                 actual,
                 minimum: limits.min_model_count,
             });
@@ -182,7 +182,7 @@ impl Catalog {
         if limits.backup_model_count > 0
             && (actual as f64) < (limits.backup_model_count as f64) * limits.min_backup_ratio
         {
-            return Err(CatalogError::Shrunk {
+            return Err(Error::Shrunk {
                 actual,
                 backup: limits.backup_model_count,
                 ratio: limits.min_backup_ratio,
@@ -237,16 +237,20 @@ impl Catalog {
     pub fn sample_spec(&self) -> Option<&Value> {
         self.sample_spec.as_ref()
     }
-    pub fn fallback_generalizations(&self) -> Option<&Value> {
+    pub fn fallback_generalizations(&self) -> Option<&FallbackGeneralizations> {
         self.fallback_generalizations.as_ref()
     }
-    pub fn fallback_rules(&self) -> Option<&Vec<Value>> {
-        self.fallback_generalizations
-            .as_ref()?
-            .get("rules")?
-            .as_array()
+    pub fn fallback_rules(&self) -> Option<&[FallbackRule]> {
+        Some(self.fallback_generalizations.as_ref()?.rules.as_slice())
     }
     pub fn provenance(&self) -> &Provenance {
         &self.provenance
     }
+}
+
+#[cfg(feature = "schema")]
+/// JSON Schema for one catalog model entry, mirroring
+/// `model_prices_and_context_window.schema.json`'s `modelEntry` definition.
+pub fn model_entry_json_schema() -> schemars::Schema {
+    schemars::schema_for!(ModelInfo)
 }

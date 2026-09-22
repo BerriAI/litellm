@@ -1,4 +1,4 @@
-use litellm_model_catalog::{AliasIssue, Catalog, CatalogError, IntegrityLimits, Provenance};
+use litellm_model_catalog::{AliasIssue, Catalog, Error, IntegrityLimits, Provenance};
 use serde_json::json;
 
 fn parse(body: &str) -> Catalog {
@@ -36,6 +36,10 @@ fn preserves_fields_metadata_and_snapshot_isolation() {
         Some(&json!({"nested":[1,{"x":true}]}))
     );
     assert_eq!(entry.entry.field("aliases"), None);
+    assert_eq!(
+        entry.entry.info().litellm_provider.as_deref(),
+        Some("test")
+    );
     assert_eq!(
         catalog.sample_spec(),
         Some(&json!({"explanation":"example"}))
@@ -99,7 +103,7 @@ fn integrity_uses_canonical_count_and_strict_shrink_boundary() {
             min_model_count: 1,
             min_backup_ratio: 0.5,
         }),
-        Err(CatalogError::Shrunk { actual: 1, .. })
+        Err(Error::Shrunk { actual: 1, .. })
     ));
     assert!(matches!(
         catalog.validate(IntegrityLimits {
@@ -107,7 +111,7 @@ fn integrity_uses_canonical_count_and_strict_shrink_boundary() {
             min_model_count: 2,
             min_backup_ratio: 0.5,
         }),
-        Err(CatalogError::BelowMinimum { actual: 1, .. })
+        Err(Error::BelowMinimum { actual: 1, .. })
     ));
     assert!(matches!(
         catalog.validate(IntegrityLimits {
@@ -115,7 +119,7 @@ fn integrity_uses_canonical_count_and_strict_shrink_boundary() {
             min_model_count: 0,
             min_backup_ratio: f64::NAN,
         }),
-        Err(CatalogError::InvalidRatio)
+        Err(Error::InvalidRatio)
     ));
 }
 
@@ -123,15 +127,15 @@ fn integrity_uses_canonical_count_and_strict_shrink_boundary() {
 fn malformed_input_and_aliases_have_typed_outcomes() {
     assert!(matches!(
         Catalog::parse(b"{}", Provenance::default()),
-        Err(CatalogError::Empty)
+        Err(Error::Empty)
     ));
     assert!(matches!(
         Catalog::parse(b"{", Provenance::default()),
-        Err(CatalogError::Json(_))
+        Err(Error::Json(_))
     ));
     assert!(matches!(
         Catalog::parse(b"{\"a\":1}", Provenance::default()),
-        Err(CatalogError::EntryNotObject { .. })
+        Err(Error::EntryNotObject { .. })
     ));
     let catalog = parse(r#"{"a":{"aliases":"bad"},"b":{"aliases":[9,"ok"]}}"#);
     assert_eq!(
@@ -166,4 +170,11 @@ fn parses_current_and_packaged_catalogs_without_pinning_counts() {
             .validate(IntegrityLimits::python_defaults(backup.model_count()))
             .is_ok()
     );
+    for name in current.model_names() {
+        let entry = current.lookup(name).unwrap().entry;
+        assert_eq!(
+            entry.info().litellm_provider.is_some(),
+            entry.field("litellm_provider").is_some()
+        );
+    }
 }
