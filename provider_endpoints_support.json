@@ -1493,6 +1493,23 @@
         "a2a": false
       }
     },
+    "litellm": {
+      "display_name": "LiteLLM Virtual Models (`litellm`)",
+      "url": "https://docs.litellm.ai/docs/fusion_models",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "litellm_proxy": {
       "display_name": "LiteLLM Proxy (`litellm_proxy`)",
       "url": "https://docs.litellm.ai/docs/providers/litellm_proxy",
