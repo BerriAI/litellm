@@ -234,7 +234,9 @@ def _merge_beta_headers(existing: str | None, new_beta: str) -> str:
     return ",".join(sorted(betas))
 
 
-def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None, api_base: str | None = None) -> tuple[dict, str | None]:
+def optionally_handle_anthropic_oauth(
+    headers: dict, api_key: str | None, api_base: str | None = None
+) -> tuple[dict, str | None]:
     """
     Handle Anthropic OAuth token detection and header setup.
 
@@ -252,11 +254,23 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None, api_ba
     # Check Authorization header (passthrough / forwarded requests)
     auth_header: Final = next((value for name, value in headers.items() if name.lower() == "authorization"), "")
 
-    if api_base is not None and "api.anthropic.com" not in api_base:
+    from urllib.parse import urlparse
+
+    def _is_anthropic_host(url: str | None) -> bool:
+        if not url:
+            return True
+        try:
+            return urlparse(url).hostname == "api.anthropic.com"
+        except ValueError:
+            return False
+
+    is_anthropic = _is_anthropic_host(api_base)
+
+    if not is_anthropic:
         if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
-            for key in list(headers.keys()):
-                if key.lower() == "authorization":
-                    headers.pop(key)
+            headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}  # rebind-ok: strip authorization without mutating the caller's default dict
+        if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
+            api_key = None
         return headers, api_key
 
     if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):

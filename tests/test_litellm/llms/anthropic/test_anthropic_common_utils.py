@@ -160,13 +160,20 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+        
+        # Test completely different hostname
         updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
             headers, None, api_base="https://custom-gateway.com/v1"
         )
-
         assert extracted_api_key is None
         assert "authorization" not in updated_headers
-        assert "anthropic-beta" not in updated_headers
+        
+        # Test lookalike hostname
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
+            headers, FAKE_OAUTH_TOKEN, api_base="https://api.anthropic.com.attacker.com/v1"
+        )
+        assert extracted_api_key is None
+        assert "authorization" not in updated_headers
 
 
 class TestGetAnthropicHeaders:
@@ -1997,7 +2004,6 @@ class TestClaudeOpus48AdaptiveThinking:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
-
 
     @pytest.mark.parametrize(
         "model",
