@@ -475,7 +475,7 @@ async def _resolve_jwt_auth(
                 proxy_logging_obj=proxy_logging_obj,
             )
             if isinstance(mapped, UserAPIKeyAuth):
-                return None if await _key_owner_scim_deactivated(mapped) or not _active_key_user_id(mapped) else mapped
+                return None if await _key_owner_scim_deactivated(mapped) or not _key_is_active(mapped) else mapped
             if mapped is not None:
                 return None
         if write_route is None:

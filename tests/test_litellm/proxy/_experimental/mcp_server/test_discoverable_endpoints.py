@@ -6841,6 +6841,89 @@ async def test_bridge_mint_jwt_with_no_resolved_identity_is_400_before_upstream(
     post.assert_not_called()
 
 
+def _jwt_auth_patches(mapped_key):
+    """Patch proxy_server globals and the virtual-key mapping so the real _resolve_jwt_auth runs
+    its mapped-key arm against a JWT-shaped presented credential."""
+    from contextlib import ExitStack
+
+    jwtauth = MagicMock()
+    jwtauth.is_virtual_key_mapping_configured.return_value = True
+    jwtauth.custom_validate = None
+    handler = MagicMock()
+    handler.litellm_jwtauth = jwtauth
+    handler.auth_jwt = AsyncMock(return_value={})
+    stack = ExitStack()
+    stack.enter_context(patch("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": True}))
+    stack.enter_context(patch("litellm.proxy.proxy_server.premium_user", True))
+    stack.enter_context(patch("litellm.proxy.proxy_server.prisma_client", object()))
+    stack.enter_context(patch("litellm.proxy.proxy_server.jwt_handler", handler))
+    stack.enter_context(
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._resolve_jwt_to_virtual_key",
+            new=AsyncMock(return_value=mapped_key),
+        )
+    )
+    stack.enter_context(
+        patch(
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._key_owner_scim_deactivated",
+            new=AsyncMock(return_value=False),
+        )
+    )
+    return stack
+
+
+@pytest.mark.asyncio
+async def test_jwt_mapped_to_service_account_key_without_user_id_resolves():
+    """A JWT mapped to a team or service-account virtual key (no user_id) is still an active
+    credential: _resolve_jwt_auth returns the mapped key, and the mint seals a key_hash-subject
+    envelope rather than 400ing with no_identity."""
+    from litellm.proxy._experimental.mcp_server import bridge_token_flow
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp import MCPAuth
+
+    mapped_key = UserAPIKeyAuth(api_key="svc-key-hash-1", user_id=None, token="svc-key-hash-1")
+    request = _bridge_mock_request()
+    request.headers = {"x-litellm-api-key": "aaa.bbb.ccc"}
+    with (
+        _jwt_auth_patches(mapped_key),
+        patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
+    ):
+        resolved = await bridge_token_flow._resolve_jwt_auth(request, "aaa.bbb.ccc", None)
+        assert resolved is mapped_key
+
+        mint = await bridge_token_flow._prepare_bridge_mint(
+            request=request,
+            mcp_server=_bridge_server(auth_type=MCPAuth.oauth_delegate),
+        )
+    assert isinstance(mint, bridge_token_flow._BridgeMintReady)
+    assert mint.identity.subject_type == "key_hash"
+    assert mint.identity.subject == "svc-key-hash-1"
+
+
+@pytest.mark.asyncio
+async def test_jwt_mapped_to_blocked_key_is_rejected():
+    """The relaxed gate is still active-state gated: a JWT mapped to a blocked virtual key resolves
+    to None, so the mint cannot seal an envelope under it."""
+    from litellm.proxy._experimental.mcp_server import bridge_token_flow
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    mapped_key = UserAPIKeyAuth(api_key="blocked-key-hash-1", user_id=None, token="blocked-key-hash-1", blocked=True)
+    request = _bridge_mock_request()
+    request.headers = {"x-litellm-api-key": "aaa.bbb.ccc"}
+    with (
+        _jwt_auth_patches(mapped_key),
+        patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
+    ):
+        resolved = await bridge_token_flow._resolve_jwt_auth(request, "aaa.bbb.ccc", None)
+        assert resolved is None
+
+        mint = await bridge_token_flow._prepare_bridge_mint(
+            request=request,
+            mcp_server=_bridge_server(auth_type=MCPAuth.oauth_delegate),
+        )
+    assert mint == "no_identity"
+
+
 @pytest.mark.asyncio
 async def test_bridge_mint_upstream_expired_lifetime_is_502():
     """An upstream token response reporting an already-elapsed lifetime (a parseable non-positive
