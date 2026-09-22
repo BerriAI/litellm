@@ -78,7 +78,7 @@ class CachingHandlerResponse(BaseModel):
     cached_result: object | None = None
     final_embedding_cached_response: EmbeddingResponse | None = None
     embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
-    remaining_embedding_inputs: tuple[str, ...] | None = None
+    remaining_embedding_inputs: tuple[str | int | list[int], ...] | None = None
 
 
 in_memory_cache_obj: Final = InMemoryCache()

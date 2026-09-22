@@ -454,7 +454,8 @@ class TestReliabilityCache:
             model_id: Final = client.proxy.create_model(model, _openai_params(edge, _OPENAI_EMBEDDING_MODEL))
             resources.defer(lambda: client.proxy.delete_model(model_id))
             cached_input: Final = f"cached embedding input {cached_marker}"
-            fresh_input: Final = f"fresh embedding input {marker}"
+            leading_input: Final = f"leading embedding input {marker}"
+            trailing_input: Final = f"trailing embedding input {marker}"
 
             warm: Final = client.proxy.transport.send(
                 "/embeddings",
@@ -470,19 +471,20 @@ class TestReliabilityCache:
             mixed: Final = client.proxy.transport.send(
                 "/embeddings",
                 headers=client.proxy.transport.bearer(scoped_key),
-                json=_CacheEmbeddingsBody(model=model, input=(cached_input, fresh_input)),
+                json=_CacheEmbeddingsBody(model=model, input=(leading_input, cached_input, trailing_input)),
             )
             require_successful_call(mixed)
             mixed_answer: Final = _CachedEmbeddingsResponse.model_validate_json(mixed.body)
-            assert tuple(item.index for item in mixed_answer.data) == (0, 1), (
+            assert tuple(item.index for item in mixed_answer.data) == (0, 1, 2), (
                 "embeddings partial: a partial cache hit renumbered the returned items"
             )
-            assert mixed_answer.data[0].embedding == warm_answer.data[0].embedding, (
-                "embeddings partial: the cached input did not keep its vector"
+            assert mixed_answer.data[1].embedding == warm_answer.data[0].embedding, (
+                "embeddings partial: the cached input did not keep its requested position"
             )
-            assert mixed_answer.data[1].embedding and mixed_answer.data[1].embedding != warm_answer.data[0].embedding, (
-                "embeddings partial: the uncached input was served the cached vector"
-            )
+            assert all(
+                item.embedding and item.embedding != warm_answer.data[0].embedding
+                for item in (mixed_answer.data[0], mixed_answer.data[2])
+            ), "embeddings partial: an uncached input was served the cached vector"
             _assert_one_provider_call(observation, "embeddings partial")
 
     @pytest.mark.covers("reliability.cache.exact.returns_cached")

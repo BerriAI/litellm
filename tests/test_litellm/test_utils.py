@@ -4577,7 +4577,7 @@ async def test_wrapper_async_sends_only_uncached_embedding_inputs_upstream(
     monkeypatch.setattr(litellm, "cache", Cache(type="local"))
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
-    vectors: Final = {"cached": [0.1, 0.1], "uncached": [0.9, 0.9]}
+    vectors: Final = {"cached": [0.1, 0.1], "before": [0.4, 0.4], "after": [0.9, 0.9]}
     upstream_inputs: Final[list[list[str]]] = []
 
     def _respond(request: httpx.Request) -> httpx.Response:
@@ -4606,13 +4606,60 @@ async def test_wrapper_async_sends_only_uncached_embedding_inputs_upstream(
     )
     mixed: Final = await litellm.aembedding(
         model="openai/text-embedding-3-small",
-        input=["cached", "uncached"],
+        input=["before", "cached", "after"],
         api_key="sk-test",
         num_retries=0,
     )
 
-    assert upstream_inputs == [["cached"], ["uncached"]]
-    assert [item["embedding"] for item in mixed.data] == [vectors["cached"], vectors["uncached"]]
+    assert upstream_inputs == [["cached"], ["before", "after"]]
+    assert [item["embedding"] for item in mixed.data] == [vectors["before"], vectors["cached"], vectors["after"]]
+    assert [item["index"] for item in mixed.data] == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_wrapper_async_partial_cache_hit_serves_token_id_embedding_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    vectors: Final = {(1, 2, 3): [0.1, 0.1], (4, 5, 6): [0.9, 0.9]}
+    upstream_inputs: Final[list[list[list[int]]]] = []
+
+    def _respond(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        upstream_inputs.append([list(tokens) for tokens in payload["input"]])
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {"object": "embedding", "embedding": vectors[tuple(tokens)], "index": index}
+                    for index, tokens in enumerate(payload["input"])
+                ],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": len(payload["input"]), "total_tokens": len(payload["input"])},
+            },
+        )
+
+    respx.post("https://api.openai.com/v1/embeddings").mock(side_effect=_respond)
+
+    await litellm.aembedding(
+        model="openai/text-embedding-3-small",
+        input=[[1, 2, 3]],
+        api_key="sk-test",
+        num_retries=0,
+    )
+    mixed: Final = await litellm.aembedding(
+        model="openai/text-embedding-3-small",
+        input=[[1, 2, 3], [4, 5, 6]],
+        api_key="sk-test",
+        num_retries=0,
+    )
+
+    assert upstream_inputs == [[[1, 2, 3]], [[4, 5, 6]]]
+    assert [item["embedding"] for item in mixed.data] == [vectors[(1, 2, 3)], vectors[(4, 5, 6)]]
     assert [item["index"] for item in mixed.data] == [0, 1]
 
 
