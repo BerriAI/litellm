@@ -1780,6 +1780,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             if structured_messages:
                 if self._use_latest_user_only(request_data, logging_obj):
                     scannable_indices = self._get_latest_user_text_indices(texts, structured_messages)
+                    if scannable_indices is not None and not scannable_indices:
+                        verbose_proxy_logger.debug(
+                            "PANW Prisma AIRS: latest user message has no text, so "
+                            "experimental_use_latest_role_message_only leaves nothing to scan for call_id=%s",
+                            call_id,
+                        )
                 if scannable_indices is None:
                     scannable_indices = self._get_scannable_text_indices(texts, structured_messages)
                 if (

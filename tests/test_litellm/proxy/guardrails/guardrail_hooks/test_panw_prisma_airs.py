@@ -11,6 +11,7 @@ This test file follows LiteLLM's testing patterns and covers:
 
 import copy
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from datetime import datetime
@@ -4824,7 +4825,7 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
         assert self.LATEST in [call.kwargs["content"] for call in mock_api.call_args_list]
 
     @pytest.mark.asyncio
-    async def test_flag_true_image_only_latest_turn_does_not_rescan_history(self):
+    async def test_flag_true_image_only_latest_turn_does_not_rescan_history_and_logs_why(self, caplog):
         from litellm.llms.openai.responses.guardrail_translation.handler import (
             OpenAIResponsesHandler,
         )
@@ -4834,13 +4835,18 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
             {"role": "user", "content": [{"type": "input_image", "image_url": "https://example.test/cat.png"}]},
         )
         patcher, mock_api = self._scan(handler, {"action": "block", "category": "malicious"})
-        with patcher:
+        with patcher, caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
             result = await OpenAIResponsesHandler().process_input_messages(
                 data=request_data, guardrail_to_apply=handler
             )
 
         assert mock_api.call_args_list == []
         assert result["input"] == request_data["input"]
+        skipped = [r.getMessage() for r in caplog.records if "leaves nothing to scan" in r.getMessage()]
+        assert skipped == [
+            "PANW Prisma AIRS: latest user message has no text, so "
+            "experimental_use_latest_role_message_only leaves nothing to scan for call_id=test-call-id"
+        ], caplog.text
 
     @pytest.mark.asyncio
     async def test_flag_true_trailing_reasoning_item_falls_back_to_scanning_history(self):
