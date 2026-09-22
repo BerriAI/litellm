@@ -109,7 +109,9 @@ def test_proxy_stream_usage_visibility_keeps_exact_persisted_charge(gateway: Gat
 @pytest.mark.covers("other.streaming.messages_bridge.empty_choices_usage_chunk_completes_stream")
 def test_messages_stream_completes_through_trailing_empty_choices_usage_chunk(gateway: Gateway) -> None:
     identity: Final = "messages-empty-choices-" + uuid.uuid4().hex
-    with wire_server(lambda request: Reply(content_type="text/event-stream", chunks=text_stream(identity))) as wire, gateway.scenario() as scenario:
+    metadata: Final = b"data: " + json.dumps({"id": identity, "object": "chat.completion.chunk", "created": 1, "model": "gpt-4o-mini", "choices": [], "prompt_filter_results": [{"prompt_index": 0, "content_filter_results": {}}]}, ensure_ascii=False).encode() + b"\n\n"
+    frames: Final = (metadata, *text_stream(identity))
+    with wire_server(lambda request: Reply(content_type="text/event-stream", chunks=frames)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model="azure/gpt-4o-mini", api_base=wire.url + "/v1")
         with gateway.client.stream(
             "POST",
