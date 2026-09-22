@@ -20,6 +20,7 @@ from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
 )
 
+from litellm.constants import OTEL_EXCLUDE_INTERNAL_SPANS, OTEL_TENANT_INTERNAL_SPANS_ENV
 from litellm.integrations.otel.model.semconv import HTTP
 from litellm.types.utils import OtelInternalSpans
 
@@ -401,10 +402,6 @@ def tenant_destinations_are_additive() -> bool:
     return isinstance(configured, str) and configured.strip().lower() == ADDITIVE_DESTINATION_MODE
 
 
-EXCLUDE_INTERNAL_SPANS: Final = "exclude"
-OTEL_TENANT_INTERNAL_SPANS_ENV: Final = "LITELLM_OTEL_TENANT_INTERNAL_SPANS"
-
-
 def tenant_internal_spans_default() -> OtelInternalSpans:
     """The ``internal_spans`` a tenant destination gets when its own callback vars name none.
 
@@ -414,7 +411,7 @@ def tenant_internal_spans_default() -> OtelInternalSpans:
     import litellm
 
     configured: Final = litellm.otel_tenant_internal_spans or os.environ.get(OTEL_TENANT_INTERNAL_SPANS_ENV)
-    if isinstance(configured, str) and configured.strip().lower() == EXCLUDE_INTERNAL_SPANS:
+    if isinstance(configured, str) and configured.strip().lower() == OTEL_EXCLUDE_INTERNAL_SPANS:
         return "exclude"
     return "include"
 
