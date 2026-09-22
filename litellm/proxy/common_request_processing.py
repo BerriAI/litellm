@@ -47,6 +47,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.bug_report import (
+    allowlisted,
     bug_report_notice,
     build_bug_report,
     should_report_bug,
@@ -71,7 +72,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
-from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
     request_skips_budget_checks,
@@ -111,6 +112,10 @@ from litellm.types.router_weights import validate_router_weights
 
 _LateResponseT = TypeVar("_LateResponseT", bound=Response)
 _LlmCallT = TypeVar("_LlmCallT")
+
+KNOWN_PROXY_ROUTES: Final = frozenset(
+    route for member in LiteLLMRoutes for route in member.value if route.startswith("/")
+)
 
 ProxyRouteType: TypeAlias = Literal[
     "acompletion",
@@ -3676,8 +3681,7 @@ class ProxyBaseLLMRequestProcessing:
                         build_bug_report(
                             e,
                             surface="proxy",
-                            call_type=request_path or None,
-                            model=self.data.get("model"),
+                            call_type=allowlisted(request_path, KNOWN_PROXY_ROUTES),
                             custom_llm_provider=self.data.get("custom_llm_provider"),
                         )
                     )

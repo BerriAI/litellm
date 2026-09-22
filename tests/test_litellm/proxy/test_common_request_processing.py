@@ -4,7 +4,7 @@ import datetime
 import json
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Optional, Sequence
-from urllib.parse import unquote
+from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -9316,9 +9316,37 @@ async def test_handle_llm_api_exception_logs_bug_report_for_unmapped_error(
     processor = ProxyBaseLLMRequestProcessing(
         data={
             "proxy_server_request": {"url": "https://example.test/v1/chat/completions?debug=true"},
-            "model": "gpt-4",
+            "model": "acme-prod-gpt4",
             "custom_llm_provider": "openai",
         }
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+        with pytest.raises(ProxyException):
+            await processor._handle_llm_api_exception(
+                e=RuntimeError("unmapped for user@example.com"),
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    issue_url = next(word for word in caplog.text.split() if word.startswith(ISSUE_URL_BASE))
+    assert "Endpoint / call: /v1/chat/completions" in unquote_plus(issue_url)
+    assert "Provider: openai" in unquote_plus(issue_url)
+    assert "acme-prod-gpt4" not in unquote_plus(issue_url)
+    assert "user@example.com" not in unquote_plus(issue_url)
+
+
+@pytest.mark.asyncio
+async def test_handle_llm_api_exception_bug_report_drops_unknown_route(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    monkeypatch.delenv(DISABLE_ENV_VAR, raising=False)
+    processor = ProxyBaseLLMRequestProcessing(
+        data={"proxy_server_request": {"url": "https://example.test/v1/files/file-customer-123/content"}}
     )
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
@@ -9332,8 +9360,9 @@ async def test_handle_llm_api_exception_logs_bug_report_for_unmapped_error(
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-    assert ISSUE_URL_BASE in caplog.text
-    assert "/v1/chat/completions" in unquote(caplog.text)
+    issue_url = next(word for word in caplog.text.split() if word.startswith(ISSUE_URL_BASE))
+    assert "Endpoint / call: unknown" in unquote_plus(issue_url)
+    assert "file-customer-123" not in unquote_plus(issue_url)
 
 
 @pytest.mark.asyncio

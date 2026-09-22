@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
 from typing import cast
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
 
+import litellm
 from litellm._version import version
 from litellm.exceptions import APIConnectionError, BadRequestError, InternalServerError
 from litellm.litellm_core_utils.bug_report import (
     DISABLE_ENV_VAR,
     ISSUE_URL_BASE,
+    MAX_FRAMES,
     MAX_URL_LENGTH,
+    allowlisted,
     bug_report_enabled,
     bug_report_issue_url,
     bug_report_notice,
@@ -22,7 +27,7 @@ from litellm.litellm_core_utils.bug_report import (
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 
-def test_build_bug_report_keeps_only_redacted_litellm_frames():
+def test_build_bug_report_keeps_only_litellm_frames():
     with pytest.raises(BadRequestError) as raised:
         get_llm_provider(cast(str, None))
     report = build_bug_report(raised.value, surface="sdk")
@@ -32,41 +37,64 @@ def test_build_bug_report_keeps_only_redacted_litellm_frames():
     assert all("test_bug_report.py" not in frame for frame in report.litellm_frames)
 
 
-def test_issue_url_redacts_message_and_prefills_sdk_fields():
-    report = build_bug_report(
-        RuntimeError("failed with key sk-abcdefghijklmnopqrstuvwxyz1234567890"),
-        surface="sdk",
-    )
-    query = parse_qs(urlparse(bug_report_issue_url(report)).query)
+def test_issue_url_never_contains_the_exception_message():
+    secret = "sk-abcdefghijklmnopqrstuvwxyz1234567890"
+    prompt = "my social security number is 123-45-6789"
+    report = build_bug_report(RuntimeError(f"{secret} {prompt}"), surface="sdk")
+    url = bug_report_issue_url(report)
+    query = parse_qs(urlparse(url).query)
 
-    assert ISSUE_URL_BASE in bug_report_issue_url(report)
-    assert "sk-abcdef" not in str(query)
-    assert query["title"][0].startswith("[Bug]: RuntimeError:")
+    assert url.startswith(ISSUE_URL_BASE)
+    assert secret not in url and "123-45-6789" not in url and "social" not in url
+    assert query["title"] == ["[Bug]: RuntimeError in litellm"]
     assert query["version"] == [version]
     assert query["template"] == ["bug_report.yml"]
     assert query["domain"] == ["Python SDK: the litellm package itself"]
     assert query["deployment"] == ["pip / Python SDK"]
-    assert "RuntimeError" in query["description"][0]
+    assert "Exception: `RuntimeError`" in query["description"][0]
     assert "Python:" in query["description"][0]
 
 
-def test_issue_url_is_bounded_for_long_messages():
-    report = build_bug_report(RuntimeError("x" * 20_000), surface="proxy")
+def test_issue_url_drops_unknown_provider_and_call_type():
+    report = build_bug_report(
+        ValueError("boom"),
+        surface="proxy",
+        custom_llm_provider="acme-internal-gateway",
+    )
     query = parse_qs(urlparse(bug_report_issue_url(report)).query)
 
-    assert len(bug_report_issue_url(report)) <= MAX_URL_LENGTH
-    assert "RuntimeError" in query["description"][0]
+    assert report.custom_llm_provider is None
+    assert "acme" not in bug_report_issue_url(report)
+    assert "Provider: unknown" in query["description"][0]
+    assert "Endpoint / call: unknown" in query["description"][0]
 
 
-def test_issue_url_is_bounded_for_long_non_ascii_context():
-    report = build_bug_report(
-        ValueError("故障" * 10_000),
-        surface="sdk",
-        model="模型" * 300,
-        custom_llm_provider="供給" * 300,
-        call_type="呼出" * 300,
+def test_allowlisted_only_passes_exact_members():
+    allowed = frozenset({"/v1/chat/completions"})
+
+    assert allowlisted("/v1/chat/completions", allowed) == "/v1/chat/completions"
+    assert allowlisted("/v1/chat/completions/../../admin", allowed) is None
+    assert allowlisted(None, allowed) is None
+
+
+def test_frames_are_capped_and_url_is_bounded():
+    namespace: dict[str, object] = {}
+    exec(
+        compile(
+            "def recurse(depth):\n    if depth == 0:\n        raise RuntimeError('deep')\n    recurse(depth - 1)\n",
+            str(Path(litellm.__file__).with_name("fake_deep_module.py")),
+            "exec",
+        ),
+        namespace,
     )
+    recurse = cast(Callable[[int], None], namespace["recurse"])
 
+    with pytest.raises(RuntimeError) as raised:
+        recurse(200)
+    report = build_bug_report(raised.value, surface="proxy")
+
+    assert len(report.litellm_frames) == MAX_FRAMES
+    assert all(frame.startswith("litellm/fake_deep_module.py:") for frame in report.litellm_frames)
     assert len(bug_report_issue_url(report)) <= MAX_URL_LENGTH
 
 
@@ -108,17 +136,18 @@ def test_should_report_bug_accepts_plain_python_errors():
     assert should_report_bug(KeyError("missing")) is True
 
 
-def test_proxy_provider_uses_translation_domain():
+def test_proxy_known_provider_uses_translation_domain():
     report = build_bug_report(
         RuntimeError("proxy failure"),
         surface="proxy",
         call_type="/v1/chat/completions",
-        model="gpt-4",
         custom_llm_provider="openai",
     )
     query = parse_qs(urlparse(bug_report_issue_url(report)).query)
 
+    assert report.custom_llm_provider == "openai"
     assert query["domain"] == ["LLM translation: a specific provider's request or response"]
+    assert "Endpoint / call: /v1/chat/completions" in query["description"][0]
 
 
 def test_strip_bug_report_notice():

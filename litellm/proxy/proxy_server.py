@@ -75,6 +75,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.bug_report import (
+    allowlisted,
     bug_report_notice,
     build_bug_report,
     should_report_bug,
@@ -366,6 +367,7 @@ from litellm.proxy.batches_endpoints.endpoints import router as batches_router
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_request_processing import (
+    KNOWN_PROXY_ROUTES,
     ProxyBaseLLMRequestProcessing,
     _is_azure_model_router_request,
     _should_return_raw_model_name,
@@ -856,7 +858,7 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
-from fastapi.routing import APIRouter
+from fastapi.routing import APIRoute, APIRouter
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
@@ -1876,8 +1878,17 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
         raise exc
     verbose_proxy_logger.exception("Unhandled exception in request: %s", type(exc).__name__)
     if should_report_bug(exc):
+        matched_route: Final = request.scope.get("route")
         verbose_proxy_logger.error(
-            bug_report_notice(build_bug_report(exc, surface="proxy", call_type=request.url.path))
+            bug_report_notice(
+                build_bug_report(
+                    exc,
+                    surface="proxy",
+                    call_type=allowlisted(matched_route.path, KNOWN_PROXY_ROUTES)
+                    if isinstance(matched_route, APIRoute)
+                    else None,
+                )
+            )
         )
     _close_dangling_otel_server_span(request, 500, exc=exc)
     return JSONResponse(
