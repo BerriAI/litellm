@@ -222,6 +222,21 @@ async def test_aresponses_drops_stream_options():
 
 
 @pytest.mark.asyncio
+async def test_aresponses_forwards_non_enum_reasoning_effort(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(_minimal_responses_api_payload("resp_effort_int", "gpt-5.4"), 200)
+
+        await litellm.aresponses(model="openai/gpt-5.4", input="hi", reasoning_effort=5)
+
+        mock_post.assert_called_once()
+        assert mock_post.call_args.kwargs["json"]["reasoning"] == {"effort": 5}
+
+
+@pytest.mark.asyncio
 async def test_aresponses_keeps_include_obfuscation_in_stream_options():
     """include_obfuscation is a valid Responses API stream option and must survive the include_usage strip."""
     with patch(

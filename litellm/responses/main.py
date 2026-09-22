@@ -1295,11 +1295,11 @@ def responses(
 
         local_vars.update(kwargs)
         # Map reasoning_effort (from litellm_params/proxy config) to reasoning when not set
-        if reasoning is None and "reasoning_effort" in local_vars:
-            _mapped = LiteLLMResponsesTransformationHandler()._map_reasoning_effort(local_vars.pop("reasoning_effort"))
-            if _mapped is not None:
-                reasoning = _mapped
-                local_vars["reasoning"] = _mapped
+        if reasoning is None and local_vars.get("reasoning_effort") is not None:
+            reasoning = LiteLLMResponsesTransformationHandler()._map_reasoning_effort(
+                local_vars.pop("reasoning_effort")
+            )
+            local_vars["reasoning"] = reasoning
         # Get ResponsesAPIOptionalRequestParams with only valid parameters
         response_api_optional_params: Final[ResponsesAPIOptionalRequestParams] = (
             ResponsesAPIRequestUtils.get_requested_response_api_optional_param(local_vars)

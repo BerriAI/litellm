@@ -6,7 +6,7 @@ import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast
 
 from openai.types.chat import ChatCompletion
 from openai.types.responses import Response
@@ -38,7 +38,6 @@ from litellm.responses.sse_output_recovery import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils, normalize_responses_api_stream_options
 from litellm.types.llms.openai import (
-    REASONING_EFFORT,
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
     ChatCompletionToolCallChunk,
@@ -1180,7 +1179,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return optional_params
 
-    def _map_reasoning_effort(self, reasoning_effort: str | Reasoning) -> Reasoning | None:
+    def _map_reasoning_effort(self, reasoning_effort: str | Reasoning) -> Reasoning:
         # If dict is passed, convert it directly to Reasoning object
         if isinstance(reasoning_effort, dict):
             return Reasoning(**reasoning_effort)
@@ -1191,13 +1190,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
         )
 
-        if reasoning_effort in get_args(REASONING_EFFORT):
-            return (
-                Reasoning(effort=reasoning_effort, summary="detailed")
-                if auto_summary_enabled
-                else Reasoning(effort=reasoning_effort)
-            )
-        return None
+        return (
+            Reasoning(effort=reasoning_effort, summary="detailed")
+            if auto_summary_enabled
+            else Reasoning(effort=reasoning_effort)
+        )
 
     def _add_web_search_tool(
         self,
