@@ -70,7 +70,7 @@ from models import ChatMessage, RouterSettingsOverride, SpendLogRow
 from proxy_client import ProxyClient
 from reliability_support import chat_override, create_never_benched_refusing_deployment
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.quiet_stack]
 
 DEPLOYMENTS_PER_GROUP: Final = 2
 RSS_SAMPLE_CAP: Final = 4 * MEMORY_RSS_SETTLE_SAMPLES

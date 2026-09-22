@@ -49,6 +49,7 @@ from models import TeamNewBody, UserNewBody, UserNewResponse
 from provider_cache_routing import LIVE_PROVIDER_REQUIRED
 from provider_edge import replay_leftover_error
 from proxy_client import ProxyClient, build_proxy_client
+from stack_lock import stack_lock
 
 _E2E_TEST_RAN = pytest.StashKey[bool]()
 _CALL_PASSED = pytest.StashKey[bool]()
@@ -144,6 +145,11 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
+        "quiet_stack: measures the proxy itself, so it runs while no other e2e test on this host is hitting the stack; "
+        "every other e2e test waits for it to finish",
+    )
+    config.addinivalue_line(
+        "markers",
         "mcp_oauth_live: real Linear OAuth consent via a captured browser session; deselected unless "
         "E2E_MCP_OAUTH_LIVE is set",
     )
@@ -231,6 +237,14 @@ def _proxy_fail_reason() -> str | None:
     if CONTROL_PLANE_BASE_URL != PROXY_BASE_URL:
         return _liveness_reason("control plane", CONTROL_PLANE_BASE_URL)
     return None
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> Generator[None, object, object]:
+    if item.get_closest_marker("e2e") is None:
+        return (yield)
+    with stack_lock(exclusive=item.get_closest_marker("quiet_stack") is not None):
+        return (yield)
 
 
 @pytest.hookimpl(tryfirst=True)
