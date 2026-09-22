@@ -818,6 +818,35 @@ async def test_proxy_startup_event_prunes_dead_workers_live_gauges(tmp_path):
     assert counter.exists()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("disable_model_info_refresh", "job_scheduled"), [(True, False), (False, True)])
+async def test_proxy_startup_event_honors_disable_model_info_refresh(
+    disable_model_info_refresh: bool, job_scheduled: bool
+) -> None:
+    """``general_settings.disable_model_info_refresh: true`` keeps the proxy from polling every
+    OpenAI-compatible deployment's ``/v1/models`` in the background, so a proxy fronting a replay
+    fixture (or a metered upstream) makes only the calls its clients asked for."""
+    scheduler = AsyncIOScheduler()
+    clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
+    }
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.object(ps, "scheduler", scheduler),
+        patch.dict(ps.general_settings, {"disable_model_info_refresh": disable_model_info_refresh}),
+    ):
+        try:
+            async with proxy_startup_event(app=None):
+                job = scheduler.get_job("refresh_model_info")
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+
+    assert (job is not None) is job_scheduled, (
+        f"disable_model_info_refresh={disable_model_info_refresh} but refresh_model_info job is {job}"
+    )
+
+
 def test_otel_global_provider_published_after_callback_init():
     """The OTel V2 global-provider publish must run after callback
     initialization in ``proxy_startup_event``.
