@@ -2,7 +2,10 @@ use std::{sync::Arc, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_secrets_cyberark::{CyberArkSecretManager, DeleteOutcome, Error};
-use litellm_secrets_types::SecretValue;
+use litellm_secrets_types::{
+    BaseSecretManager, CyberarkOperationContext, SecretOperationContext, SecretValue,
+};
+use rstest::{fixture, rstest};
 use serde::Deserialize;
 use wiremock::{
     Match, Mock, MockServer, Request, ResponseTemplate,
@@ -40,7 +43,8 @@ impl Match for RawPath {
     }
 }
 
-fn fixture() -> ParityFixture {
+#[fixture]
+fn parity_fixture() -> ParityFixture {
     serde_json::from_str(include_str!("fixtures/parity.json")).unwrap()
 }
 
@@ -65,6 +69,7 @@ async fn mount_auth(server: &MockServer, expected: u64) {
         .await;
 }
 
+#[rstest]
 #[tokio::test]
 async fn successful_reads_cache_auth_secret_and_redact_values() {
     let server = MockServer::start().await;
@@ -89,6 +94,7 @@ async fn successful_reads_cache_auth_secret_and_redact_values() {
     }
 }
 
+#[rstest]
 #[tokio::test]
 async fn concurrent_reads_share_authentication_request() {
     let server = MockServer::start().await;
@@ -122,7 +128,7 @@ async fn concurrent_reads_share_authentication_request() {
     assert_eq!(second.unwrap().unwrap().expose(), "value");
 }
 
-#[rstest::rstest]
+#[rstest]
 #[case::not_found(404)]
 #[case::unauthorized(401)]
 #[case::forbidden(403)]
@@ -162,6 +168,7 @@ async fn failed_reads_are_not_cached(#[case] status: u16) {
     }
 }
 
+#[rstest]
 #[tokio::test]
 async fn failed_authentication_is_not_cached_and_does_not_read_secret() {
     let server = MockServer::start().await;
@@ -199,6 +206,29 @@ async fn failed_authentication_is_not_cached_and_does_not_read_secret() {
     );
 }
 
+#[rstest]
+#[tokio::test]
+async fn trait_read_applies_cyberark_operation_timeout_to_authentication() {
+    let server = MockServer::start().await;
+    Mock::given(path("/authn/acct/admin/authenticate"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(TOKEN_JSON)
+                .set_delay(Duration::from_millis(50)),
+        )
+        .mount(&server)
+        .await;
+    let manager = manager(&server, Duration::from_secs(60));
+    let context = SecretOperationContext::Cyberark(CyberarkOperationContext {
+        timeout: Some(Duration::from_millis(10)),
+    });
+
+    let result = BaseSecretManager::async_read_secret(&manager, "key", &context).await;
+
+    assert!(matches!(result, Err(Error::Http(error)) if error.is_timeout()));
+}
+
+#[rstest]
 #[tokio::test]
 async fn expired_tokens_and_secrets_are_fetched_again() {
     let server = MockServer::start().await;
@@ -215,13 +245,14 @@ async fn expired_tokens_and_secrets_are_fetched_again() {
     }
 }
 
-#[rstest::rstest]
+#[rstest]
+#[case::plain("OPENAI_API_KEY")]
+#[case::path("team/app/key")]
+#[case::punctuation("a b+c.d-e_f~g")]
+#[case::quote("needs \"quote\"")]
 #[tokio::test]
-async fn secret_names_use_python_quote_encoding(
-    #[values("OPENAI_API_KEY", "team/app/key", "a b+c.d-e_f~g", "needs \"quote\"")] name: &str,
-) {
-    let fixture = fixture();
-    let secret = fixture
+async fn secret_names_use_python_quote_encoding(parity_fixture: ParityFixture, #[case] name: &str) {
+    let secret = parity_fixture
         .secrets
         .iter()
         .find(|secret| secret.name == name)
@@ -244,11 +275,11 @@ async fn secret_names_use_python_quote_encoding(
     );
 }
 
-#[rstest::rstest]
-#[case(201)]
-#[case(409)]
-#[case(422)]
-#[case(500)]
+#[rstest]
+#[case::created(201)]
+#[case::already_exists(409)]
+#[case::unprocessable(422)]
+#[case::server_error(500)]
 #[tokio::test]
 async fn writes_tolerate_policy_status_and_cache_value(#[case] policy_status: u16) {
     let server = MockServer::start().await;
@@ -282,6 +313,7 @@ async fn writes_tolerate_policy_status_and_cache_value(#[case] policy_status: u1
     );
 }
 
+#[rstest]
 #[tokio::test]
 async fn failed_value_write_is_not_cached() {
     let server = MockServer::start().await;
@@ -319,13 +351,17 @@ async fn failed_value_write_is_not_cached() {
     );
 }
 
+#[rstest]
+#[case::parent("../etc")]
+#[case::embedded_parent("team/../etc")]
+#[case::control("key\n")]
 #[tokio::test]
-async fn unsafe_names_fail_before_http_calls() {
+async fn unsafe_names_fail_before_http_calls(#[case] name: &str) {
     let server = MockServer::start().await;
     let manager = manager(&server, Duration::from_secs(60));
     assert!(matches!(
         manager
-            .async_write_secret("../etc", &SecretValue::new("v"), None)
+            .async_write_secret(name, &SecretValue::new("v"), None)
             .await,
         Err(Error::Operation(
             litellm_secrets_types::Error::UnsafeSecretName
@@ -333,6 +369,7 @@ async fn unsafe_names_fail_before_http_calls() {
     ));
 }
 
+#[rstest]
 #[tokio::test]
 async fn delete_invalidates_cache_and_reports_not_supported() {
     let server = MockServer::start().await;
@@ -353,7 +390,7 @@ async fn delete_invalidates_cache_and_reports_not_supported() {
         "v"
     );
     assert_eq!(
-        manager.async_delete_secret("key", 7).await.unwrap(),
+        manager.async_delete_secret("key", Some(7)).await.unwrap(),
         DeleteOutcome::NotSupported
     );
     assert_eq!(
@@ -367,7 +404,7 @@ async fn delete_invalidates_cache_and_reports_not_supported() {
     );
 }
 
-#[test]
+#[rstest]
 fn new_validates_credentials_before_license_and_configuration() {
     let empty: Arc<dyn litellm_core_utils::settings::Lookup + Send + Sync> =
         Arc::new(|_: &str| None);
@@ -413,6 +450,7 @@ fn new_validates_credentials_before_license_and_configuration() {
     ));
 }
 
+#[rstest]
 #[tokio::test]
 async fn new_reads_environment_defaults_end_to_end() {
     let server = MockServer::start().await;
@@ -446,7 +484,7 @@ async fn new_reads_environment_defaults_end_to_end() {
     );
 }
 
-#[test]
+#[rstest]
 fn new_reports_missing_client_certificate_files() {
     assert!(matches!(
         CyberArkSecretManager::new(
@@ -461,6 +499,7 @@ fn new_reports_missing_client_certificate_files() {
     ));
 }
 
+#[rstest]
 #[tokio::test]
 async fn trailing_slash_endpoint_preserves_base_path() {
     let server = MockServer::start().await;
@@ -494,23 +533,25 @@ async fn trailing_slash_endpoint_preserves_base_path() {
     );
 }
 
-#[test]
-fn parity_fixture_matches_authentication_contract() {
-    let fixture = fixture();
-    assert_eq!(fixture.endpoint, "http://conjur.test:8080");
-    assert_eq!(fixture.account, "acct");
-    assert_eq!(fixture.username, "admin");
-    assert_eq!(fixture.api_key, "k3y");
-    assert_eq!(fixture.authenticate_path, "/authn/acct/admin/authenticate");
-    assert_eq!(fixture.token_json, TOKEN_JSON);
+#[rstest]
+fn parity_fixture_matches_authentication_contract(parity_fixture: ParityFixture) {
+    assert_eq!(parity_fixture.endpoint, "http://conjur.test:8080");
+    assert_eq!(parity_fixture.account, "acct");
+    assert_eq!(parity_fixture.username, "admin");
+    assert_eq!(parity_fixture.api_key, "k3y");
     assert_eq!(
-        fixture.authorization_header,
+        parity_fixture.authenticate_path,
+        "/authn/acct/admin/authenticate"
+    );
+    assert_eq!(parity_fixture.token_json, TOKEN_JSON);
+    assert_eq!(
+        parity_fixture.authorization_header,
         format!("Token token=\"{}\"", STANDARD.encode(TOKEN_JSON))
     );
-    assert_eq!(fixture.policy_path, "/policies/acct/policy/root");
-    assert_eq!(fixture.secrets.len(), 4);
+    assert_eq!(parity_fixture.policy_path, "/policies/acct/policy/root");
+    assert_eq!(parity_fixture.secrets.len(), 4);
     assert_eq!(
-        fixture.secrets[1].policy_body,
+        parity_fixture.secrets[1].policy_body,
         "- !variable \"team/app/key\"\n"
     );
 }
