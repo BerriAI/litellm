@@ -6533,9 +6533,9 @@ class BaseLLMHTTPHandler:
             try:
                 configured_client: Final = openai_client.with_options(
                     timeout=timeout,
-                    set_default_headers={  # mutable-ok: OpenAI SDK accepts a mutable custom-header mapping
-                        key: str(value) for key, value in (extra_headers or {}).items()
-                    },
+                    set_default_headers=MappingProxyType(
+                        {key: str(value) for key, value in (extra_headers or MappingProxyType({})).items()}
+                    ),
                 )
                 raw_response: Final = await configured_client.post(
                     "/realtime/translations/client_secrets",
@@ -6669,9 +6669,9 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                     set_default_headers={  # mutable-ok: OpenAI SDK accepts a mutable custom-header mapping
                         "Content-Type": "application/sdp",
-                        **{  # mutable-ok: caller headers are normalized into the SDK header mapping
-                            key: str(value) for key, value in (extra_headers or {}).items()
-                        },
+                        **MappingProxyType(
+                            {key: str(value) for key, value in (extra_headers or MappingProxyType({})).items()}
+                        ),
                     },
                 )
                 translation_response: Final = await configured_client.post(
@@ -6684,9 +6684,9 @@ class BaseLLMHTTPHandler:
                 RealtimeSessionCreateRequestParam,
                 session_data,
             )
-            sdk_extra_headers: Final = {  # mutable-ok: OpenAI SDK accepts a mutable custom-header mapping
-                key: str(value) for key, value in (extra_headers or {}).items()
-            }
+            sdk_extra_headers: Final = MappingProxyType(
+                {key: str(value) for key, value in (extra_headers or MappingProxyType({})).items()}
+            )
             raw_response: Final = await openai_client.realtime.calls.with_raw_response.create(
                 sdp=sdp_text,
                 session=realtime_session_data,

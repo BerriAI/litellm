@@ -7,7 +7,7 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 import ssl
 from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
-from types import TracebackType
+from types import MappingProxyType, TracebackType
 from typing import Any, Final, cast
 
 from openai import AsyncOpenAI, omit
@@ -180,13 +180,11 @@ class OpenAIRealtime(OpenAIChatCompletion):
                 additional_headers=headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_config,
-                **({"open_timeout": timeout} if timeout is not None else {}),
+                **(MappingProxyType({"open_timeout": timeout}) if timeout is not None else MappingProxyType({})),
             )
         openai_client: Final = client
         model_query: Final = query_params.get("model")
-        extra_query: Final = {  # mutable-ok: OpenAI SDK accepts a mutable query-parameter mapping
-            key: value for key, value in query_params.items() if key != "model"
-        }
+        extra_query: Final = MappingProxyType({key: value for key, value in query_params.items() if key != "model"})
         sdk_model: Final = omit if query_params.get("intent") == "transcription" else model_query or model
         sdk_connection_manager: Final = openai_client.realtime.connect(
             model=sdk_model,
@@ -194,8 +192,8 @@ class OpenAIRealtime(OpenAIChatCompletion):
             extra_headers=headers,
             websocket_connection_options={  # mutable-ok: OpenAI SDK forwards a mutable options mapping
                 "max_size": REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-                **({"ssl": ssl_config} if url.startswith("wss://") else {}),
-                **({"open_timeout": timeout} if timeout is not None else {}),
+                **(MappingProxyType({"ssl": ssl_config}) if url.startswith("wss://") else MappingProxyType({})),
+                **(MappingProxyType({"open_timeout": timeout}) if timeout is not None else MappingProxyType({})),
             },
             max_retries=0,
         )
