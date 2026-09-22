@@ -2883,6 +2883,51 @@ describe("EntityUsageExport utils", () => {
       );
     });
 
+    it("should keep owners separate when entity and user ids contain underscores", () => {
+      const collisionFixture: EntitySpendData = {
+        results: [
+          {
+            date: "2025-03-01",
+            breakdown: {
+              entities: {
+                team_1: {
+                  metrics: { spend: 1, api_requests: 1, total_tokens: 10 },
+                  api_key_breakdown: {
+                    kX: {
+                      metrics: { spend: 1, api_requests: 1, total_tokens: 10 },
+                      metadata: { team_id: "team_1", user_id: "u1" },
+                    },
+                  },
+                },
+                team: {
+                  metrics: { spend: 2, api_requests: 2, total_tokens: 20 },
+                  api_key_breakdown: {
+                    kY: {
+                      metrics: { spend: 2, api_requests: 2, total_tokens: 20 },
+                      metadata: { team_id: "team", user_id: "1_u1" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: usersFixture.metadata,
+      };
+
+      const rows = generateDailyWithUsersData(collisionFixture, "Team");
+
+      expect(rows).toHaveLength(2);
+      const team1Row = rows.find((r) => r["Team ID"] === "team_1");
+      expect(team1Row?.["User ID"]).toBe("u1");
+      expect(team1Row?.Keys).toBe(1);
+      expect(team1Row?.["Spend ($)"]).toBe("1.0000");
+      const teamRow = rows.find((r) => r["Team ID"] === "team");
+      expect(teamRow?.["User ID"]).toBe("1_u1");
+      expect(teamRow?.Keys).toBe(1);
+      expect(teamRow?.["Spend ($)"]).toBe("2.0000");
+    });
+
     it("should leave daily and daily_with_models output without user columns", () => {
       const daily = generateDailyData(usersFixture, "Team");
       expect(daily[0]).not.toHaveProperty("User ID");

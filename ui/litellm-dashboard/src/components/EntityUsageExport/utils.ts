@@ -277,7 +277,7 @@ export const generateDailyWithUsersData = (
       const { id: entityId, alias: entityAlias } = resolveEntityDisplay(entity, teamAliasMap, data.metadata);
       Object.entries(data.api_key_breakdown || {}).forEach(([keyId, keyData]: [string, any]) => {
         const userId = keyData?.metadata?.user_id || "Unassigned";
-        const uniqueKey = `${day.date}_${entityId}_${userId}`;
+        const uniqueKey = JSON.stringify([day.date, entityId, userId]);
         if (!aggregatedData[uniqueKey]) {
           aggregatedData[uniqueKey] = {
             Date: day.date,
