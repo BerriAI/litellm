@@ -3,7 +3,7 @@
 import os
 import re
 import traceback
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from importlib.metadata import PackageNotFoundError, version
@@ -528,7 +528,7 @@ class LangFuseLogger:
         prompt: dict,
         level: str,
         status_message: str | None,
-    ) -> tuple[dict | None, str | dict | list | None]:
+    ) -> tuple[dict | None, str | dict | Sequence[object] | None]:
         """
         Get the input and output content for Langfuse logging
 
@@ -544,7 +544,7 @@ class LangFuseLogger:
             output: The output content for Langfuse logging
         """
         input = None
-        output: str | dict | list[Any] | None = None
+        output: str | dict | Sequence[object] | None = None
         if level == "ERROR" and status_message is not None and isinstance(status_message, str):
             input = prompt
             output = status_message
@@ -604,7 +604,7 @@ class LangFuseLogger:
         user_id: str | None,
         metadata: dict[str, object],
         litellm_params: dict,
-        output: str | dict | list | None,
+        output: str | dict | Sequence[object] | None,
         start_time: datetime | None,
         end_time: datetime | None,
         kwargs: dict,

@@ -4,40 +4,17 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-import httpx
-import openai
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import PROVIDER_NATIVE_RESPONSE_KEY, OCRResponse
 from litellm.rust_bridge import failures
+from litellm.rust_bridge.failures import UpstreamFailure
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 
+__all__ = ("UpstreamFailure", "arguments", "map_failure", "response")
+
 _RESPONSE_ADAPTER: Final = TypeAdapter(dict[str, object])
-_UPSTREAM_ARGS: Final = TypeAdapter(tuple[int, str])
-_UPSTREAM_HEADERS: Final = TypeAdapter(list[tuple[str, str]])
-
-
-class UpstreamFailure(Exception):
-    def __init__(self, response: httpx.Response, cause: Exception) -> None:
-        super().__init__(str(cause))
-        self.message: Final = str(cause)
-        self.response: Final = response
-        self.status_code: Final = response.status_code
-        self.__cause__ = cause
-
-
-def _upstream_failure(error: Exception, request: LiteLLMOcrRequest) -> Exception:
-    try:
-        status, body = _UPSTREAM_ARGS.validate_python(error.args)
-        headers: Final = _UPSTREAM_HEADERS.validate_python(getattr(error, "headers", None))
-    except ValidationError:
-        return error
-    http_request: Final = httpx.Request("POST", request.api_base or "https://docs.litellm.ai/docs")
-    return UpstreamFailure(
-        httpx.Response(status, content=body.encode(), headers=headers, request=http_request),
-        error,
-    )
 
 
 def response(value: Mapping[str, object]) -> OCRResponse:
@@ -61,11 +38,4 @@ def map_failure(error: Exception, request: LiteLLMOcrRequest, request_provider: 
             model=request.model.removeprefix(f"{request_provider}/"),
             llm_provider=request_provider,
         )
-    original: Final = _upstream_failure(error, request)
-    public_error: Final = failures.map_failure(original, request.model, request_provider, arguments(request))
-    if isinstance(original, UpstreamFailure) and public_error.__context__ is original:
-        public_error.__context__ = error
-        if isinstance(public_error, openai.APIStatusError):
-            public_error.response = original.response
-            public_error.status_code = original.status_code
-    return public_error
+    return failures.map_native_failure(error, request.model, request_provider, arguments(request), request.api_base)

@@ -435,7 +435,7 @@ def _signal_process_group(process_id: int, signum: int) -> bool:
     return True
 
 
-def _stop_process_group(child: subprocess.Popen[bytes]) -> None:
+def stop_process_group(child: subprocess.Popen[bytes]) -> None:
     _signal_process_group(child.pid, signal.SIGTERM)
     deadline: Final = time.monotonic() + 5
     while _process_group_exists(child.pid):
@@ -476,7 +476,7 @@ def run_oidc_profile(proxy_url: str, command: list[str]) -> int:
             try:
                 return child.wait()
             finally:
-                _stop_process_group(child)
+                stop_process_group(child)
 
 
 if __name__ == "__main__":

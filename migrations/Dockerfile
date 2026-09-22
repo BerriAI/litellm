@@ -67,6 +67,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --extra extra_proxy \
         --python python3.13
 
+RUN cp "$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"/litellm/rust_bridge/_native*.so litellm/rust_bridge/
+
 COPY migrations/run.py /app/run.py
 
 # Pre-warm the Prisma binary cache so the Job pod doesn't reach the

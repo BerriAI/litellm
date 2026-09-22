@@ -58,6 +58,10 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeyInfo", () => ({
   useKeyInfo: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys", () => ({
+  useApplyUserBudgetToTeamKeys: vi.fn(() => false),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(),
 }));

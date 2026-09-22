@@ -13,7 +13,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequen
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -3124,7 +3124,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
                 now = self._get_current_time().timestamp()
                 reset_time = now + self.window_size
-                reset_time_formatted = datetime.fromtimestamp(reset_time).strftime("%Y-%m-%d %H:%M:%S UTC")
+                reset_time_formatted = datetime.fromtimestamp(reset_time, tz=timezone.utc).strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"
+                )
 
                 remaining_display = max(0, status["limit_remaining"])
                 rate_limit_type = status["rate_limit_type"]
@@ -4473,9 +4475,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # 'metadata' and 'litellm_metadata' fields from litellm_params
         standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
         request_metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
-        if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
-            # Internal sub-calls bill spend to the caller but are not the caller's
-            # traffic; charging them here would let background evals eat TPM headroom.
+        origin: Final = request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
+        if origin and origin != "autorouter_compaction":
+            # Background evaluations keep their exemption; foreground compaction
+            # is necessary caller traffic and consumes the caller's token limits.
             return []
         standard_logging_metadata: Final = standard_logging_object.get("metadata") or {}
 

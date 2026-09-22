@@ -1,6 +1,8 @@
 import asyncio
+import base64
 import contextlib
 import contextvars
+import io
 import json
 import logging
 import os
@@ -9,7 +11,8 @@ import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Final
+from pathlib import PurePath
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -19,9 +22,6 @@ from jsonschema import validate
 
 import litellm
 from litellm._internal_context import is_internal_call
-from litellm.caching.caching import Cache
-from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
-from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm._logging import (
     CorrelationContextFilter,
     JsonFormatter,
@@ -29,14 +29,18 @@ from litellm._logging import (
     trace_id_var,
     verbose_logger,
 )
+from litellm.caching.caching import Cache
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy.utils import is_valid_api_key
-from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
+from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.types.utils import (
+    ADDRESSED_RESPONSE_ID_FIELD,
     CallTypes,
     Choices,
     Delta,
@@ -46,7 +50,6 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     StreamingChoices,
     Usage,
-    ADDRESSED_RESPONSE_ID_FIELD,
     all_litellm_params,
     bedrock_batch_litellm_params,
 )
@@ -178,9 +181,53 @@ def test_potential_model_names_keeps_provider_prefixed_candidate():
     assert bare["provider_prefixed_model_name"] == bare["combined_model_name"] == "perplexity/glm-5.2"
 
 
+@pytest.mark.parametrize("capability", [True, False, None])
+def test_get_model_info_anthropic_compaction(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, capability: bool | None
+) -> None:
+    monkeypatch.setitem(litellm.model_cost["claude-sonnet-5"], "supports_anthropic_compaction", capability)
+    assert litellm.get_model_info("claude-sonnet-5")["supports_anthropic_compaction"] is capability
+
+
 def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local_model_cost_map):
     info = litellm.get_model_info(model="ft:gpt-4o-2024-08-06:my-org::abc123", custom_llm_provider="openai")
     assert info["key"] == "ft:gpt-4o-2024-08-06"
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_key"),
+    [
+        ("gpt-5.6-luna-2099-01-01", "openai", "gpt-5.6-luna"),
+        ("gpt-5.6-luna-2099-01-01", "azure", "azure/gpt-5.6-luna"),
+    ],
+)
+def test_get_model_info_falls_back_from_dated_snapshot_to_undated_entry(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    custom_llm_provider: str,
+    expected_key: str,
+) -> None:
+    monkeypatch.delitem(litellm.model_cost, model, raising=False)
+    monkeypatch.delitem(litellm.model_cost, f"{custom_llm_provider}/{model}", raising=False)
+    assert expected_key in litellm.model_cost
+    info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    assert info["key"] == expected_key
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_key"),
+    [
+        ("gpt-4o-2024-08-06", "openai", "gpt-4o-2024-08-06"),
+        ("gpt-5.6-luna-2026-07-09", "azure", "azure/gpt-5.6-luna-2026-07-09"),
+    ],
+)
+def test_get_model_info_prefers_exact_dated_key_over_stripped(
+    local_model_cost_map: None, model: str, custom_llm_provider: str, expected_key: str
+) -> None:
+    assert expected_key in litellm.model_cost
+    info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    assert info["key"] == expected_key
 
 
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
@@ -583,6 +630,8 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_second",
         "output_cost_per_second_480p",
         "output_cost_per_second_720p",
+        "output_cost_per_second_768p",
+        "output_cost_per_second_2k",
         "output_cost_per_second_1080p",
         "output_cost_per_second_4k",
         "input_cost_per_query",
@@ -616,6 +665,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "cache_creation_input_audio_token_cost",
         "cache_read_input_token_cost",
         "cache_read_input_audio_token_cost",
+        "cache_read_input_image_token_cost",
         "input_dbu_cost_per_token",
         "output_db_cost_per_token",
         "output_dbu_cost_per_token",
@@ -693,6 +743,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_flex": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_priority": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens_batches": {"type": "number"},
+                "cache_creation_input_token_cost_batches": {"type": "number"},
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
@@ -702,8 +754,11 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_flex": {"type": "number"},
                 "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_batches": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_image_token_cost": {"type": "number"},
                 "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
@@ -728,12 +783,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_token_priority": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_batches": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens_flex": {"type": "number"},
                 "input_cost_per_audio_token_priority": {"type": "number"},
                 "output_cost_per_token_flex": {"type": "number"},
                 "output_cost_per_token_priority": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_batches": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_flex": {"type": "number"},
                 "regional_endpoint_uplift_multiplier": {"type": "number"},
                 "regional_processing_uplift_multiplier_eu": {"type": "number"},
@@ -755,7 +812,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_video_per_second_above_128k_tokens": {"type": "number"},
                 "input_dbu_cost_per_token": {"type": "number"},
                 "annotation_cost_per_page": {"type": "number"},
+                "annotation_cost_per_page_batches": {"type": "number"},
                 "ocr_cost_per_page": {"type": "number"},
+                "ocr_cost_per_page_batches": {"type": "number"},
                 "ocr_cost_per_credit": {"type": "number"},
                 "code_interpreter_cost_per_session": {"type": "number"},
                 "inference_geo": {"type": "string"},
@@ -798,6 +857,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_second_480p": {"type": "number"},
                 "output_cost_per_second_720p": {"type": "number"},
+                "output_cost_per_second_768p": {"type": "number"},
+                "output_cost_per_second_2k": {"type": "number"},
                 "output_cost_per_second_1080p": {"type": "number"},
                 "output_cost_per_second_4k": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
@@ -817,6 +878,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "source": {"type": "string"},
                 "comment": {"type": "string"},
                 "supports_assistant_prefill": {"type": "boolean"},
+                "supports_anthropic_compaction": {"type": "boolean"},
                 "supports_audio_input": {"type": "boolean"},
                 "supports_audio_output": {"type": "boolean"},
                 "gemini_native_audio": {"type": "boolean"},
@@ -831,6 +893,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_pdf_input": {"type": "boolean"},
                 "prompt_cache_min_tokens": {"type": "number"},
                 "supports_prompt_cache_breakpoint": {"type": "boolean"},
+                "supports_thinking_cache_preservation": {"type": "boolean"},
                 "supports_prompt_caching": {"type": "boolean"},
                 "supports_response_schema": {"type": "boolean"},
                 "supports_system_messages": {"type": "boolean"},
@@ -902,6 +965,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
+                            "/v1/videos",
                             "/vertex_ai/live",
                             "/v1/listen",
                             "/v1beta/interactions",
@@ -950,6 +1014,38 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
                 "use_openai_responses_path": {"type": "boolean"},
+                "off_peak_pricing": {
+                    "type": "object",
+                    "properties": {
+                        "hours_utc": {
+                            "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        },
+                        "windows": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "hours_utc": {
+                                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                                    },
+                                    "weekdays": {
+                                        "type": "array",
+                                        "items": {"oneOf": [{"type": "integer"}, {"type": "string"}]},
+                                    },
+                                },
+                                "required": ["hours_utc"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "weekday_timezone": {"type": "string"},
+                        "input_cost_per_token": {"type": "number"},
+                        "output_cost_per_token": {"type": "number"},
+                        "output_cost_per_reasoning_token": {"type": "number"},
+                        "cache_read_input_token_cost": {"type": "number"},
+                        "cache_creation_input_token_cost": {"type": "number"},
+                    },
+                    "additionalProperties": False,
+                },
                 "tiered_pricing": {
                     "type": "array",
                     "items": {
@@ -999,6 +1095,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         # Add any model IDs that should be exempt from the cost validation
         # Example: "expensive-model-id",
         "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
+        "fal_ai/bytedance/seedance-2.0/text-to-video",
+        "fal_ai/bytedance/seedance-2.0/image-to-video",
+        "fal_ai/bytedance/seedance-2.0/reference-to-video",
     ]
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
@@ -1060,7 +1159,7 @@ def test_max_tokens_consistency():
         if len(inconsistencies) > 10:
             error_msg += f"\n  ... and {len(inconsistencies) - 10} more\n"
 
-        error_msg += "\nTo fix these inconsistencies, run: poetry run python fix_max_tokens_inconsistencies.py"
+        error_msg += "\nTo fix these inconsistencies, run: uv run python fix_max_tokens_inconsistencies.py"
         raise AssertionError(error_msg)
 
 
@@ -1084,6 +1183,21 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
 
     control = litellm.get_model_info(model="au.anthropic.claude-opus-4-8", custom_llm_provider="bedrock")
     assert control["key"] == "au.anthropic.claude-opus-4-8"
+
+
+def test_get_model_info_bedrock_mantle_region_prefix_falls_back_to_the_mantle_row(local_model_cost_map):
+    """A Mantle deployment name may carry the region as a prefix (bedrock_mantle/us-east-2/<model>).
+    That name has no cost row of its own, so pricing must fall through to the region-free
+    bedrock_mantle/<model> row instead of raising, while a region that has its own row keeps it."""
+    for model, expected_key in (
+        ("bedrock_mantle/us-east-2/anthropic.claude-haiku-4-5", "bedrock_mantle/anthropic.claude-haiku-4-5"),
+        ("bedrock_mantle/us-east-2/openai.gpt-5.6-sol", "bedrock_mantle/openai.gpt-5.6-sol"),
+        ("bedrock_mantle/us-gov-west-1/openai.gpt-5.4", "bedrock_mantle/us-gov-west-1/openai.gpt-5.4"),
+    ):
+        info = litellm.get_model_info(model=model, custom_llm_provider="bedrock_mantle")
+        assert info["key"] == expected_key, model
+        assert info["input_cost_per_token"] == litellm.model_cost[expected_key]["input_cost_per_token"], model
+        assert info["input_cost_per_token"] > 0, model
 
 
 def test_openai_models_in_model_info(monkeypatch):
@@ -1527,7 +1641,6 @@ class TestProxyFunctionCalling:
         # For now, we expect False (current behavior), but document the limitation
         assert proxy_result is False, f"Current limitation: {proxy_model_with_hints} returns False without inference"
 
-
     def test_litellm_utils_supports_function_calling_import(self):
         """Test that supports_function_calling can be imported from litellm.utils."""
         try:
@@ -1546,7 +1659,6 @@ class TestProxyFunctionCalling:
             assert callable(litellm.supports_function_calling)
         except Exception as e:
             pytest.fail(f"Failed to access litellm.supports_function_calling: {e}")
-
 
     def test_edge_cases_and_malformed_proxy_models(self):
         """Test edge cases and malformed proxy model names."""
@@ -2902,6 +3014,74 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
         assert result.get("custom_param") == "value"
 
 
+class TestExtraBodyCannotOverrideModel:
+    @pytest.mark.parametrize("custom_llm_provider", ["edenai", "openai", "azure"])
+    def test_extra_body_model_is_dropped_for_openai_compatible_providers(self, custom_llm_provider: str) -> None:
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params={"extra_body": {"model": "edenai/openai/gpt-4o", "provider_flag": True}},
+            passed_params={
+                "model": "edenai/openai/gpt-4o-mini",
+                "extra_body": {"model": "edenai/anthropic/claude-3-opus", "top_k": 5},
+                "custom_param": "kept",
+            },
+            custom_llm_provider=custom_llm_provider,
+            openai_params=["model", "temperature"],
+            additional_drop_params=None,
+        )
+
+        assert result == {"extra_body": {"provider_flag": True, "top_k": 5, "custom_param": "kept"}}, result
+
+    def test_get_optional_params_strips_extra_body_model_for_edenai(self) -> None:
+        result = litellm.get_optional_params(
+            model="openai/gpt-4o-mini",
+            custom_llm_provider="edenai",
+            extra_body={"model": "anthropic/claude-opus-4-1", "top_k": 5},
+        )
+
+        assert result["extra_body"] == {"top_k": 5}, result
+
+    def test_nested_drop_paths_do_not_break_extra_body_filtering(self) -> None:
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params={},
+            passed_params={
+                "model": "hosted_vllm/my-vllm-model",
+                "extra_body": {"model": "hosted_vllm/other", "top_k": 5, "kept": True},
+            },
+            custom_llm_provider="hosted_vllm",
+            openai_params=["model", "temperature"],
+            additional_drop_params=[["tools", "function", "strict"], "top_k"],
+        )
+
+        assert result == {"extra_body": {"kept": True}}, result
+
+    def test_a_list_entry_does_not_break_a_supported_nested_drop_path(self) -> None:
+        def tools() -> list[dict]:
+            return [
+                {
+                    "type": "function",
+                    "function": {"name": "f", "custom_marker": "LEAK", "parameters": {"type": "object"}},
+                }
+            ]
+
+        untouched = litellm.get_optional_params(
+            model="my-vllm-model", custom_llm_provider="hosted_vllm", tools=tools()
+        )
+        assert untouched["tools"][0]["function"]["custom_marker"] == "LEAK", untouched
+
+        result = litellm.get_optional_params(
+            model="my-vllm-model",
+            custom_llm_provider="hosted_vllm",
+            tools=tools(),
+            additional_drop_params=["tools[*].function.custom_marker", ["tools", "function", "custom_marker"]],
+        )
+
+        assert "custom_marker" not in result["tools"][0]["function"], result
+
+
 class TestDropParamsWithPromptCacheKey:
     """
     Test that drop_params: true correctly drops prompt_cache_key for non-OpenAI providers.
@@ -3568,6 +3748,28 @@ class TestGetOptionalParamsTencent:
         )
         assert isinstance(config, TencentAnthropicMessagesConfig)
         assert config.custom_llm_provider == "tencent"
+
+    def test_bedrock_mantle_claude_messages_config_routing(self):
+        import litellm
+        from litellm.llms.bedrock_mantle.messages.transformation import (
+            BedrockMantleAnthropicMessagesConfig,
+        )
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="anthropic.claude-sonnet-5",
+            provider=litellm.LlmProviders.BEDROCK_MANTLE,
+        )
+        assert isinstance(config, BedrockMantleAnthropicMessagesConfig)
+        assert config.custom_llm_provider == "bedrock_mantle"
+
+    def test_bedrock_mantle_openai_models_keep_the_messages_bridge(self):
+        import litellm
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="openai.gpt-5.6-sol",
+            provider=litellm.LlmProviders.BEDROCK_MANTLE,
+        )
+        assert config is None
 
 
 class TestValidateEnvironmentTencent:
@@ -4535,6 +4737,33 @@ def test_bedrock_batch_params_never_reach_the_provider():
     )
 
 
+def test_documented_batch_s3_credentials_never_reach_the_provider():
+    """The Bedrock batch docs tell users to put s3_access_key_id, s3_secret_access_key
+    and s3_encryption_key_id on the deployment. Left unregistered they are swept into
+    additionalModelRequestFields, Bedrock 400s ordinary chat on that deployment with
+    `s3_secret_access_key: Extra inputs are not permitted`, and the S3 secret is sent
+    to the provider and printed in the debug log (LIT-8290).
+    """
+    configured = {
+        "s3_access_key_id": "configured-access-key-id",
+        "s3_secret_access_key": "configured-secret-access-key",
+        "s3_encryption_key_id": "arn:aws:kms:us-east-1:000000000000:key/configured",
+    }
+    kwargs = {"a_real_provider_specific_param": 1, **configured}
+
+    non_default = get_non_default_completion_params(dict(kwargs))
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "documented batch S3 credentials leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+
+    batch_params = dict(GenericLiteLLMParams(**kwargs))
+    assert {field: batch_params.get(field) for field in configured} == configured, (
+        "registering these must not strip them from the batch path"
+    )
+
+
 def test_client_side_timeout_marker_never_reaches_the_provider():
     """The proxy stamps kwargs["client_side_timeout"] = True whenever a request carries
     a caller-supplied timeout (body timeout / request_timeout / stream_timeout or the
@@ -4808,6 +5037,102 @@ async def test_wrapper_async_fires_post_call_failure_deployment_hook_on_internal
 
     assert len(recorder.calls) == 1
     assert isinstance(recorder.calls[0][1], litellm.AuthenticationError)
+
+
+def _budget_reservation(callback_bound: bool = False) -> dict:
+    return {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": callback_bound}
+
+
+_BUDGET_RESERVATION_CALL_KWARGS: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
+_BUDGET_RESERVATION_REFUSAL: Final = litellm.AuthenticationError(
+    message="bad key", llm_provider="openai", model="gpt-4o"
+)
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_claims_the_budget_reservation_for_the_cost_callback() -> None:
+    reservation = _budget_reservation()
+
+    await litellm.acompletion(
+        **_BUDGET_RESERVATION_CALL_KWARGS,
+        mock_response="ok",
+        metadata={"user_api_key_budget_reservation": reservation},
+    )
+
+    assert reservation["callback_bound"] is True
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_claims_the_budget_reservation_before_the_stream_is_consumed() -> None:
+    reservation = _budget_reservation()
+
+    stream = await litellm.acompletion(
+        **_BUDGET_RESERVATION_CALL_KWARGS,
+        mock_response="ok",
+        stream=True,
+        metadata={"user_api_key_budget_reservation": reservation},
+    )
+
+    assert reservation["callback_bound"] is True
+    async for _ in stream:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_claims_the_budget_reservation_a_supplied_logging_object_already_saw() -> None:
+    reservation = _budget_reservation()
+    logging_obj, kwargs = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        **_BUDGET_RESERVATION_CALL_KWARGS,
+        litellm_call_id="proxy-pre-call-setup",
+        metadata={"user_api_key_budget_reservation": reservation},
+    )
+    assert reservation["callback_bound"] is False
+
+    await litellm.acompletion(**kwargs, litellm_logging_obj=logging_obj, mock_response="ok")
+
+    assert reservation["callback_bound"] is True
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_hands_the_budget_reservation_back_when_the_call_fails() -> None:
+    reservation = _budget_reservation()
+
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.acompletion(
+            **_BUDGET_RESERVATION_CALL_KWARGS,
+            mock_response=_BUDGET_RESERVATION_REFUSAL,
+            metadata={"user_api_key_budget_reservation": reservation},
+        )
+
+    assert reservation["callback_bound"] is False
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_leaves_the_budget_reservation_alone_on_internal_calls() -> None:
+    claimed_by_the_outer_call = _budget_reservation(callback_bound=True)
+    never_claimed = _budget_reservation()
+
+    token = is_internal_call.set(True)
+    try:
+        await litellm.acompletion(
+            **_BUDGET_RESERVATION_CALL_KWARGS,
+            mock_response="ok",
+            metadata={"user_api_key_budget_reservation": never_claimed},
+        )
+        with pytest.raises(litellm.AuthenticationError):
+            await litellm.acompletion(
+                **_BUDGET_RESERVATION_CALL_KWARGS,
+                mock_response=_BUDGET_RESERVATION_REFUSAL,
+                metadata={"user_api_key_budget_reservation": claimed_by_the_outer_call},
+            )
+    finally:
+        is_internal_call.reset(token)
+
+    assert never_claimed["callback_bound"] is False
+    assert claimed_by_the_outer_call["callback_bound"] is True
 
 
 @pytest.mark.asyncio
@@ -5721,3 +6046,111 @@ def test_calculate_max_parallel_requests_precedence(
         )
         == expected
     )
+
+
+class _NamedStream(io.BytesIO):
+    def __init__(self, name: str | int) -> None:
+        super().__init__(b"%PDF-1.4 secret document body")
+        self.name = name
+
+
+def _logged_request_messages(original_function: str, *args: object, **kwargs: object) -> object:
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function,
+        litellm.utils.Rules(),
+        datetime.now(),
+        *args,
+        litellm_call_id="request-text-call",
+        **kwargs,
+    )
+    return logging_obj.messages
+
+
+@pytest.mark.parametrize(
+    ("original_function", "args", "kwargs", "expected"),
+    [
+        ("search", (), {"query": "Eiffel Tower"}, "Eiffel Tower"),
+        ("asearch", ("Eiffel Tower",), {}, "Eiffel Tower"),
+        ("asearch", (), {"query": ["Eiffel Tower", "Louvre"]}, "Eiffel Tower\nLouvre"),
+        ("asearch", (), {"query": ["Eiffel Tower", 7, None]}, "Eiffel Tower"),
+        ("image_edit", (), {"prompt": "make it blue", "image": b"png"}, "make it blue"),
+        ("aimage_edit", (b"png", "make it blue"), {}, "make it blue"),
+        (
+            "aocr",
+            (),
+            {"document": {"type": "document_url", "document_url": "https://x.test/a.pdf"}},
+            "https://x.test/a.pdf",
+        ),
+        (
+            "ocr",
+            ("mistral-ocr-latest", {"type": "image_url", "image_url": "https://x.test/a.png"}),
+            {},
+            "https://x.test/a.png",
+        ),
+        (
+            "aocr",
+            (),
+            {"document": {"type": "document_url", "document_url": "data:application/pdf;base64,JVBERi0xLjQ="}},
+            "data:application/pdf;base64 (12 chars)",
+        ),
+        (
+            "aocr",
+            (),
+            {"document": {"type": "image_url", "image_url": "https://x.test/a,b.png"}},
+            "https://x.test/a,b.png",
+        ),
+        (
+            "aocr",
+            (),
+            {"document": {"type": "file", "file": PurePath("/tmp/hello.pdf"), "mime_type": "application/pdf"}},
+            "file (application/pdf) hello.pdf",
+        ),
+        ("aocr", (), {"document": {"type": "document_url", "document_url": ""}}, ""),
+        ("aocr", (), {"document": {"type": "file", "file": b"%PDF"}}, "file 4 bytes"),
+        ("aocr", (), {"document": {"type": "file", "file": io.BytesIO(b"%PDF")}}, "file"),
+        ("aocr", (), {"document": {"type": "file", "file": _NamedStream("/tmp/scan.pdf")}}, "file scan.pdf"),
+        (
+            "aocr",
+            (),
+            {"document": {"type": "file", "file": _NamedStream(3), "mime_type": "application/pdf"}},
+            "file (application/pdf)",
+        ),
+        ("aocr", (), {"document": "not-a-document"}, "default-message-value"),
+    ],
+)
+def test_function_setup_logs_the_search_query_edit_prompt_and_ocr_document_summary_as_the_request(
+    original_function: str, args: tuple[object, ...], kwargs: dict[str, object], expected: str
+) -> None:
+    assert _logged_request_messages(original_function, *args, **kwargs) == [{"role": "user", "content": expected}]
+
+
+def test_search_with_a_mixed_type_query_list_still_reaches_its_own_validation_error() -> None:
+    mixed_query: Final = cast(list[str], ["Eiffel Tower", 7])  # cast-ok: the invalid list is the point of the test
+
+    with pytest.raises(litellm.APIConnectionError, match="All items in query list must be strings"):
+        litellm.search(query=mixed_query, search_provider="duckduckgo")
+
+
+def test_function_setup_never_logs_the_ocr_file_bytes() -> None:
+    content: Final = b"%PDF-1.4 secret document body"
+    logged: Final = _logged_request_messages("aocr", document={"type": "file", "file": content})
+
+    assert logged == [{"role": "user", "content": "file 29 bytes"}]
+
+
+def test_function_setup_leaves_the_ocr_file_stream_unread_and_never_logs_its_bytes() -> None:
+    stream: Final = _NamedStream("/tmp/scan.pdf")
+    logged: Final = _logged_request_messages("aocr", document={"type": "file", "file": stream})
+
+    assert logged == [{"role": "user", "content": "file scan.pdf"}]
+    assert stream.tell() == 0
+
+
+def test_function_setup_never_logs_the_ocr_data_uri_payload() -> None:
+    payload: Final = base64.b64encode(b"%PDF-1.4 secret document body").decode()
+    logged: Final = _logged_request_messages(
+        "aocr", document={"type": "document_url", "document_url": f"data:application/pdf;base64,{payload}"}
+    )
+
+    assert logged == [{"role": "user", "content": f"data:application/pdf;base64 ({len(payload)} chars)"}]
+    assert payload not in str(logged)
