@@ -113,6 +113,9 @@
     "tests/integration/pricing/test_off_peak_pricing.py::test_closed_off_peak_window_bills_standard_rates": [
       "quota_management.spend_tracking.off_peak_pricing.closed_window_bills_standard_rates"
     ],
+    "tests/integration/pricing/test_service_tier_pricing.py::test_ultrafast_service_tier_bills_ultrafast_rates_and_keeps_pricing_off_the_wire": [
+      "quota_management.spend_tracking.service_tier_pricing.ultrafast_bills_ultrafast_rates"
+    ],
     "tests/integration/spend/test_cache_and_quota.py::test_generated_cache_sequences_preserve_content_usage_and_zero_hit_cost": [
       "quota_management.response_cache.generated_sequences_preserve_content_and_accounting"
     ],
