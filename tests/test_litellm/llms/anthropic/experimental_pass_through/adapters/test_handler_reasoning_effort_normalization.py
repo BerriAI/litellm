@@ -36,6 +36,72 @@ def _reasoning_effort_sent(model: str, provider: str, reasoning_effort: object) 
     return completion_kwargs.get("reasoning_effort")
 
 
+def _reasoning_effort_sent_for_thinking(model: str, provider: str, thinking: dict[str, object]) -> object:
+    completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=model,
+        metadata=None,
+        stop_sequences=None,
+        stream=False,
+        system=None,
+        temperature=None,
+        thinking=thinking,
+        tool_choice=None,
+        tools=None,
+        top_k=None,
+        top_p=None,
+        output_format=None,
+        extra_kwargs={"custom_llm_provider": provider},
+    )
+    return completion_kwargs.get("reasoning_effort")
+
+
+SUMMARIZED_THINKING = {"type": "enabled", "budget_tokens": 4096, "summary": "auto"}
+PLAIN_THINKING = {"type": "enabled", "budget_tokens": 4096}
+
+
+class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:
+    """Only the Responses API takes ``reasoning_effort`` as a dict. Databricks answered the wrapped
+    ``{"effort", "summary"}`` with ``field 'reasoning_effort' expects input with json type 'string'
+    but got 'object'``, so a target that stays on chat completions has to get the plain tier and a
+    target the bridge picks up has to keep the summary it can honor."""
+
+    @pytest.mark.parametrize(
+        "model, provider",
+        [
+            ("databricks/databricks-qwen35-122b-a10b", "databricks"),
+            ("databricks-qwen35-122b-a10b", "databricks"),
+            ("fireworks_ai/kimi-k3", "fireworks_ai"),
+        ],
+    )
+    def test_a_chat_target_gets_the_plain_tier(self, local_model_cost_map, model, provider):
+        assert _reasoning_effort_sent_for_thinking(model, provider, SUMMARIZED_THINKING) == "high"
+
+    def test_auto_summary_stays_a_plain_tier_on_a_chat_target(self, local_model_cost_map, monkeypatch):
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+
+        sent = _reasoning_effort_sent_for_thinking("databricks/databricks-qwen35-122b-a10b", "databricks", PLAIN_THINKING)
+
+        assert sent == "high"
+
+    @pytest.mark.parametrize(
+        "model, provider",
+        [("azure/responses/gpt-5-mini", "azure"), ("gpt-5-mini", "openai")],
+    )
+    def test_a_bridged_target_keeps_the_summary(self, local_model_cost_map, model, provider):
+        sent = _reasoning_effort_sent_for_thinking(model, provider, SUMMARIZED_THINKING)
+
+        assert sent == {"effort": "high", "summary": "auto"}
+
+    def test_auto_summary_still_reaches_a_bridged_target(self, local_model_cost_map, monkeypatch):
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+
+        sent = _reasoning_effort_sent_for_thinking("azure/responses/gpt-5-mini", "azure", PLAIN_THINKING)
+
+        assert sent == {"effort": "high", "summary": "detailed"}
+
+
 class TestTheNormalizedTierIsTheTierSent:
     """The bug in the caller's terms: a proxy advertising kimi-k3 ``max`` accepted the request and
     then put ``high`` on the wire. Every spelling of the entry has to survive the adapter, including
