@@ -15,6 +15,7 @@ import time
 import traceback
 from collections.abc import Mapping
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import BaseModel
@@ -623,7 +624,7 @@ class Cache:
             else:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None and self._native_cache is not None:
-                request = self._native_cache.request(self, {**kwargs, "cache_key": cache_key})
+                request = self._native_cache.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
                 if request is None:
                     return None
                 if not self._is_semantic_cache():
@@ -664,7 +665,7 @@ class Cache:
             else:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None and self._native_cache is not None:
-                request = self._native_cache.request(self, {**kwargs, "cache_key": cache_key})
+                request = self._native_cache.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
                 if request is None:
                     return None
                 if not self._is_semantic_cache():
@@ -942,13 +943,15 @@ class Cache:
                 cache_list.append((cache_key, cached_data))
 
             if self._native_cache is not None:
-                entries: Final = [
-                    (self._native_request({**kwargs, "cache_key": cache_key}), cached_data["response"])
+                entries: Final = tuple(
+                    (request, cached_data["response"])
                     for cache_key, cached_data in cache_list
-                ]
+                    if (request := self._native_request(MappingProxyType({**kwargs, "cache_key": cache_key})))
+                    is not None
+                )
                 await self._native_cache.async_store_batch(
-                    [request for request, _ in entries if request is not None],
-                    [response for request, response in entries if request is not None],
+                    tuple(request for request, _ in entries),
+                    tuple(response for _, response in entries),
                 )
             elif dynamic_cache_object is not None:
                 await dynamic_cache_object.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
@@ -963,7 +966,9 @@ class Cache:
         cache_key: Final = kwargs.get("cache_key")
         return self._native_cache.request(
             self,
-            kwargs if isinstance(cache_key, str) else {**kwargs, "cache_key": self.get_cache_key(**kwargs)},
+            kwargs
+            if isinstance(cache_key, str)
+            else MappingProxyType({**kwargs, "cache_key": self.get_cache_key(**kwargs)}),
         )
 
     def should_use_cache(self, **kwargs):
