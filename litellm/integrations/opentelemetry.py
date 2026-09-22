@@ -6,10 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, cast
-
-import requests
-from requests.adapters import HTTPAdapter
+from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -29,6 +26,7 @@ from litellm.integrations.otel.model.baggage import promoted_metadata
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.metadata import flatten_metadata
 from litellm.integrations.otel.model.semconv import Metric
+from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
@@ -101,41 +99,6 @@ _MAX_DYNAMIC_TRACER_PROVIDERS: Final = 256
 
 # Dedicated so a slow exporter shutdown cannot starve the shared logging executor.
 _PROVIDER_SHUTDOWN_EXECUTOR: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OtelProviderShutdown")
-
-
-@dataclass(frozen=True, slots=True)
-class _OtlpHttpTls:
-    certificate_file: str | None
-    session: requests.Session | None
-
-
-class _NoVerifyAdapter(HTTPAdapter):
-    def cert_verify(
-        self,
-        conn: object,
-        url: str,
-        verify: bool | str,
-        cert: str | tuple[str, str] | None,
-    ) -> None:
-        super().cert_verify(  # pyright: ignore[reportUnknownMemberType]  # requests stubs omit HTTPAdapter.cert_verify
-            conn, url, False, cert
-        )
-
-
-def _resolve_otlp_http_tls(signal: Literal["TRACES", "METRICS", "LOGS"]) -> _OtlpHttpTls:
-    if os.getenv(f"OTEL_EXPORTER_OTLP_{signal}_CERTIFICATE") or os.getenv("OTEL_EXPORTER_OTLP_CERTIFICATE"):
-        return _OtlpHttpTls(certificate_file=None, session=None)
-
-    from litellm.llms.custom_httpx.http_handler import get_ssl_verify
-
-    verify: Final = get_ssl_verify()
-    if verify is False:
-        session: Final = requests.Session()
-        session.mount("https://", _NoVerifyAdapter())
-        return _OtlpHttpTls(certificate_file=None, session=session)
-    if isinstance(verify, str):
-        return _OtlpHttpTls(certificate_file=verify, session=None)
-    return _OtlpHttpTls(certificate_file=None, session=None)
 
 
 LITELLM_TRACER_NAME: Final = os.getenv("OTEL_TRACER_NAME", "litellm")
@@ -3123,7 +3086,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 otel_exporter,
             )
             normalized_endpoint = self._normalize_otel_endpoint(otel_endpoint, "traces")
-            tls: Final = _resolve_otlp_http_tls("TRACES")
+            tls: Final = resolve_otlp_http_tls("TRACES")
             return BatchSpanProcessor(
                 OTLPSpanExporterHTTP(
                     endpoint=normalized_endpoint,
@@ -3211,7 +3174,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 self.OTEL_EXPORTER,
                 normalized_endpoint,
             )
-            tls: Final = _resolve_otlp_http_tls("LOGS")
+            tls: Final = resolve_otlp_http_tls("LOGS")
             return OTLPLogExporter(
                 endpoint=normalized_endpoint,
                 headers=_split_otel_headers,
@@ -3280,7 +3243,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 OTLPMetricExporter,
             )
 
-            tls: Final = _resolve_otlp_http_tls("METRICS")
+            tls: Final = resolve_otlp_http_tls("METRICS")
             exporter = OTLPMetricExporter(
                 endpoint=normalized_endpoint,
                 headers=_split_otel_headers,

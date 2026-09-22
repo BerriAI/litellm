@@ -1414,3 +1414,109 @@ def test_genai_mapper_guardrail_cost_in_spend_attr():
     billed = dict(entry)
     del billed["guardrail_cost_in_spend"]
     assert LiteLLM.GUARDRAIL_COST_IN_SPEND not in GenAIMapper().map(GuardrailSpanData.from_logging_entry(billed))
+
+
+def _isolate_v2_otlp_tls_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+
+    for key in (
+        "SSL_VERIFY",
+        "SSL_CERT_FILE",
+        "OTEL_EXPORTER_OTLP_CERTIFICATE",
+        "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
+        "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
+        "OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "2")
+    monkeypatch.setattr(litellm, "ssl_verify", True)
+
+
+def test_v2_otlp_http_span_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tls_sink) -> None:
+    _isolate_v2_otlp_tls_env(monkeypatch)
+    monkeypatch.setenv("SSL_CERT_FILE", tls_sink.certificate_path)
+    cfg = OpenTelemetryV2Config(exporter="otlp_http", endpoint=tls_sink.url)
+    _export_one_span(cfg)
+    assert tls_sink.received.get(timeout=5) == "/v1/traces"
+
+
+def test_v2_http_json_span_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tls_sink) -> None:
+    _isolate_v2_otlp_tls_env(monkeypatch)
+    monkeypatch.setenv("SSL_CERT_FILE", tls_sink.certificate_path)
+    cfg = OpenTelemetryV2Config(exporter="http/json", endpoint=tls_sink.url)
+    _export_one_span(cfg)
+    assert tls_sink.received.get(timeout=5) == "/v1/traces"
+
+
+def test_v2_otlp_http_metric_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tls_sink) -> None:
+    _isolate_v2_otlp_tls_env(monkeypatch)
+    monkeypatch.setenv("SSL_CERT_FILE", tls_sink.certificate_path)
+    cfg = OpenTelemetryV2Config(exporter="otlp_http", endpoint=tls_sink.url)
+    reader = providers.build_metric_reader(cfg)
+    provider = MeterProvider(metric_readers=[reader])
+    try:
+        provider.get_meter("v2-tls-test").create_counter("tls_export_test").add(1)
+        assert provider.force_flush(), "metric flush failed"
+        assert tls_sink.received.get(timeout=5) == "/v1/metrics"
+    finally:
+        provider.shutdown()
+
+
+def test_v2_otlp_http_log_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tls_sink) -> None:
+    import time
+
+    from opentelemetry._logs.severity import SeverityNumber
+    from opentelemetry.sdk._logs import LogData, LogRecord
+    from opentelemetry.sdk._logs.export import LogExportResult
+    from opentelemetry.sdk.util.instrumentation import InstrumentationScope
+    from opentelemetry.trace import TraceFlags
+
+    _isolate_v2_otlp_tls_env(monkeypatch)
+    monkeypatch.setenv("SSL_CERT_FILE", tls_sink.certificate_path)
+    cfg = OpenTelemetryV2Config(exporter="otlp_http", endpoint=tls_sink.url)
+    exporter = providers.build_log_exporter(cfg)
+    try:
+        record = LogRecord(
+            timestamp=int(time.time() * 1e9),
+            observed_timestamp=int(time.time() * 1e9),
+            trace_id=0,
+            span_id=0,
+            trace_flags=TraceFlags(0),
+            severity_number=SeverityNumber.INFO,
+            body="v2-tls-test",
+        )
+        log_data = LogData(log_record=record, instrumentation_scope=InstrumentationScope("v2-tls-test"))
+        result = exporter.export([log_data])
+        assert result is LogExportResult.SUCCESS, f"log export failed: {result}"
+        assert tls_sink.received.get(timeout=5) == "/v1/logs"
+    finally:
+        exporter.shutdown()
+
+
+def test_v2_otlp_http_export_skips_verification_when_ssl_verify_false(
+    monkeypatch: pytest.MonkeyPatch, tls_sink
+) -> None:
+    _isolate_v2_otlp_tls_env(monkeypatch)
+    monkeypatch.setenv("SSL_VERIFY", "false")
+    cfg = OpenTelemetryV2Config(exporter="otlp_http", endpoint=tls_sink.url)
+    _export_one_span(cfg)
+    assert tls_sink.received.get(timeout=5) == "/v1/traces"
+
+
+def test_v2_otlp_http_export_rejects_untrusted_collector_by_default(
+    monkeypatch: pytest.MonkeyPatch, tls_sink
+) -> None:
+    import contextlib
+
+    import requests
+
+    _isolate_v2_otlp_tls_env(monkeypatch)
+    cfg = OpenTelemetryV2Config(exporter="otlp_http", endpoint=tls_sink.url)
+    provider = providers.build_tracer_provider(cfg)
+    provider.get_tracer("probe").start_span("probe").end()
+    try:
+        with contextlib.suppress(requests.exceptions.SSLError):
+            provider.force_flush()
+        assert tls_sink.received.empty(), "sink received a request it should never have trusted"
+    finally:
+        provider.shutdown()

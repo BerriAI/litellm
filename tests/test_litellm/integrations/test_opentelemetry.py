@@ -1,21 +1,14 @@
 import asyncio
 import concurrent.futures
 import contextlib
-import functools
 import gc
-import http.server
-import ipaddress
 import json
 import os
-import queue
-import ssl
 import sys
 import threading
 import time
 import unittest
 import weakref
-from collections.abc import Iterator
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
@@ -40,6 +33,7 @@ from parameterized import parameterized
 
 import requests
 
+from conftest import TlsSink, write_self_signed_cert
 import litellm
 from litellm.integrations import opentelemetry as otel_module
 from litellm.integrations.opentelemetry import (
@@ -2097,83 +2091,6 @@ class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
         self.assertEqual(traces, "http://collector:4318/v1/traces")
 
 
-@dataclass(frozen=True, slots=True)
-class _TlsSink:
-    url: str
-    certificate_path: str
-    received: "queue.Queue[str]"
-
-
-class _RecordingOtelHandler(http.server.BaseHTTPRequestHandler):
-    def __init__(self, *args: object, received: "queue.Queue[str]", **kwargs: object) -> None:
-        self._received: Final = received
-        super().__init__(*args, **kwargs)
-
-    def do_POST(self) -> None:
-        length: Final = int(self.headers.get("Content-Length") or 0)
-        if length:
-            self.rfile.read(length)
-        self._received.put(self.path)
-        self.send_response(200)
-        self.send_header("Content-Type", "application/x-protobuf")
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-
-    def log_message(self, format: str, *args: object) -> None:
-        pass
-
-
-def _write_self_signed_cert(directory: Path, stem: str) -> tuple[Path, Path]:
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.x509.oid import NameOID
-
-    key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
-    certificate: Final = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(timezone.utc) - timedelta(minutes=1))
-        .not_valid_after(datetime.now(timezone.utc) + timedelta(hours=1))
-        .add_extension(
-            x509.SubjectAlternativeName([x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
-            critical=False,
-        )
-        .sign(key, hashes.SHA256())
-    )
-    certificate_path: Final = directory / f"{stem}.crt"
-    certificate_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
-    key_path: Final = directory / f"{stem}.key"
-    key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
-    return certificate_path, key_path
-
-
-@pytest.fixture
-def tls_sink(tmp_path: Path) -> Iterator[_TlsSink]:
-    certificate_path, key_path = _write_self_signed_cert(tmp_path, "sink")
-    received: "queue.Queue[str]" = queue.Queue()
-    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(str(certificate_path), str(key_path))
-    server: Final = http.server.ThreadingHTTPServer(
-        ("127.0.0.1", 0), functools.partial(_RecordingOtelHandler, received=received)
-    )
-    server.socket = context.wrap_socket(server.socket, server_side=True)
-    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    yield _TlsSink(
-        url=f"https://127.0.0.1:{server.server_port}",
-        certificate_path=str(certificate_path),
-        received=received,
-    )
-    server.shutdown()
-    server.server_close()
-    thread.join(timeout=5)
-
-
 def _isolate_otlp_tls_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in (
         "SSL_VERIFY",
@@ -2195,7 +2112,7 @@ def _ended_span() -> tuple[TracerProvider, ReadableSpan]:
     return provider, span
 
 
-def _assert_export_rejected(processor, span: ReadableSpan, sink: _TlsSink) -> None:
+def _assert_export_rejected(processor, span: ReadableSpan, sink: TlsSink) -> None:
     with contextlib.suppress(requests.exceptions.SSLError):
         result: Final = processor.span_exporter.export([span])
         assert result is SpanExportResult.FAILURE, f"rejected export must report failure, got {result}"
@@ -2206,7 +2123,7 @@ def _otlp_http_otel(endpoint: str) -> OpenTelemetry:
     return OpenTelemetry(config=OpenTelemetryConfig(exporter="otlp_http", endpoint=endpoint))
 
 
-def test_otlp_http_span_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tls_sink: _TlsSink) -> None:
+def test_otlp_http_span_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tls_sink: TlsSink) -> None:
     _isolate_otlp_tls_env(monkeypatch)
     monkeypatch.setenv("SSL_CERT_FILE", tls_sink.certificate_path)
     otel: Final = _otlp_http_otel(tls_sink.url)
@@ -2221,7 +2138,7 @@ def test_otlp_http_span_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPa
         provider.shutdown()
 
 
-def test_otlp_http_metric_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tls_sink: _TlsSink) -> None:
+def test_otlp_http_metric_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tls_sink: TlsSink) -> None:
     _isolate_otlp_tls_env(monkeypatch)
     monkeypatch.setenv("SSL_CERT_FILE", tls_sink.certificate_path)
     otel: Final = _otlp_http_otel(tls_sink.url)
@@ -2235,7 +2152,7 @@ def test_otlp_http_metric_export_trusts_ssl_cert_file(monkeypatch: pytest.Monkey
         provider.shutdown()
 
 
-def test_otlp_http_log_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tls_sink: _TlsSink) -> None:
+def test_otlp_http_log_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tls_sink: TlsSink) -> None:
     _isolate_otlp_tls_env(monkeypatch)
     monkeypatch.setenv("SSL_CERT_FILE", tls_sink.certificate_path)
     otel: Final = _otlp_http_otel(tls_sink.url)
@@ -2259,7 +2176,7 @@ def test_otlp_http_log_export_trusts_ssl_cert_file(monkeypatch: pytest.MonkeyPat
 
 
 def test_otlp_http_export_skips_verification_when_ssl_verify_false(
-    monkeypatch: pytest.MonkeyPatch, tls_sink: _TlsSink
+    monkeypatch: pytest.MonkeyPatch, tls_sink: TlsSink
 ) -> None:
     _isolate_otlp_tls_env(monkeypatch)
     monkeypatch.setenv("SSL_VERIFY", "false")
@@ -2276,7 +2193,7 @@ def test_otlp_http_export_skips_verification_when_ssl_verify_false(
 
 
 def test_otlp_http_export_rejects_untrusted_collector_by_default(
-    monkeypatch: pytest.MonkeyPatch, tls_sink: _TlsSink
+    monkeypatch: pytest.MonkeyPatch, tls_sink: TlsSink
 ) -> None:
     _isolate_otlp_tls_env(monkeypatch)
     otel: Final = _otlp_http_otel(tls_sink.url)
@@ -2290,10 +2207,10 @@ def test_otlp_http_export_rejects_untrusted_collector_by_default(
 
 
 def test_otel_certificate_env_takes_precedence_over_ssl_cert_file(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tls_sink: _TlsSink
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tls_sink: TlsSink
 ) -> None:
     _isolate_otlp_tls_env(monkeypatch)
-    unrelated_certificate, _ = _write_self_signed_cert(tmp_path, "unrelated")
+    unrelated_certificate, _ = write_self_signed_cert(tmp_path, "unrelated")
     monkeypatch.setenv("SSL_CERT_FILE", tls_sink.certificate_path)
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_CERTIFICATE", str(unrelated_certificate))
     otel: Final = _otlp_http_otel(tls_sink.url)
