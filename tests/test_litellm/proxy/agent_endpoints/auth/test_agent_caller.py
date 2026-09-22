@@ -2,8 +2,12 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth, agent_caller_from_headers
+from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.auth.agent_caller import (
+    agent_caller_auth,
+    agent_caller_from_headers,
+    agent_caller_resolves,
+)
 from litellm.types.agents import AgentCaller
 
 _AGENT_KEY: Final = UserAPIKeyAuth(api_key="agent-key", user_id="agent-owner", team_id="agent-team", agent_id="agent-1")
@@ -55,3 +59,36 @@ def test_agent_caller_cannot_be_set_from_a_request_payload() -> None:
 
     assert forged.agent_caller is None
     assert "agent_caller" not in forged.model_dump()
+
+
+async def _team_row(user_api_key_auth: UserAPIKeyAuth) -> LiteLLM_TeamTable | None:
+    return LiteLLM_TeamTable(team_id="callers")
+
+
+async def _user_row(user_api_key_auth: UserAPIKeyAuth) -> LiteLLM_UserTable | None:
+    return LiteLLM_UserTable(user_id="alice", max_budget=None, user_email=None)
+
+
+async def _no_row(user_api_key_auth: UserAPIKeyAuth) -> None:
+    raise ValueError("doesn't exist in db")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "load_team", "load_user", "expected"),
+    [
+        (None, _no_row, _no_row, True),
+        (AgentCaller(user_id="alice", team_id="callers"), _team_row, _no_row, True),
+        (AgentCaller(user_id="alice", team_id="ghost-team"), _no_row, _user_row, False),
+        (AgentCaller(user_id="alice", team_id=None), _no_row, _user_row, True),
+        (AgentCaller(user_id="ghost", team_id=None), _team_row, _no_row, False),
+    ],
+    ids=["no_caller", "known_team", "unknown_team_despite_known_user", "known_user", "unknown_user"],
+)
+async def test_caller_resolves_only_when_the_echoed_team_or_else_user_names_a_row(
+    caller: AgentCaller | None, load_team, load_user, expected: bool
+) -> None:
+    agent_key: Final = UserAPIKeyAuth(agent_id="agent-1")
+    agent_key.agent_caller = caller
+
+    assert await agent_caller_resolves(agent_key, load_team=load_team, load_user=load_user) is expected

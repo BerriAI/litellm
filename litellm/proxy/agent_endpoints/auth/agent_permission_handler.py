@@ -23,7 +23,11 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
     CeilingResolver,
     resolve_agent_access_group_ceiling,
 )
-from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
+from litellm.proxy.agent_endpoints.auth.agent_caller import (
+    CallerResolver,
+    agent_caller_auth,
+    agent_caller_resolves,
+)
 from litellm.repositories.table_repositories import AgentsRepository
 from litellm.types.agents import AgentResponse
 
@@ -83,11 +87,12 @@ class AgentRequestHandler:
     async def resolve_agent_access(
         user_api_key_auth: UserAPIKeyAuth | None = None,
         resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
+        caller_resolves: CallerResolver = agent_caller_resolves,
     ) -> AgentAccess:
         """Agents the key may reach: key and team grants, intersected with the agent's access group ceiling
         and, for an agent key acting on behalf of an invoking user, with that user's team grants."""
         key_team_access: Final = await AgentRequestHandler._resolve_key_team_agent_access(user_api_key_auth)
-        caller_access: Final = await AgentRequestHandler._agent_caller_access(user_api_key_auth)
+        caller_access: Final = await AgentRequestHandler._agent_caller_access(user_api_key_auth, caller_resolves)
         own_access: Final = _intersect_agent_access(key_team_access, caller_access)
         agent_ceiling: Final = await AgentRequestHandler._agent_access_group_ceiling(user_api_key_auth, resolve_ceiling)
         if agent_ceiling is None:
@@ -97,10 +102,14 @@ class AgentRequestHandler:
         return RestrictedAgentAccess(own_access.agent_ids & agent_ceiling)
 
     @staticmethod
-    async def _agent_caller_access(user_api_key_auth: UserAPIKeyAuth | None) -> AgentAccess:
+    async def _agent_caller_access(
+        user_api_key_auth: UserAPIKeyAuth | None, caller_resolves: CallerResolver
+    ) -> AgentAccess:
         caller_auth: Final = agent_caller_auth(user_api_key_auth) if user_api_key_auth else None
-        if caller_auth is None:
+        if caller_auth is None or user_api_key_auth is None:
             return UnrestrictedAgentAccess()
+        if not await caller_resolves(user_api_key_auth):
+            return RestrictedAgentAccess(frozenset())
         return await AgentRequestHandler._get_allowed_agents_for_team(caller_auth)
 
     @staticmethod
@@ -132,6 +141,7 @@ class AgentRequestHandler:
         agent_id: str,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
+        caller_resolves: CallerResolver = agent_caller_resolves,
     ) -> bool:
         """
         Check if a specific agent is allowed for the given user/key.
@@ -145,7 +155,7 @@ class AgentRequestHandler:
         """
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
-        match await AgentRequestHandler.resolve_agent_access(user_api_key_auth, resolve_ceiling):
+        match await AgentRequestHandler.resolve_agent_access(user_api_key_auth, resolve_ceiling, caller_resolves):
             case UnrestrictedAgentAccess():
                 return True
             case RestrictedAgentAccess(allowed_agent_ids):

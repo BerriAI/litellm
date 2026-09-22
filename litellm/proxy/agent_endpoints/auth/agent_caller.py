@@ -7,8 +7,8 @@ substituted for, the agent key's own grants and the agent's access group ceiling
 can only narrow access and need no trust.
 """
 
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Final, TypeAlias
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, UserAPIKeyAuth
@@ -17,6 +17,12 @@ from litellm.types.agents import (
     AGENT_CALLER_USER_ID_HEADER,
     AgentCaller,
 )
+
+LoadedCallerTeam: TypeAlias = LiteLLM_TeamTable | None
+LoadedCallerUser: TypeAlias = LiteLLM_UserTable | None
+CallerTeamLoader: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LoadedCallerTeam]]  # mutable-ok: Callable params
+CallerUserLoader: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LoadedCallerUser]]  # mutable-ok: Callable params
+CallerResolver: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[bool]]  # mutable-ok: Callable params
 
 
 def _header(headers: Mapping[str, str], name: str) -> str | None:
@@ -51,12 +57,12 @@ def agent_caller_auth(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKeyAuth | Non
 async def load_agent_caller_team(user_api_key_auth: UserAPIKeyAuth) -> LiteLLM_TeamTable | None:
     """The invoking team's row, or ``None`` when no team id was echoed. Raises when the id names a team
     that cannot be loaded, since a caller we cannot resolve must not be treated as unrestricted."""
-    from litellm.proxy.auth.auth_checks import get_team_object
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
-
     caller: Final = user_api_key_auth.agent_caller
     if caller is None or caller.team_id is None:
         return None
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
     return await get_team_object(
         team_id=caller.team_id,
         prisma_client=prisma_client,
@@ -67,14 +73,15 @@ async def load_agent_caller_team(user_api_key_auth: UserAPIKeyAuth) -> LiteLLM_T
 
 
 async def load_agent_caller_user(user_api_key_auth: UserAPIKeyAuth) -> LiteLLM_UserTable | None:
-    """The invoking user's row, or ``None`` when no user id was echoed or the row does not exist."""
-    from litellm.proxy.auth.auth_checks import get_user_object
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
-
+    """The invoking user's row, or ``None`` when no user id was echoed. Raises ``UserNotFoundError`` when
+    the id names no user, so an unresolvable caller is denied rather than left uncapped."""
     caller: Final = user_api_key_auth.agent_caller
     if caller is None or caller.user_id is None:
         return None
-    user_object: Final = await get_user_object(
+    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    return await get_user_object(
         user_id=caller.user_id,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
@@ -82,6 +89,25 @@ async def load_agent_caller_user(user_api_key_auth: UserAPIKeyAuth) -> LiteLLM_U
         parent_otel_span=user_api_key_auth.parent_otel_span,
         proxy_logging_obj=proxy_logging_obj,
     )
-    if user_object is None:
-        verbose_proxy_logger.debug("agent caller user %r not found; no user ceiling applied", caller.user_id)
-    return user_object
+
+
+async def agent_caller_resolves(
+    user_api_key_auth: UserAPIKeyAuth,
+    load_team: CallerTeamLoader = load_agent_caller_team,
+    load_user: CallerUserLoader = load_agent_caller_user,
+) -> bool:
+    """Whether the echoed ids name a team (when one was echoed, else a user) the proxy can load. The
+    grant resolvers answer "no grants" for a missing row just as for an unrestricted one, so callers
+    ask this first and deny outright when the invoking identity cannot be resolved."""
+    caller: Final = user_api_key_auth.agent_caller
+    if caller is None:
+        return True
+    try:
+        if caller.team_id is not None:
+            await load_team(user_api_key_auth)
+        else:
+            await load_user(user_api_key_auth)
+    except Exception as error:  # noqa: BLE001  # any failure to resolve the caller must deny, never widen
+        verbose_proxy_logger.warning("agent caller %s could not be resolved, denying: %s", caller, error)
+        return False
+    return True

@@ -9261,6 +9261,46 @@ async def test_agent_key_acting_for_a_teamless_user_is_capped_at_that_users_mode
     assert asked == ["team:None", "user:alice", "team:None", "user:alice"]
 
 
+_CALLER_LOOKUP_MISS: Final = ProxyException(message="not in db", type="auth_error", param=None, code=404)
+
+
+async def _no_such_team(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTable | None:
+    raise _CALLER_LOOKUP_MISS
+
+
+async def _no_such_user(valid_token: UserAPIKeyAuth) -> LiteLLM_UserTable | None:
+    raise _CALLER_LOOKUP_MISS
+
+
+@pytest.mark.asyncio
+async def test_agent_key_acting_for_an_unknown_team_is_denied_with_403():
+    """An echoed team id that names no team must deny the agent's own model as a 403 access denial,
+    never pass uncapped and never surface the lookup's own 404."""
+    agent_key: Final = _agent_key_acting_for(user_id="alice", team_id="no-such-team")
+    _, load_user, asked = _caller_loaders(None, None)
+
+    with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
+        await _check_caller_models(agent_key, "gpt-5", _no_such_team, load_user)
+
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+    assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+    assert "team_id='no-such-team'" in exc_info.value.internal_message
+    assert asked == [], "user lookup must not run once the team lookup failed"
+
+
+@pytest.mark.asyncio
+async def test_agent_key_acting_for_an_unknown_teamless_user_is_denied_with_403():
+    agent_key: Final = _agent_key_acting_for(user_id="nobody", team_id=None)
+    load_team, _, _ = _caller_loaders(None, None)
+
+    with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
+        await _check_caller_models(agent_key, "gpt-5", load_team, _no_such_user)
+
+    assert exc_info.value.type == ProxyErrorTypes.user_model_access_denied
+    assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+    assert "user_id='nobody'" in exc_info.value.internal_message
+
+
 @pytest.mark.asyncio
 async def test_agent_key_without_an_echoed_caller_keeps_its_own_models():
     agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5", "claude-sonnet"])
