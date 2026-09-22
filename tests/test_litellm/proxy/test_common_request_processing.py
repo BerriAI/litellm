@@ -9034,6 +9034,60 @@ class TestDetachedStreamFailureHook:
         assert [call["original_exception"] for call in recorder.calls] == [failure]
 
 
+class TestPostCallMaskedOutputReachesDeferredLogging:
+    @pytest.mark.asyncio
+    async def test_non_streaming_records_the_masked_response_before_deferred_logging_fires(self, monkeypatch):
+        from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "lit-8325-call"
+        logging_obj._defer_async_logging = False
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj.cost_breakdown = None
+        logging_obj.model_call_details = {}
+        recorded_at_enqueue: dict[str, object] = {}
+        logging_obj._enqueue_deferred_logging = lambda: recorded_at_enqueue.update(logging_obj.model_call_details)
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "oa", "litellm_logging_obj": logging_obj})
+
+        def mask(data, user_api_key_dict, response):
+            response.choices[0].message.content = "Card: <CREDIT_CARD>"
+            return response
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_success_hook = AsyncMock(side_effect=mask)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=None)
+
+        async def fake_route_request(**kwargs):
+            async def call():
+                return ModelResponse(
+                    choices=[Choices(index=0, message=Message(content="Card: 4111 1111 1111 1111", role="assistant"))]
+                )
+
+            return call()
+
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", fake_route_request)
+
+        result = await processor.base_process_llm_request(
+            request=Request(scope={"type": "http", "headers": []}),
+            fastapi_response=Response(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=MagicMock(),
+            is_streaming_request=False,
+            skip_pre_call_logic=True,
+        )
+
+        assert result.choices[0].message.content == "Card: <CREDIT_CARD>"
+        assert recorded_at_enqueue[SERVED_OUTPUT_TEXTS_KEY] == ("Card: <CREDIT_CARD>",)
+
+
 class TestStreamingResponseHeadersFollowFallback:
     """LIT-6767: the streaming branch has to publish the deployment that served the stream."""
 

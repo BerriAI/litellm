@@ -1032,3 +1032,11 @@ def test_a_callback_that_redacts_itself_keeps_its_messages_but_not_the_classifie
     assert "classifier_input" not in stored
     assert stored["messages"] == payload["messages"]
     assert stored["response"] == payload["response"]
+
+
+def test_perform_redaction_drops_the_served_output_texts_from_the_callback_kwargs() -> None:
+    from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+
+    details: Final = {"litellm_params": {}, SERVED_OUTPUT_TEXTS_KEY: ("Card: <CREDIT_CARD>",)}
+    perform_redaction(details, None)
+    assert SERVED_OUTPUT_TEXTS_KEY not in details

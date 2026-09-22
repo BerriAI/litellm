@@ -29,6 +29,7 @@ this suite deliberately requires the detected-entity details to remain visible.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -479,6 +480,149 @@ class TestPresidioCreditCardOutputMasking:
             return _anthropic_stream_content(result)
 
         _assert_eventually_masks_generated_card(fetch)
+
+
+def _wire_text(outcome: StreamingResponse) -> str:
+    return "\n".join(outcome.stream_events) if outcome.is_streaming else outcome.body
+
+
+def _poll_until_generated_card_masked(fetch: Callable[[], StreamingResponse]) -> StreamingResponse:
+    """The raw HTTP outcome once the output masker is in effect on the serving
+    worker: whichever wire shape the endpoint speaks, a masked body carries the
+    CREDIT_CARD placeholder and no Luhn-valid card run. A raw card is a worker
+    that has not loaded the guardrail yet, so it is polled through like any
+    other unmasked answer."""
+    deadline = time.monotonic() + GUARDRAIL_PROPAGATION_DEADLINE_SECONDS
+    last: str = "<no successful response yet>"
+    while True:
+        outcome = fetch()
+        if outcome.ok and not outcome.stream_error:
+            wire = _wire_text(outcome)
+            last = wire
+            if MASKED_CREDIT_CARD_TOKEN in wire and not _contains_card_number(wire):
+                return outcome
+        if time.monotonic() >= deadline:
+            pytest.fail(
+                "presidio post_call output masking never masked the generated card within "
+                f"{GUARDRAIL_PROPAGATION_DEADLINE_SECONDS}s; last observation: {last[:300]!r}"
+            )
+        time.sleep(GUARDRAIL_PROPAGATION_POLL_INTERVAL_SECONDS)
+
+
+def _spend_log_response_text(client: GuardrailsClient, key: str, call_id: str) -> str:
+    rows = client.proxy.poll_logs_for_key(
+        key,
+        predicate=lambda logged: any(row.litellm_call_id == call_id for row in logged),
+    )
+    row = next((row for row in rows if row.litellm_call_id == call_id), None)
+    assert row is not None, f"no spend log row ever appeared for x-litellm-call-id {call_id}"
+    return json.dumps(row.response)
+
+
+class TestPresidioSpendLogStoresMaskedOutput:
+    """The spend log stores the response the caller received, on every endpoint
+    and both stream modes, when an output-only post_call Presidio guardrail masks
+    a card number the model generated."""
+
+    _CELL: Final = "guardrail.presidio.post_call.spend_log_stores_masked_output"
+
+    def _assert_spend_log_is_masked(
+        self,
+        client: GuardrailsClient,
+        resources: ResourceManager,
+        key: str,
+        *,
+        name: str,
+        fetch: Callable[[str, str], StreamingResponse],
+    ) -> None:
+        _register_presidio(
+            client,
+            resources,
+            name=name,
+            mode="post_call",
+            filter_scope="output",
+            entities={"CREDIT_CARD": "MASK"},
+        )
+        prompt: Final = _credit_card_prompt(unique_marker())
+        outcome = _poll_until_generated_card_masked(lambda: fetch(prompt, name))
+        assert outcome.call_id, f"the served response must carry x-litellm-call-id: {dict(outcome.headers)}"
+
+        logged = _spend_log_response_text(client, key, outcome.call_id)
+        assert not _contains_card_number(logged), (
+            "the caller got the masked response but the spend log stored the raw model output: "
+            f"{logged[:400]!r}"
+        )
+        assert MASKED_CREDIT_CARD_TOKEN in logged, (
+            f"the spend log response carries neither the card nor the placeholder: {logged[:400]!r}"
+        )
+
+    @pytest.mark.covers(_CELL, exercised_on=["chat_completions"])
+    def test_spend_log_stores_masked_output_on_chat_completions(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        self._assert_spend_log_is_masked(
+            client,
+            resources,
+            scoped_key,
+            name=f"e2e-presidio-log-card-chat-{unique_marker()}",
+            fetch=lambda prompt, guardrail: client.chat_raw(
+                scoped_key, MODEL, prompt, guardrails=[guardrail], max_tokens=512
+            ),
+        )
+
+    @pytest.mark.covers(_CELL, exercised_on=["chat_completions_stream"])
+    def test_spend_log_stores_masked_output_on_streaming_chat_completions(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        self._assert_spend_log_is_masked(
+            client,
+            resources,
+            scoped_key,
+            name=f"e2e-presidio-log-card-chat-stream-{unique_marker()}",
+            fetch=lambda prompt, guardrail: client.chat_stream_raw(
+                scoped_key, MODEL, prompt, guardrails=[guardrail], max_tokens=512
+            ),
+        )
+
+    @pytest.mark.covers(_CELL, exercised_on=["messages"])
+    def test_spend_log_stores_masked_output_on_anthropic_messages(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        self._assert_spend_log_is_masked(
+            client,
+            resources,
+            scoped_key,
+            name=f"e2e-presidio-log-card-messages-{unique_marker()}",
+            fetch=lambda prompt, guardrail: client.messages_raw(
+                scoped_key, MODEL, prompt, guardrails=[guardrail], max_tokens=512
+            ),
+        )
+
+    @pytest.mark.covers(_CELL, exercised_on=["anthropic_messages_stream"])
+    def test_spend_log_stores_masked_output_on_streaming_anthropic_messages(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        self._assert_spend_log_is_masked(
+            client,
+            resources,
+            scoped_key,
+            name=f"e2e-presidio-log-card-messages-stream-{unique_marker()}",
+            fetch=lambda prompt, guardrail: client.messages_stream_raw(
+                scoped_key, MODEL, prompt, guardrails=[guardrail], max_tokens=512
+            ),
+        )
+
+    @pytest.mark.covers(_CELL, exercised_on=["responses"])
+    def test_spend_log_stores_masked_output_on_responses(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        self._assert_spend_log_is_masked(
+            client,
+            resources,
+            scoped_key,
+            name=f"e2e-presidio-log-card-responses-{unique_marker()}",
+            fetch=lambda prompt, guardrail: client.responses(scoped_key, MODEL, prompt, guardrails=[guardrail]),
+        )
 
 
 _LOGGED_ENTITIES: dict[PiiEntity, PiiAction] = {"EMAIL_ADDRESS": "MASK", "PHONE_NUMBER": "MASK"}
