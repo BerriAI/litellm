@@ -152,6 +152,8 @@ class Manager:
         raise failure
 manager = Manager()
 import sys, types
+for name in ('litellm', 'litellm.secret_managers'):
+    sys.modules.setdefault(name, types.ModuleType(name))
 handler = sys.modules.setdefault('litellm.secret_managers.secret_manager_handler', types.ModuleType('litellm.secret_managers.secret_manager_handler'))
 def get_secret_from_manager(**kwargs):
     return kwargs['client'].sync_read_secret(kwargs['secret_name'])
