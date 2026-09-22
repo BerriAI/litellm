@@ -560,6 +560,41 @@ async def get_api_key_metadata(
     return await attach_user_emails(prisma_client, combined)
 
 
+async def _get_deleted_keys_for_user(
+    prisma_client: PrismaClient,
+    user_id: str,
+) -> Sequence["PrismaDeletedVerificationToken"]:
+    try:
+        return await DeletedVerificationTokenRepository(prisma_client).table.find_many(
+            where={"user_id": user_id},
+            order={"deleted_at": "desc"},
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning("Failed to fetch deleted key metadata for user %s: %s", user_id, e)
+        return ()
+
+
+async def get_user_api_key_filter(
+    prisma_client: PrismaClient,
+    user_id: str,
+    api_key: str | None,
+) -> list[str]:
+    """Return the key digests that should scope a user's activity query."""
+    active_keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(where={"user_id": user_id})
+    deleted_keys: Final = await _get_deleted_keys_for_user(prisma_client, user_id)
+
+    user_api_keys: Final = list(
+        dict.fromkeys(
+            key.token
+            for key in (*active_keys, *deleted_keys)
+            if getattr(key, "token", None) and getattr(key, "user_id", None) == user_id
+        )
+    )
+    if api_key is None:
+        return user_api_keys
+    return [api_key] if api_key in user_api_keys else []
+
+
 def _adjust_dates_for_timezone(
     start_date: str,
     end_date: str,
