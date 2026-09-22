@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -9,6 +10,13 @@ from pydantic import TypeAdapter, ValidationError
 secrets_adapter: Final[TypeAdapter[dict[str, str]]] = TypeAdapter(dict[str, str])
 ENV_NAME: Final = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 MIN_MASKED_LENGTH: Final = 8
+ACTIONS_RUNNER_FLAG: Final = "GITHUB_ACTIONS"
+
+
+def mask_commands(secrets: Mapping[str, str]) -> tuple[str, ...]:
+    return tuple(
+        f"::add-mask::{value.replace('%', '%25')}\n" for value in secrets.values() if len(value) >= MIN_MASKED_LENGTH
+    )
 
 
 def main() -> int:
@@ -30,10 +38,9 @@ def main() -> int:
             f"these names or values cannot be represented in both bash and dotenv: {' '.join(sorted(unusable))}\n"
         )
         return 1
-    for value in secrets.values():
-        if len(value) >= MIN_MASKED_LENGTH:
-            _ = sys.stdout.write(f"::add-mask::{value.replace('%', '%25')}\n")
-    sys.stdout.flush()
+    if os.environ.get(ACTIONS_RUNNER_FLAG) == "true":
+        _ = sys.stdout.write("".join(mask_commands(secrets)))
+        sys.stdout.flush()
     lines: Final = tuple(f"{key}='{value}'" for key, value in secrets.items() if value)
     try:
         with os.fdopen(os.open(env_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600), "w") as handle:
