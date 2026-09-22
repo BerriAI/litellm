@@ -8,7 +8,7 @@ const TREATMENT_BY_ASSET: Readonly<Record<string, LogoTreatment>> = {
   "baseten.svg": "invert",
   "cursor.svg": "invert",
   "edenai.svg": "invert",
-  "enkrypt_ai.png": "invert",
+  "enkrypt_ai.avif": "invert",
   "friendli.svg": "invert",
   "github.svg": "invert",
   "github_copilot.svg": "invert",

@@ -299,7 +299,7 @@ export interface InputSchemaProperty {
   properties?: Record<string, InputSchemaProperty>; // For nested object properties
   required?: string[]; // For required fields in nested objects
   enum?: string[]; // For enum values
-  default?: unknown; // For default values
+  default?: any; // For default values
   items?: InputSchemaProperty | InputSchemaProperty[]; // For array item schemas
   anyOf?: InputSchemaProperty[];
   oneOf?: InputSchemaProperty[];
@@ -343,7 +343,7 @@ export type ListMCPToolsResponse = MCPTool[];
 // Define the argument structure for calling an MCP tool
 export interface CallMCPToolArgs {
   name: string;
-  arguments: Record<string, unknown> | null;
+  arguments: Record<string, any> | null;
   server_name?: string; // Now using server_name from mcp_info
 }
 
@@ -351,7 +351,7 @@ export interface CallMCPToolArgs {
 export interface MCPTextContent {
   type: "text";
   text: string;
-  annotations?: unknown;
+  annotations?: any;
 }
 
 export interface MCPImageContent {
@@ -364,7 +364,7 @@ export interface MCPEmbeddedResource {
   type: "embedded_resource";
   resource_type?: string;
   url?: string;
-  data?: unknown;
+  data?: any;
 }
 
 // Define the union type for the content array in the response
@@ -373,9 +373,9 @@ export type MCPContent = MCPTextContent | MCPImageContent | MCPEmbeddedResource;
 // Define the response structure for the callMCPTool endpoint
 export type CallMCPToolResponse = {
   content: MCPContent[];
-  _meta: unknown;
+  _meta: any;
   isError: boolean;
-  structuredContent: unknown;
+  structuredContent: any;
 };
 
 // Props for the main component
@@ -475,7 +475,7 @@ export interface MCPServer {
   review_notes?: string | null;
 
   /** Per-user OAuth token storage settings (interactive OAuth only) */
-  token_validation?: Record<string, unknown> | null;
+  token_validation?: Record<string, any> | null;
   token_storage_ttl_seconds?: number | null;
 
   /**

@@ -7,7 +7,7 @@ import bedrockLogo from "../../../../../public/assets/logos/bedrock.svg";
 import catoNetworksLogo from "../../../../../public/assets/logos/cato_networks.svg";
 import ciscoLogo from "../../../../../public/assets/logos/cisco.png";
 import deepkeepLogo from "../../../../../public/assets/logos/deepkeep.svg";
-import enkryptAiLogo from "../../../../../public/assets/logos/enkrypt_ai.png";
+import enkryptAiLogo from "../../../../../public/assets/logos/enkrypt_ai.avif";
 import googleLogo from "../../../../../public/assets/logos/google.svg";
 import guardrailsAiLogo from "../../../../../public/assets/logos/guardrails_ai.jpeg";
 import javelinLogo from "../../../../../public/assets/logos/javelin.png";
@@ -39,7 +39,7 @@ export enum GuardrailProviders {
 export let DynamicGuardrailProviders: Record<string, string> = {};
 
 // Function to populate dynamic providers from API response
-export const populateGuardrailProviders = (providerParamsResponse: Record<string, unknown>) => {
+export const populateGuardrailProviders = (providerParamsResponse: Record<string, any>) => {
   const providers: Record<string, string> = {};
 
   // Legacy hardcoded providers for backward compatibility
@@ -59,9 +59,7 @@ export const populateGuardrailProviders = (providerParamsResponse: Record<string
         )
         .join("");
 
-      if (typeof value.ui_friendly_name === "string") {
-        providers[providerKey] = value.ui_friendly_name;
-      }
+      providers[providerKey] = value.ui_friendly_name;
     }
   });
 
@@ -92,7 +90,7 @@ export const guardrail_provider_map: Record<string, string> = {
 };
 
 // Function to populate provider map from API response - updates the original map
-export const populateGuardrailProviderMap = (providerParamsResponse: Record<string, unknown>) => {
+export const populateGuardrailProviderMap = (providerParamsResponse: Record<string, any>) => {
   // Add dynamic providers from API response directly to the main map
   Object.entries(providerParamsResponse).forEach(([key, value]) => {
     if (value && typeof value === "object" && "ui_friendly_name" in value) {
