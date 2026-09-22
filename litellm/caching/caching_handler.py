@@ -124,15 +124,25 @@ def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> boo
     handlers when the stream finishes; firing them here too would double-count
     spend and callback records. A plain (non-stream) replay logs here, since nothing
     else will.
+
+    The Anthropic Messages cache helper imports ``litellm.proxy`` (fastapi). That is
+    only available with the ``proxy`` extra, so a missing import must not break
+    plain SDK cache hits (#42195).
     """
-    from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
-        CachedAnthropicMessagesStreamIterator,
-    )
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 
-    return isinstance(
-        cached_result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator, CachedAnthropicMessagesStreamIterator)
-    )
+    streaming_types: tuple[type, ...] = (CustomStreamWrapper, BaseResponsesAPIStreamingIterator)
+    try:
+        from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+            CachedAnthropicMessagesStreamIterator,
+        )
+    except ImportError:
+        # response_cache -> streaming_iterator -> litellm.proxy (fastapi / orjson).
+        pass
+    else:
+        streaming_types = (*streaming_types, CachedAnthropicMessagesStreamIterator)
+
+    return isinstance(cached_result, streaming_types)
 
 
 def _prompt_tokens_details_as_mapping(details: "PromptTokensDetailsWrapper") -> Mapping[str, object]:
