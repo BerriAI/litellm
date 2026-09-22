@@ -600,6 +600,12 @@ func TestKeyUpdateWithoutMetadataChangePreservesServerMetadata(t *testing.T) {
 	if got := newState.Attributes["metadata.a"]; got != "1" {
 		t.Errorf("metadata.a = %q, want 1", got)
 	}
+	if got := newState.Attributes["server_metadata.server_side"]; got != "x" {
+		t.Errorf("server_metadata.server_side = %q, want x", got)
+	}
+	if _, present := proxy.updates[0]["server_metadata"]; present {
+		t.Errorf("computed server_metadata was sent on /key/update: %v", proxy.updates[0]["server_metadata"])
+	}
 }
 
 func TestKeyUpdateWithMetadataChangeMergesOverServerMetadata(t *testing.T) {
@@ -651,6 +657,32 @@ func TestKeyReadKeepsOnlyDeclaredMetadata(t *testing.T) {
 	want := map[string]interface{}{"a": "1"}
 	if got := d.Get("metadata"); !reflect.DeepEqual(got, want) {
 		t.Errorf("metadata in state = %v, want %v", got, want)
+	}
+}
+
+func TestKeyReadExposesUndeclaredMetadataInServerMetadata(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{
+		"a":               "1",
+		"server_side":     "x",
+		"model_rpm_limit": map[string]interface{}{"gpt-4o-mini": float64(5)},
+		"nested":          map[string]interface{}{"k": "v"},
+	}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	d := newKeyResourceData(t, map[string]interface{}{"metadata": map[string]interface{}{"a": "1"}})
+	d.SetId("hash-1")
+	if diags := resourceKeyRead(context.Background(), d, client); diags.HasError() {
+		t.Fatalf("Read returned error: %v", diags)
+	}
+
+	if got, want := d.Get("metadata"), map[string]interface{}{"a": "1"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("metadata in state = %v, want %v", got, want)
+	}
+	want := map[string]interface{}{"a": "1", "server_side": "x", "nested": `{"k":"v"}`}
+	if got := d.Get("server_metadata"); !reflect.DeepEqual(got, want) {
+		t.Errorf("server_metadata in state = %v, want %v", got, want)
 	}
 }
 
