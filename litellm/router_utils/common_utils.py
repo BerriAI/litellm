@@ -87,7 +87,8 @@ def format_no_fallback_group_message(lookup_groups: Sequence[str], fallbacks: Se
     return (
         f"\n\nLiteLLM: model group '{requested}' failed with the error above and no fallback model group was found "
         f"for it, so the request was not retried on another model.{configured_text}"
-        " Add an entry for that model group under router_settings.fallbacks to retry on another model."
+        " Add a fallbacks entry for that model group (Router fallbacks or proxy router_settings.fallbacks)"
+        " to retry on another model."
     )
 
 
