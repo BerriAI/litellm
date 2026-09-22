@@ -4,6 +4,13 @@ use litellm_model_catalog::{AliasIssue, Catalog, Error, IntegrityLimits, Provena
 use rstest::{fixture, rstest};
 use serde_json::json;
 
+const ALPHA_FIXTURE: &[u8] = br#"{
+    "sample_spec":{"explanation":"example"},
+    "fallback_generalizations":{"rules":[{"name":"family","pattern":"^new-","model_info":{"mode":"chat"}}]},
+    "Alpha":{"litellm_provider":"test","aliases":["short"],"price":0,"enabled":false,
+             "optional":null,"unknown":{"nested":[1,{"x":true}]}}
+}"#;
+
 #[fixture]
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
@@ -25,12 +32,7 @@ fn backup_catalog(repo_root: PathBuf) -> Catalog {
 #[fixture]
 fn fixture_catalog() -> Catalog {
     Catalog::parse(
-        br#"{
-            "sample_spec":{"explanation":"example"},
-            "fallback_generalizations":{"rules":[{"name":"family","pattern":"^new-","model_info":{"mode":"chat"}}]},
-            "Alpha":{"litellm_provider":"test","aliases":["short"],"price":0,"enabled":false,
-                     "optional":null,"unknown":{"nested":[1,{"x":true}]}}
-        }"#,
+        ALPHA_FIXTURE,
         Provenance {
             source: Some("fixture".into()),
             revision: Some("rev".into()),
@@ -41,27 +43,8 @@ fn fixture_catalog() -> Catalog {
 }
 
 #[rstest]
-fn preserves_fields_metadata_and_snapshot_isolation(fixture_catalog: Catalog) {
-    let mut source = br#"{
-        "sample_spec":{"explanation":"example"},
-        "fallback_generalizations":{"rules":[{"name":"family","pattern":"^new-","model_info":{"mode":"chat"}}]},
-        "Alpha":{"litellm_provider":"test","aliases":["short"],"price":0,"enabled":false,
-                 "optional":null,"unknown":{"nested":[1,{"x":true}]}}
-    }"#
-    .to_vec();
-    let snapshot = Catalog::parse(
-        &source,
-        Provenance {
-            source: Some("fixture".into()),
-            revision: Some("rev".into()),
-            etag: None,
-        },
-    )
-    .unwrap();
-    source.fill(b' ');
-
-    assert_eq!(fixture_catalog.model_count(), snapshot.model_count());
-    let catalog = snapshot;
+fn preserves_fields_and_metadata(fixture_catalog: Catalog) {
+    let catalog = fixture_catalog;
     let entry = catalog.lookup("SHORT").unwrap();
     assert_eq!(entry.canonical_key, "Alpha");
     assert_eq!(entry.matched_key, "short");
@@ -82,6 +65,17 @@ fn preserves_fields_metadata_and_snapshot_isolation(fixture_catalog: Catalog) {
     assert_eq!(catalog.fallback_rules().unwrap().len(), 1);
     assert_eq!(catalog.provenance().revision.as_deref(), Some("rev"));
     assert_eq!(catalog.model_count(), 1);
+}
+
+#[rstest]
+fn snapshot_does_not_borrow_source() {
+    let mut source = ALPHA_FIXTURE.to_vec();
+    let catalog = Catalog::parse(&source, Provenance::default()).unwrap();
+    source.fill(b' ');
+
+    let entry = catalog.lookup("short").unwrap();
+    assert_eq!(entry.canonical_key, "Alpha");
+    assert_eq!(entry.entry.field("price"), Some(&json!(0)));
 }
 
 #[rstest]
@@ -209,7 +203,10 @@ fn malformed_input_and_aliases_have_typed_outcomes(
             assert!(matches!(actual, Err(Error::EntryNotObject { .. })))
         }
     }
+}
 
+#[rstest]
+fn invalid_aliases_are_reported_not_fatal() {
     let catalog = Catalog::parse(
         br#"{"a":{"aliases":"bad"},"b":{"aliases":[9,"ok"]}}"#,
         Provenance::default(),

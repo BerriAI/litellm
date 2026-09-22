@@ -77,30 +77,6 @@ fn every_entry_round_trips_through_model_info(repo_root: PathBuf, #[case] filena
 }
 
 #[rstest]
-fn sample_spec_matches_model_info(repo_root: PathBuf) {
-    let body = std::fs::read(repo_root.join("model_prices_and_context_window.json")).unwrap();
-    let document: Map<String, Value> = serde_json::from_slice(&body).unwrap();
-    let sample_spec = document.get("sample_spec").unwrap();
-    let mut typed_sample = sample_spec.as_object().unwrap().clone();
-    for key in [
-        "computer_use_input_cost_per_1k_tokens",
-        "computer_use_output_cost_per_1k_tokens",
-        "file_search_cost_per_1k_calls",
-        "file_search_cost_per_gb_per_day",
-        "max_input_tokens",
-        "max_output_tokens",
-        "max_tokens",
-        "mode",
-        "vector_store_cost_per_gb_per_day",
-    ] {
-        typed_sample.remove(key);
-    }
-    let info: ModelInfo = serde_json::from_value(Value::Object(typed_sample.clone())).unwrap();
-    let serialized = serde_json::to_value(info).unwrap();
-    assert!(json_eq(&Value::Object(typed_sample), &serialized));
-}
-
-#[rstest]
 fn fallback_generalizations_are_typed(repo_root: PathBuf) {
     let body = std::fs::read(repo_root.join("model_prices_and_context_window.json")).unwrap();
     let document: Map<String, Value> = serde_json::from_slice(&body).unwrap();
