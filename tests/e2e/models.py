@@ -951,6 +951,23 @@ class RouterSettingsResponse(BaseModel):
     current_values: RouterCurrentValues
 
 
+class ConfigListParams(BaseModel):
+    config_type: Literal["general_settings"]
+
+
+class ConfigField(BaseModel):
+    """One row of GET /config/list: a general_settings field and the value the
+    proxy is running with, the two fields a test preconditions on."""
+
+    model_config = ConfigDict(extra="ignore")
+    field_name: str
+    field_value: JsonValue = None
+
+
+class ConfigFieldList(RootModel[tuple[ConfigField, ...]]):
+    """GET /config/list answers with a bare array of general_settings fields."""
+
+
 class CostMapEntry(BaseModel):
     model_config = ConfigDict(extra="ignore")
     litellm_provider: str | None = None
@@ -1066,6 +1083,7 @@ class ModelInfoBody(BaseModel):
     mode: ModelMode | None = None
     access_groups: list[str] | None = None
     team_id: str | None = None
+    allowed_fails: int | None = None
     allowed_fails_policy: dict[str, int] | None = None
 
 
