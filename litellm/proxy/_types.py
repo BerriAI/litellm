@@ -3091,16 +3091,6 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "(see GitHub issue #12905)."
         ),
     )
-    mcp_skip_budget_checks: bool | None = Field(
-        None,
-        description=(
-            "If True, requests to the MCP endpoints skip every spend budget check, so a key that "
-            "has spent its max_budget keeps its MCP servers instead of losing them at connect "
-            "time. Defaults to False, where MCP is enforced like any other LLM API route. Only "
-            "enforcement is skipped: MCP tool call cost is still calculated and logged, so a "
-            "server priced with mcp_server_cost_info can take a key further past its budget."
-        ),
-    )
     user_url_validation: bool | None = Field(
         None,
         description=(

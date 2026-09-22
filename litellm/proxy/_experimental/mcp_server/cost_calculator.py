@@ -2,9 +2,12 @@
 Cost calculator for MCP tools.
 """
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.mcp import MCPServerCostInfo
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.utils import StandardLoggingMCPToolCall
 
 if TYPE_CHECKING:
@@ -67,3 +70,36 @@ class MCPCostCalculator:
         elif default_cost_per_query is not None:
             cost_per_query = default_cost_per_query
         return cost_per_query
+
+    @staticmethod
+    def tool_calls_may_cost(servers: Iterable[MCPServer], callbacks: Iterable[object]) -> bool:
+        """Whether any MCP tool call could be charged: a server priced above zero, or a
+        callback overriding the post-call hook, which can set the cost of any call."""
+        return any(_may_price_mcp_calls(callback) for callback in callbacks) or any(
+            _is_priced(server) for server in servers
+        )
+
+
+def _costs_nothing(cost: object) -> bool:
+    return cost is None or (isinstance(cost, int | float) and cost <= 0)
+
+
+def _is_priced(server: MCPServer) -> bool:
+    cost_info: Final = (server.mcp_info or {}).get("mcp_server_cost_info")
+    if cost_info is None:
+        return False
+    if not isinstance(cost_info, dict):
+        return True
+    tool_costs: Final = cost_info.get("tool_name_to_cost_per_query") or {}
+    if not isinstance(tool_costs, dict):
+        return True
+    return not _costs_nothing(cost_info.get("default_cost_per_query")) or not all(
+        _costs_nothing(cost) for cost in tool_costs.values()
+    )
+
+
+def _may_price_mcp_calls(callback: object) -> bool:
+    return (
+        isinstance(callback, CustomLogger)
+        and type(callback).async_post_mcp_tool_call_hook is not CustomLogger.async_post_mcp_tool_call_hook
+    )
