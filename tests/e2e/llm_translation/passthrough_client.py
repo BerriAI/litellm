@@ -237,9 +237,6 @@ class PassthroughBatchList(BaseModel):
 
 
 class FalQueueSubmitBody(BaseModel):
-    """Input for a Fal queue submission. `resolution` is typed loosely on purpose: the
-    proxy prices the request off this field and must treat 512 and "512" alike."""
-
     image_url: str
     prompt: str | None = None
     resolution: int | str | None = None
