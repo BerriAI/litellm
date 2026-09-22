@@ -3,12 +3,14 @@ from typing import Final
 
 import pytest
 from prometheus_client import REGISTRY
+from prometheus_client.samples import Sample
 
 import litellm
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.types.utils import StandardLoggingZeroCostDiagnostic
 
 METRIC: Final = "litellm_zero_cost_requests_total"
-MISSING_KEY_DIAGNOSTIC: Final = {
+MISSING_KEY_DIAGNOSTIC: Final[StandardLoggingZeroCostDiagnostic] = {
     "reason": "missing_pricing_key",
     "pricing_model": "dep-1",
     "missing_pricing_keys": ("input_cost_per_token", "output_cost_per_token"),
@@ -23,11 +25,11 @@ def _clear_prometheus_registry() -> None:
             pass
 
 
-def _samples(metric_name: str):
+def _samples(metric_name: str) -> list[Sample]:
     return [sample for metric in REGISTRY.collect() for sample in metric.samples if sample.name == metric_name]
 
 
-def _payload(zero_cost_diagnostic: dict | None) -> dict:
+def _payload(zero_cost_diagnostic: StandardLoggingZeroCostDiagnostic | None) -> dict[str, object]:
     return {
         "id": "t",
         "call_type": "completion",
@@ -68,7 +70,9 @@ def _payload(zero_cost_diagnostic: dict | None) -> dict:
     }
 
 
-async def _log_success(logger: PrometheusLogger, zero_cost_diagnostic: dict | None) -> None:
+async def _log_success(
+    logger: PrometheusLogger, zero_cost_diagnostic: StandardLoggingZeroCostDiagnostic | None
+) -> None:
     now: Final = datetime.datetime.now()
     kwargs: Final = {
         "model": "openai/gpt-5.4-nano",
@@ -83,7 +87,9 @@ async def _log_success(logger: PrometheusLogger, zero_cost_diagnostic: dict | No
     await logger.async_log_success_event(kwargs, None, now, now)
 
 
-async def _log_failure(logger: PrometheusLogger, zero_cost_diagnostic: dict | None) -> None:
+async def _log_failure(
+    logger: PrometheusLogger, zero_cost_diagnostic: StandardLoggingZeroCostDiagnostic | None
+) -> None:
     now: Final = datetime.datetime.now()
     kwargs: Final = {
         "model": "openai/gpt-5.4-nano",
@@ -98,7 +104,7 @@ async def _log_failure(logger: PrometheusLogger, zero_cost_diagnostic: dict | No
 
 
 @pytest.mark.asyncio
-async def test_failure_event_counts_a_zero_cost_request_by_model_and_reason():
+async def test_failure_event_counts_a_zero_cost_request_by_model_and_reason() -> None:
     _clear_prometheus_registry()
     try:
         logger: Final = PrometheusLogger()
@@ -122,7 +128,7 @@ async def test_failure_event_counts_a_zero_cost_request_by_model_and_reason():
 
 
 @pytest.mark.asyncio
-async def test_success_event_counts_a_zero_cost_request_by_model_and_reason():
+async def test_success_event_counts_a_zero_cost_request_by_model_and_reason() -> None:
     _clear_prometheus_registry()
     try:
         logger: Final = PrometheusLogger()
@@ -144,7 +150,7 @@ async def test_success_event_counts_a_zero_cost_request_by_model_and_reason():
 
 
 @pytest.mark.asyncio
-async def test_request_without_a_diagnostic_leaves_the_counter_untouched():
+async def test_request_without_a_diagnostic_leaves_the_counter_untouched() -> None:
     _clear_prometheus_registry()
     try:
         await _log_success(PrometheusLogger(), None)
@@ -155,7 +161,7 @@ async def test_request_without_a_diagnostic_leaves_the_counter_untouched():
 
 
 @pytest.mark.asyncio
-async def test_label_filter_that_drops_reason_still_counts_the_request():
+async def test_label_filter_that_drops_reason_still_counts_the_request() -> None:
     _clear_prometheus_registry()
     previous_config: Final = litellm.prometheus_metrics_config
     litellm.prometheus_metrics_config = [

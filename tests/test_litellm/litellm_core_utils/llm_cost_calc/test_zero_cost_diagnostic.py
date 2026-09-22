@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
@@ -16,7 +17,7 @@ PRICED_ENTRY: Final = {"input_cost_per_token": 1e-06, "output_cost_per_token": 2
 TEXT_USAGE: Final = Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
 
 
-def test_missing_pricing_key_names_every_rate_the_usage_needs():
+def test_missing_pricing_key_names_every_rate_the_usage_needs() -> None:
     diagnostic = diagnose_zero_cost(
         usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=PER_SECOND_ENTRY, calculation_failed=False
     )
@@ -28,7 +29,7 @@ def test_missing_pricing_key_names_every_rate_the_usage_needs():
     }
 
 
-def test_only_the_absent_rate_is_reported():
+def test_only_the_absent_rate_is_reported() -> None:
     diagnostic = diagnose_zero_cost(
         usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry={"input_cost_per_token": 1e-06}, calculation_failed=False
     )
@@ -37,7 +38,7 @@ def test_only_the_absent_rate_is_reported():
     assert diagnostic["missing_pricing_keys"] == ("output_cost_per_token",)
 
 
-def test_free_model_stays_silent():
+def test_free_model_stays_silent() -> None:
     assert (
         diagnose_zero_cost(usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=FREE_ENTRY, calculation_failed=False)
         is None
@@ -45,7 +46,7 @@ def test_free_model_stays_silent():
 
 
 @pytest.mark.parametrize("calculation_failed", [False, True])
-def test_request_without_usage_stays_silent(calculation_failed):
+def test_request_without_usage_stays_silent(calculation_failed: bool) -> None:
     usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
     assert (
@@ -64,20 +65,25 @@ def test_request_without_usage_stays_silent(calculation_failed):
         {"tiered_pricing": "not a tier table", "litellm_provider": "openai"},
     ],
 )
-def test_entry_that_declares_no_rate_stays_silent(entry):
-    assert diagnose_zero_cost(usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=entry, calculation_failed=False) is None
+def test_entry_that_declares_no_rate_stays_silent(entry: Mapping[str, object]) -> None:
+    assert (
+        diagnose_zero_cost(usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=entry, calculation_failed=False)
+        is None
+    )
 
 
-def test_tiered_rate_counts_as_a_declared_rate():
+def test_tiered_rate_counts_as_a_declared_rate() -> None:
     entry = {"tiered_pricing": [{"range": [0, 128000], "input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}]}
 
-    diagnostic = diagnose_zero_cost(usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=entry, calculation_failed=False)
+    diagnostic = diagnose_zero_cost(
+        usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=entry, calculation_failed=False
+    )
 
     assert diagnostic is not None
     assert diagnostic["reason"] == "missing_pricing_key"
 
 
-def test_priced_entry_that_still_prices_to_zero_is_pricing_not_applied():
+def test_priced_entry_that_still_prices_to_zero_is_pricing_not_applied() -> None:
     diagnostic = diagnose_zero_cost(
         usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=PRICED_ENTRY, calculation_failed=False
     )
@@ -85,7 +91,7 @@ def test_priced_entry_that_still_prices_to_zero_is_pricing_not_applied():
     assert diagnostic == {"reason": "pricing_not_applied", "pricing_model": "dep-1", "missing_pricing_keys": ()}
 
 
-def test_calculator_failure_on_a_priced_entry_is_cost_calculation_error():
+def test_calculator_failure_on_a_priced_entry_is_cost_calculation_error() -> None:
     diagnostic = diagnose_zero_cost(
         usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=PRICED_ENTRY, calculation_failed=True
     )
@@ -93,19 +99,22 @@ def test_calculator_failure_on_a_priced_entry_is_cost_calculation_error():
     assert diagnostic == {"reason": "cost_calculation_error", "pricing_model": "dep-1", "missing_pricing_keys": ()}
 
 
-def test_calculator_failure_on_a_free_entry_stays_silent():
+def test_calculator_failure_on_a_free_entry_stays_silent() -> None:
     assert (
         diagnose_zero_cost(usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=FREE_ENTRY, calculation_failed=True)
         is None
     )
 
 
-def test_calculator_failure_on_an_entry_that_declares_no_rate_stays_silent():
+def test_calculator_failure_on_an_entry_that_declares_no_rate_stays_silent() -> None:
     entry: Final = {"litellm_provider": "openai", "mode": "chat", "supports_prompt_caching": True}
-    assert diagnose_zero_cost(usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=entry, calculation_failed=True) is None
+    assert (
+        diagnose_zero_cost(usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=entry, calculation_failed=True)
+        is None
+    )
 
 
-def test_audio_tokens_need_the_audio_rates():
+def test_audio_tokens_need_the_audio_rates() -> None:
     usage = Usage(
         prompt_tokens=10,
         completion_tokens=20,
@@ -126,7 +135,7 @@ def test_audio_tokens_need_the_audio_rates():
     assert diagnostic["missing_pricing_keys"] == ("input_cost_per_audio_token", "output_cost_per_audio_token")
 
 
-def test_warning_names_the_request_the_entry_the_missing_keys_and_the_counter():
+def test_warning_names_the_request_the_entry_the_missing_keys_and_the_counter() -> None:
     diagnostic = diagnose_zero_cost(
         usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=PER_SECOND_ENTRY, calculation_failed=False
     )
