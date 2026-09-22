@@ -934,6 +934,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.meta.ai/v1",
     "https://api.cognition.ai/v1",
     "https://api.scx.ai/v1",
+    "https://cruise.bytesbrains.net/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
 ]
 
@@ -1007,6 +1008,7 @@ openai_compatible_providers: Final[list] = [
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "scx-ai",
+    "cruise",  # BytesBrains Cruise - JSON-configured provider
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
