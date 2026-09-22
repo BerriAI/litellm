@@ -262,6 +262,126 @@ class TestUseResponsesApiBridgeFlag:
         assert request_body["messages"] == [{"role": "user", "content": "Hello"}]
         assert response.output[0].content[0].text == "Answer"
 
+    def test_bridge_drops_client_metadata_even_when_allowed_openai_params_names_it(
+        self, respx_mock: respx.MockRouter
+    ):
+        upstream: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-123",
+                    "object": "chat.completion",
+                    "created": 1677652288,
+                    "model": "my-custom-model",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+                },
+            )
+        )
+
+        response: Final = litellm.responses(
+            model="openai/my-custom-model",
+            input="Hello",
+            use_chat_completions_api=True,
+            allowed_openai_params=["client_metadata"],
+            client_metadata={"turn_id": "turn-1", "thread_id": "thread-1"},
+            api_key="fake-provider-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        request_body: Final = json.loads(upstream.calls[0].request.read())
+        assert "client_metadata" not in request_body
+        assert request_body["messages"] == [{"role": "user", "content": "Hello"}]
+        assert response.output[0].content[0].text == "Answer"
+
+    def test_bridge_merges_instructions_and_developer_input_for_databricks(self, respx_mock: respx.MockRouter):
+        upstream: Final = respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
+            return_value=httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-123",
+                    "object": "chat.completion",
+                    "created": 1677652288,
+                    "model": "my-custom-model",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+                },
+            )
+        )
+
+        response: Final = litellm.responses(
+            model="databricks/my-custom-model",
+            instructions="You are terse.",
+            input=[
+                {"role": "developer", "content": [{"type": "input_text", "text": "Skills: none."}]},
+                {"role": "user", "content": [{"type": "input_text", "text": "Hello"}]},
+            ],
+            client_metadata={"turn_id": "turn-1", "thread_id": "thread-1"},
+            chat_template_kwargs={"thinking": True},
+            api_base="https://example.databricks.test/serving-endpoints",
+            api_key="fake-databricks-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        request_body: Final = json.loads(upstream.calls[0].request.read())
+        assert request_body["messages"] == [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "You are terse."}, {"type": "text", "text": "Skills: none."}],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+        ]
+        assert "client_metadata" not in request_body
+        assert request_body["chat_template_kwargs"] == {"thinking": True}
+        assert response.output[0].content[0].text == "Answer"
+
+    def test_bridge_drops_client_metadata_for_provider_without_native_config(self, respx_mock: respx.MockRouter):
+        upstream: Final = respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
+            return_value=httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-123",
+                    "object": "chat.completion",
+                    "created": 1677652288,
+                    "model": "my-custom-model",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+                },
+            )
+        )
+
+        response: Final = litellm.responses(
+            model="databricks/my-custom-model",
+            input="Hello",
+            client_metadata={
+                "turn_id": "turn-1",
+                "thread_id": "thread-1",
+                "session_id": "session-1",
+                "root_turn_id": "turn-1",
+                "x-codex-installation-id": "install-1",
+                "x-codex-turn-metadata": '{"turn_id":"turn-1"}',
+            },
+            chat_template_kwargs={"thinking": True},
+            api_base="https://example.databricks.test/serving-endpoints",
+            api_key="fake-databricks-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        request_body: Final = json.loads(upstream.calls[0].request.read())
+        assert "client_metadata" not in request_body
+        assert request_body["chat_template_kwargs"] == {"thinking": True}
+        assert request_body["messages"] == [{"role": "user", "content": "Hello"}]
+        assert response.output[0].content[0].text == "Answer"
+
     def test_bridge_keeps_deployment_credentials_while_dropping_unknown_params(self, respx_mock: respx.MockRouter):
         upstream: Final = respx_mock.post(
             "https://example-resource.openai.azure.com/openai/deployments/my-deployment/chat/completions",
