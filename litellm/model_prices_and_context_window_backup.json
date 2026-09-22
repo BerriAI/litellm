@@ -77786,7 +77786,11 @@
         "mode": "chat",
         "output_cost_per_token": 6.6e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_function_calling": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": false
     },
     "azure/us/o1-preview": {
@@ -77799,7 +77803,11 @@
         "mode": "chat",
         "output_cost_per_token": 6.6e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_function_calling": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": false
     }
 }
