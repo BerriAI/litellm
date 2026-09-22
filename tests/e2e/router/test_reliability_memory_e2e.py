@@ -58,7 +58,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -222,9 +222,7 @@ def _stored_request_kb(proxy: ProxyClient, call: FailedCall) -> float:
 
 class TestReliabilityMemory:
     @pytest.mark.covers("reliability.perf.idle_memory.under_slo")
-    def test_workers_idle_under_rss_budget_before_traffic(
-        self, idle_rss: RssCapture, record_property: Callable[[str, object], None]
-    ) -> None:
+    def test_workers_idle_under_rss_budget_before_traffic(self, idle_rss: RssCapture) -> None:
         assert not idle_rss.failures, (
             f"{len(idle_rss.failures)} replica(s) gave no RSS reading when the session started, so their idle "
             f"footprint went unmeasured: {'; '.join(idle_rss.failures)}"
@@ -234,9 +232,8 @@ class TestReliabilityMemory:
             f"{len(unmeasured)} of {len(PROXY_REPLICA_URLS)} replica(s) gave neither an RSS reading nor a failure "
             f"reason when the session started, so their idle footprint went unmeasured: {', '.join(sorted(unmeasured))}"
         )
-        heaviest: Final = max(idle_rss.readings, key=lambda reading: reading.ram_usage_mb)
-        record_property("idle_rss_heaviest_mb", heaviest.ram_usage_mb)
-        record_property("idle_rss_heaviest_worker", heaviest.where)
+        heaviest: Final = idle_rss.heaviest
+        assert heaviest is not None, "no replica was configured to read, so nothing was measured"
         assert heaviest.ram_usage_mb <= MEMORY_IDLE_RSS_BUDGET_MB, (
             f"{heaviest.where} sat at {heaviest.ram_usage_mb:.0f} MB RSS when the session started, before it sent "
             f"any traffic, past the {MEMORY_IDLE_RSS_BUDGET_MB:.0f} MB idle budget; a DB-backed v1.100.x worker idled "

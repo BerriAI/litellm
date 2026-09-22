@@ -268,6 +268,8 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     run even when none is up. Never skip for a missing proxy. Replay mode needs
     the proxy too: only provider-bound traffic replays from the bundle."""
     LIVE_PROVIDER_REQUIRED.set(item.get_closest_marker("provider_live") is not None)
+    if _uses_idle_rss(item):
+        item.user_properties.extend(item.config.stash[_IDLE_RSS].junit_properties)
     if not _reaches_proxy(item):
         return
     if isinstance(item, pytest.Function) and "oauth_gateway" in item.fixturenames:

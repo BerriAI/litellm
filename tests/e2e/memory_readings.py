@@ -44,6 +44,17 @@ class RssCapture:
     readings: tuple[RssReading, ...]
     failures: tuple[str, ...]
 
+    @property
+    def heaviest(self) -> RssReading | None:
+        return max(self.readings, key=lambda reading: reading.ram_usage_mb, default=None)
+
+    @property
+    def junit_properties(self) -> tuple[tuple[str, object], ...]:
+        heaviest: Final = self.heaviest
+        if heaviest is None:
+            return ()
+        return (("idle_rss_heaviest_mb", heaviest.ram_usage_mb), ("idle_rss_heaviest_worker", heaviest.where))
+
 
 def _outcome(replica: str, result: Result[MemorySummaryResponse]) -> RssReading | str:
     match result:
