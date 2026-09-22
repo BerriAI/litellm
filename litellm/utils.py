@@ -289,7 +289,7 @@ except (ImportError, AttributeError, TypeError):
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args, runtime_checkable
 
 from typing_extensions import assert_never
 
@@ -887,8 +887,13 @@ async def _run_success_deployment_hook_on_converted_chat_stream(
     )
 
 
+@runtime_checkable
+class _NamedFile(Protocol):
+    @property
+    def name(self) -> object: ...
+
+
 def _ocr_document_summary(document: object) -> str:
-    """The OCR document as logged input: its URL, or the file's name, MIME type or size; never the bytes."""
     if not isinstance(document, Mapping):
         return "default-message-value"
     doc: Final = cast(Mapping[str, object], document)  # cast-ok: ocr()/aocr() type the document as Mapping[str, object]
@@ -903,6 +908,8 @@ def _ocr_document_summary(document: object) -> str:
         return f"{kind} {file_input.name}"
     if isinstance(file_input, bytes):
         return f"{kind} {len(file_input)} bytes"
+    if isinstance(file_input, _NamedFile) and isinstance(file_input.name, str):
+        return f"{kind} {PurePath(file_input.name).name}"
     return kind
 
 
@@ -1148,7 +1155,11 @@ def function_setup(
             messages = kwargs.get("query")
         elif call_type in (CallTypes.search.value, CallTypes.asearch.value):
             search_query: Final = args[0] if len(args) > 0 else kwargs.get("query")
-            messages = "\n".join(search_query) if isinstance(search_query, list) else search_query
+            messages = (
+                "\n".join(part for part in search_query if isinstance(part, str))
+                if isinstance(search_query, list)
+                else search_query
+            )
         elif call_type in (CallTypes.image_edit.value, CallTypes.aimage_edit.value):
             messages = args[1] if len(args) > 1 else kwargs.get("prompt")
         elif call_type in (CallTypes.ocr.value, CallTypes.aocr.value):

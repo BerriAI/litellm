@@ -836,9 +836,9 @@ def _rerank_line(index: int, score: float, document: object) -> str:
 def _search_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
     return _joined_choice(
         tuple(
-            "\n".join(part for part in (as_str(result.get("title")), url, as_str(result.get("snippet"))) if part)
+            line
             for result in _dicts(response.get("results"))
-            if (url := as_str(result.get("url")))
+            if (line := "\n".join(part for key in ("title", "url", "snippet") if (part := as_str(result.get(key)))))
         )
     )
 

@@ -148,7 +148,8 @@ def _mistral_ocr() -> LiteLLMParamsBody:
 def _langfuse_search_tool(
     client: LoggingClient, creds: LangfuseCreds, resources: ResourceManager
 ) -> tuple[str, str, str]:
-    """A keyless DuckDuckGo search tool registered for this run plus a key on a team whose Langfuse callback is `creds`."""
+    """A keyless DuckDuckGo search tool registered for this run, plus a key on a team whose Langfuse callback is
+    `creds`."""
     tool: Final = f"e2e-otel-search-{unique_marker()}"
     tool_id: Final = client.proxy.create_search_tool(
         SearchToolCreateBody(

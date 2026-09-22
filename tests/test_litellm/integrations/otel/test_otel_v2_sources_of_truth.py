@@ -1078,7 +1078,7 @@ def test_search_results_become_title_url_and_snippet_blocks_in_result_order() ->
                 "results": [
                     {"title": "Eiffel Tower", "url": "https://example.com/eiffel", "snippet": "A lattice tower."},
                     {"url": "https://example.com/bare", "date": "2024-01-01"},
-                    {"title": "no url", "snippet": "dropped"},
+                    {"title": "no url", "snippet": "kept"},
                 ],
             },
         ),
@@ -1086,7 +1086,9 @@ def test_search_results_become_title_url_and_snippet_blocks_in_result_order() ->
     )
 
     assert data.choices_out == (
-        _assistant_choice("Eiffel Tower\nhttps://example.com/eiffel\nA lattice tower.\n\nhttps://example.com/bare"),
+        _assistant_choice(
+            "Eiffel Tower\nhttps://example.com/eiffel\nA lattice tower.\n\nhttps://example.com/bare\n\nno url\nkept"
+        ),
     )
     assert data.finish_reasons == ()
 
@@ -1099,9 +1101,11 @@ def test_search_output_follows_the_content_capture_gate() -> None:
     assert data.choices_out == ()
 
 
-def test_search_results_without_a_url_produce_no_output() -> None:
+def test_search_results_without_any_text_field_produce_no_output() -> None:
     data: Final = LLMCallSpanData.from_standard_logging_payload(
-        _route_payload("asearch", "exa-search", {"results": [{"title": "t", "snippet": "s"}, "not-a-result"]}),
+        _route_payload(
+            "asearch", "exa-search", {"results": [{"date": "2024-01-01"}, {"title": "", "url": None}, "not-a-result"]}
+        ),
         capture_content=True,
     )
 

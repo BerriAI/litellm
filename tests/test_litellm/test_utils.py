@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePath
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -6003,6 +6003,12 @@ def test_calculate_max_parallel_requests_precedence(
     )
 
 
+class _NamedStream(io.BytesIO):
+    def __init__(self, name: str | int) -> None:
+        super().__init__(b"%PDF-1.4 secret document body")
+        self.name = name
+
+
 def _logged_request_messages(original_function: str, *args: object, **kwargs: object) -> object:
     logging_obj, _ = litellm.utils.function_setup(
         original_function,
@@ -6021,6 +6027,7 @@ def _logged_request_messages(original_function: str, *args: object, **kwargs: ob
         ("search", (), {"query": "Eiffel Tower"}, "Eiffel Tower"),
         ("asearch", ("Eiffel Tower",), {}, "Eiffel Tower"),
         ("asearch", (), {"query": ["Eiffel Tower", "Louvre"]}, "Eiffel Tower\nLouvre"),
+        ("asearch", (), {"query": ["Eiffel Tower", 7, None]}, "Eiffel Tower"),
         ("image_edit", (), {"prompt": "make it blue", "image": b"png"}, "make it blue"),
         ("aimage_edit", (b"png", "make it blue"), {}, "make it blue"),
         (
@@ -6056,6 +6063,13 @@ def _logged_request_messages(original_function: str, *args: object, **kwargs: ob
         ("aocr", (), {"document": {"type": "document_url", "document_url": ""}}, ""),
         ("aocr", (), {"document": {"type": "file", "file": b"%PDF"}}, "file 4 bytes"),
         ("aocr", (), {"document": {"type": "file", "file": io.BytesIO(b"%PDF")}}, "file"),
+        ("aocr", (), {"document": {"type": "file", "file": _NamedStream("/tmp/scan.pdf")}}, "file scan.pdf"),
+        (
+            "aocr",
+            (),
+            {"document": {"type": "file", "file": _NamedStream(3), "mime_type": "application/pdf"}},
+            "file (application/pdf)",
+        ),
         ("aocr", (), {"document": "not-a-document"}, "default-message-value"),
     ],
 )
@@ -6065,11 +6079,26 @@ def test_function_setup_logs_the_search_query_edit_prompt_and_ocr_document_summa
     assert _logged_request_messages(original_function, *args, **kwargs) == [{"role": "user", "content": expected}]
 
 
+def test_search_with_a_mixed_type_query_list_still_reaches_its_own_validation_error() -> None:
+    mixed_query: Final = cast(list[str], ["Eiffel Tower", 7])  # cast-ok: the invalid list is the point of the test
+
+    with pytest.raises(litellm.APIConnectionError, match="All items in query list must be strings"):
+        litellm.search(query=mixed_query, search_provider="duckduckgo")
+
+
 def test_function_setup_never_logs_the_ocr_file_bytes() -> None:
     content: Final = b"%PDF-1.4 secret document body"
     logged: Final = _logged_request_messages("aocr", document={"type": "file", "file": content})
 
     assert logged == [{"role": "user", "content": "file 29 bytes"}]
+
+
+def test_function_setup_leaves_the_ocr_file_stream_unread_and_never_logs_its_bytes() -> None:
+    stream: Final = _NamedStream("/tmp/scan.pdf")
+    logged: Final = _logged_request_messages("aocr", document={"type": "file", "file": stream})
+
+    assert logged == [{"role": "user", "content": "file scan.pdf"}]
+    assert stream.tell() == 0
 
 
 def test_function_setup_never_logs_the_ocr_data_uri_payload() -> None:
