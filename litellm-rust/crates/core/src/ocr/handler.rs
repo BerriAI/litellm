@@ -1,117 +1,78 @@
-use litellm_callbacks::event::{CallEvent, RawResponse};
+use futures_util::future::BoxFuture;
+use litellm_auth::SecretValue;
+use litellm_host::event::{MachineEvent, RawResponse, RequestContext, WireRequest};
+use litellm_llms::base_llm::ocr::{
+    error::Error,
+    handler::{CallHooks, OcrClient},
+    transformation::{LiteLLMOcrResponse, PreparedOcrRequest},
+};
+use serde_json::Value;
 
 use super::{
-    OcrClient,
+    arguments::is_secret_param, prepare::prepare_request, provider_config::OcrConfigKind,
     route::OcrHost,
-    types::{LiteLLMOcrResponse, PreparedOcrRequest, ResolvedOcrRequest},
 };
-use crate::llms::base_llm::ocr::transformation::OcrResponseContext;
+use crate::ocr::types::ResolvedOcrRequest;
 
 pub(crate) async fn perform_ocr_request(
     client: &OcrClient,
     request: ResolvedOcrRequest,
     host: &OcrHost,
     caller_document: bool,
-) -> Result<LiteLLMOcrResponse, super::Error> {
+) -> Result<LiteLLMOcrResponse, Error> {
     request.response_format()?;
-    PreparedOcrCall::prepare(client.clone(), request, host, caller_document)
-        .await?
-        .execute()
-        .await
+    let config = request.config;
+    let request = prepare_request(request, caller_document, client);
+    let hooks = OcrCallHooks::new(host.clone(), &request, config);
+    config.ocr(client, &request, &hooks).await
 }
 
-pub(crate) struct PreparedOcrCall {
-    client: OcrClient,
-    request: PreparedOcrRequest,
-    http: reqwest::Request,
+/// Lets provider code reach the host mid-call, filling in the request context only the
+/// route knows.
+pub(crate) struct OcrCallHooks {
+    host: OcrHost,
+    model: String,
+    custom_llm_provider: &'static str,
+    optional_params: Value,
+    secret_fields: Vec<String>,
+    api_key: Option<SecretValue>,
 }
 
-impl PreparedOcrCall {
-    pub(crate) async fn prepare(
-        client: OcrClient,
-        request: ResolvedOcrRequest,
-        host: &OcrHost,
-        caller_document: bool,
-    ) -> Result<Self, super::Error> {
-        let request = super::prepare::prepare_request(request, host.clone(), caller_document);
-        let http = request.config.prepare_request(&request, &client).await?;
-        Ok(Self {
-            client,
-            request,
-            http,
-        })
-    }
-
-    pub(crate) async fn execute(self) -> Result<LiteLLMOcrResponse, super::Error> {
-        let url = self.http.url().to_string();
-        let headers = request_headers(&self.http)?;
-        let response =
-            crate::http_utils::execute_http_request(self.client.provider_http(), self.http)
-                .await
-                .map_err(super::client::transport_error)?;
-        if !response.status().is_success() {
-            let headers = response
-                .headers()
-                .iter()
-                .filter_map(|(name, value)| {
-                    value
-                        .to_str()
-                        .ok()
-                        .map(|value| (name.to_string(), value.to_string()))
-                })
-                .collect();
-            return match super::client::read_response_bytes(
-                response,
-                self.request.connection.max_response_bytes,
-            )
-            .await
-            {
-                Err(super::Error::Transport(crate::transport::Error::Http { status, body })) => {
-                    Err(self.request.config.get_error_class(body, status, headers))
-                }
-                Err(error) => Err(error),
-                Ok(_) => unreachable!("non-success response produces an HTTP error"),
-            };
+impl OcrCallHooks {
+    pub(crate) fn new(host: OcrHost, request: &PreparedOcrRequest, config: OcrConfigKind) -> Self {
+        Self {
+            host,
+            model: request.model.clone(),
+            custom_llm_provider: config.provider().into(),
+            optional_params: Value::Object(request.optional_params.clone().into()),
+            secret_fields: request
+                .optional_params
+                .keys()
+                .filter(|name| is_secret_param(name))
+                .cloned()
+                .collect(),
+            api_key: request.connection.api_key.clone(),
         }
-        let model = &self.request.model;
-        let context = OcrResponseContext {
-            client: &self.client,
-            connection: &self.request.connection,
-            host: &self.request.host,
-            request_format: self.request.response_format()?,
-            url: &url,
-            headers: &headers,
-        };
-        self.request
-            .config
-            .async_transform_ocr_response(model, response, context)
-            .await
     }
 }
 
-fn request_headers(request: &reqwest::Request) -> Result<Vec<(String, String)>, super::Error> {
-    request
-        .headers()
-        .iter()
-        .map(|(name, value)| {
-            value
-                .to_str()
-                .map(|value| (name.to_string(), value.to_string()))
-                .map_err(|_| super::Error::RequestField {
-                    path: "headers".into(),
-                })
-        })
-        .collect()
-}
+impl CallHooks<Error> for OcrCallHooks {
+    fn before_send(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, Error>> {
+        let context = RequestContext {
+            model: self.model.clone(),
+            custom_llm_provider: self.custom_llm_provider.into(),
+            optional_params: self.optional_params.clone(),
+            secret_fields: self.secret_fields.clone(),
+            api_key: self.api_key.clone(),
+        };
+        Box::pin(self.host.before_send(wire, context))
+    }
 
-pub(crate) async fn emit_response_received(
-    host: &OcrHost,
-    bytes: &[u8],
-) -> Result<(), super::Error> {
-    host.emit(CallEvent::ResponseReceived {
-        raw: RawResponse {
-            body: String::from_utf8_lossy(bytes).into_owned(),
-        },
-    })
-    .await
+    fn response_received<'a>(&'a self, body: &'a [u8]) -> BoxFuture<'a, Result<(), Error>> {
+        Box::pin(self.host.emit(MachineEvent::ResponseReceived {
+            raw: RawResponse {
+                body: String::from_utf8_lossy(body).into_owned(),
+            },
+        }))
+    }
 }

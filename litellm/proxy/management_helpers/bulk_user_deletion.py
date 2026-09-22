@@ -28,7 +28,7 @@ from litellm.proxy._types import (
     MemberDeleteRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import delete_cache_key_objects
+from litellm.proxy.auth.auth_checks import delete_cache_key_objects, get_jwt_key_mapping_cache_keys_for_tokens
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
@@ -94,12 +94,20 @@ class _TeamRemoval:
     removed: frozenset[str]
     matched: frozenset[int]
     deleted_key_tokens: tuple[str, ...]
+    jwt_mapping_cache_keys: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class _UserBatchDeletion:
     removals: Mapping[str, _TeamRemoval]
     deleted_key_tokens: tuple[str, ...]
+    jwt_mapping_cache_keys: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _DeletedKeys:
+    tokens: tuple[str, ...]
+    jwt_mapping_cache_keys: tuple[str, ...]
 
 
 def _team_not_found(team_id: str) -> ManagementProblem:
@@ -237,6 +245,10 @@ async def _remove_members_from_team(
         if any(_addresses_member(m, r) for m in removed_members) or any(_addresses_user(u, r) for u in stale_rows)
     )
     keys: Final = await _token_tx_db(tx).find_many(where=_team_users_filter(team_id, cleanup_ids))
+    jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_tokens(
+        hashed_tokens=tuple(k.token for k in keys),
+        prisma_client=prisma_client,
+    )
 
     if removed_members:
         roster_data: Final[_RosterData] = {
@@ -265,6 +277,7 @@ async def _remove_members_from_team(
         removed=cleanup_ids,
         matched=matched,
         deleted_key_tokens=tuple(k.token for k in keys),
+        jwt_mapping_cache_keys=jwt_mapping_cache_keys,
     )
 
 
@@ -322,6 +335,7 @@ async def bulk_remove_team_members(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+    await evict_and_broadcast(cache_keys=removal.jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
     _emit_team_members_metric(removal.team)
 
     matched: Final = frozenset(kept_indexes[j] for j in removal.matched)
@@ -368,8 +382,12 @@ async def _delete_user_rows(
     user_ids: frozenset[str],
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
-) -> tuple[str, ...]:
+) -> _DeletedKeys:
     keys: Final = await _token_tx_db(tx).find_many(where=_in_filter("user_id", user_ids))
+    jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_tokens(
+        hashed_tokens=tuple(k.token for k in keys),
+        prisma_client=prisma_client,
+    )
     if keys:
         await _persist_deleted_verification_tokens(
             keys=keys,  # pyright: ignore[reportArgumentType]  # generated row model carries the same columns as LiteLLM_VerificationToken
@@ -389,7 +407,7 @@ async def _delete_user_rows(
     await _org_membership_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
     await _membership_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
     await _user_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
-    return tuple(k.token for k in keys)
+    return _DeletedKeys(tokens=tuple(k.token for k in keys), jwt_mapping_cache_keys=jwt_mapping_cache_keys)
 
 
 async def _delete_users_tx(
@@ -423,12 +441,14 @@ async def _delete_users_tx(
                 for tid in team_ids
             }
         )
-        deleted_key_tokens: Final = await _delete_user_rows(
+        deleted_keys: Final = await _delete_user_rows(
             prisma_client, tx, frozenset(u.user_id for u in users), user_api_key_dict, litellm_changed_by
         )
     return _UserBatchDeletion(
         removals=removals,
-        deleted_key_tokens=deleted_key_tokens + tuple(t for r in removals.values() for t in r.deleted_key_tokens),
+        deleted_key_tokens=deleted_keys.tokens + tuple(t for r in removals.values() for t in r.deleted_key_tokens),
+        jwt_mapping_cache_keys=deleted_keys.jwt_mapping_cache_keys
+        + tuple(k for r in removals.values() for k in r.jwt_mapping_cache_keys),
     )
 
 
@@ -454,6 +474,7 @@ async def _delete_users(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+    await evict_and_broadcast(cache_keys=deletion.jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
     await evict_and_broadcast(cache_keys=sorted(user_ids), user_api_key_cache=user_api_key_cache)
     for removal in deletion.removals.values():
         _emit_team_members_metric(removal.team)
@@ -534,7 +555,7 @@ async def bulk_delete_users(
             litellm_changed_by,
         )
         if candidates
-        else _UserBatchDeletion(removals=MappingProxyType({}), deleted_key_tokens=())
+        else _UserBatchDeletion(removals=MappingProxyType({}), deleted_key_tokens=(), jwt_mapping_cache_keys=())
     )
 
     def result(index: int, user_id: str) -> UserDeleteResult:

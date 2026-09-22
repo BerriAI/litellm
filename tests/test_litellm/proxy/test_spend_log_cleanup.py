@@ -793,18 +793,20 @@ async def test_spend_logs_retention_alone_does_not_touch_the_session_rollup():
     tables = [call[0][0] for call in client.db.execute_raw.call_args_list]
     assert any('"LiteLLM_SpendLogs"' in sql for sql in tables)
     assert not any('"LiteLLM_AutoRouterSession"' in sql for sql in tables)
+    assert not any('"LiteLLM_AutoRouterUserSession"' in sql for sql in tables)
     assert not any('"LiteLLM_HealthCheckTable"' in sql for sql in tables)
 
 
 @pytest.mark.asyncio
-async def test_session_retention_alone_cleans_only_the_session_rollup():
-    client = _mock_prisma_for_retention([0])
+async def test_session_retention_alone_cleans_both_session_rollups():
+    client = _mock_prisma_for_retention([0, 0])
     cleaner = SpendLogCleanup(general_settings={"maximum_autorouter_session_retention_period": "365d"})
     cleaner.pod_lock_manager = None
     await cleaner.cleanup_old_spend_logs(client)
     tables = [call[0][0] for call in client.db.execute_raw.call_args_list]
-    assert len(tables) == 1
+    assert len(tables) == 2
     assert '"LiteLLM_AutoRouterSession"' in tables[0]
+    assert '"LiteLLM_AutoRouterUserSession"' in tables[1]
 
 
 @pytest.mark.asyncio
@@ -825,7 +827,7 @@ async def test_health_check_retention_alone_cleans_only_the_health_check_table()
 
 @pytest.mark.asyncio
 async def test_each_retention_key_cuts_off_at_its_own_horizon():
-    client = _mock_prisma_for_retention([0, 0, 0, 0])
+    client = _mock_prisma_for_retention([0, 0, 0, 0, 0])
     cleaner = SpendLogCleanup(
         general_settings={
             "maximum_spend_logs_retention_period": "7d",
@@ -839,6 +841,8 @@ async def test_each_retention_key_cuts_off_at_its_own_horizon():
         (
             "LiteLLM_AutoRouterSession"
             if '"LiteLLM_AutoRouterSession"' in call[0][0]
+            else "LiteLLM_AutoRouterUserSession"
+            if '"LiteLLM_AutoRouterUserSession"' in call[0][0]
             else "LiteLLM_HealthCheckTable"
             if '"LiteLLM_HealthCheckTable"' in call[0][0]
             else "logs"
@@ -848,6 +852,7 @@ async def test_each_retention_key_cuts_off_at_its_own_horizon():
     now = datetime.now(timezone.utc)
     assert (now - cutoffs["logs"]).days == 7
     assert (now - cutoffs["LiteLLM_AutoRouterSession"]).days == 365
+    assert cutoffs["LiteLLM_AutoRouterUserSession"] == cutoffs["LiteLLM_AutoRouterSession"]
     assert (now - cutoffs["LiteLLM_HealthCheckTable"]).days == 30
 
 

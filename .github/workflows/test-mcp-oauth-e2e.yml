@@ -1,0 +1,180 @@
+name: MCP OAuth happy path
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/test-mcp-oauth-e2e.yml'
+      - '.github/e2e-stack/**'
+      - 'tests/e2e/*.py'
+      - 'tests/e2e/pytest.ini'
+      - 'tests/e2e/idp_realm.json'
+      - 'tests/e2e/mcp/**'
+      - 'litellm/experimental_mcp_client/**'
+      - 'litellm/proxy/_experimental/mcp_server/**'
+      - 'litellm/proxy/auth/**'
+      - 'litellm/proxy/management_endpoints/mcp_management_endpoints.py'
+      - 'litellm/proxy/_types.py'
+      - 'litellm/types/mcp_server/mcp_server_manager.py'
+      - 'litellm/proxy/management_endpoints/*sso*.py'
+      - 'litellm/proxy/management_endpoints/sso/**'
+      - 'litellm/proxy/common_utils/encrypt_decrypt_utils.py'
+      - 'litellm/proxy/proxy_server.py'
+      - 'litellm/proxy/schema.prisma'
+      - 'ui/litellm-dashboard/src/app/connect/**'
+      - 'ui/litellm-dashboard/src/app/mcp/oauth/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: mcp-oauth-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  oauth:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: e2e-changed
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    services:
+      postgres:
+        image: postgres:16.6
+        env:
+          POSTGRES_USER: litellm
+          POSTGRES_PASSWORD: dbpassword9090
+          POSTGRES_DB: litellm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U litellm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_HOST: 127.0.0.1
+      DATABASE_PORT: '5432'
+      DATABASE_USER: litellm
+      DATABASE_PASSWORD: dbpassword9090
+      DATABASE_NAME: litellm
+      DATABASE_URL: postgresql://litellm:dbpassword9090@127.0.0.1:5432/litellm
+      E2E_KEYCLOAK_URL: http://127.0.0.1:8081
+      E2E_KEYCLOAK_ADMIN_USER: admin
+      E2E_KEYCLOAK_ADMIN_PASSWORD: e2e-ephemeral-idp-not-a-secret
+      E2E_FIXTURE_MODE: live
+      E2E_PROVIDER_CACHE: '0'
+      E2E_MCP_OAUTH_LIVE: '1'
+      E2E_REQUIRED_TEST_COUNT: '4'
+    steps:
+      - name: Checkout the tested source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Require and materialize the upstream login
+        env:
+          STORAGE_STATE: ${{ secrets.E2E_LINEAR_STORAGE_STATE_B64 }}
+        run: |
+          umask 077
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import secrets
+          from pathlib import Path
+          encoded = os.environ.get("STORAGE_STATE", "")
+          if not encoded:
+              raise SystemExit("E2E_LINEAR_STORAGE_STATE_B64 is required; capture and provision a test-account login")
+          state = json.loads(base64.b64decode(encoded, validate=True))
+          if not isinstance(state, dict) or not state.get("cookies"):
+              raise SystemExit("The captured login must contain browser cookies")
+          directory = Path(os.environ["RUNNER_TEMP"]) / "mcp-oauth-private"
+          directory.mkdir(mode=0o700)
+          path = directory / "linear-state.json"
+          path.write_text(json.dumps(state))
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write(f"E2E_LINEAR_STORAGE_STATE={path}\n")
+              for name in ("LITELLM_MASTER_KEY", "LITELLM_SALT_KEY"):
+                  value = "sk-e2e-" + secrets.token_hex(24)
+                  print(f"::add-mask::{value}")
+                  output.write(f"{name}={value}\n")
+          PY
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.13'
+      - uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: '0.10.9'
+      - uses: ./.github/actions/cache-cargo-build
+      - name: Install the frozen E2E environment
+        run: |
+          .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra proxy-runtime --extra extra_proxy --group ci --group proxy-dev --group e2e-dev
+          uv run --no-sync python scripts/prisma_generate_if_needed.py
+          uv run --no-sync playwright install --with-deps chromium
+
+      - name: Configure license access
+        id: aws
+        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        with:
+          role-to-assume: ${{ vars.E2E_AWS_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+          role-session-name: mcp-oauth-${{ github.run_id }}
+          role-duration-seconds: 900
+          output-env-credentials: false
+          output-credentials: true
+      - name: Load the E2E license
+        env:
+          AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.aws.outputs.aws-secret-access-key }}
+          AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          license="$(aws secretsmanager get-secret-value --secret-id litellm-e2e-changed-license --query SecretString --output text)"
+          test -n "${license}"
+          echo "::add-mask::${license}"
+          echo "LITELLM_LICENSE=${license}" >> "${GITHUB_ENV}"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: ui/litellm-dashboard/.nvmrc
+      - name: Build the gateway consent UI at the tested commit
+        run: |
+          cd ui/litellm-dashboard
+          ../../scripts/with_dashboard_node.sh npm ci
+          ../../scripts/with_dashboard_node.sh npm run build
+          mkdir -p ../../litellm/proxy/_experimental/out
+          cp -r out/. ../../litellm/proxy/_experimental/out/
+          find ../../litellm/proxy/_experimental/out -name '*.html' ! -name index.html | while read -r page; do
+            mkdir -p "${page%.html}"
+            mv "${page}" "${page%.html}/index.html"
+          done
+
+      - name: Prepare the isolated database and IdP
+        run: |
+          umask 077
+          bash .github/e2e-stack/start-idp.sh
+          uv run --no-sync python migrations/run.py > "${RUNNER_TEMP}/mcp-oauth-private/migrations.log" 2>&1
+
+      - name: Run every required OAuth variant without retries
+        run: |
+          umask 077
+          uv run --no-sync pytest -c tests/e2e/pytest.ini tests/e2e/mcp/test_mcp_oauth_happy_path_e2e.py \
+            --rootdir=. --reruns 0 --tb=short -o junit_family=xunit1 \
+            --junitxml="${RUNNER_TEMP}/mcp-oauth-private/results.xml" \
+            > "${RUNNER_TEMP}/mcp-oauth-private/pytest.log" 2>&1
+      - name: Report JUnit results and reject skipped or missing cases
+        if: always()
+        run: |
+          uv run --no-sync python .github/e2e-stack/assert_tests_ran.py \
+            "${RUNNER_TEMP}/mcp-oauth-private/results.xml" tests/e2e/mcp/test_mcp_oauth_happy_path_e2e.py
+      - name: Remove private login and logs
+        if: always()
+        run: |
+          docker rm -f e2e-keycloak >/dev/null 2>&1 || true
+          rm -rf "${RUNNER_TEMP}/mcp-oauth-private"

@@ -1,4 +1,6 @@
-use litellm_providers::{
+use litellm_http::request::string_headers as shared_string_headers;
+pub(super) use litellm_http::request::{has_bearer_auth, has_header, truncate_error_body};
+use litellm_llms::{
     anthropic::experimental_pass_through::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     azure_ai::anthropic::messages_transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
     base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig,
@@ -6,8 +8,6 @@ use litellm_providers::{
 use serde_json::{Map, Value};
 
 use super::Error;
-use crate::http_utils::string_headers as shared_string_headers;
-pub(super) use crate::http_utils::{has_bearer_auth, has_header, truncate_error_body};
 
 const HEADER_CONTEXT: &str = "messages";
 
