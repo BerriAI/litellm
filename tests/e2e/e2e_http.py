@@ -907,10 +907,7 @@ class PreparedForward:
 
 
 def prepare_forward(
-    method: str,
-    url: str,
-    headers: dict[str, str],
-    body: bytes | None,
+    method: str, url: str, headers: dict[str, str], body: bytes | None,
 ) -> PreparedForward | NetworkError:
     try:
         with requests.Session() as session:
@@ -929,8 +926,7 @@ def forward_prepared_stream(prepared: PreparedForward, timeout: float) -> Stream
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
     return StreamHead(
-        resp.status_code,
-        {name.lower(): value for name, value in resp.headers.items()},
+        resp.status_code, {name.lower(): value for name, value in resp.headers.items()},
         primed_steps(_stream_steps(resp)),
     )
 
