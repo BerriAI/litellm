@@ -189,11 +189,8 @@ class SseFrame:
 
 
 def _frame_event(body: str) -> Mapping[str, object] | None:
-    data: Final = next(
-        (line[len("data:") :].strip() for line in body.splitlines() if line.startswith("data:")),
-        None,
-    )
-    if data is None:
+    data: Final = "\n".join(line[len("data:") :].strip() for line in body.splitlines() if line.startswith("data:"))
+    if not data:
         return None
     try:
         parsed: Final = cast(object, json.loads(data))  # cast-ok: json.loads returns Any
@@ -276,6 +273,6 @@ def _emitted_frame(
         (
             *lines[:data_position],
             f"data: {json.dumps(payload, ensure_ascii=False)}{ending}",
-            *lines[data_position + 1 :],
+            *(line for line in lines[data_position + 1 :] if not line.startswith("data:")),
         )
     ).encode()

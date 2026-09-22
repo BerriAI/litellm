@@ -1,6 +1,7 @@
 import json
 import re
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -61,7 +62,7 @@ def _anthropic_stream(text: str) -> tuple[bytes, ...]:
     return tuple(f"event: {kind}\ndata: {json.dumps(data)}\n\n".encode() for kind, data in events)
 
 
-def _events(body: bytes) -> tuple[dict, ...]:
+def _events(body: bytes) -> tuple[Mapping[str, object], ...]:
     return tuple(
         json.loads(line[len("data: ") :]) for line in body.decode("utf-8").splitlines() if line.startswith("data: ")
     )

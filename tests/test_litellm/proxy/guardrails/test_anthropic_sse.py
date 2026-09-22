@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.proxy.guardrails.anthropic_sse import (
@@ -8,7 +9,7 @@ from litellm.proxy.guardrails.anthropic_sse import (
 )
 
 
-def _frame(event_type: str, payload: dict, separator: str = "\n\n") -> bytes:
+def _frame(event_type: str, payload: Mapping[str, object], separator: str = "\n\n") -> bytes:
     return f"event: {event_type}\ndata: {json.dumps(payload)}{separator}".encode()
 
 
@@ -91,6 +92,35 @@ def test_text_block_texts_joins_only_text_deltas() -> None:
     thinking_only: Final = anthropic_sse_frames(chunks[:5] + chunks[-1:])
     assert thinking_only is not None
     assert dict(text_block_texts(thinking_only)) == {}
+
+
+def test_multiline_data_fields_are_joined_and_rewritten_as_one_data_line() -> None:
+    start: Final = _frame(
+        "message_start",
+        {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+    )
+    split_delta: Final = (
+        b"event: content_block_delta\n"
+        b'data: {"type":"content_block_delta","index":0,\n'
+        b'data: "delta":{"type":"text_delta","text":"mail jane@x.io"}}\n'
+        b"\n"
+    )
+    stop: Final = _frame("message_stop", {"type": "message_stop"})
+    frames: Final = anthropic_sse_frames((start, split_delta, stop))
+    assert frames is not None
+    assert dict(text_block_texts(frames)) == {0: "mail jane@x.io"}
+    emitted: Final = rewrite_text_blocks(frames, {0: "masked"})
+    rewritten: Final = emitted[1]
+    assert emitted[0] == start and emitted[2] == stop
+    rewritten_lines: Final = rewritten.decode().splitlines()
+    assert rewritten_lines[0] == "event: content_block_delta"
+    data_lines: Final = tuple(line for line in rewritten_lines if line.startswith("data:"))
+    assert len(data_lines) == 1
+    assert json.loads(data_lines[0][len("data:") :]) == {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "masked"},
+    }
 
 
 def test_rewrite_text_blocks_keeps_crlf_line_endings_on_the_rewritten_frame() -> None:
