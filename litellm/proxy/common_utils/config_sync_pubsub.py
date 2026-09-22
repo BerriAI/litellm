@@ -55,6 +55,7 @@ _CONFIG_SYNCED_TABLE_NAMES: Final[frozenset[str]] = frozenset(
         "litellm_ssoconfig",
         "litellm_cacheconfig",
         "litellm_configoverrides",
+        "litellm_uisettings",
     }
 )
 

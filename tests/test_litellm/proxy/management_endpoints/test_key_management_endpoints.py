@@ -609,10 +609,7 @@ async def test_generate_key_debug_log_never_contains_raw_token(monkeypatch, capl
 
     mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
-        AsyncMock(return_value={}),
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
 
     from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
     from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -1494,18 +1491,12 @@ async def test_list_keys_full_object_returns_lifetime_total_spend():
 @pytest.mark.asyncio
 async def test_get_new_token_with_valid_key(monkeypatch):
     """Test get_new_token function when provided with a valid key that starts with 'sk-'"""
-    from unittest.mock import AsyncMock
-
     from litellm.proxy._types import RegenerateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         get_new_token,
     )
 
-    # Mock get_ui_settings_cached to return setting disabled (custom keys allowed)
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
-        AsyncMock(return_value={}),
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
 
     # Test with valid new_key
     data = RegenerateKeyRequest(new_key="sk-test1234567890abc")
@@ -1517,8 +1508,6 @@ async def test_get_new_token_with_valid_key(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_new_token_with_invalid_key(monkeypatch):
     """Test get_new_token function when provided with an invalid key that doesn't start with 'sk-'"""
-    from unittest.mock import AsyncMock
-
     from fastapi import HTTPException
 
     from litellm.proxy._types import RegenerateKeyRequest
@@ -1526,11 +1515,7 @@ async def test_get_new_token_with_invalid_key(monkeypatch):
         get_new_token,
     )
 
-    # Mock get_ui_settings_cached to return setting disabled (custom keys allowed)
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
-        AsyncMock(return_value={}),
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
 
     # Test with invalid new_key (doesn't start with 'sk-')
     data = RegenerateKeyRequest(new_key="invalid-key-123")
@@ -1546,8 +1531,6 @@ async def test_get_new_token_with_invalid_key(monkeypatch):
 async def test_get_new_token_rejects_short_new_key(monkeypatch):
     """Regression test for LIT-4355: a short custom key like sk-99 must be rejected,
     otherwise the stored key_name (sk-...{last 4 chars}) reveals the entire key."""
-    from unittest.mock import AsyncMock
-
     from fastapi import HTTPException
 
     from litellm.proxy._types import RegenerateKeyRequest
@@ -1555,10 +1538,7 @@ async def test_get_new_token_rejects_short_new_key(monkeypatch):
         get_new_token,
     )
 
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
-        AsyncMock(return_value={}),
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
 
     data = RegenerateKeyRequest(new_key="sk-99")
 
@@ -1588,10 +1568,7 @@ async def test_generate_key_fn_rejects_short_custom_key(monkeypatch, short_key):
     )
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
-        AsyncMock(return_value={}),
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
 
     assert len(short_key) < 16
 
@@ -1628,10 +1605,7 @@ async def test_generate_key_fn_accepts_custom_key_at_minimum_length(monkeypatch)
     )
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
-        AsyncMock(return_value={}),
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
 
     custom_key = "sk-abcdefghijklm"
     assert len(custom_key) == 16
@@ -1649,18 +1623,13 @@ async def test_generate_key_fn_accepts_custom_key_at_minimum_length(monkeypatch)
 @pytest.mark.asyncio
 async def test_check_custom_key_allowed_when_disabled(monkeypatch):
     """_check_custom_key_allowed raises 403 when disable_custom_api_keys is true."""
-    from unittest.mock import AsyncMock
-
     from fastapi import HTTPException
 
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _check_custom_key_allowed,
     )
 
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
-        AsyncMock(return_value={"disable_custom_api_keys": True}),
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_custom_api_keys": True})
 
     with pytest.raises(HTTPException) as exc_info:
         await _check_custom_key_allowed("sk-custom-key-123")
@@ -1672,16 +1641,11 @@ async def test_check_custom_key_allowed_when_disabled(monkeypatch):
 @pytest.mark.asyncio
 async def test_check_custom_key_allowed_when_enabled(monkeypatch):
     """_check_custom_key_allowed does nothing when disable_custom_api_keys is false."""
-    from unittest.mock import AsyncMock
-
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _check_custom_key_allowed,
     )
 
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
-        AsyncMock(return_value={"disable_custom_api_keys": False}),
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_custom_api_keys": False})
 
     # Should not raise
     await _check_custom_key_allowed("sk-custom-key-123")
@@ -1690,34 +1654,132 @@ async def test_check_custom_key_allowed_when_enabled(monkeypatch):
 @pytest.mark.asyncio
 async def test_check_custom_key_allowed_when_unset(monkeypatch):
     """_check_custom_key_allowed does nothing when setting is not present."""
-    from unittest.mock import AsyncMock
-
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _check_custom_key_allowed,
     )
 
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
-        AsyncMock(return_value={}),
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
 
     # Should not raise
     await _check_custom_key_allowed("sk-custom-key-123")
 
 
 @pytest.mark.asyncio
-async def test_check_custom_key_allowed_none_key_always_passes(monkeypatch):
-    """_check_custom_key_allowed does nothing when key is None, even if setting is on."""
-    from unittest.mock import AsyncMock
+async def test_check_custom_key_allowed_honours_the_config_file(monkeypatch):
+    """A config-file general_settings.disable_custom_api_keys is enforced with no stored UI row."""
+    from fastapi import HTTPException
 
+    from litellm.proxy.config_resolvers import SettingsStore
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _check_custom_key_allowed,
     )
 
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
-        AsyncMock(return_value={"disable_custom_api_keys": True}),
+    general_settings = SettingsStore("general_settings")
+    general_settings.load_yaml({"disable_custom_api_keys": True})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_custom_key_allowed("sk-custom-key-123456")
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("config_value", "blocked"),
+    [
+        (True, True),
+        ("true", True),
+        ("True", True),
+        (1, True),
+        (False, False),
+        ("false", False),
+        ("False", False),
+        (0, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_check_custom_key_allowed_coerces_a_non_bool_config_value(monkeypatch, config_value, blocked):
+    """A YAML value that is not a bare bool, such as a quoted "true", still decides the gate."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.config_resolvers import SettingsStore
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _check_custom_key_allowed,
     )
+
+    general_settings = SettingsStore("general_settings")
+    general_settings.load_yaml({"disable_custom_api_keys": config_value})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+    rejected = False
+    try:
+        await _check_custom_key_allowed("sk-custom-key-123456")
+    except HTTPException as e:
+        rejected = e.status_code == 403
+
+    assert rejected is blocked
+
+
+@pytest.mark.asyncio
+async def test_check_custom_key_allowed_config_file_beats_the_stored_ui_row(monkeypatch):
+    """The config file owns the flag, so a stored UI row saying false cannot re-open custom keys."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.config_resolvers import SettingsStore
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _check_custom_key_allowed,
+    )
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+        apply_runtime_general_settings_flags,
+    )
+
+    general_settings = SettingsStore("general_settings")
+    general_settings.load_yaml({"disable_custom_api_keys": True})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+    apply_runtime_general_settings_flags({"disable_custom_api_keys": False})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_custom_key_allowed("sk-custom-key-123456")
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_check_custom_key_allowed_picks_up_a_ui_write_without_the_serving_pod(monkeypatch):
+    """A pod that never served the PATCH enforces the new value after its own settings sync."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.config_resolvers import SettingsStore
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _check_custom_key_allowed,
+    )
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+        apply_runtime_general_settings_flags,
+    )
+
+    general_settings = SettingsStore("general_settings")
+    general_settings.load_yaml({})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+    await _check_custom_key_allowed("sk-custom-key-123456")
+
+    apply_runtime_general_settings_flags({"disable_custom_api_keys": True})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_custom_key_allowed("sk-custom-key-123456")
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_check_custom_key_allowed_none_key_always_passes(monkeypatch):
+    """_check_custom_key_allowed does nothing when key is None, even if setting is on."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _check_custom_key_allowed,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_custom_api_keys": True})
 
     # Should not raise — None means auto-generate
     await _check_custom_key_allowed(None)
@@ -1726,8 +1788,6 @@ async def test_check_custom_key_allowed_none_key_always_passes(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_new_token_rejected_when_custom_keys_disabled(monkeypatch):
     """get_new_token raises 403 when new_key is set and disable_custom_api_keys is true."""
-    from unittest.mock import AsyncMock
-
     from fastapi import HTTPException
 
     from litellm.proxy._types import RegenerateKeyRequest
@@ -1735,10 +1795,7 @@ async def test_get_new_token_rejected_when_custom_keys_disabled(monkeypatch):
         get_new_token,
     )
 
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
-        AsyncMock(return_value={"disable_custom_api_keys": True}),
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_custom_api_keys": True})
 
     data = RegenerateKeyRequest(new_key="sk-custom-regen-key")
 
@@ -1751,17 +1808,12 @@ async def test_get_new_token_rejected_when_custom_keys_disabled(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_new_token_auto_generates_when_custom_keys_disabled(monkeypatch):
     """get_new_token auto-generates a key when new_key is None, even if setting is on."""
-    from unittest.mock import AsyncMock
-
     from litellm.proxy._types import RegenerateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         get_new_token,
     )
 
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_ui_settings_cached",
-        AsyncMock(return_value={"disable_custom_api_keys": True}),
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_custom_api_keys": True})
 
     data = RegenerateKeyRequest()  # no new_key
     result = await get_new_token(data)
