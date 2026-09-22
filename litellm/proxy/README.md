@@ -31,6 +31,21 @@ print(response)
 [**See how to call Huggingface,Bedrock,TogetherAI,Anthropic, etc.**](https://docs.litellm.ai/docs/simple_proxy)
 
 
+## Hosted applications using gateway SSO
+
+A trusted web application can request a personal proxy-API session through the gateway’s configured SSO provider. By default, proxy-API OAuth grants only accept loopback redirects. To permit a hosted application, configure its exact callback URI on the gateway:
+
+```shell
+LITELLM_PROXY_API_OAUTH_REDIRECT_URIS=https://admin.example.com/oauth/callback
+```
+
+Multiple URIs are comma-separated. Each hosted URI must use HTTPS and contain no userinfo, query string, or fragment. Matching includes the complete path and port; wildcards and subdomain matching are not supported. Only allow callbacks operated by applications trusted to hold users’ personal proxy credentials
+
+The application registers the same URI at `/register` and uses `/authorize` with `resource` set to the gateway base URL, S256 PKCE, and state. LiteLLM handles SSO and presents an approval page with team selection before returning an authorization code. The application exchanges the code at `/token` using the original verifier and callback URI. Applications must validate state and bind the callback to the browser that started sign-in
+
+This setting does not grant an admin role or change existing native-client and MCP grants. The resulting credential uses the signed-in user’s permissions. Hosted applications must protect access and refresh tokens and handle expiry and revocation
+
+
 ---
 
 ### Folder Structure

@@ -40,6 +40,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import html
+import os
 import secrets
 from base64 import urlsafe_b64encode
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -553,6 +554,24 @@ def aggregate_authorize(
     return response
 
 
+def _hosted_proxy_redirect_is_allowed(redirect_uri: str) -> bool:
+    parsed: Final = urlparse(redirect_uri)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        return False
+    if parsed.query or parsed.fragment or "?" in redirect_uri or "#" in redirect_uri:
+        return False
+    try:
+        validate_redirect_uri_shape(parsed)
+    except HTTPException:
+        return False
+    allowed: Final = tuple(
+        entry.strip()
+        for entry in os.environ.get("LITELLM_PROXY_API_OAUTH_REDIRECT_URIS", "").split(",")
+        if entry.strip()
+    )
+    return redirect_uri in allowed
+
+
 async def native_client_authorize(
     request: Request,
     client_id: str,
@@ -564,20 +583,23 @@ async def native_client_authorize(
     session_user_id: str | None,
     lookup_consent_teams: LookupConsentTeams,
 ) -> Response:
-    """The authorize verb for a native client that named the proxy API itself as its
-    RFC 8707 ``resource``: the same client, redirect, PKCE, and sign-in checks as the
-    aggregate verb plus a loopback-only redirect (the credential this grant mints is the
-    user's personal proxy key, which belongs on their own machine and never behind a hosted
-    callback), then the consent page rendered right here (no connect-page interlude, since
-    there is no per-server vaulting to do) with the flow sealed into the per-flow cookie
-    and its handle carried only in the form, never in a URL."""
+    """Authorize a proxy-API credential for a native or explicitly trusted hosted client.
+
+    Hosted callbacks require an exact operator-configured HTTPS URI in addition to
+    client registration, S256 PKCE, SSO, and the user's deliberate consent.
+    """
     rejected: Final = _rejected_authorize_request(
         client_id, redirect_uri, state, code_challenge, code_challenge_method, response_type
     )
     if rejected is not None:
         return rejected
-    if not is_loopback_redirect_host(urlparse(redirect_uri)):
-        return _oauth_error(400, "invalid_request", "a proxy-API grant may only redirect to a loopback address")
+    is_hosted: Final = not is_loopback_redirect_host(urlparse(redirect_uri))
+    if is_hosted and not _hosted_proxy_redirect_is_allowed(redirect_uri):
+        return _oauth_error(
+            400,
+            "invalid_request",
+            "a proxy-API grant may only redirect to a loopback address or an explicitly allowed HTTPS callback",
+        )
     base_url: Final = get_request_base_url(request)
     if session_user_id is None:
         return _login_redirect(base_url, request)
@@ -600,6 +622,7 @@ async def native_client_authorize(
         teams=tuple((team.team_id, team.team_alias or team.team_id) for team in teams),
         flow_handle=handle,
         complete_url=f"{base_url}/authorize/complete",
+        hosted=is_hosted,
     )
     response: Final = HTMLResponse(page, headers=_CONSENT_PAGE_HEADERS)
     _set_flow_cookie(response, request, handle, flow)

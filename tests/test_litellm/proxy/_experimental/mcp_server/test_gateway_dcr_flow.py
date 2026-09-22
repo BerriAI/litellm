@@ -74,6 +74,7 @@ CODE_CHALLENGE = urlsafe_b64encode(hashlib.sha256(CODE_VERIFIER.encode("ascii"))
 @pytest.fixture(autouse=True)
 def _salt_key(monkeypatch):
     monkeypatch.setenv("LITELLM_SALT_KEY", MASTER_KEY)
+    monkeypatch.delenv("LITELLM_PROXY_API_OAUTH_REDIRECT_URIS", raising=False)
 
 
 def _request(path="/authorize", query="", cookies=None, method="GET"):
@@ -1540,8 +1541,7 @@ async def test_native_authorize_validation_failures_never_reach_consent():
 
 @pytest.mark.asyncio
 async def test_native_authorize_refuses_a_hosted_redirect_for_the_proxy_api():
-    """Registration accepts any https redirect because MCP clients can be hosted, but a
-    proxy-API grant hands out the user's personal key, so it only ever goes back to loopback."""
+    """Public MCP registration must not grant permission to receive proxy credentials."""
     hosted = "https://evil.example/cb"
     client_id = (await _register([hosted]))["client_id"]
     lookup = _ConsentTeams()
@@ -1549,10 +1549,112 @@ async def test_native_authorize_refuses_a_hosted_redirect_for_the_proxy_api():
     assert response.status_code == 400
     assert json.loads(response.body) == {
         "error": "invalid_request",
-        "error_description": "a proxy-API grant may only redirect to a loopback address",
+        "error_description": (
+            "a proxy-API grant may only redirect to a loopback address or an explicitly allowed HTTPS callback"
+        ),
     }
     assert "set-cookie" not in response.headers
     assert lookup.calls == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_hosted_callback_preserves_consent_pkce_identity_and_one_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hosted: Final = "https://admin.example/oauth/callback"
+    monkeypatch.setenv("LITELLM_PROXY_API_OAUTH_REDIRECT_URIS", hosted)
+    client_id: Final = (await _register([hosted]))["client_id"]
+    login: Final = await _native_authorize(client_id, redirect_uri=hosted, session_user_id=None)
+    assert login.status_code == 303
+    assert urlparse(login.headers["location"]).path == "/sso/key/generate"
+    invalid_pkce: Final = await _native_authorize(client_id, redirect_uri=hosted, code_challenge_method="plain")
+    assert invalid_pkce.status_code == 400
+    consent: Final = await _native_authorize(client_id, redirect_uri=hosted)
+    assert consent.status_code == 200
+    assert "Authorize application access" in consent.body.decode()
+    assert "<code>https://admin.example</code>" in consent.body.decode()
+    cache: Final = DualCache()
+    approved: Final = await _complete_consent(consent, cache=cache, decision="approve", team_id="team-b")
+    assert approved.headers["location"].startswith(hosted + "?")
+    code: Final = _code_from(approved)
+    minter: Final = _Minter()
+    stolen: Final = await _redeem(
+        code,
+        client_id,
+        redirect_uri=hosted,
+        cache=cache,
+        code_verifier="wrong-" + "v" * 43,
+        resource=PROXY_API_RESOURCE,
+        mint_proxy_credential=minter,
+    )
+    assert stolen.status_code == 400
+    assert minter.calls == []
+    redeemed: Final = await _redeem(
+        code,
+        client_id,
+        redirect_uri=hosted,
+        cache=cache,
+        resource=PROXY_API_RESOURCE,
+        mint_proxy_credential=minter,
+    )
+    assert redeemed.status_code == 200
+    assert json.loads(redeemed.body)["user_id"] == "u1"
+    assert json.loads(redeemed.body)["team_id"] == "team-b"
+    replay: Final = await _redeem(
+        code,
+        client_id,
+        redirect_uri=hosted,
+        cache=cache,
+        resource=PROXY_API_RESOURCE,
+        mint_proxy_credential=minter,
+    )
+    assert replay.status_code == 400
+    assert json.loads(replay.body)["error"] == "invalid_grant"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "hosted",
+    [
+        "https://admin.example/other",
+        "https://admin.example/oauth/callback/child",
+        "https://admin.example.evil.example/oauth/callback",
+        "https://sub.admin.example/oauth/callback",
+        "https://admin.example/oauth/callback?next=https://evil.example",
+        "https://admin.example:444/oauth/callback",
+    ],
+)
+async def test_hosted_callback_allowlist_requires_exact_uri(monkeypatch: pytest.MonkeyPatch, hosted: str) -> None:
+    monkeypatch.setenv("LITELLM_PROXY_API_OAUTH_REDIRECT_URIS", "https://admin.example/oauth/callback")
+    client_id: Final = (await _register([hosted]))["client_id"]
+    lookup: Final = _ConsentTeams()
+    response: Final = await _native_authorize(client_id, redirect_uri=hosted, lookup=lookup)
+    assert response.status_code == 400
+    assert "location" not in response.headers
+    assert lookup.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "hosted", ("https://admin.example/oauth/callback?", "https://admin.example/oauth/callback?next=other")
+)
+async def test_hosted_allowlist_cannot_enable_query_callbacks(monkeypatch: pytest.MonkeyPatch, hosted: str) -> None:
+    monkeypatch.setenv("LITELLM_PROXY_API_OAUTH_REDIRECT_URIS", hosted)
+    client_id: Final = (await _register([hosted]))["client_id"]
+    lookup: Final = _ConsentTeams()
+    response: Final = await _native_authorize(client_id, redirect_uri=hosted, lookup=lookup)
+    assert response.status_code == 400
+    assert lookup.calls == []
+
+
+@pytest.mark.asyncio
+async def test_hosted_callback_allowlist_does_not_replace_client_registration(monkeypatch: pytest.MonkeyPatch) -> None:
+    hosted: Final = "https://admin.example/oauth/callback"
+    monkeypatch.setenv("LITELLM_PROXY_API_OAUTH_REDIRECT_URIS", hosted)
+    client_id: Final = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    response: Final = await _native_authorize(client_id, redirect_uri=hosted)
+    assert response.status_code == 400
+    assert "not registered" in json.loads(response.body)["error_description"]
 
 
 @pytest.mark.asyncio
