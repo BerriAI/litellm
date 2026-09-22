@@ -53,7 +53,6 @@ LlmRoute = Literal[
     "bedrock_converse",
     "bedrock_invoke",
     "cohere",
-    "fal_ai",
     "gemini",
     "hosted_vllm",
     "openai",
@@ -67,7 +66,6 @@ LlmCapability = Literal[
     "basic",
     "batch_deployment",
     "count_tokens",
-    "custom_api_base",
     "govcloud_partition",
     "split_s3_credentials",
     "input_validation",
@@ -154,7 +152,14 @@ class OtherCell(_Base):
 
 
 Cell = Annotated[
-    LlmCell | MgmtCell | McpCell | ReliabilityCell | QuotaCell | LoggingCell | GuardrailCell | OtherCell,
+    LlmCell
+    | MgmtCell
+    | McpCell
+    | ReliabilityCell
+    | QuotaCell
+    | LoggingCell
+    | GuardrailCell
+    | OtherCell,
     Field(discriminator="module"),
 ]
 
