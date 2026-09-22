@@ -4315,27 +4315,22 @@ class BaseLLMHTTPHandler:
 
     def list_batches(
         self,
-        litellm_params: dict,  # mutable-ok: litellm_params contract across batch handlers is a plain dict
+        litellm_params: dict,
         provider_config: "BaseBatchesConfig",
-        headers: dict,  # mutable-ok: validate_environment fills provider headers in place
+        headers: dict,
         api_base: str | None,
         api_key: str | None,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         after: str | None = None,
         limit: int | None = None,
         _is_async: bool = False,
         client: Union["HTTPHandler", "AsyncHTTPHandler"] | None = None,
         timeout: float | httpx.Timeout | None = None,
-        model: str | None = None,
-    ) -> (
-        dict | Coroutine[object, object, dict]
-    ):  # mutable-ok: list_batches returns the provider's dict payload like create_batch returns dict request shapes
+        model: str = "",
+    ) -> dict | Coroutine[object, object, dict]:
         """
         List batches using provider-specific configuration.
         """
-        if model is None:
-            raise ValueError("model is required for list_batches")
-
         headers = provider_config.validate_environment(
             api_key=api_key,
             headers=headers,
@@ -4395,14 +4390,14 @@ class BaseLLMHTTPHandler:
     async def async_list_batches(
         self,
         list_url: str,
-        litellm_params: dict,  # mutable-ok: litellm_params contract across batch handlers is a plain dict
+        litellm_params: dict,
         provider_config: "BaseBatchesConfig",
-        headers: dict,  # mutable-ok: validate_environment fills provider headers in place
-        logging_obj: "LiteLLMLoggingObj",
+        headers: dict,
+        logging_obj: "LiteLLMLoggingObj | None",
         client: Union["HTTPHandler", "AsyncHTTPHandler"] | None = None,
         timeout: float | httpx.Timeout | None = None,
-        model: str | None = None,
-    ) -> dict:  # mutable-ok: returns the provider list payload mirroring create_batch's dict contract
+        model: str = "",
+    ) -> dict:
         """
         Async version of list_batches
         """
@@ -4444,23 +4439,20 @@ class BaseLLMHTTPHandler:
     def cancel_batch(
         self,
         batch_id: str,
-        litellm_params: dict,  # mutable-ok: litellm_params contract across batch handlers is a plain dict
+        litellm_params: dict,
         provider_config: "BaseBatchesConfig",
-        headers: dict,  # mutable-ok: validate_environment fills provider headers in place
+        headers: dict,
         api_base: str | None,
         api_key: str | None,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         _is_async: bool = False,
         client: Union["HTTPHandler", "AsyncHTTPHandler"] | None = None,
         timeout: float | httpx.Timeout | None = None,
-        model: str | None = None,
+        model: str = "",
     ) -> Union["LiteLLMBatch", Coroutine[object, object, "LiteLLMBatch"]]:
         """
         Cancel a batch using provider-specific configuration.
         """
-        if model is None:
-            raise ValueError("model is required for cancel_batch")
-
         headers = provider_config.validate_environment(
             api_key=api_key,
             headers=headers,
@@ -4520,14 +4512,14 @@ class BaseLLMHTTPHandler:
     async def async_cancel_batch(
         self,
         cancel_url: str,
-        litellm_params: dict,  # mutable-ok: litellm_params contract across batch handlers is a plain dict
+        litellm_params: dict,
         provider_config: "BaseBatchesConfig",
-        headers: dict,  # mutable-ok: validate_environment fills provider headers in place
-        logging_obj: "LiteLLMLoggingObj",
+        headers: dict,
+        logging_obj: "LiteLLMLoggingObj | None",
         client: Union["HTTPHandler", "AsyncHTTPHandler"] | None = None,
         timeout: float | httpx.Timeout | None = None,
         batch_id: str | None = None,
-        model: str | None = None,
+        model: str = "",
     ) -> "LiteLLMBatch":
         """
         Async version of cancel_batch
@@ -5770,7 +5762,7 @@ class BaseLLMHTTPHandler:
         model: str,
         messages: list[dict],
         anthropic_messages_optional_request_params: dict,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         kwargs: dict,
         depth: int,
         max_loops: int,
@@ -5850,7 +5842,7 @@ class BaseLLMHTTPHandler:
         plan: AgenticLoopPlan,
         model: str,
         response_api_optional_request_params: dict,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         kwargs: dict,
         depth: int,
         max_loops: int,
@@ -5930,7 +5922,7 @@ class BaseLLMHTTPHandler:
         callback: "CustomLogger",
         plan: AgenticLoopPlan,
         kwargs: dict,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         model: str,
     ) -> None:
         try:
@@ -5949,7 +5941,7 @@ class BaseLLMHTTPHandler:
         result: ResponsesAPIResponse,
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         custom_llm_provider: str,
     ) -> MockResponsesAPIStreamingIterator:
         """
@@ -6080,7 +6072,7 @@ class BaseLLMHTTPHandler:
         messages: list[dict],
         anthropic_messages_provider_config: "BaseAnthropicMessagesConfig",
         anthropic_messages_optional_request_params: dict,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         stream: bool,
         custom_llm_provider: str,
         kwargs: dict,
@@ -6272,7 +6264,7 @@ class BaseLLMHTTPHandler:
         model: str,
         messages: list[dict],
         optional_params: dict,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         stream: bool,
         custom_llm_provider: str,
         kwargs: dict,
@@ -6677,7 +6669,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
         provider_config: BaseRealtimeHTTPConfig | None = None,
-        model: str | None = None,
+        model: str = "",
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
@@ -6710,7 +6702,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
         provider_config: BaseRealtimeHTTPConfig | None = None,
-        model: str | None = None,
+        model: str = "",
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
@@ -6739,7 +6731,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
         provider_config: Any | None = None,
-        model: str | None = None,
+        model: str = "",
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_version: str | None = None,
@@ -6811,7 +6803,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
         provider_config: Any | None = None,
-        model: str | None = None,
+        model: str = "",
         session_config: dict[str, object] | None = None,
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -9171,7 +9163,7 @@ class BaseLLMHTTPHandler:
         container_create_request_params: dict,
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         extra_headers: dict[str, object] | None = None,
         timeout: float | httpx.Timeout = 600,
         _is_async: bool = False,
@@ -9260,7 +9252,7 @@ class BaseLLMHTTPHandler:
         container_create_request_params: dict,
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         extra_headers: dict[str, object] | None = None,
         timeout: float | httpx.Timeout = 600,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -9336,7 +9328,7 @@ class BaseLLMHTTPHandler:
         self,
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
@@ -9428,7 +9420,7 @@ class BaseLLMHTTPHandler:
         self,
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
@@ -9508,7 +9500,7 @@ class BaseLLMHTTPHandler:
         container_id: str,
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         extra_headers: dict[str, object] | None = None,
         extra_query: dict[str, object] | None = None,
         timeout: float | httpx.Timeout = 600,
@@ -9598,7 +9590,7 @@ class BaseLLMHTTPHandler:
         container_id: str,
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         extra_headers: dict[str, object] | None = None,
         extra_query: dict[str, object] | None = None,
         timeout: float | httpx.Timeout = 600,
@@ -9677,7 +9669,7 @@ class BaseLLMHTTPHandler:
         container_id: str,
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         extra_headers: dict[str, object] | None = None,
         extra_query: dict[str, object] | None = None,
         timeout: float | httpx.Timeout = 600,
@@ -9767,7 +9759,7 @@ class BaseLLMHTTPHandler:
         container_id: str,
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         extra_headers: dict[str, object] | None = None,
         extra_query: dict[str, object] | None = None,
         timeout: float | httpx.Timeout = 600,
@@ -9846,7 +9838,7 @@ class BaseLLMHTTPHandler:
         container_id: str,
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
@@ -9940,7 +9932,7 @@ class BaseLLMHTTPHandler:
         container_id: str,
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
@@ -10022,7 +10014,7 @@ class BaseLLMHTTPHandler:
         file_id: str,
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         extra_headers: dict[str, object] | None = None,
         timeout: float | httpx.Timeout = 600,
         _is_async: bool = False,
@@ -10110,7 +10102,7 @@ class BaseLLMHTTPHandler:
         file_id: str,
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: "LiteLLMLoggingObj | None",
         extra_headers: dict[str, object] | None = None,
         timeout: float | httpx.Timeout = 600,
         client: HTTPHandler | AsyncHTTPHandler | None = None,

@@ -224,7 +224,7 @@ class BaseBatchesConfig(ABC):
         self,
         model: str | None,
         raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj: LiteLLMLoggingObj | None,
         litellm_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
     ) -> dict:  # mutable-ok: list responses mirror the dict payload the proxy serializes
         """
@@ -270,7 +270,7 @@ class BaseBatchesConfig(ABC):
         self,
         model: str | None,
         raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj: LiteLLMLoggingObj | None,
         litellm_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
     ) -> LiteLLMBatch:
         """

@@ -443,7 +443,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         self,
         model: str | None,
         raw_response: httpx.Response,
-        logging_obj: LoggingClass,
+        logging_obj: LoggingClass | None,
         litellm_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
     ) -> dict[str, object]:  # mutable-ok: list responses mirror the dict payload the proxy serializes
         """Transform the Anthropic batch list response into the OpenAI list shape."""
@@ -481,7 +481,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         self,
         model: str | None,
         raw_response: httpx.Response,
-        logging_obj: LoggingClass,
+        logging_obj: LoggingClass | None,
         litellm_params: dict,  # mutable-ok: batch-config signature contract is a plain dict
     ) -> LiteLLMBatch:
         """Transform Anthropic MessageBatch cancel response to LiteLLM format."""

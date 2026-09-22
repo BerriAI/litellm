@@ -830,9 +830,8 @@ def list_batches(
                 model="",
                 provider=LlmProviders.ANTHROPIC,
             )
-            litellm_logging_obj: Final = cast(  # cast-ok: the client decorator injects litellm_logging_obj into kwargs
-                LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None)
-            )
+            litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj", None)
+            client: Final = kwargs.get("client", None)
             response = base_llm_http_handler.list_batches(
                 litellm_params=litellm_params,
                 provider_config=provider_config,
@@ -843,7 +842,7 @@ def list_batches(
                 after=after,
                 limit=limit,
                 _is_async=_is_async,
-                client=kwargs.get("client"),
+                client=(client if client is not None and isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else None),
                 timeout=timeout,
                 model="",
             )
@@ -1052,9 +1051,8 @@ def cancel_batch(
                 model=model or "",
                 provider=LlmProviders.ANTHROPIC,
             )
-            litellm_logging_obj: Final = cast(  # cast-ok: callers pass litellm_logging_obj through kwargs
-                LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None)
-            )
+            litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj", None)
+            client: Final = kwargs.get("client", None)
             response = base_llm_http_handler.cancel_batch(
                 batch_id=batch_id,
                 litellm_params=litellm_params,
@@ -1064,7 +1062,7 @@ def cancel_batch(
                 api_key=api_key,
                 logging_obj=litellm_logging_obj,
                 _is_async=_is_async,
-                client=kwargs.get("client"),
+                client=(client if client is not None and isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else None),
                 timeout=timeout,
                 model=model or "",
             )
