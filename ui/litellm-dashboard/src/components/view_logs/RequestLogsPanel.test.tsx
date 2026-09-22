@@ -3,10 +3,11 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import moment from "moment";
 import { NuqsTestingAdapter, type UrlUpdateEvent } from "nuqs/adapters/testing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
+import { chooseSelectOption, render, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import type { LogEntry } from "./columns";
+import type { PaginatedResponse } from "./log_filter_logic";
 import RequestLogsPanel from "./RequestLogsPanel";
 
 vi.mock("../networking", async (importOriginal) => {
@@ -53,15 +54,38 @@ vi.mock("./LogDetailsDrawer", () => ({
   },
 }));
 
+vi.mock("../templates/key_info_view", () => ({
+  default: function KeyInfoViewMock({
+    keyId,
+    keyData,
+    onClose,
+    backButtonText,
+  }: {
+    keyId: string;
+    keyData?: object;
+    onClose: () => void;
+    backButtonText: string;
+  }) {
+    return (
+      <div data-testid="key-info-view" data-key-id={keyId} data-key-found={String(keyData !== undefined)}>
+        <button type="button" onClick={onClose}>
+          {backButtonText}
+        </button>
+      </div>
+    );
+  },
+}));
+
 const debounce = vi.hoisted(() => ({ settled: null as string | null }));
 
-vi.mock("@tanstack/react-pacer/debouncer", () => ({
+vi.mock("@tanstack/react-pacer/debouncer", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-pacer/debouncer")>()),
   useDebouncedValue: vi.fn((value: unknown) => [debounce.settled ?? value, { cancel: vi.fn(), flush: vi.fn() }]),
 }));
 
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
-import { uiSpendLogsCall } from "../networking";
+import { keyInfoV1Call, uiSpendLogsCall } from "../networking";
 
 const logEntry = (overrides: Partial<LogEntry>): LogEntry => ({
   request_id: "req-1",
@@ -101,6 +125,28 @@ const defaultProps = {
 
 const row = (requestId: string) => document.querySelector(`[data-row-id="${requestId}"]`);
 const lastCall = () => vi.mocked(uiSpendLogsCall).mock.calls.at(-1)?.[0];
+const windowSeconds = () => {
+  const call = lastCall();
+  if (!call) throw new Error("uiSpendLogsCall was not called");
+  return moment
+    .utc(call.end_date, "YYYY-MM-DD HH:mm:ss")
+    .diff(moment.utc(call.start_date, "YYYY-MM-DD HH:mm:ss"), "seconds");
+};
+const fullPage = (count: number, prefix = "req") =>
+  Array.from({ length: count }, (_, index) => logEntry({ request_id: `${prefix}-${index}` }));
+const SESSION_CURSOR = "2026-07-07 09:50:13|key-1|sess-1";
+const respondWithPages = (page: number, pageSize: number, total: number, cursor: string | null = null) => {
+  const response: PaginatedResponse = {
+    data: fullPage(pageSize),
+    total,
+    page,
+    page_size: pageSize,
+    total_pages: Math.ceil(total / pageSize),
+    next_session_cursor: cursor,
+    has_more: page * pageSize < total,
+  };
+  vi.mocked(uiSpendLogsCall).mockResolvedValue(response);
+};
 
 const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
 const renderPanel = (searchParams?: string) =>
@@ -144,6 +190,10 @@ describe("RequestLogsPanel", () => {
     testQueryClient.clear();
     respondWith([]);
     debounce.settled = null;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe("server-grouped session pagination (#38060)", () => {
@@ -312,6 +362,8 @@ describe("RequestLogsPanel", () => {
       fireEvent.click(screen.getByTestId("pagination-next"));
       await waitFor(() => expect(lastCall()?.page).toBe(2));
 
+      await waitFor(() => expect(urlParams().get("page")).toBe("2"));
+
       fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "req-elsewhere" } });
 
       await waitFor(() => {
@@ -479,6 +531,14 @@ describe("RequestLogsPanel", () => {
   });
 
   describe("time range", () => {
+    beforeEach(() => {
+      vi.stubEnv("TZ", "America/New_York");
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
     it("requests a ~15 minute window when Last 15 Minutes is picked", async () => {
       const user = userEvent.setup();
       renderPanel();
@@ -487,16 +547,148 @@ describe("RequestLogsPanel", () => {
       await user.click(screen.getByRole("button", { name: /Last 24 Hours/i }));
       await user.click(await screen.findByRole("button", { name: "Last 15 Minutes" }));
 
-      const windowSeconds = () => {
-        const call = lastCall();
-        if (!call) throw new Error("no call");
-        return moment
-          .utc(call.end_date, "YYYY-MM-DD HH:mm:ss")
-          .diff(moment.utc(call.start_date, "YYYY-MM-DD HH:mm:ss"), "seconds");
-      };
-
       await waitFor(() => expect(windowSeconds()).toBeGreaterThanOrEqual(15 * 60));
       expect(windowSeconds()).toBeLessThanOrEqual(16 * 60);
+    });
+
+    it("restores a preset from ?range= and requests that window", async () => {
+      renderPanel("?range=15m");
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(windowSeconds()).toBeGreaterThanOrEqual(15 * 60);
+      expect(windowSeconds()).toBeLessThanOrEqual(16 * 60);
+      expect(screen.getByRole("button", { name: /Last 15 Minutes/i })).toBeInTheDocument();
+    });
+
+    it("falls back to the default 24 hour window for an unknown ?range=", async () => {
+      renderPanel("?range=3y");
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(windowSeconds()).toBeGreaterThanOrEqual(24 * 60 * 60);
+      expect(windowSeconds()).toBeLessThanOrEqual(24 * 60 * 60 + 60);
+      expect(screen.getByRole("button", { name: /Last 24 Hours/i })).toBeInTheDocument();
+    });
+
+    it("writes the picked preset to ?range= from page 1 and drops the key for the default preset", async () => {
+      const user = userEvent.setup();
+      respondWithPages(2, 25, 80, SESSION_CURSOR);
+      renderPanel("?page=2");
+
+      await waitFor(() => expect(lastCall()?.page).toBe(2));
+      await user.click(screen.getByRole("button", { name: /Last 24 Hours/i }));
+      await user.click(await screen.findByRole("button", { name: "Last Hour" }));
+
+      await waitFor(() => expect(urlParams().get("range")).toBe("1h"));
+      expect(urlParams().get("page")).toBeNull();
+      await waitFor(() => expect(lastCall()?.page).toBe(1));
+
+      await user.click(screen.getByRole("button", { name: /Last Hour/i }));
+      await user.click(await screen.findByRole("button", { name: "Last 24 Hours" }));
+
+      await waitFor(() => expect(urlParams().get("range")).toBeNull());
+    });
+
+    it("restores a custom range from ?range=custom&start=&end= and requests exactly that window", async () => {
+      renderPanel("?range=custom&start=2026-07-01T10:00Z&end=2026-07-02T10:30Z");
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.start_date).toBe("2026-07-01 10:00:00");
+      expect(lastCall()?.end_date).toBe("2026-07-02 10:30:00");
+      expect(screen.getByLabelText("Start time")).toHaveValue("2026-07-01T06:00");
+      expect(screen.getByLabelText("End time")).toHaveValue("2026-07-02T06:30");
+    });
+
+    it("queries the default window instead of an invalid date when a custom bound is missing or unparsable", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-07-07T10:00:00Z"));
+      const sqlTimestamp = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+      renderPanel("?range=custom&start=not-a-date");
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.start_date).toBe("2026-07-06 10:00:00");
+      expect(lastCall()?.end_date).toBe("2026-07-07 10:00:00");
+      const sentDates = vi
+        .mocked(uiSpendLogsCall)
+        .mock.calls.flatMap(([options]) => [options.start_date, options.end_date]);
+      expect(sentDates.every((value) => sqlTimestamp.test(value ?? ""))).toBe(true);
+      expect(screen.getByLabelText("Start time")).toHaveValue("");
+      expect(screen.getByLabelText("End time")).toHaveValue("");
+    });
+
+    it("ignores ?start= and ?end= when the range is a preset", async () => {
+      renderPanel("?range=1h&start=2026-07-01T10:00Z&end=2026-07-02T10:30Z");
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(windowSeconds()).toBeGreaterThanOrEqual(60 * 60);
+      expect(windowSeconds()).toBeLessThanOrEqual(61 * 60);
+      expect(screen.getByRole("button", { name: /Last Hour/i })).toBeInTheDocument();
+      expect(screen.queryByLabelText("Start time")).not.toBeInTheDocument();
+    });
+
+    it("toggling Custom Range writes ?range=custom with the current bounds and edits rewrite ?start= as UTC", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-07-07T10:00:00Z"));
+      const user = userEvent.setup();
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      await user.click(screen.getByRole("button", { name: /Last 24 Hours/i }));
+      await user.click(await screen.findByRole("button", { name: "Custom Range" }));
+
+      await waitFor(() => expect(urlParams().get("range")).toBe("custom"));
+      expect(urlParams().get("start")).toBe("2026-07-06T10:00Z");
+      expect(urlParams().get("end")).toBe("2026-07-07T10:00Z");
+      expect(screen.getByLabelText("Start time")).toHaveValue("2026-07-06T06:00");
+
+      fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "2026-07-01T10:00" } });
+
+      await waitFor(() => expect(urlParams().get("start")).toBe("2026-07-01T14:00Z"));
+      await waitFor(() => expect(lastCall()?.start_date).toBe("2026-07-01 14:00:00"));
+      expect(lastCall()?.page).toBe(1);
+    });
+
+    it("toggling Custom Range off goes back to the preset picked before it, anchored at the current time", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-07-07T10:00:00Z"));
+      const user = userEvent.setup();
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      await user.click(screen.getByRole("button", { name: /Last 24 Hours/i }));
+      await user.click(await screen.findByRole("button", { name: "Last Hour" }));
+      await user.click(await screen.findByRole("button", { name: /Last Hour/i }));
+      await user.click(await screen.findByRole("button", { name: "Custom Range" }));
+      await waitFor(() => expect(urlParams().get("range")).toBe("custom"));
+      fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "2026-07-01T10:00" } });
+      await waitFor(() => expect(lastCall()?.start_date).toBe("2026-07-01 14:00:00"));
+
+      vi.setSystemTime(new Date("2026-07-07T10:05:00Z"));
+      await user.click(screen.getByRole("button", { name: "Custom Range" }));
+
+      await waitFor(() => expect(urlParams().get("range")).toBe("1h"));
+      expect(urlParams().get("start")).toBeNull();
+      expect(urlParams().get("end")).toBeNull();
+      expect(screen.queryByLabelText("Start time")).not.toBeInTheDocument();
+      await waitFor(() => expect(lastCall()?.end_date).toBe("2026-07-07 10:05:00"));
+      expect(lastCall()?.start_date).toBe("2026-07-07 09:05:00");
+    });
+
+    it("Reset Filters clears the range, bounds and filters from the URL", async () => {
+      const user = userEvent.setup();
+      respondWithPages(2, 25, 80, SESSION_CURSOR);
+      renderPanel(
+        "?page=2&range=custom&start=2026-07-01T10:00Z&end=2026-07-02T10:30Z&filter_team=team-1&log_search=abc",
+      );
+
+      await waitFor(() => expect(lastCall()?.params?.team_id).toBe("team-1"));
+      await user.click(screen.getByRole("button", { name: "Reset Filters" }));
+
+      await waitFor(() => expect(urlParams().get("range")).toBeNull());
+      for (const key of ["start", "end", "filter_team", "log_search", "page"]) {
+        expect(urlParams().get(key)).toBeNull();
+      }
+      expect(await screen.findByRole("button", { name: /Last 24 Hours/i })).toBeInTheDocument();
+      await waitFor(() => expect(lastCall()?.params?.team_id).toBeUndefined());
     });
 
     it("restores the default 24 hour window when filters are reset", async () => {
@@ -753,41 +945,345 @@ describe("RequestLogsPanel", () => {
     });
   });
 
-  describe("hide health checks", () => {
+  describe("hide health checks (?hide_health_checks=)", () => {
     const toggle = () => screen.getByRole("switch", { name: "Hide Health Checks" });
 
-    it("defaults to showing health checks and refetches without them from page 1 when toggled on", async () => {
+    it("defaults to showing health checks and writes ?hide_health_checks=true from page 1 when toggled on", async () => {
       const user = userEvent.setup();
+      respondWithPages(1, 25, 80, SESSION_CURSOR);
       renderPanel();
 
-      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      await waitFor(() => expect(row("req-0")).not.toBeNull());
       expect(lastCall()?.params?.exclude_internal_health_checks).toBe(false);
       expect(toggle()).not.toBeChecked();
+      fireEvent.click(screen.getByTestId("pagination-next"));
+      await waitFor(() => expect(lastCall()?.page).toBe(2));
 
       await user.click(toggle());
 
       await waitFor(() => expect(lastCall()?.params?.exclude_internal_health_checks).toBe(true));
       expect(lastCall()?.page).toBe(1);
+      expect(lastCall()?.params?.session_cursor).toBeUndefined();
       expect(toggle()).toBeChecked();
-      expect(sessionStorage.getItem("excludeInternalHealthChecks")).toBe("true");
+      expect(urlParams().get("hide_health_checks")).toBe("true");
+      expect(urlParams().get("page")).toBeNull();
+      expect(sessionStorage.getItem("excludeInternalHealthChecks")).toBeNull();
     });
 
-    it("restores the persisted toggle from sessionStorage", async () => {
-      sessionStorage.setItem("excludeInternalHealthChecks", "true");
-      renderPanel();
+    it("restores the toggle from ?hide_health_checks=true and drops the key again when toggled off", async () => {
+      const user = userEvent.setup();
+      renderPanel("?hide_health_checks=true");
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
       expect(lastCall()?.params?.exclude_internal_health_checks).toBe(true);
       expect(toggle()).toBeChecked();
+
+      await user.click(toggle());
+
+      await waitFor(() => expect(lastCall()?.params?.exclude_internal_health_checks).toBe(false));
+      expect(urlParams().get("hide_health_checks")).toBeNull();
     });
 
-    it("falls back to showing health checks when the persisted value is malformed", async () => {
-      sessionStorage.setItem("excludeInternalHealthChecks", "{not json");
-      renderPanel();
+    it("shows health checks for a malformed ?hide_health_checks= and ignores the old sessionStorage flag", async () => {
+      sessionStorage.setItem("excludeInternalHealthChecks", "true");
+      renderPanel("?hide_health_checks=maybe");
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
       expect(lastCall()?.params?.exclude_internal_health_checks).toBe(false);
       expect(toggle()).not.toBeChecked();
+    });
+  });
+
+  describe("URL-persisted table state", () => {
+    it("restores page, page size, sort, search and filters from the URL without opening the drawer", async () => {
+      const expectedParams = {
+        sort_by: "spend",
+        sort_order: "asc",
+        search: "needle",
+        team_id: "team-9",
+        status_filter: "failure",
+        cache_hit_filter: "hit",
+        key_alias: "alias-9",
+        user_id: "user-9",
+        end_user: "end-9",
+        error_code: "429",
+        error_message: "boom",
+        api_key: "hash-9",
+        session_id: "sess-9",
+        model_id: "model-9",
+        model: "gpt-9",
+        request_id: "req-9",
+      };
+      respondWithPages(3, 50, 200);
+      renderPanel(
+        "?page=3&page_size=50&sort_by=spend&sort_order=asc&log_search=needle" +
+          "&filter_team=team-9&filter_status=failure&filter_cache=hit&filter_key_alias=alias-9&filter_user=user-9" +
+          "&filter_end_user=end-9&filter_error_code=429&filter_error_message=boom&filter_key_hash=hash-9" +
+          "&filter_session=sess-9&filter_model_id=model-9&filter_model=gpt-9&filter_request_id=req-9",
+      );
+
+      await waitFor(() => expect(row("req-0")).not.toBeNull());
+      const call = lastCall();
+      if (!call) throw new Error("uiSpendLogsCall was not called");
+      expect(call.page).toBe(3);
+      expect(call.page_size).toBe(50);
+      expect(call.params).toMatchObject(expectedParams);
+      expect(screen.getByTestId("datatable-search")).toHaveValue("needle");
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 3 of 4");
+      expect(screen.getByTestId("filter-chip-session_id")).toHaveTextContent("Session ID:sess-9");
+      expect(screen.getByTestId("log-details-drawer")).toHaveTextContent("closed");
+    });
+
+    it("clamps a URL page past the end straight to the last page without requesting the pages in between", async () => {
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ page }) => {
+        const shared = { total: 60, page, page_size: 25, total_pages: 3 };
+        if (page === 40) return { ...shared, data: [], next_session_cursor: null, has_more: false };
+        if (page === 3)
+          return { ...shared, data: fullPage(10, "req-last"), next_session_cursor: null, has_more: false };
+        return { ...shared, data: fullPage(25), next_session_cursor: SESSION_CURSOR, has_more: true };
+      });
+      renderPanel("?page=40");
+
+      await waitFor(() => expect(row("req-last-0")).not.toBeNull());
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 3 of 3");
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 51-60 of 60");
+      expect(urlParams().get("page")).toBe("3");
+      expect(vi.mocked(uiSpendLogsCall).mock.calls.map(([options]) => options.page)).toEqual([40, 3]);
+    });
+
+    it("falls back to the default sort column when ?sort_by= is not a sortable log field", async () => {
+      renderPanel("?sort_by=api_key&sort_order=asc");
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.params?.sort_by).toBe("startTime");
+      expect(lastCall()?.params?.sort_order).toBe("asc");
+      expect(screen.getByTestId("sort-trigger-startTime").innerHTML).toContain('data-sort-indicator="asc"');
+    });
+
+    it("keeps a URL page when the fetch fails instead of clamping it back to page 1", async () => {
+      vi.mocked(uiSpendLogsCall).mockRejectedValue(new Error("boom"));
+      renderPanel("?page=3");
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      await waitFor(() => expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0));
+      await expect(waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), { timeout: 300 })).rejects.toThrow();
+      expect(vi.mocked(uiSpendLogsCall).mock.calls.map(([options]) => options.page)).toEqual([3]);
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+    });
+
+    it("writes the search box to ?log_search= only and returns to the first page", async () => {
+      respondWithPages(2, 25, 80, SESSION_CURSOR);
+      renderPanel("?page=2");
+
+      await waitFor(() => expect(lastCall()?.page).toBe(2));
+      fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "req-77" } });
+
+      await waitFor(() => expect(urlParams().get("log_search")).toBe("req-77"));
+      expect(urlParams().get("search")).toBeNull();
+      expect(urlParams().get("page")).toBeNull();
+      await waitFor(() => expect(lastCall()?.page).toBe(1));
+    });
+
+    it("writes sort changes to ?sort_by= and ?sort_order= and returns to the first page", async () => {
+      const user = userEvent.setup();
+      respondWith([logEntry({ request_id: "req-a" })]);
+      renderPanel("?page=2");
+
+      await waitFor(() => expect(lastCall()?.page).toBe(2));
+      await chooseSelectOption(user, screen.getByTestId("sort-trigger-spend"), /ascending/i, "menuitem");
+
+      await waitFor(() => expect(urlParams().get("sort_by")).toBe("spend"));
+      expect(urlParams().get("sort_order")).toBe("asc");
+      expect(urlParams().get("page")).toBeNull();
+      await waitFor(() => expect(lastCall()?.params?.sort_by).toBe("spend"));
+      expect(lastCall()?.params?.sort_order).toBe("asc");
+      expect(lastCall()?.page).toBe(1);
+    });
+
+    it("writes the next page to ?page= and the page size to ?page_size=", async () => {
+      const user = userEvent.setup();
+      respondWithPages(1, 25, 80, SESSION_CURSOR);
+      renderPanel();
+
+      await waitFor(() => expect(row("req-0")).not.toBeNull());
+      fireEvent.click(screen.getByTestId("pagination-next"));
+
+      await waitFor(() => expect(urlParams().get("page")).toBe("2"));
+      expect(urlParams().get("page_size")).toBeNull();
+
+      await chooseSelectOption(user, screen.getByTestId("pagination-page-size"), "50");
+
+      await waitFor(() => expect(urlParams().get("page_size")).toBe("50"));
+      expect(urlParams().get("page")).toBeNull();
+      await waitFor(() => expect(lastCall()?.page_size).toBe(50));
+      expect(lastCall()?.page).toBe(1);
+      expect(lastCall()?.params?.session_cursor).toBeUndefined();
+    });
+
+    it("applying the Session ID filter writes ?filter_session= and leaves the drawer's ?session_id= untouched", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      await user.click(screen.getByTestId("datatable-filters-trigger"));
+      await user.type(await screen.findByPlaceholderText("Enter session ID…"), "sess-9");
+      await user.click(screen.getByTestId("filter-drawer-apply"));
+
+      await waitFor(() => expect(urlParams().get("filter_session")).toBe("sess-9"));
+      expect(urlParams().get("session_id")).toBeNull();
+      expect(urlParams().get("log_id")).toBeNull();
+      await waitFor(() => expect(lastCall()?.params?.session_id).toBe("sess-9"));
+      expect(screen.getByTestId("log-details-drawer")).toHaveTextContent("closed");
+    });
+
+    it("removing the Search chip clears ?log_search= while other filters stay in the URL", async () => {
+      const user = userEvent.setup();
+      renderPanel("?log_search=sess-42&filter_team=team-1");
+
+      await waitFor(() => expect(lastCall()?.params?.search).toBe("sess-42"));
+      await user.click(screen.getByRole("button", { name: "Remove Search filter" }));
+
+      await waitFor(() => expect(urlParams().get("log_search")).toBeNull());
+      expect(urlParams().get("filter_team")).toBe("team-1");
+      expect(screen.getByTestId("datatable-search")).toHaveValue("");
+    });
+
+    it("keeps a URL page while the panel is inactive and requests it once the tab becomes active", async () => {
+      respondWithPages(3, 25, 80);
+      const view = renderWithProviders(<RequestLogsPanel {...defaultProps} isActive={false} />, {
+        searchParams: "?page=3",
+        onUrlUpdate,
+      });
+
+      expect(uiSpendLogsCall).not.toHaveBeenCalled();
+      view.rerender(<RequestLogsPanel {...defaultProps} isActive />);
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(vi.mocked(uiSpendLogsCall).mock.calls[0]?.[0].page).toBe(3);
+    });
+  });
+
+  describe("session cursors across browser history", () => {
+    it("does not send another filter's keyset cursor when Back restores an unfiltered page", async () => {
+      const user = userEvent.setup();
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ page = 1, params }) => {
+        const scope = params?.session_id ?? "all";
+        return {
+          data: fullPage(25, `${scope}-p${page}`),
+          total: 500,
+          page,
+          page_size: 25,
+          total_pages: 20,
+          next_session_cursor: `${scope}|${page}`,
+          has_more: true,
+        };
+      });
+      const { goBack } = renderPanelWithHistory();
+      const goToNextPage = async (scope: string, page: number) => {
+        fireEvent.click(screen.getByTestId("pagination-next"));
+        await waitFor(() => expect(row(`${scope}-p${page}-0`)).not.toBeNull());
+      };
+
+      await waitFor(() => expect(row("all-p1-0")).not.toBeNull());
+      await goToNextPage("all", 2);
+      await goToNextPage("all", 3);
+      expect(lastCall()?.params?.session_cursor).toBe("all|2");
+
+      await user.click(row("all-p3-0") as HTMLElement);
+      await waitFor(() => expect(urlParams().get("log_id")).toBe("all-p3-0"));
+      await user.click(screen.getByRole("button", { name: "close-drawer" }));
+      await waitFor(() => expect(urlParams().get("log_id")).toBeNull());
+
+      await user.click(screen.getByTestId("datatable-filters-trigger"));
+      await user.type(await screen.findByPlaceholderText("Enter session ID…"), "sess-b");
+      await user.click(screen.getByTestId("filter-drawer-apply"));
+      await waitFor(() => expect(row("sess-b-p1-0")).not.toBeNull());
+      await goToNextPage("sess-b", 2);
+      await goToNextPage("sess-b", 3);
+      expect(lastCall()?.params?.session_cursor).toBe("sess-b|2");
+
+      const callsBeforeBack = vi.mocked(uiSpendLogsCall).mock.calls.length;
+      goBack();
+
+      await waitFor(() => expect(row("all-p3-0")).not.toBeNull());
+      const unfilteredPageThreeCalls = vi
+        .mocked(uiSpendLogsCall)
+        .mock.calls.slice(callsBeforeBack)
+        .map(([options]) => options)
+        .filter((options) => options.page === 3 && options.page_size === 25 && !options.params?.session_id);
+      expect(unfilteredPageThreeCalls.length).toBeGreaterThan(0);
+      expect(unfilteredPageThreeCalls.map((options) => options.params?.session_cursor)).toEqual(
+        unfilteredPageThreeCalls.map(() => undefined),
+      );
+    });
+  });
+
+  describe("key hash takeover (?key=)", () => {
+    const keyInfoView = () => screen.getByTestId("key-info-view");
+
+    it("clicking a key hash pushes ?key= and swaps the table for KeyInfoView", async () => {
+      const user = userEvent.setup();
+      respondWith([logEntry({ request_id: "req-1", metadata: { user_api_key: "sk-hash-9" } })]);
+      renderPanel();
+
+      await waitFor(() => expect(row("req-1")).not.toBeNull());
+      await user.click(screen.getByText("sk-hash-9"));
+
+      await waitFor(() => expect(urlParams().get("key")).toBe("sk-hash-9"));
+      expect(urlParams().get("log_id")).toBeNull();
+      expect(historyModes()).toEqual(["push"]);
+      await waitFor(() => expect(keyInfoView()).toHaveAttribute("data-key-id", "sk-hash-9"));
+      expect(screen.queryByTestId("datatable-search")).not.toBeInTheDocument();
+    });
+
+    it("opens KeyInfoView from ?key= on load and Back to Logs clears it", async () => {
+      const user = userEvent.setup();
+      renderPanel("?key=sk-hash-9");
+
+      await waitFor(() => expect(keyInfoView()).toHaveAttribute("data-key-id", "sk-hash-9"));
+      await user.click(screen.getByRole("button", { name: "Back to Logs" }));
+
+      await waitFor(() => expect(urlParams().get("key")).toBeNull());
+      expect(await screen.findByTestId("datatable-search")).toBeInTheDocument();
+    });
+
+    it("shows a loading state instead of the logs table while ?key= resolves", async () => {
+      vi.mocked(keyInfoV1Call).mockImplementationOnce(() => new Promise(() => {}));
+      renderPanel("?key=sk-hash-9");
+
+      expect(await screen.findByText("Loading key...")).toBeInTheDocument();
+      expect(screen.queryByTestId("datatable-search")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("key-info-view")).not.toBeInTheDocument();
+    });
+
+    it("shows KeyInfoView's not-found state when ?key= fails to load, and Back to Logs clears the key", async () => {
+      const user = userEvent.setup();
+      vi.mocked(keyInfoV1Call).mockRejectedValueOnce(new Error("key not found"));
+      renderPanel("?key=sk-bogus");
+
+      await waitFor(() => expect(keyInfoView()).toHaveAttribute("data-key-found", "false"));
+      expect(keyInfoView()).toHaveAttribute("data-key-id", "sk-bogus");
+      expect(screen.queryByTestId("datatable-search")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Back to Logs" }));
+
+      await waitFor(() => expect(urlParams().get("key")).toBeNull());
+      expect(await screen.findByTestId("datatable-search")).toBeInTheDocument();
+    });
+
+    it("Back after opening a key closes KeyInfoView and shows the logs table again", async () => {
+      const user = userEvent.setup();
+      respondWith([logEntry({ request_id: "req-1", metadata: { user_api_key: "sk-hash-9" } })]);
+      const { goBack } = renderPanelWithHistory();
+
+      await waitFor(() => expect(row("req-1")).not.toBeNull());
+      await user.click(screen.getByText("sk-hash-9"));
+      await waitFor(() => expect(keyInfoView()).toHaveAttribute("data-key-id", "sk-hash-9"));
+
+      goBack();
+
+      await waitFor(() => expect(screen.queryByTestId("key-info-view")).not.toBeInTheDocument());
+      expect(row("req-1")).not.toBeNull();
     });
   });
 
@@ -801,6 +1297,17 @@ describe("RequestLogsPanel", () => {
       await user.click(screen.getByRole("button", { name: "Stop" }));
 
       expect(screen.queryByText("Auto-refreshing every 15 seconds")).not.toBeInTheDocument();
+      expect(sessionStorage.getItem("isLiveTail")).toBe("false");
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+    });
+
+    it("stays off on load when it was stopped earlier in this browser tab", async () => {
+      sessionStorage.setItem("isLiveTail", "false");
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(screen.queryByText("Auto-refreshing every 15 seconds")).not.toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: "Live Tail" })).not.toBeChecked();
     });
   });
 });

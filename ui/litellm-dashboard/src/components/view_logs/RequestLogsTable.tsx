@@ -17,6 +17,7 @@ interface RequestLogsTableProps {
   data: LogEntry[];
   rowCount: number;
   isLoading: boolean;
+  isError?: boolean;
   isRefreshing: boolean;
   pagination: PaginationState;
   onPaginationChange: OnChangeFn<PaginationState>;
@@ -55,6 +56,7 @@ export function RequestLogsTable({
   data,
   rowCount,
   isLoading,
+  isError,
   isRefreshing,
   pagination,
   onPaginationChange,
@@ -101,6 +103,7 @@ export function RequestLogsTable({
       columnFilters={columnFilters}
       onColumnFiltersChange={onColumnFiltersChange}
       isLoading={isLoading}
+      isError={isError}
       loadingMessage="Loading request logs…"
       noDataMessage={<RequestLogsEmptyState filtered={isFiltered} />}
       size="compact"
