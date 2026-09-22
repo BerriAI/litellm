@@ -393,6 +393,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
@@ -418,6 +419,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
+    LITELLM_CALL_ID_HEADER,
     headers_with_litellm_call_id,
     litellm_call_id_headers,
     with_litellm_call_id,
@@ -1813,7 +1815,10 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
     _log_model_access_denial(exc)
     headers: Final = exc.headers
-    error_dict: Final = exc.to_dict()
+    error_dict: Final = with_call_id(
+        JSON_OBJECT.validate_python(exc.to_dict()),
+        error_body_call_id(general_settings_view(), headers.get(LITELLM_CALL_ID_HEADER)),
+    )
     status_code: Final = int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
     _close_dangling_otel_server_span(request, status_code, exc=exc)
     return JSONResponse(
@@ -2477,6 +2482,13 @@ heuristic_v1_tuning_baselines: Mapping[str, str] | None = None
 # second ProxyConfig instance must not get its own independent lock over it.
 MODEL_RECONCILE_LOCK: Final = asyncio.Lock()
 general_settings: dict = {}
+_GENERAL_SETTINGS_VIEW: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def general_settings_view() -> Mapping[str, object]:
+    return _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
+
+
 config_passthrough_endpoints: list[dict[str, Any]] | None = None
 log_file: Final = "api_log.json"
 worker_config: Final = None

@@ -8,7 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 import litellm
-from litellm.anthropic_interface.exceptions import AnthropicErrorResponse, AnthropicExceptionMapping
+from litellm.anthropic_interface.exceptions import (
+    AnthropicErrorDetail,
+    AnthropicErrorResponse,
+    AnthropicExceptionMapping,
+)
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     AnthropicContextManagementError,
@@ -25,8 +29,10 @@ from litellm.proxy.common_request_processing import (
     proxy_exception_from_http_exception,
     resolve_litellm_call_id,
 )
+from litellm.proxy.common_utils.error_body_call_id import error_body_call_id
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.openai_error_payload import (
+    LITELLM_CALL_ID_HEADER,
     error_status_code,
     openai_error_param,
     openai_error_type,
@@ -37,9 +43,29 @@ from litellm.types.utils import TokenCountResponse
 router: Final = APIRouter()
 
 
+def _with_provider_specific_fields(exc: ProxyException, detail: AnthropicErrorDetail) -> AnthropicErrorDetail:
+    if not exc.provider_specific_fields:
+        return detail
+    with_fields: Final[AnthropicErrorDetail] = {**detail, "provider_specific_fields": exc.provider_specific_fields}
+    return with_fields
+
+
+def _anthropic_error_detail(
+    exc: ProxyException, detail: AnthropicErrorDetail, call_id: str | None
+) -> AnthropicErrorDetail:
+    if call_id is None:
+        return _with_provider_specific_fields(exc, detail)
+    with_call_id: Final[AnthropicErrorDetail] = {
+        **_with_provider_specific_fields(exc, detail),
+        "litellm_call_id": call_id,
+    }
+    return with_call_id
+
+
 def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
     from litellm.proxy.proxy_server import (
         _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; error JSONResponses returned by the route must stamp the OTel server span like the global ProxyException handler does
+        general_settings_view,
     )
 
     status_code: Final = int(exc.code) if exc.code is not None and exc.code.isdigit() else 500
@@ -49,11 +75,10 @@ def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSO
         raw_message=exc.message,
         request_id=request.headers.get("x-request-id"),
     )
-    if not exc.provider_specific_fields:
-        return JSONResponse(status_code=status_code, content=envelope, headers=exc.headers)
+    body_call_id: Final = error_body_call_id(general_settings_view(), exc.headers.get(LITELLM_CALL_ID_HEADER))
     content: Final[AnthropicErrorResponse] = {
         **envelope,
-        "error": {**envelope["error"], "provider_specific_fields": exc.provider_specific_fields},
+        "error": _anthropic_error_detail(exc, envelope["error"], body_call_id),
     }
     return JSONResponse(status_code=status_code, content=content, headers=exc.headers)
 

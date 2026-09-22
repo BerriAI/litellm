@@ -95,6 +95,71 @@ async def test_openai_exception_handler_invalid_empty_code_defaults_to_500():
     }
 
 
+def _call_id_exception(headers):
+    return ProxyException(
+        message="bad input",
+        type="invalid_request_error",
+        param="model",
+        code=400,
+        headers=headers,
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_copies_the_call_id_into_the_error_when_opted_in(monkeypatch):
+    """With include_call_id_in_error_body on, error.litellm_call_id is byte-identical to the
+    x-litellm-call-id header, so a pasted str(e) names the request to look up."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"include_call_id_in_error_body": True})
+    exc = _call_id_exception({"x-litellm-call-id": "call-8302"})
+
+    response = await openai_exception_handler(request=_make_request(), exc=exc)
+    body = json.loads(response.body)
+
+    assert response.headers["x-litellm-call-id"] == "call-8302"
+    assert body == {
+        "error": {
+            "message": "bad input",
+            "type": "invalid_request_error",
+            "param": "model",
+            "code": "400",
+            "litellm_call_id": "call-8302",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_leaves_the_error_alone_when_opted_out(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    exc = _call_id_exception({"x-litellm-call-id": "call-8302"})
+
+    response = await openai_exception_handler(request=_make_request(), exc=exc)
+    body = json.loads(response.body)
+
+    assert response.headers["x-litellm-call-id"] == "call-8302"
+    assert body == {
+        "error": {
+            "message": "bad input",
+            "type": "invalid_request_error",
+            "param": "model",
+            "code": "400",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_never_fabricates_a_call_id(monkeypatch):
+    """An error raised before a call id exists (auth failures, say) carries no header,
+    and the body must not invent one."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"include_call_id_in_error_body": True})
+    exc = _call_id_exception({})
+
+    response = await openai_exception_handler(request=_make_request(), exc=exc)
+    body = json.loads(response.body)
+
+    assert "x-litellm-call-id" not in response.headers
+    assert "litellm_call_id" not in body["error"]
+
+
 # ---------------------------------------------------------------------------
 # _close_dangling_otel_server_span
 # ---------------------------------------------------------------------------

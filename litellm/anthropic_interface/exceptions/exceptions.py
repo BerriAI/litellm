@@ -25,6 +25,7 @@ class AnthropicErrorDetail(TypedDict):
     type: AnthropicErrorType
     message: str
     provider_specific_fields: NotRequired[ReadOnly[Mapping[str, object]]]
+    litellm_call_id: NotRequired[ReadOnly[str]]
 
 
 class AnthropicErrorResponse(TypedDict, total=False):
