@@ -586,6 +586,18 @@
           "type": "number",
           "minimum": 0
         },
+        "output_cost_per_image_1024": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_image_1536": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_image_512": {
+          "type": "number",
+          "minimum": 0
+        },
         "output_cost_per_image_token": {
           "type": "number",
           "minimum": 0
@@ -825,6 +837,9 @@
           }
         },
         "supports_adaptive_thinking": {
+          "type": "boolean"
+        },
+        "supports_anthropic_compaction": {
           "type": "boolean"
         },
         "supports_anthropic_thinking_payload": {

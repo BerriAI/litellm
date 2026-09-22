@@ -6,10 +6,12 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
+from litellm.exceptions import InternalServerError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.bug_report import ISSUE_URL_BASE
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -2418,3 +2420,16 @@ def test_mcp_auth_policy_uses_original_request_model(monkeypatch, model, expecte
     synthetic = proxy_logging._convert_mcp_to_llm_format(proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs)
     assert ("model-rule" in synthetic["metadata"]["guardrails"]) is expected
     assert "request-rule" in synthetic["metadata"]["guardrails"]
+
+
+def test_handle_exception_on_proxy_logs_bug_report_only_for_unmapped_500(caplog):
+    with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+        provider_result = handle_exception_on_proxy(
+            InternalServerError(message="upstream 500", llm_provider="openai", model="gpt-4")
+        )
+        assert ISSUE_URL_BASE not in caplog.text
+        internal_result = handle_exception_on_proxy(KeyError("missing"))
+
+    assert provider_result.code == internal_result.code == "500"
+    assert ISSUE_URL_BASE in caplog.text
+    assert ISSUE_URL_BASE not in internal_result.message
