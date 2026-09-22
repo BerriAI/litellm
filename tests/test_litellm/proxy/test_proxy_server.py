@@ -3200,7 +3200,7 @@ def test_normalize_datetime_for_sorting():
 
 
 @pytest.mark.asyncio
-async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
+async def test_add_proxy_budget_to_db_only_creates_user_no_keys(monkeypatch):
     """
     Test that _add_proxy_budget_to_db only creates a user and no keys are added.
 
@@ -3218,8 +3218,8 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
     from litellm.proxy.proxy_server import ProxyStartupEvent
 
     # Set up required litellm settings
-    litellm.budget_duration = "30d"
-    litellm.max_budget = 100.0
+    monkeypatch.setattr(litellm, "budget_duration", "30d")
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
 
     litellm_proxy_budget_name = "litellm-proxy-budget"
 
@@ -3258,7 +3258,7 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
 
 
 @pytest.mark.asyncio
-async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
+async def test_add_proxy_budget_to_db_backfills_budget_reset_at(monkeypatch):
     """
     Test that _upsert_proxy_budget_with_reset_at_backfill issues a conditional
     update_many with `WHERE budget_reset_at IS NULL` to backfill the column on
@@ -3276,8 +3276,8 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
     import litellm
     from litellm.proxy.proxy_server import ProxyStartupEvent
 
-    litellm.budget_duration = "30d"
-    litellm.max_budget = 100.0
+    monkeypatch.setattr(litellm, "budget_duration", "30d")
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
     litellm_proxy_budget_name = "litellm-proxy-budget"
 
     mock_prisma = MagicMock()
