@@ -5936,12 +5936,13 @@ class TestMCPDcrBridgeDelegateAdmission:
 
     @staticmethod
     def _wrapped_user_lookup_error(original: BaseException) -> ValueError:
-        """Reproduce get_user_object's real exception contract (litellm/proxy/auth/auth_checks.py): it
-        catches every DB failure in a broad ``except`` and re-raises a bare ``ValueError``, so the
-        original error (a missing-user Exception or a real outage) survives only as ``__context__``.
-        Injecting a raw ConnectionError/Exception instead would exercise a shape production never
-        produces and let a chain-blind outage classifier pass. That wrapping fidelity is itself pinned by
-        test_get_user_object_wraps_db_outage_as_valueerror_preserving_context in test_auth_checks."""
+        """Reproduce get_user_object's exception contract (litellm/proxy/auth/auth_checks.py): a read
+        failure that is not a database outage is re-raised as a bare ``ValueError`` with the original
+        error only as ``__context__``, while an outage propagates raw (pinned by
+        test_get_user_object_surfaces_a_db_outage_as_503_not_as_a_missing_user and
+        test_get_user_object_still_reports_a_non_outage_read_failure_as_a_missing_user in
+        test_auth_checks). The wrapped shape is the harder one for the outage classifier, so injecting
+        it here keeps a chain-blind classifier from passing."""
         try:
             raise original
         except BaseException:

@@ -26,6 +26,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
     count_request_input_tokens,
     estimate_request_max_cost,
+    release_unbound_budget_reservation,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -552,3 +553,41 @@ async def test_team_member_reservation_counter_adds_temp_increase_to_live_team_d
     assert counter is not None
     assert counter.max_budget == expected_max_budget
     assert counter.fallback_spend == 0.5
+
+
+@pytest.mark.asyncio
+async def test_reservation_starts_unbound_to_any_callback():
+    reservation: Final = await _reserve("/v1/responses")
+
+    assert reservation is not None
+    assert reservation["callback_bound"] is False
+
+
+@pytest.mark.asyncio
+async def test_release_unbound_budget_reservation_frees_the_counter(spend_counter_cache: DualCache):
+    counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
+    reservation: Final = await _reserve_for_tiny_budget_key(
+        "/v1/chat/completions", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
+    )
+    assert reservation is not None
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reservation["reserved_cost"])
+
+    await release_unbound_budget_reservation(reservation)
+
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(0.0)
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_callback(spend_counter_cache: DualCache):
+    counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
+    reservation: Final = await _reserve_for_tiny_budget_key(
+        "/v1/chat/completions", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
+    )
+    assert reservation is not None
+    reservation["callback_bound"] = True
+
+    await release_unbound_budget_reservation(reservation)
+
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reservation["reserved_cost"])
+    assert reservation["finalized"] is False

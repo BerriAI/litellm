@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _extract_reasoning_content,  # pyright: ignore[reportPrivateUsage]  # same import as the OpenAI transformation
+    merge_consecutive_system_messages,
     strip_litellm_internal_message_fields,
     strip_name_from_message,
 )
@@ -464,7 +465,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             new_messages.append(_message)
 
         if "claude" not in model:
-            new_messages = _split_parallel_tool_calls(cast(list[AllMessageValues], new_messages))
+            new_messages = _split_parallel_tool_calls(
+                merge_consecutive_system_messages(cast(list[AllMessageValues], new_messages))
+            )
 
         if is_async:
             return super()._transform_messages(messages=new_messages, model=model, is_async=cast(Literal[True], True))

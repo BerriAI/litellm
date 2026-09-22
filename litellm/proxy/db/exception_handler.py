@@ -398,11 +398,8 @@ class PrismaDBExceptionHandler:
 
         ``is_database_service_unavailable_error`` classifies a single exception
         by type, which a caller that catches a raw DB failure and re-raises a
-        domain exception of a different type defeats. ``get_user_object`` in
-        ``litellm/proxy/auth/auth_checks.py`` is the concrete case: it wraps
-        every DB error, a genuine outage included, in a bare ``ValueError``
-        whose original error survives only as ``__context__``. A type check on
-        the ``ValueError`` misses the outage, so the caller would mistake an
+        domain exception of a different type defeats. A type check on the
+        wrapper misses the outage, so the caller would mistake an
         infrastructure fault for an auth failure. Walking the chain recovers the
         real signal, which is the PEP 3134 way to inspect a wrapped cause.
 

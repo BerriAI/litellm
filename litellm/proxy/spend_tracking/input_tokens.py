@@ -20,7 +20,7 @@ from typing import Final
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.rust_bridge import runtime
-from litellm.rust_bridge.catalog import Context, Route
+from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.token_counter import (
     TOKEN_COUNTER,
     RustTokenCounterFactory,
@@ -87,7 +87,7 @@ async def _count_group(
         return await python()
     try:
         return await runtime.arun(
-            Context(Route.TOKEN_COUNTER, provider=tokenizer),
+            RouteContext(Route.TOKEN_COUNTER, provider=tokenizer),
             binding=TOKEN_COUNTER,
             native=lambda factory: _native_counts(factory, tokenizer, raw_body, models),
             python=python,

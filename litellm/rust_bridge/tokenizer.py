@@ -9,7 +9,7 @@ from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
 from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, HuggingFaceTokenizer, OpenAIEncoding
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Context, Route
+from litellm.rust_bridge.catalog import Route, RouteContext
 
 if TYPE_CHECKING:
     from litellm.rust_bridge._native import Tokenizer as NativeTokenizer
@@ -27,8 +27,8 @@ TOKENIZER: Final = NativeBinding("Tokenizer", validate=_as_factory)
 
 # The catalog contexts the tokenizer factories dispatch on. Callers that cache a tokenizer per
 # backend key their cache on `decision(...)` of the same context, so key and dispatch agree.
-TIKTOKEN_CONTEXT: Final = Context(Route.TOKENIZER, provider="tiktoken")
-HUGGINGFACE_CONTEXT: Final = Context(Route.TOKENIZER, provider="huggingface")
+TIKTOKEN_CONTEXT: Final = RouteContext(Route.TOKENIZER, provider="tiktoken")
+HUGGINGFACE_CONTEXT: Final = RouteContext(Route.TOKENIZER, provider="huggingface")
 
 
 @lru_cache(maxsize=8)
