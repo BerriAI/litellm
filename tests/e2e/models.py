@@ -60,6 +60,7 @@ class KeyMetadata(BaseModel):
     priority: str | None = None
     batch_enqueued_token_limit: int | None = None
     tag: str | None = None
+    guardrails: list[str] | None = None
 
 
 class ObjectPermission(BaseModel):
@@ -695,6 +696,20 @@ class EmbedBody(BaseModel):
 
 class EmbedResponse(BaseModel):
     model: str | None = None
+
+
+# ---------- videos ----------
+
+
+class VideoCreateBody(BaseModel):
+    model: str
+    prompt: str
+    seconds: str | None = None
+
+
+class VideoCreateResponse(BaseModel):
+    id: str
+    status: str | None = None
 
 
 # ---------- rerank ----------
