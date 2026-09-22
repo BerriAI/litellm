@@ -34,6 +34,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_provider_specific_headers_to_request,
     check_if_token_is_service_account,
     clean_headers,
+    move_guardrails_to_metadata,
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
@@ -5185,6 +5186,45 @@ def test_clean_headers_strips_x_api_key_when_byok_enabled_but_x_api_key_was_auth
 # ---------------------------------------------------------------------------
 # Team guardrail + global policy regression tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_move_guardrails_to_metadata_moves_include_guardrail_response_before_the_no_guardrail_early_out():
+    policy_registry = MagicMock()
+    policy_registry.is_initialized.return_value = False
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    true_data = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "include_guardrail_response": True,
+    }
+    with patch("litellm.proxy.policy_engine.policy_registry.get_policy_registry", return_value=policy_registry):
+        await move_guardrails_to_metadata(
+            data=true_data,
+            _metadata_variable_name="metadata",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert "include_guardrail_response" not in true_data
+    assert true_data["metadata"]["include_guardrail_response"] is True
+
+    string_data = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "include_guardrail_response": "true",
+    }
+    with patch("litellm.proxy.policy_engine.policy_registry.get_policy_registry", return_value=policy_registry):
+        await move_guardrails_to_metadata(
+            data=string_data,
+            _metadata_variable_name="metadata",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert "include_guardrail_response" not in string_data
+    assert string_data["metadata"]["include_guardrail_response"] is False
 
 
 @pytest.mark.asyncio

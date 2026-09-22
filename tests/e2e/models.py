@@ -334,6 +334,7 @@ class ChatBody(BaseModel):
     tools: Sequence[ChatTool | McpChatTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
+    include_guardrail_response: bool | None = None
     response_format: dict[str, object] | None = None
     chat_template_kwargs: dict[str, bool] | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
@@ -448,6 +449,14 @@ class Usage(BaseModel):
     completion_tokens_details: CompletionTokensDetails | None = None
 
 
+class GuardrailInformationEntry(BaseModel):
+    guardrail_name: str
+    guardrail_status: str
+    guardrail_mode: object | None = None
+    guardrail_response: object | None = None
+    duration: float | None = None
+
+
 class ChatResponse(BaseModel):
     id: str | None = None
     object: str | None = None
@@ -455,6 +464,7 @@ class ChatResponse(BaseModel):
     choices: list[ChatChoice] = []
     usage: Usage | None = None
     service_tier: str | None = None
+    guardrail_information: list[GuardrailInformationEntry] | None = None
 
 
 # ---------- anthropic /v1/messages + count_tokens ----------

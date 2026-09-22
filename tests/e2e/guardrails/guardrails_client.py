@@ -291,6 +291,7 @@ class GuardrailsClient:
         text: str,
         *,
         guardrails: list[str] | None = None,
+        include_guardrail_response: bool | None = None,
         max_tokens: int = 16,
         tools: list[ChatTool] | None = None,
     ) -> Result[ChatResponse]:
@@ -306,6 +307,7 @@ class GuardrailsClient:
                 messages=[ChatMessage(role="user", content=text)],
                 max_tokens=max_tokens,
                 guardrails=guardrails,
+                include_guardrail_response=include_guardrail_response,
                 tools=tools,
             ),
         )
