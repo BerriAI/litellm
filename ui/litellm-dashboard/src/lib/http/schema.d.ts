@@ -27678,6 +27678,26 @@ export interface components {
              */
             pattern_type: "prebuilt" | "regex";
         };
+        /** ContextCompactionConfig */
+        ContextCompactionConfig: {
+            /**
+             * Max Tokens
+             * @default 4096
+             */
+            max_tokens: number;
+            /** Model */
+            model?: string | null;
+            /**
+             * Timeout Seconds
+             * @default 120
+             */
+            timeout_seconds: number;
+            /**
+             * Trigger Ratio
+             * @default 0.9
+             */
+            trigger_ratio: number;
+        };
         /**
          * CoordinationRedisNode
          * @description A single startup node of a cluster-mode Redis used for proxy coordination.
@@ -30660,6 +30680,12 @@ export interface components {
              * @default false
              */
             is_byok: boolean;
+            /**
+             * Is Config
+             * @description Whether this server is defined in config and is read-only.
+             * @default false
+             */
+            is_config: boolean;
             /** Issuer */
             issuer?: string | null;
             /** Last Health Check */
@@ -36962,6 +36988,11 @@ export interface components {
              * @description Keywords indicating code-related content
              */
             code_keywords?: string[] | null;
+            /**
+             * Context Compaction
+             * @description Compact full conversation history near the selected deployment's input limit for Chat, Responses and Messages. Uses a capable configured tier model unless model is specified. Set false or null to disable. Stored and client-managed native history keep their existing behavior.
+             */
+            context_compaction?: components["schemas"]["ContextCompactionConfig"] | false;
             /**
              * Context Window Escalation Buffer
              * @description Fraction of a model's declared context window the estimated prompt must fit within. The token count is an estimate, so fitting against the full window would dispatch prompts that the provider's own tokenizer then rejects; 0.95 leaves room for that drift plus the response tokens.

@@ -24,6 +24,7 @@ from ...common_utils import (
     AnthropicError,
     AnthropicModelInfo,
     optionally_handle_anthropic_oauth,
+    requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
 )
@@ -74,6 +75,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "tool_choice",
             "thinking",
             "context_management",
+            *(("compaction",) if self._resolved_provider == "anthropic" else ()),
             "output_format",
             "inference_geo",
             "speed",
@@ -636,6 +638,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             if piece.strip()
         )
         beta_values.update(existing_beta)
+
+        if requires_native_compaction_beta(custom_llm_provider, optional_params, messages):
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
 
         # Check for context management
         context_management_param: Final = optional_params.get("context_management")

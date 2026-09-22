@@ -874,6 +874,8 @@ class SpendLogRow(BaseModel):
     request_tags: list[str] | None = None
     metadata: SpendLogMetadata | None = None
     proxy_server_request: JsonValue = None
+    response: JsonValue = None
+    litellm_call_id: str | None = None
 
 
 class SpendLogs(RootModel[list[SpendLogRow]]):
