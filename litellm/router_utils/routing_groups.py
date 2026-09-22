@@ -2,7 +2,18 @@ from collections.abc import Sequence
 from typing import Final
 
 from litellm._logging import verbose_router_logger
-from litellm.types.router import RoutingGroup, RoutingStrategy
+from litellm.types.router import DeploymentTypedDict, RoutingGroup, RoutingStrategy
+
+
+def apply_routing_group_priority(
+    group: RoutingGroup, member: str, deployment: DeploymentTypedDict
+) -> DeploymentTypedDict:
+    if group.routing_strategy != "priority" or group.model_priorities is None:
+        return deployment
+    return {  # mutable-ok: deployment selection accepts dict rows, without mutating stored deployments
+        **deployment,
+        "litellm_params": {**deployment["litellm_params"], "order": group.model_priorities[member]},
+    }
 
 
 def validate_routing_strategy(routing_strategy: RoutingStrategy | str | None) -> None:
@@ -42,10 +53,18 @@ def parse_routing_groups(
         raise ValueError(f"routing_groups: group names must be unique, duplicate group_name '{min(duplicate_names)}'.")
 
     for group in groups:
-        validate_routing_strategy(group.routing_strategy)
+        if group.routing_strategy != "priority":
+            validate_routing_strategy(group.routing_strategy)
 
     owners_by_model: Final = tuple(
-        (model_name, tuple(group.group_name for group in groups if model_name in group.models))
+        (
+            model_name,
+            tuple(
+                group.group_name
+                for group in groups
+                if group.routing_strategy != "priority" and model_name in group.models
+            ),
+        )
         for model_name in dict.fromkeys(model_name for group in groups for model_name in group.models)
     )
     conflicts: Final = tuple(

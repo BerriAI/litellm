@@ -37198,6 +37198,11 @@ export interface components {
              */
             fields: components["schemas"]["RouterSettingsField"][];
             /**
+             * Routing Group Strategies
+             * @description Strategies supported when constructing a routing group
+             */
+            routing_group_strategies: string[];
+            /**
              * Routing Strategy Descriptions
              * @description Descriptions for each routing strategy option
              */
@@ -37239,6 +37244,11 @@ export interface components {
              */
             fields: components["schemas"]["RouterSettingsField"][];
             /**
+             * Routing Group Strategies
+             * @description Strategies supported when constructing a routing group
+             */
+            routing_group_strategies: string[];
+            /**
              * Routing Strategy Descriptions
              * @description Descriptions for each routing strategy option
              */
@@ -37260,6 +37270,13 @@ export interface components {
         RoutingGroup: {
             /** Group Name */
             group_name: string;
+            /**
+             * Model Priorities
+             * @description For priority groups, every model's priority. Lower numbers are tried first; equal numbers share traffic.
+             */
+            model_priorities?: {
+                [key: string]: number;
+            } | null;
             /** Models */
             models: string[];
             /** Routing Strategy */
