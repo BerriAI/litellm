@@ -338,7 +338,7 @@ impl CacheBackendConfig {
             },
             Self::RedisSemantic(config) => BackendIdentity::RedisSemantic {
                 index_name: config.index_name.clone(),
-                similarity_threshold: config.similarity_threshold,
+                similarity_threshold: config.similarity_threshold as f32,
             },
             Self::QdrantSemantic(config) => BackendIdentity::QdrantSemantic {
                 collection_name: config.collection_name.clone(),

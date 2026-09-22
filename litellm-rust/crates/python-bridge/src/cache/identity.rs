@@ -37,7 +37,8 @@ pub(super) enum BackendIdentity {
     },
     RedisSemantic {
         index_name: String,
-        similarity_threshold: f64,
+        /// The backend stores the threshold as `f32`; a facade's `f64` is compared at that width.
+        similarity_threshold: f32,
     },
     ValkeySemantic {
         index_name: String,
@@ -352,6 +353,15 @@ mod tests {
             index_name: "idx".into(),
             similarity_threshold: 0.8,
         }
+    }
+
+    #[test]
+    fn redis_semantic_thresholds_compare_at_backend_precision() {
+        let facade = BackendIdentity::RedisSemantic {
+            index_name: "idx".into(),
+            similarity_threshold: 0.8_f64 as f32,
+        };
+        assert_eq!(facade.mismatch(&redis_semantic()), None);
     }
 
     fn valkey_semantic() -> BackendIdentity {

@@ -21,9 +21,14 @@ use super::{
     embedder::PythonEmbedder,
     identity::BackendIdentity,
     request::{NativeRequest, now},
-    semantic::{SemanticBody, SemanticOperation, drive},
-    semantic_step::{SemanticEmbedExecution, drive_semantic},
+    semantic::{EmbeddingFailure, SemanticExecution, SemanticOperation, drive},
 };
+
+/// What the Python embedder receives for one semantic request.
+pub(super) struct EmbeddingInput {
+    pub(super) prompt: String,
+    pub(super) metadata: Option<Value>,
+}
 
 /// An exact-match backend behind one pointer, with the identity its facade must reproduce.
 pub(super) struct ExactService {
@@ -245,7 +250,7 @@ impl NativeResponseCache {
             },
             Self::RedisSemantic { cache, .. } => BackendIdentity::RedisSemantic {
                 index_name: cache.backend().index_name().to_owned(),
-                similarity_threshold: f64::from(cache.backend().similarity_threshold()),
+                similarity_threshold: cache.backend().similarity_threshold(),
             },
             Self::QdrantSemantic(cache) => BackendIdentity::QdrantSemantic {
                 collection_name: cache.backend().collection_name().to_owned(),
@@ -286,15 +291,46 @@ impl NativeResponseCache {
         }
     }
 
-    pub fn semantic_embedder(&self) -> Option<&PythonEmbedder> {
+    pub fn embedder_object(&self) -> Option<&Py<PyAny>> {
         match self {
-            Self::RedisSemantic { embedder, .. } => Some(embedder),
+            Self::RedisSemantic { embedder, .. } => Some(embedder.object()),
             _ => None,
         }
     }
 
-    pub fn embedder_object(&self) -> Option<&Py<PyAny>> {
-        self.semantic_embedder().map(PythonEmbedder::object)
+    /// The prompt and metadata this backend would embed for `request`, if it has a prompt.
+    pub(super) fn embedding_input(&self, request: &NativeRequest) -> Option<EmbeddingInput> {
+        let context = match self {
+            Self::ValkeySemantic { scope, .. } => request.scoped_semantic(scope).context,
+            Self::RedisSemantic { .. } => request.semantic().context,
+            Self::Exact(_) | Self::QdrantSemantic(_) => return None,
+        };
+        let prompt = litellm_cache_redis_semantic::prompt_from_context(&context)?;
+        Some(EmbeddingInput {
+            prompt,
+            metadata: context.metadata,
+        })
+    }
+
+    /// Drives a semantic operation whose embedding comes from Python.
+    fn python_semantic<'py>(
+        &self,
+        py: Python<'py>,
+        operation: SemanticOperation,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let (embedder, failure) = match self {
+            Self::ValkeySemantic { embedder, .. } => (embedder, EmbeddingFailure::Propagate),
+            Self::RedisSemantic { embedder, .. } => (embedder, EmbeddingFailure::Unavailable),
+            Self::Exact(_) | Self::QdrantSemantic(_) => {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    "semantic execution requires a Python-embedded backend",
+                ));
+            }
+        };
+        drive(
+            py,
+            SemanticExecution::new(self.clone(), embedder.clone(), failure, operation),
+        )
     }
 
     pub fn lookup(&self, request: &NativeRequest, now: Duration) -> Result<Option<Value>, Error> {
@@ -368,22 +404,9 @@ impl NativeResponseCache {
                     super::cache_error,
                 )
             }
-            Self::ValkeySemantic {
-                cache,
-                embedder,
-                scope,
-            } => drive_semantic(
-                py,
-                SemanticEmbedExecution::lookup(
-                    Arc::clone(cache.backend_arc()),
-                    embedder.clone(),
-                    request.scoped_semantic(scope),
-                ),
-            ),
-            Self::RedisSemantic { .. } => drive(
-                py,
-                SemanticBody::new(self.clone(), SemanticOperation::Lookup(request)),
-            ),
+            Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } => {
+                self.python_semantic(py, SemanticOperation::Lookup(request))
+            }
         }
     }
 
@@ -436,23 +459,9 @@ impl NativeResponseCache {
                     super::cache_error,
                 )
             }
-            Self::ValkeySemantic {
-                cache,
-                embedder,
-                scope,
-            } => drive_semantic(
-                py,
-                SemanticEmbedExecution::store(
-                    Arc::clone(cache.backend_arc()),
-                    embedder.clone(),
-                    request.scoped_semantic(scope),
-                    response,
-                ),
-            ),
-            Self::RedisSemantic { .. } => drive(
-                py,
-                SemanticBody::new(self.clone(), SemanticOperation::Store(request, response)),
-            ),
+            Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } => {
+                self.python_semantic(py, SemanticOperation::Store(request, response))
+            }
         }
     }
 
@@ -514,29 +523,9 @@ impl NativeResponseCache {
                     super::cache_error,
                 )
             }
-            Self::ValkeySemantic {
-                cache,
-                embedder,
-                scope,
-            } => {
-                let (requests, responses): (Vec<_>, Vec<_>) = entries
-                    .into_iter()
-                    .map(|(request, response)| (request.scoped_semantic(scope), response))
-                    .unzip();
-                drive_semantic(
-                    py,
-                    SemanticEmbedExecution::store_batch(
-                        Arc::clone(cache.backend_arc()),
-                        embedder.clone(),
-                        requests,
-                        responses,
-                    ),
-                )
+            Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } => {
+                self.python_semantic(py, SemanticOperation::StoreBatch(entries.into()))
             }
-            Self::RedisSemantic { .. } => drive(
-                py,
-                SemanticBody::new(self.clone(), SemanticOperation::StoreBatch(entries.into())),
-            ),
             Self::QdrantSemantic(_) => Err(super::cache_error(Error::UnsupportedOperation)),
         }
     }
