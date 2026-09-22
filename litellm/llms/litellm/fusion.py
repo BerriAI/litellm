@@ -30,7 +30,6 @@ class FusionJudgeConfig(BaseModel):
 class FusionSDKConfig(BaseModel):
     models: tuple[str, ...] = Field(default=DEFAULT_FUSION_PANEL_MODELS, min_length=1, max_length=8)
     judge: FusionJudgeConfig = Field(default_factory=FusionJudgeConfig)
-    max_tool_calls: int = Field(default=4, ge=1, le=16)
     max_completion_tokens: int = Field(default=16000, ge=1, le=128000)
     reasoning: ReasoningEffort | None = None
     temperature: float | None = Field(default=None, ge=0, le=2)
@@ -53,7 +52,6 @@ class FusionSDKConfig(BaseModel):
             "analyst_model": self.judge.model,
             "analyst_criteria": self.judge.criteria,
             "invocation": "required",
-            "max_tool_calls": self.max_tool_calls,
             "max_completion_tokens": self.max_completion_tokens,
             "reasoning_effort": self.reasoning,
             "temperature": self.temperature,
@@ -92,6 +90,22 @@ class FusionLiteLLMModel:
         stream: bool,
         request_kwargs: Mapping[str, object],
     ) -> ModelResponse | CustomStreamWrapper:
+        import litellm
+
+        if isinstance(request_kwargs.get("proxy_server_request"), Mapping):
+            raise litellm.BadRequestError(
+                message=f"{FUSION_SDK_MODEL} is available through the SDK only",
+                model=FUSION_SDK_MODEL,
+                llm_provider="litellm",
+            )
+        if request_kwargs.get("api_key") is not None:
+            raise litellm.BadRequestError(
+                message=(
+                    f"{FUSION_SDK_MODEL} does not accept a shared api_key; configure each provider credential instead"
+                ),
+                model=FUSION_SDK_MODEL,
+                llm_provider="litellm",
+            )
         if request_kwargs.get("_fusion_depth"):
             raise ValueError(f"{FUSION_SDK_MODEL} cannot recursively invoke itself")
         config: Final = FusionSDKConfig.model_validate(

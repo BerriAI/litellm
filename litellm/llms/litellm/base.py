@@ -76,4 +76,17 @@ def stamp_litellm_model_response(
                 cast(Mapping[str, object], source_hidden_params)  # cast-ok: hidden metadata uses string keys
             )
         object_hidden_params["router"] = model
+    elif hasattr(response, "__dict__"):
+        setattr(
+            response,
+            "_hidden_params",
+            {
+                **(
+                    dict(cast(Mapping[str, object], source_hidden_params))
+                    if isinstance(source_hidden_params, Mapping)
+                    else {}
+                ),
+                "router": model,
+            },
+        )
     return response

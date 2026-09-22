@@ -42,6 +42,12 @@ def dispatch_completion(
     request_kwargs: Mapping[str, object],
     litellm_model: BaseLiteLLMModel | None = None,
 ) -> ModelResponse | CustomStreamWrapper:
+    if stream:
+        raise litellm.BadRequestError(
+            message="Synchronous Chat Completions streaming is not supported for LiteLLM models; use acompletion",
+            model=model,
+            llm_provider="litellm",
+        )
     return run_async_function(
         adispatch_completion,
         model=model,
@@ -130,8 +136,9 @@ async def adispatch_responses(
         )
         return stamp_litellm_model_response(response, model)
     raw_litellm_metadata: Final = request_kwargs.get("litellm_metadata")
+    stream_model: Final = getattr(completion_response, "model", None)
     response_stream: Final = LiteLLMCompletionStreamingIterator(
-        model=model,
+        model=stream_model if isinstance(stream_model, str) and stream_model else model,
         litellm_custom_stream_wrapper=completion_response,
         request_input=response_input,
         responses_api_request=responses_request,
@@ -145,7 +152,11 @@ async def adispatch_responses(
             else {}  # mutable-ok: streaming adapter requires a native mapping
         ),
     )
-    return stamp_litellm_model_response(response_stream, model)
+    return stamp_litellm_model_response(
+        response_stream,
+        model,
+        source_response=completion_response,
+    )
 
 
 def dispatch_responses(
@@ -232,10 +243,11 @@ async def adispatch_anthropic_messages(
         litellm_model=litellm_model,
     )
     if stream:
+        stream_model: Final = getattr(completion_response, "model", None)
         transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
             completion_response,
             model=local_model_name(
-                model,
+                stream_model if isinstance(stream_model, str) and stream_model else model,
                 cast(  # cast-ok: provider name is validated by the public SDK boundary
                     str | None, request_kwargs.get("custom_llm_provider")
                 ),
@@ -284,6 +296,12 @@ def dispatch_anthropic_messages(
     request_kwargs: Mapping[str, object],
     litellm_model: BaseLiteLLMModel | None = None,
 ) -> object:
+    if stream:
+        raise litellm.BadRequestError(
+            message="Synchronous Messages streaming is not supported for LiteLLM models; use acreate",
+            model=model,
+            llm_provider="litellm",
+        )
     return cast(  # cast-ok: shared sync bridge preserves the async function's object response
         object,
         run_async_function(

@@ -57,7 +57,7 @@ def _analysis() -> str:
         {
             "consensus": ["shared conclusion"],
             "contradictions": [],
-            "partial_coverage": ["one gap"],
+            "partial_coverage": [{"models": ["panel-a"], "point": "one gap"}],
             "unique_insights": [{"model": "panel-b", "insight": "unique detail"}],
             "blind_spots": ["missing measurement"],
         }
@@ -154,6 +154,8 @@ async def test_fusion_sdk_model_always_deliberates_with_configured_panel_and_jud
     assert all(call["reasoning_effort"] == "low" for call in panel_calls)
     assert all(call["temperature"] == 0.2 for call in panel_calls)
     assert all("web_search_options" not in call for call in completion.calls)
+    assert response._hidden_params["fusion"]["analysis_available"] is True
+    assert "shared conclusion" in str(completion.calls[-1]["messages"])
 
 
 def test_fusion_sdk_config_rejects_recursion_and_more_than_eight_models() -> None:
@@ -161,6 +163,23 @@ def test_fusion_sdk_config_rejects_recursion_and_more_than_eight_models() -> Non
         FusionSDKConfig.model_validate({"models": ["litellm/fusion-1"]})
     with pytest.raises(ValueError, match="at most 8"):
         FusionSDKConfig.model_validate({"models": [f"model-{index}" for index in range(9)]})
+
+
+@pytest.mark.asyncio
+async def test_fusion_sdk_rejects_proxy_dispatch_and_shared_credentials() -> None:
+    fusion_model: Final = FusionLiteLLMModel(completion=RecordingCompletion({}))
+    with pytest.raises(litellm.BadRequestError, match="SDK only"):
+        await fusion_model.acompletion(
+            messages=[{"role": "user", "content": "question"}],
+            stream=False,
+            request_kwargs={"proxy_server_request": {"body": {}}},
+        )
+    with pytest.raises(litellm.BadRequestError, match="does not accept a shared api_key"):
+        await fusion_model.acompletion(
+            messages=[{"role": "user", "content": "question"}],
+            stream=False,
+            request_kwargs={"api_key": "provider-specific-key"},
+        )
 
 
 def test_fusion_1_is_registered_as_a_litellm_model() -> None:
@@ -248,3 +267,23 @@ def test_public_sdk_surfaces_dispatch_through_the_shared_model() -> None:
     assert responses_response.output_text == "shared answer"
     assert messages_response["content"][0]["text"] == "shared answer"
     assert len(shared_model.requests) == 3
+
+
+def test_sync_streaming_fails_before_starting_an_async_provider_stream() -> None:
+    shared_model: Final = StaticLiteLLMModel()
+    with patch("litellm.llms.litellm.adapters.get_litellm_model", return_value=shared_model):
+        with pytest.raises(litellm.BadRequestError, match="use acompletion"):
+            litellm.completion(
+                model="litellm/fusion-1",
+                messages=[{"role": "user", "content": "chat question"}],
+                stream=True,
+            )
+        with pytest.raises(litellm.BadRequestError, match="use acreate"):
+            litellm.anthropic.messages.create(
+                model="litellm/fusion-1",
+                messages=[{"role": "user", "content": "messages question"}],
+                max_tokens=128,
+                stream=True,
+            )
+
+    assert shared_model.requests == []
