@@ -829,25 +829,21 @@ class FusionReplayStream(CustomStreamWrapper):
         chunks: Sequence[ModelResponseStream],
         fusion_metadata: Mapping[str, object],
     ) -> None:
-        # Deliberately do not call CustomStreamWrapper.__init__. The source
-        # wrapper already normalized and logged these chunks while Fusion
-        # buffered them to determine whether its private tool was invoked.
-        source_model: Final = getattr(source, "model", "")
-        self.model = source_model if isinstance(source_model, str) else ""
-        self.custom_llm_provider = source.custom_llm_provider
-        self.logging_obj = source.logging_obj
-        self._hidden_params = dict(  # mutable-ok: local provider payload
-            getattr(
-                source,
-                "_hidden_params",
-                {},  # mutable-ok: stream metadata defaults to a native mapping
-            )  # mutable-ok: local provider payload
-        )  # mutable-ok: local provider payload
-        self._hidden_params["fusion"] = dict(  # mutable-ok: local provider payload
-            fusion_metadata
-        )  # mutable-ok: local provider payload
-        self._source = source
+        super().__init__(
+            completion_stream=source,
+            model=source.model,
+            logging_obj=source.logging_obj,
+            custom_llm_provider=source.custom_llm_provider,
+            stream_options=source.stream_options,
+        )
+        self._hidden_params = {  # mutable-ok: stream consumers attach response metadata
+            **source._hidden_params,
+            "fusion": dict(fusion_metadata),
+        }
         self._iterator = iter(chunks)
+
+    def __next__(self) -> ModelResponseStream:
+        return next(self._iterator)
 
     def __aiter__(self) -> FusionReplayStream:
         return self
@@ -857,10 +853,6 @@ class FusionReplayStream(CustomStreamWrapper):
             return next(self._iterator)
         except StopIteration as exc:
             raise StopAsyncIteration from exc
-
-    async def aclose(self) -> None:
-        if hasattr(self._source, "aclose"):
-            await self._source.aclose()
 
 
 class FusionRouter:

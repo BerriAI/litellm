@@ -1118,7 +1118,8 @@ async def test_proxy_fusion_fails_closed_without_authorization_context() -> None
 
 
 @pytest.mark.asyncio
-async def test_router_replays_direct_outer_response_as_an_async_stream() -> None:
+@pytest.mark.parametrize("consume_sync", [True, False])
+async def test_router_replays_direct_outer_response_without_reprocessing(consume_sync: bool) -> None:
     router = Router(model_list=_router_model_list())
     response = await router.acompletion(
         model="fusion/test",
@@ -1127,11 +1128,12 @@ async def test_router_replays_direct_outer_response_as_an_async_stream() -> None
     )
 
     assert isinstance(response, CustomStreamWrapper)
-    chunks = [chunk async for chunk in response]
+    chunks = list(response) if consume_sync else [chunk async for chunk in response]
     rebuilt = litellm.stream_chunk_builder(chunks=chunks)
     assert isinstance(rebuilt, ModelResponse)
     assert rebuilt.choices[0].message.content == "Final"
     assert response._hidden_params["fusion"]["invoked"] is False
+    await response.aclose()
 
 
 @pytest.mark.asyncio
