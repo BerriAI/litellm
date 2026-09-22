@@ -1,3 +1,4 @@
+import os
 from collections.abc import Mapping
 from math import ceil
 from types import MappingProxyType
@@ -24,6 +25,12 @@ FAL_NAMED_IMAGE_SIZES: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 _OBJECT_MAP: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+FAL_AI_QUEUE_DEFAULT_BASE: Final[str] = "https://queue.fal.run"
+
+
+def fal_ai_queue_base() -> str:
+    return os.getenv("FAL_AI_QUEUE_API_BASE") or FAL_AI_QUEUE_DEFAULT_BASE
 
 
 def _keyed_size(optional_params: Mapping[str, object]) -> str | None:
@@ -126,6 +133,16 @@ def _entry(key: str) -> Mapping[str, object] | None:
     if not isinstance(raw_entry, Mapping):
         return None
     return _OBJECT_MAP.validate_python(raw_entry)
+
+
+def fal_ai_passthrough_cost(model: str, request_body: Mapping[str, object]) -> float | None:
+    entry: Final = _entry(f"{litellm.LlmProviders.FAL_AI.value}/{model}")
+    if entry is None:
+        return None
+    resolution: Final = request_body.get("resolution")
+    keyed_cost: Final = entry.get(f"output_cost_per_image_{resolution}") if isinstance(resolution, int) else None
+    cost: Final = keyed_cost if isinstance(keyed_cost, (int, float)) else entry.get("output_cost_per_image")
+    return float(cost) if isinstance(cost, (int, float)) else None
 
 
 def cost_calculator(

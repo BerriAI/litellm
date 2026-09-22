@@ -29,6 +29,9 @@ from .llm_provider_handlers.cursor_passthrough_logging_handler import (
 from .llm_provider_handlers.deepgram_listen_passthrough_logging_handler import (
     DeepgramListenPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.fal_ai_passthrough_logging_handler import (
+    FalAIPassthroughLoggingHandler,
+)
 from .llm_provider_handlers.gemini_passthrough_logging_handler import (
     GeminiPassthroughLoggingHandler,
 )
@@ -370,6 +373,16 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = deepgram_handler_result["result"]  # rebind-ok: elif-chain
             kwargs = deepgram_handler_result["kwargs"]  # rebind-ok: elif-chain contract
+        elif FalAIPassthroughLoggingHandler.is_fal_ai_route(url_route, custom_llm_provider):
+            fal_ai_handler_result: Final = FalAIPassthroughLoggingHandler().fal_ai_passthrough_handler(
+                response_body=response_body if isinstance(response_body, dict) else MappingProxyType({}),
+                request_body=request_body,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                kwargs=kwargs,
+            )
+            standard_logging_response_object = fal_ai_handler_result["result"]  # rebind-ok: elif-chain
+            kwargs = fal_ai_handler_result["kwargs"]  # rebind-ok: elif-chain contract
         return_dict["standard_logging_response_object"] = standard_logging_response_object
 
         return_dict["kwargs"] = kwargs

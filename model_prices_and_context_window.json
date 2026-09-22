@@ -24966,6 +24966,27 @@
             "/v1/images/generations"
         ]
     },
+    "fal_ai/fal-ai/trellis": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://fal.ai/models/fal-ai/trellis",
+        "metadata": {
+            "comment": "image-to-3D, returns a GLB mesh; served through the /fal_ai pass-through route"
+        }
+    },
+    "fal_ai/fal-ai/trellis-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.3,
+        "output_cost_per_image_512": 0.25,
+        "output_cost_per_image_1024": 0.3,
+        "output_cost_per_image_1536": 0.35,
+        "source": "https://fal.ai/models/fal-ai/trellis-2",
+        "metadata": {
+            "comment": "image-to-3D, returns a GLB mesh; priced by the request's resolution field (default 1024); served through the /fal_ai pass-through route"
+        }
+    },
     "fal_ai/fal-ai/flux-lora-depth": {
         "litellm_provider": "fal_ai",
         "metadata": {
