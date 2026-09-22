@@ -60921,6 +60921,8 @@ export interface operations {
                 status_filter?: string | null;
                 /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
                 cache_hit_filter?: string | null;
+                /** @description Filter logs by span type: llm, agent, mcp, or batch */
+                span_type?: string | null;
                 /** @description Filter logs by model */
                 model?: string | null;
                 /** @description Filter logs by model ID (litellm model deployment id) */
@@ -61039,6 +61041,8 @@ export interface operations {
                 status_filter?: string | null;
                 /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
                 cache_hit_filter?: string | null;
+                /** @description Filter logs by span type: llm, agent, mcp, or batch */
+                span_type?: string | null;
                 /** @description Filter logs by model */
                 model?: string | null;
                 /** @description Filter logs by model ID (litellm model deployment id) */
