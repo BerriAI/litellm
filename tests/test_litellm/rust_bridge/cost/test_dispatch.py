@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Final, Never
+from typing import Final
 
 import pytest
+from typing_extensions import Never
 
 from litellm import cost_calculator
 from litellm.litellm_core_utils.llm_cost_calc import utils

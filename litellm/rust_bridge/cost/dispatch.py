@@ -3,9 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from enum import Enum
 from functools import wraps
-from typing import Final, Never, ParamSpec, TypeVar
+from typing import Final, ParamSpec, TypeVar
 
-from typing_extensions import assert_never
+from typing_extensions import Never, assert_never
 
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import CostContext, Rules, decision
