@@ -23,7 +23,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mappin
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
-from functools import partial
+from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 from urllib.parse import urlsplit
@@ -39,7 +39,7 @@ import httpx
 import openai
 from openai import AsyncStream, Stream
 from openai.types.audio import TranscriptionStreamEvent
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import overload
 
 import litellm
@@ -7871,6 +7871,23 @@ async def atranscription(
         )
 
 
+@lru_cache(maxsize=1)
+def _bundled_transcription_response_formats() -> Mapping[str, tuple[str, ...]]:
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    catalog: Final = TypeAdapter(dict[str, dict[str, object]]).validate_python(
+        GetModelCostMap.load_local_model_cost_map()
+    )
+    formats_adapter: Final = TypeAdapter(tuple[str, ...])
+    return MappingProxyType(
+        {
+            model: formats_adapter.validate_python(entry["supported_transcription_response_formats"])
+            for model, entry in catalog.items()
+            if "supported_transcription_response_formats" in entry
+        }
+    )
+
+
 def _validate_gpt_transcription_request(
     model: str,
     custom_llm_provider: str,
@@ -7879,25 +7896,30 @@ def _validate_gpt_transcription_request(
     response_format: str | None,
     api_version: str | None,
 ) -> str | None:
+    model_info: Final = get_model_info(model=model) if model in litellm.model_cost else {}
+    supported_endpoints: Final = model_info.get("supported_endpoints")
+    supported_formats: Final = model_info.get("supported_transcription_response_formats") or (
+        _bundled_transcription_response_formats().get(model)
+    )
     if language is not None and languages is not None:
         raise litellm.UnsupportedParamsError(
             message="language and languages cannot be used together",
             model=model,
             llm_provider=custom_llm_provider,
         )
-    if model == "gpt-live-transcribe":
+    if supported_endpoints is not None and "/v1/audio/transcriptions" not in supported_endpoints:
         raise litellm.UnsupportedParamsError(
-            message="gpt-live-transcribe is available through the Realtime API, not file transcription",
+            message=f"{model} is available through the Realtime API, not file transcription",
             model=model,
             llm_provider=custom_llm_provider,
         )
-    if model == "gpt-transcribe" and response_format not in (None, "json"):
+    if supported_formats is not None and response_format is not None and response_format not in supported_formats:
         raise litellm.UnsupportedParamsError(
-            message="gpt-transcribe only supports response_format='json'",
+            message=f"{model} only supports response_format={', '.join(repr(fmt) for fmt in supported_formats)}",
             model=model,
             llm_provider=custom_llm_provider,
         )
-    if custom_llm_provider == "azure" and model == "gpt-transcribe":
+    if custom_llm_provider == "azure" and supported_formats is not None:
         if api_version in (None, "v1", "latest", "preview"):
             return litellm.AZURE_DEFAULT_API_VERSION
         return api_version

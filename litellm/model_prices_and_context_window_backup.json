@@ -214,6 +214,9 @@
             "/v1/realtime",
             "/v1/realtime/transcription_sessions"
         ],
+        "supported_transcription_response_formats": [
+            "json"
+        ],
         "supported_modalities": [
             "audio",
             "text"
@@ -57554,6 +57557,9 @@
         "supported_endpoints": [
             "/v1/audio/transcriptions",
             "/v1/realtime/transcription_sessions"
+        ],
+        "supported_transcription_response_formats": [
+            "json"
         ],
         "supported_modalities": [
             "text",

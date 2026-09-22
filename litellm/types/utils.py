@@ -396,6 +396,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         ]
     ]
     supported_endpoints: list[str] | None
+    supported_transcription_response_formats: ReadOnly[Sequence[str] | None]
     use_openai_responses_path: bool | None
     tpm: int | None
     rpm: int | None

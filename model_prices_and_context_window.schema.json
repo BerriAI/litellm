@@ -864,6 +864,13 @@
             "type": "string"
           }
         },
+        "supported_transcription_response_formats": {
+          "type": "array",
+          "description": "Response formats accepted by the model for file transcription.",
+          "items": {
+            "type": "string"
+          }
+        },
         "supports_adaptive_thinking": {
           "type": "boolean"
         },

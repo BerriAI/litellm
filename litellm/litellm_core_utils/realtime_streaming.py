@@ -437,6 +437,21 @@ class RealTimeStreaming:
     def _capture_translation_output_audio(self, event_obj: Mapping[str, object]) -> None:
         if not self._is_translation_session:
             return
+        if event_obj.get("type") == "session.closed":
+            usage: Final = event_obj.get("usage")
+            output_seconds: Final = usage.get("output_seconds") if isinstance(usage, dict) else None
+            if isinstance(output_seconds, (int, float)):
+                if not self._should_store_message(event_obj):
+                    self.messages.append(
+                        OpenAIRealtimeTranslationClosedEvent(
+                            type="session.closed",
+                            usage=OpenAIRealtimeTranslationDurationUsage(
+                                type="duration", output_seconds=output_seconds
+                            ),
+                        )
+                    )
+                self._translation_usage_finalized = True
+            return
         self._capture_translation_output_format(event_obj)
         if event_obj.get("type") not in (
             "session.output_audio.delta",
@@ -1117,6 +1132,8 @@ class RealTimeStreaming:
         for event in events:
             if self._should_drop_event_from_client(event):
                 continue
+            if isinstance(event, dict):
+                self._capture_translation_output_audio(event)
             is_session_created_event = isinstance(event, dict) and event.get("type") == "session.created"
             if is_session_created_event:
                 if self._uses_deferred_backend_setup() and not self._backend_setup_complete:
