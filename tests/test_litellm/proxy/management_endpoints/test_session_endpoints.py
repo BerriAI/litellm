@@ -86,7 +86,7 @@ async def test_session_logout_revokes_presented_session():
     assert persist_mock.await_args.kwargs["keys"][0].token == HASHED_TOKEN
     # Cache evicted + broadcast even on the delete path.
     evict_mock.assert_awaited_once()
-    assert evict_mock.await_args.kwargs["hashed_tokens"] == [HASHED_TOKEN]
+    assert tuple(evict_mock.await_args.kwargs["hashed_tokens"]) == (HASHED_TOKEN,)
 
 
 @pytest.mark.asyncio

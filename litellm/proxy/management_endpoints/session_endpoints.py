@@ -14,14 +14,16 @@ ownership checks can reject low-privilege roles, and a self-revoke endpoint
 that takes no body cannot be aimed at other keys.
 """
 
-from typing import Annotated, Final, cast
+from typing import TYPE_CHECKING, Annotated, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import (
     CommonProxyErrors,
+    HTTPExceptionErrorDetail,
     LiteLLM_VerificationToken,
     SessionLogoutResponse,
     UserAPIKeyAuth,
@@ -35,7 +37,17 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 
+if TYPE_CHECKING:
+    from prisma import types as prisma_types
+
 router: Final = APIRouter()
+
+_TOKEN_LIST: Final = TypeAdapter(list[str])
+
+
+def _error_detail(message: str) -> HTTPExceptionErrorDetail:
+    detail: Final[HTTPExceptionErrorDetail] = {"error": message}
+    return detail
 
 
 async def revoke_ui_session_keys(
@@ -61,16 +73,18 @@ async def revoke_ui_session_keys(
         return 0
 
     try:
+        where_user_sessions: Final[prisma_types.LiteLLM_VerificationTokenWhereInput] = {
+            "user_id": user_id,
+            "team_id": UI_SESSION_TOKEN_TEAM_ID,
+        }
         rows: Final = cast(  # cast-ok: find_many returns prisma rows shaped like the pydantic model
-            "list[LiteLLM_VerificationToken]",
-            await VerificationTokenRepository(prisma_client).table.find_many(
-                where={"user_id": user_id, "team_id": UI_SESSION_TOKEN_TEAM_ID}
-            ),
+            "tuple[LiteLLM_VerificationToken, ...]",
+            tuple(await VerificationTokenRepository(prisma_client).table.find_many(where=where_user_sessions)),
         )
-        revoked_rows: Final = [row for row in rows if row.token is not None and row.token != keep_hashed_token]
+        revoked_rows: Final = tuple(row for row in rows if row.token is not None and row.token != keep_hashed_token)
         if not revoked_rows:
             return 0
-        revoked_tokens: Final = [cast(str, row.token) for row in revoked_rows]
+        revoked_tokens: Final = _TOKEN_LIST.validate_python(tuple(row.token for row in revoked_rows))
 
         await _persist_deleted_verification_tokens(
             keys=revoked_rows,
@@ -78,7 +92,8 @@ async def revoke_ui_session_keys(
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
         )
-        await VerificationTokenRepository(prisma_client).table.delete_many(where={"token": {"in": revoked_tokens}})
+        where_revoked: Final[prisma_types.LiteLLM_VerificationTokenWhereInput] = {"token": {"in": revoked_tokens}}
+        await VerificationTokenRepository(prisma_client).table.delete_many(where=where_revoked)
         await delete_cache_key_objects(
             hashed_tokens=revoked_tokens,
             user_api_key_cache=user_api_key_cache,
@@ -119,31 +134,35 @@ async def session_logout(
     if prisma_client is None:
         raise HTTPException(
             status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            detail=_error_detail(CommonProxyErrors.db_not_connected_error.value),
         )
 
     if user_api_key_dict.team_id != UI_SESSION_TOKEN_TEAM_ID:
         raise HTTPException(
             status_code=403,
-            detail={"error": "Only UI session tokens can be revoked through this endpoint."},
+            detail=_error_detail("Only UI session tokens can be revoked through this endpoint."),
         )
 
     hashed_token: Final = user_api_key_dict.token
     revoked = False
     if hashed_token is not None:
-        row: Final = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": hashed_token})
+        where_token: Final[prisma_types.LiteLLM_VerificationTokenWhereUniqueInput] = {"token": hashed_token}
+        row: Final = await VerificationTokenRepository(prisma_client).table.find_unique(where=where_token)
         # A missing row means the session is already revoked (or an
         # EXPERIMENTAL_UI_LOGIN blob token); logout is idempotent either way.
         if row is not None:
+            caller_row: Final = cast(  # cast-ok: find_unique returns a prisma row shaped like the pydantic model
+                "LiteLLM_VerificationToken", row
+            )
             await _persist_deleted_verification_tokens(
-                keys=[cast(LiteLLM_VerificationToken, row)],
+                keys=(caller_row,),
                 prisma_client=prisma_client,
                 user_api_key_dict=user_api_key_dict,
             )
-            await VerificationTokenRepository(prisma_client).table.delete_many(where={"token": hashed_token})
+            await VerificationTokenRepository(prisma_client).table.delete_many(where=where_token)
             revoked = True
         await delete_cache_key_objects(
-            hashed_tokens=[hashed_token],
+            hashed_tokens=(hashed_token,),
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
