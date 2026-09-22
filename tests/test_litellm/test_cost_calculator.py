@@ -3652,6 +3652,63 @@ def test_completion_cost_base_model_ignores_regional_row(_local_model_cost_map):
     ) == pytest.approx(1000 * flat["input_cost_per_token"])
 
 
+def test_completion_cost_base_model_cross_provider_prefix(_local_model_cost_map):
+    """base_model pointing at a registered cost key from a different provider than the deployment
+    is priced from that key instead of failing provider matching and recording $0 spend (#41780)."""
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="custom-model",
+        usage={"prompt_tokens": 1000, "completion_tokens": 100, "total_tokens": 1100},
+    )
+    response._hidden_params = {"custom_llm_provider": "hosted_vllm"}
+    entry = litellm.model_cost["openrouter/deepseek/deepseek-v4-flash-0731"]
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="custom-model",
+        custom_llm_provider="hosted_vllm",
+        base_model="openrouter/deepseek/deepseek-v4-flash-0731",
+    )
+
+    assert cost == pytest.approx(1000 * entry["input_cost_per_token"] + 100 * entry["output_cost_per_token"])
+
+
+def test_completion_cost_base_model_bare_name_kept_when_prefix_unregistered(_local_model_cost_map):
+    """A bare base_model whose deployment-prefixed form is not a registered cost key is priced
+    from the base model's own registered key instead of being prefixed into an unresolvable
+    name and recording $0 spend (#41780). Uses a synthetic cost-map entry so the assertion
+    depends only on registered pricing, not on the built-in map's contents."""
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="custom-model",
+        usage={"prompt_tokens": 1000, "completion_tokens": 100, "total_tokens": 1100},
+    )
+    response._hidden_params = {"custom_llm_provider": "hosted_vllm"}
+    litellm.register_model(
+        model_cost={
+            "openrouter/synthetic-base-model": {
+                "input_cost_per_token": 2e-6,
+                "output_cost_per_token": 4e-6,
+                "litellm_provider": "openrouter",
+            }
+        }
+    )
+    entry = litellm.model_cost["openrouter/synthetic-base-model"]
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="custom-model",
+        custom_llm_provider="hosted_vllm",
+        base_model="openrouter/synthetic-base-model",
+    )
+
+    assert cost == pytest.approx(1000 * entry["input_cost_per_token"] + 100 * entry["output_cost_per_token"])
+
+
 def test_select_model_name_unresolvable_alias_unchanged(_local_model_cost_map):
     """An alias that resolves to no known cost key keeps the legacy double-prefixed name."""
 
