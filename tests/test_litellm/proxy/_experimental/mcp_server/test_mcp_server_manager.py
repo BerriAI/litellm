@@ -14520,6 +14520,92 @@ async def test_client_sampling_does_not_fill_explicit_context_from_another_ambie
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("anchored", [False, True])
+async def test_catalog_reload_preserves_concurrent_config_discovery_and_routes(anchored):
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="config-race", name="config_race", transport=MCPTransport.http,
+        url="https://upstream.example/mcp", auth_type=MCPAuth.oauth2,
+        issuer="https://issuer.example" if anchored else None, issuer_is_anchored=anchored)
+    manager.config_mcp_servers = {server.server_id: server}
+    manager._set_oauth_discovery_deferred(server.server_id, True)
+    generation: Final = manager.oauth_discovery_slot(server.server_id).generation
+    resolved: Final = server.model_copy(update={"authorization_url": "https://issuer.example/authorize",
+        "token_url": "https://issuer.example/token", "scopes": ["read"], "issuer": "https://issuer.example"})
+
+    async def hydrate(target: MCPServer) -> bool:
+        target.client_id = "persisted-client"
+        return True
+
+    async def read_rows(**_kwargs):
+        assert manager._publish_resolved_oauth_server(resolved, generation) is resolved
+        manager.published_tool_routes["config_race-search"] = "config_race"
+        return []
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=read_rows)
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy._experimental.mcp_server.discoverable_endpoints.hydrate_config_server_dcr_client", side_effect=hydrate),
+    ):
+        await manager.reload_servers_from_database()
+    current: Final = manager.get_mcp_server_by_id(server.server_id)
+    assert current.authorization_url == resolved.authorization_url
+    assert current.token_url == resolved.token_url
+    assert current.scopes == ["read"]
+    assert current.issuer == "https://issuer.example"
+    assert current.client_id == "persisted-client"
+    assert manager.oauth_discovery_slot(server.server_id) is None
+    assert manager.published_tool_routes["config_race-search"] == "config_race"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["credentials", "delete"])
+async def test_catalog_reload_does_not_restore_replaced_config_credentials_or_routes(change):
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="config-replaced", name="config_replaced", transport=MCPTransport.http,
+        client_id="previous-client")
+    manager.config_mcp_servers = {server.server_id: server}
+    manager.published_tool_routes["config_replaced-search"] = "config_replaced"
+
+    async def read_rows(**_kwargs):
+        manager.config_mcp_servers = {} if change == "delete" else {
+            server.server_id: server.model_copy(update={"client_id": "new-client"})}
+        return []
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=read_rows)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        await manager.reload_servers_from_database()
+    current: Final = manager.get_mcp_server_by_id(server.server_id)
+    if change == "delete":
+        assert current is None
+    else:
+        assert current.client_id == "new-client"
+    assert "config_replaced-search" not in manager.published_tool_routes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["discovery", "update", "delete"])
+async def test_catalog_operation_retains_routes_only_for_same_configured_target(change):
+    from mcp.types import Tool
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="route-race", name="route_race", transport=MCPTransport.http,
+        url="https://upstream.example/mcp", auth_type=MCPAuth.oauth2)
+    manager.registry = {server.server_id: server}
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        async with manager.catalog.operation():
+            tools: Final = manager._create_prefixed_tools([Tool(name="search", inputSchema={})], server)
+            if change == "delete":
+                manager.registry = {}
+            else:
+                manager.registry[server.server_id] = server.model_copy(update=(
+                    {"authorization_url": "https://issuer.example/authorize", "token_url": "https://issuer.example/token"}
+                    if change == "discovery" else {"url": "https://changed.example/mcp"}))
+    assert (tools[0].name in manager.published_tool_routes) is (change == "discovery")
+
+
+@pytest.mark.asyncio
 async def test_catalog_observes_committed_update_and_delete_without_background_reload():
     from datetime import timedelta
 

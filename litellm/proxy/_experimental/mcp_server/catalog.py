@@ -133,21 +133,25 @@ class TargetCatalog:
             self._retain_discovered_routing(snapshot)
 
     def _retain_discovered_routing(self, snapshot: CatalogSnapshot) -> None:
+        self.manager.published_tool_routes = self.manager.published_tool_routes | self._unchanged_routing(
+            snapshot.servers, snapshot.routing
+        )
+
+    def _unchanged_routing(
+        self, servers: Mapping[str, MCPServer], routing: Mapping[str, str]
+    ) -> MappingProxyType[str, str]:
         from litellm.proxy._experimental.mcp_server.utils import normalize_server_name
 
         current: Final = self.manager.config_mcp_servers | self.manager.registry
         unchanged_owners: Final = frozenset(
             owner
-            for key, server in snapshot.servers.items()
-            if current.get(key) == server
+            for key, server in servers.items()
+            if (candidate := current.get(key)) is not None
+            and _configuration_identity(candidate) == _configuration_identity(server)
             for owner in self.manager.owned_mapping_values(server)
         )
-        self.manager.published_tool_routes = self.manager.published_tool_routes | MappingProxyType(
-            {
-                name: owner
-                for name, owner in snapshot.routing.items()
-                if normalize_server_name(owner) in unchanged_owners
-            }
+        return MappingProxyType(
+            {name: owner for name, owner in routing.items() if normalize_server_name(owner) in unchanged_owners}
         )
 
     async def resolve(self, identifier: str, client_ip: str | None = None) -> MCPServer | None:
@@ -202,9 +206,18 @@ class TargetCatalog:
         from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
 
         async with self._refresh_lock:
-            staged_config: Final = {
-                key: value.model_copy(deep=True) for key, value in self.manager.config_mcp_servers.items()
-            }
+            previous_config: Final = MappingProxyType(
+                {key: value.model_copy(deep=True) for key, value in self.manager.config_mcp_servers.items()}
+            )
+            previous_servers: Final = previous_config | MappingProxyType(
+                {key: value.model_copy(deep=True) for key, value in self.manager.registry.items()}
+            )
+            config_identities: Final = MappingProxyType(
+                {key: _configuration_identity(value) for key, value in previous_config.items()}
+            )
+            staged_config: Final = MappingProxyType(
+                {key: value.model_copy(deep=True) for key, value in previous_config.items()}
+            )
             await self.manager.hydrate_config_servers_dcr_clients(tuple(staged_config.values()))
             staged_routing: Final = dict(self.manager.published_tool_routes)
             closed: Final = asyncio.Event()
@@ -212,9 +225,24 @@ class TargetCatalog:
             try:
                 with global_mcp_tool_registry.catalog_scope(global_mcp_tool_registry.published_tools) as staged_tools:
                     await self._reload()
-                    self.manager.config_mcp_servers = staged_config
+                    concurrent_routes: Final = self._unchanged_routing(
+                        previous_servers, self.manager.published_tool_routes
+                    )
+                    retained_staged_routes: Final = self._unchanged_routing(
+                        previous_config | self.manager.registry, staged_routing
+                    )
+                    self.manager.config_mcp_servers = {
+                        key: value.model_copy(
+                            update=staged_config[key].model_dump(
+                                include=frozenset(("client_id", "client_secret", "token_endpoint_auth_method"))
+                            )
+                        )
+                        if config_identities.get(key) == _configuration_identity(value)
+                        else value
+                        for key, value in self.manager.config_mcp_servers.items()
+                    }
                     global_mcp_tool_registry.tools = staged_tools
-                    self.manager.published_tool_routes = staged_routing
+                    self.manager.published_tool_routes = concurrent_routes | retained_staged_routes
             finally:
                 closed.set()
                 self._staged_routing.reset(routing_token)
