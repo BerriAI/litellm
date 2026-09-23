@@ -240,8 +240,10 @@ def test_completed_batch_emits_paired_request_response_callback_events_per_jsonl
             seconds=40,
         )
         aggregate_events: Final = tuple(event for event in events if event["call_type"] == "aretrieve_batch")
-        line_events: Final = tuple(event for event in events if event["call_type"] != "aretrieve_batch")
+        line_events: Final = tuple(event for event in events if _hidden(event).get("batch_custom_id") is not None)
         assert len(aggregate_events) == 1, [event["call_type"] for event in events]
+        other_events: Final = tuple(event for event in events if event not in aggregate_events + line_events)
+        assert sorted(event["call_type"] for event in other_events) == ["acreate_batch", "acreate_file"], other_events
         assert sorted(string_value(_hidden(event)["batch_custom_id"]) for event in line_events) == list(
             ALL_CUSTOM_IDS
         ), line_events
