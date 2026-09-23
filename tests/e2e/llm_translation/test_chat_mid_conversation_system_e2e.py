@@ -25,7 +25,7 @@ the hoist and mask the regression.
 
 The provider-native ``cache_control`` request shape is not expressible with the
 shared ``ChatBody`` (whose content parts carry no cache_control), so the body is
-built from the typed content blocks shared in ``endpoints_client.py``.
+built from the typed content blocks shared in ``models.py``.
 """
 
 from __future__ import annotations
@@ -37,12 +37,11 @@ from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import Result, unwrap
-from endpoints_client import CacheControl, RichMessage, TextBlock
 from lifecycle import ResourceManager
-from models import ChatResponse, LiteLLMParamsBody, Usage
+from models import CacheControl, ChatResponse, LiteLLMParamsBody, RichMessage, TextBlock, Usage
 from passthrough_client import PassthroughClient
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
 CACHE_PRIMING_DEADLINE_SECONDS = 60.0
 CACHE_PRIMING_INTERVAL_SECONDS = 3.0

@@ -6735,3 +6735,83 @@ def _role_block_pairs(messages: list[dict]) -> list[tuple[str, object]]:
         for message in messages
         for block in (message["content"] if isinstance(message["content"], list) else [message["content"]])
     ]
+
+
+def _thinking_reply(text: str) -> dict:
+    return {
+        "role": "assistant",
+        "content": text,
+        "thinking_blocks": [{"type": "thinking", "thinking": "Working it out.", "signature": f"sig-{text}"}],
+    }
+
+
+def _preserved_thinking_turns(reminder_after_user: bool) -> tuple[list[dict], list[dict], list[dict]]:
+    turn_n = [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "First question"}]
+    reminder = {"role": "system", "content": REMINDER_TEXT}
+    second_question = {"role": "user", "content": "Second question"}
+    second_turn = [second_question, reminder] if reminder_after_user else [reminder, second_question]
+    turn_n_plus_one = [*turn_n, _thinking_reply("First answer"), *second_turn]
+    turn_n_plus_two = [*turn_n_plus_one, _thinking_reply("Second answer"), {"role": "user", "content": "Third question"}]
+    return turn_n, turn_n_plus_one, turn_n_plus_two
+
+
+def _replayed_prefix(request: dict, message_count: int) -> str:
+    replayed = {
+        "system": request.get("system"),
+        "tools": request.get("tools"),
+        "messages": request["messages"][:message_count],
+    }
+    return json.dumps(replayed, sort_keys=True)
+
+
+def _assert_prefix_stable(requests: list[dict]) -> None:
+    for earlier, later in zip(requests, requests[1:]):
+        count = len(earlier["messages"])
+        assert _replayed_prefix(later, count) == _replayed_prefix(earlier, count)
+
+
+@pytest.mark.parametrize("reminder_after_user", [True, False])
+def test_chat_flagged_model_replays_a_byte_identical_prefix_around_a_mid_conversation_reminder(
+    local_model_cost_map, reminder_after_user
+):
+    """Preserved thinking binds each signed block to the request prefix it was created
+    under (``system``, ``tools`` and the earlier messages), so turn N's transformed
+    request must be a byte-identical prefix of turn N+1's or the block is dropped."""
+    requests = [
+        AnthropicConfig().transform_request(
+            model="claude-fable-5-1", messages=copy.deepcopy(turn), optional_params={}, litellm_params={}, headers={}
+        )
+        for turn in _preserved_thinking_turns(reminder_after_user)
+    ]
+
+    _assert_prefix_stable(requests)
+    assert [m["role"] for m in requests[1]["messages"]] == ["user", "assistant", "user", "system"]
+    assert [m["role"] for m in requests[2]["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]
+
+
+def test_chat_dummy_tool_result_for_an_orphaned_tool_call_replays_a_byte_identical_prefix(
+    local_model_cost_map, monkeypatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    tools = [{"name": "lookup", "description": "Look something up", "input_schema": {"type": "object", "properties": {}}}]
+    orphaned_call = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+    }
+    turn_n = [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "First question"}, orphaned_call]
+    turn_n_plus_one = [*turn_n, _thinking_reply("First answer"), {"role": "user", "content": "Second question"}]
+    requests = [
+        AnthropicConfig().transform_request(
+            model="claude-fable-5-1",
+            messages=copy.deepcopy(turn),
+            optional_params={"tools": copy.deepcopy(tools)},
+            litellm_params={},
+            headers={},
+        )
+        for turn in (turn_n, turn_n_plus_one)
+    ]
+
+    _assert_prefix_stable(requests)
+    assert [m["role"] for m in requests[0]["messages"]] == ["user", "assistant", "user"]
+    assert requests[0]["messages"][2]["content"][0]["type"] == "tool_result"
