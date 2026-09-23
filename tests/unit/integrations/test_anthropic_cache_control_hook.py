@@ -4101,3 +4101,35 @@ async def test_anthropic_cache_control_hook_skips_a_tool_reference_block(monkeyp
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_skips_a_block_that_is_not_an_object(monkeypatch: pytest.MonkeyPatch):
+    """A caller can put a bare string in a content list; reading .type off it raises."""
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "What is 2 + 2?"},
+            {"role": "assistant", "content": ["The answer is 4."]},
+        ],
+        [{"location": "message", "role": "assistant", "index": -1}],
+        monkeypatch,
+    )
+    assert marked == [{"role": "user", "content": [{"type": "text", "text": "What is 2 + 2?"}]}]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_leaves_a_message_that_is_not_an_object_to_litellm(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A bare string in the message list belongs to litellm's own validation, not to this hook."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake_anthropic_key")
+    monkeypatch.setattr(litellm, "callbacks", [AnthropicCacheControlHook()])
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=_anthropic_response_mock()):
+        with pytest.raises(litellm.APIConnectionError):
+            await litellm.acompletion(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "What is 2 + 2?"}, "The answer is 4."],
+                cache_control_injection_points=[{"location": "message", "index": -1}],
+                client=client,
+            )
