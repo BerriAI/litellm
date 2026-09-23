@@ -58,6 +58,10 @@ from models import (
     OrgNewBody,
     OrgNewResponse,
     OrgUpdateBody,
+    ScimGroupMemberValue,
+    ScimGroupPatchBody,
+    ScimGroupResponse,
+    ScimPatchOperationBody,
     TagDeleteBody,
     TagListEntry,
     TagListResponse,
@@ -418,6 +422,26 @@ class ManagementClient:
                 headers=self.proxy.management_headers(),
                 json=TeamMemberDeleteBody(team_id=team_id, user_id=user_id),
                 response_type=NoBody,
+            )
+        )
+
+    def scim_remove_group_member(self, team_id: str, user_id: str) -> ScimGroupResponse:
+        """PATCH /scim/v2/Groups/{team_id} with a `remove` members operation, the
+        membership-removal call a SCIM IdP makes when it drops a user from a group."""
+        return unwrap(
+            self.proxy.transport.patch(
+                f"/scim/v2/Groups/{team_id}",
+                headers=self.proxy.management_headers(),
+                json=ScimGroupPatchBody(
+                    Operations=[
+                        ScimPatchOperationBody(
+                            op="remove",
+                            path="members",
+                            value=[ScimGroupMemberValue(value=user_id)],
+                        )
+                    ]
+                ),
+                response_type=ScimGroupResponse,
             )
         )
 

@@ -1133,7 +1133,7 @@ async def _create_user_if_not_exists(user_id: str, created_via: str = "scim_grou
 
         created_user: Final = await new_user(
             data=new_user_request,
-            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            user_api_key_dict=UserAPIKeyAuth.get_litellm_scim_user_api_key_auth(),
         )
         verbose_proxy_logger.info("Created user %s via %s", user_id, created_via)
         return created_user
@@ -1723,7 +1723,7 @@ async def create_user(
 
         created_user: Final = await new_user(
             data=new_user_request,
-            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            user_api_key_dict=UserAPIKeyAuth.get_litellm_scim_user_api_key_auth(),
         )
 
         scim_user: Final = await ScimTransformations.transform_litellm_user_to_scim_user(user=created_user)
@@ -1861,7 +1861,7 @@ async def delete_user(
             if any(member.user_id == user_id for member in team_row.members_with_roles or []):
                 await team_member_delete(
                     data=TeamMemberDeleteRequest(team_id=team_row.team_id, user_id=user_id),
-                    user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                    user_api_key_dict=UserAPIKeyAuth.get_litellm_scim_user_api_key_auth(),
                 )
 
         await _set_user_keys_blocked(user_id=user_id, blocked=True)
@@ -2266,7 +2266,7 @@ async def _add_user_to_team(user_id: str, team_id: str) -> None:
                 team_id=team_id,
                 member=Member(user_id=user_id, role="user"),
             ),
-            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            user_api_key_dict=UserAPIKeyAuth.get_litellm_scim_user_api_key_auth(),
         )
     except ProxyException as e:
         if e.type != ProxyErrorTypes.team_member_already_in_team:
@@ -2278,7 +2278,7 @@ async def _remove_user_from_team(user_id: str, team_id: str) -> None:
     try:
         await team_member_delete(
             data=TeamMemberDeleteRequest(team_id=team_id, user_id=user_id),
-            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            user_api_key_dict=UserAPIKeyAuth.get_litellm_scim_user_api_key_auth(),
         )
     except HTTPException as e:
         if not _is_user_not_in_team_error(e):
@@ -2583,7 +2583,7 @@ async def create_group(
                 members_with_roles=members_with_roles,
             ),
             http_request=Request(scope={"type": "http", "path": "/scim/v2/Groups"}),
-            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            user_api_key_dict=UserAPIKeyAuth.get_litellm_scim_user_api_key_auth(),
         )
 
         await _recompute_scim_member_roles(prisma_client, member_result.all_member_ids)

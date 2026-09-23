@@ -5307,6 +5307,29 @@ def test_transform_verification_tokens_to_deleted_records_empty_list():
     assert records == []
 
 
+def test_transform_verification_tokens_to_deleted_records_deleted_by_fallback():
+    """An identity-less auth (internal callers like SCIM roster sync that only carry
+    a role) must still leave a non-empty deleted_by; a user_id-bearing auth keeps its own."""
+    live_row = MagicMock()
+    live_row.model_dump.return_value = {
+        "token": "hashed-token-fallback",
+        "user_id": "member-1",
+        "team_id": "team-1",
+    }
+
+    records = _transform_verification_tokens_to_deleted_records(
+        keys=[live_row],
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    assert isinstance(records[0]["deleted_by"], str) and records[0]["deleted_by"]
+
+    records = _transform_verification_tokens_to_deleted_records(
+        keys=[live_row],
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    assert records[0]["deleted_by"] == "admin-1"
+
+
 @pytest.mark.asyncio
 async def test_save_deleted_verification_token_records():
     mock_prisma_client = AsyncMock()
