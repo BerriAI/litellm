@@ -314,4 +314,3 @@ def test_sync_fallback_wraps_converted_stream_as_synthetic_stream(converted_stre
     events = list(response)
     assert len(events) > 0
     assert getattr(events[-1], "type", None) == "response.completed"
-

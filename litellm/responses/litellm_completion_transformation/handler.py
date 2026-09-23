@@ -85,9 +85,8 @@ class LiteLLMCompletionTransformationHandler:
                 )
             )
 
-            converted_stream: Final = (
-                converted_stream_requested(kwargs)
-                or converted_stream_requested(litellm_completion_request)
+            converted_stream: Final = converted_stream_requested(kwargs) or converted_stream_requested(
+                litellm_completion_request
             )
             if converted_stream and not kwargs.get("_agentic_loop_depth"):
                 return MockResponsesAPIStreamingIterator(
@@ -143,9 +142,8 @@ class LiteLLMCompletionTransformationHandler:
                 )
             )
 
-            converted_stream: Final = (
-                converted_stream_requested(kwargs)
-                or converted_stream_requested(litellm_completion_request)
+            converted_stream: Final = converted_stream_requested(kwargs) or converted_stream_requested(
+                litellm_completion_request
             )
             if converted_stream and not kwargs.get("_agentic_loop_depth"):
                 return MockResponsesAPIStreamingIterator(
