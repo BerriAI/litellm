@@ -1,5 +1,11 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum MissingSecretPolicy {
+    PreserveAbsence,
+    PythonError,
+}
+
 impl AwsSecretsManagerV2 {
     pub async fn read_secret_for_resolver(
         &self,
@@ -7,8 +13,13 @@ impl AwsSecretsManagerV2 {
         primary_name: Option<&str>,
         environment: &(dyn Lookup + Sync),
     ) -> Result<Option<Secret>, Error> {
-        self.read_secret_for_resolver_with_policy(name, primary_name, environment, false)
-            .await
+        self.read_secret_for_resolver_with_policy(
+            name,
+            primary_name,
+            environment,
+            MissingSecretPolicy::PreserveAbsence,
+        )
+        .await
     }
 
     pub async fn read_secret_for_python(
@@ -17,16 +28,21 @@ impl AwsSecretsManagerV2 {
         primary_name: Option<&str>,
         environment: &(dyn Lookup + Sync),
     ) -> Result<Option<Secret>, Error> {
-        self.read_secret_for_resolver_with_policy(name, primary_name, environment, true)
-            .await
+        self.read_secret_for_resolver_with_policy(
+            name,
+            primary_name,
+            environment,
+            MissingSecretPolicy::PythonError,
+        )
+        .await
     }
 
-    pub(super) async fn read_secret_for_resolver_with_policy(
+    async fn read_secret_for_resolver_with_policy(
         &self,
         name: &str,
         primary_name: Option<&str>,
         environment: &(dyn Lookup + Sync),
-        missing_is_error: bool,
+        missing_policy: MissingSecretPolicy,
     ) -> Result<Option<Secret>, Error> {
         if bootstrap_key(name) {
             return Ok(environment
@@ -39,7 +55,9 @@ impl AwsSecretsManagerV2 {
                 .async_read_secret(name)
                 .await
                 .and_then(|value| match value {
-                    None if missing_is_error => Err(Error::MissingString),
+                    None if matches!(missing_policy, MissingSecretPolicy::PythonError) => {
+                        Err(Error::MissingString)
+                    }
                     value => Ok(value.map(Secret::String)),
                 }),
             Some(primary) => {
@@ -49,7 +67,7 @@ impl AwsSecretsManagerV2 {
                     self.async_read_secret(primary).await?
                 };
                 let Some(value) = value else {
-                    return if missing_is_error {
+                    return if matches!(missing_policy, MissingSecretPolicy::PythonError) {
                         Err(Error::PrimarySecret)
                     } else {
                         Ok(None)

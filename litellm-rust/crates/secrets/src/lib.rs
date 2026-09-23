@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod compatibility;
 mod error;
 mod handler;
 mod native;
@@ -8,10 +9,9 @@ mod resolver;
 pub mod source;
 mod state;
 
+pub use compatibility::get_secret_from_python_manager;
 pub use error::Error;
-pub use handler::{
-    ExternalSecretManager, SecretManager, get_secret_from_manager, get_secret_from_python_manager,
-};
+pub use handler::{ExternalSecretManager, SecretManager, get_secret_from_manager};
 pub use litellm_secrets_types::{
     AccessMode, KeyManagementSettings, KeyManagementSystem, Secret, SecretValue,
 };

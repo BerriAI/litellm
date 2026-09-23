@@ -175,37 +175,3 @@ where
         .map(|value| value.map(Secret::String))
         .map_err(Error::from)
 }
-
-pub async fn get_secret_from_python_manager(
-    manager: &SecretManager,
-    name: &str,
-    settings: &KeyManagementSettings,
-    environment: &(dyn Lookup + Send + Sync),
-) -> Result<Option<Secret>, Error> {
-    #[cfg(feature = "aws")]
-    if let SecretManager::AwsSecretsManagerV2(client) = manager {
-        return client
-            .read_secret_for_python(name, settings.primary_secret_name.as_deref(), environment)
-            .await
-            .map_err(Error::from);
-    }
-    let result = match manager {
-        #[cfg(feature = "google")]
-        SecretManager::GoogleSecretManager(client) => client
-            .get_secret_for_python(name)
-            .await
-            .map_err(Error::from),
-        _ => get_secret_from_manager(manager, name, settings, environment).await,
-    };
-    #[cfg(feature = "azure")]
-    if matches!(
-        result,
-        Err(Error::Azure(litellm_secrets_azure::Error::MissingValue))
-    ) {
-        return Ok(None);
-    }
-    if manager.system() == KeyManagementSystem::AzureKeyVault && matches!(result, Ok(None)) {
-        return Ok(None);
-    }
-    result.and_then(|value| value.ok_or(Error::ManagedSecretMissing).map(Some))
-}

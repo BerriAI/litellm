@@ -33,46 +33,35 @@ async fn renamed_rotation_reads_creates_verifies_then_deletes(
     default_settings: KeyManagementSettings,
 ) {
     let server = MockServer::start().await;
-    let step = AtomicUsize::new(0);
-    Mock::given(wiremock::matchers::method("POST"))
-        .respond_with(move |request: &wiremock::Request| {
-            let body: serde_json::Value = request.body_json().unwrap();
-            let action = request
-                .headers
-                .get("x-amz-target")
-                .unwrap()
-                .to_str()
-                .unwrap();
-            match step.fetch_add(1, Ordering::SeqCst) {
-                0 => {
-                    assert_eq!(action, "secretsmanager.GetSecretValue");
-                    assert_eq!(body["SecretId"], "old");
-                    ResponseTemplate::new(200).set_body_json(json!({"SecretString":"old-value"}))
-                }
-                1 => {
-                    assert_eq!(action, "secretsmanager.CreateSecret");
-                    assert_eq!(body["Name"], "new");
-                    assert_eq!(body["Description"], "Rotated from old");
-                    assert_eq!(body["SecretString"], "replacement");
-                    ResponseTemplate::new(200).set_body_json(json!({"Name":"new"}))
-                }
-                2 => {
-                    assert_eq!(action, "secretsmanager.GetSecretValue");
-                    assert_eq!(body["SecretId"], "new");
-                    ResponseTemplate::new(200).set_body_json(json!({"SecretString":"replacement"}))
-                }
-                3 => {
-                    assert_eq!(action, "secretsmanager.DeleteSecret");
-                    assert_eq!(body["SecretId"], "old");
-                    assert_eq!(body["RecoveryWindowInDays"], 7);
-                    ResponseTemplate::new(200).set_body_json(json!({"Name":"old"}))
-                }
-                _ => panic!("unexpected request"),
-            }
-        })
-        .expect(4)
-        .mount(&server)
-        .await;
+    scripted_actions(
+        &server,
+        vec![
+            Action {
+                operation: "GetSecretValue",
+                request: json!({"SecretId":"old"}),
+                status: 200,
+                response: json!({"SecretString":"old-value"}),
+            },
+            Action {
+                operation: "CreateSecret",
+                request: json!({"Name":"new", "Description":"Rotated from old", "SecretString":"replacement"}),
+                status: 200,
+                response: json!({"Name":"new"}),
+            },
+            Action {
+                operation: "GetSecretValue",
+                request: json!({"SecretId":"new"}),
+                status: 200,
+                response: json!({"SecretString":"replacement"}),
+            },
+            Action {
+                operation: "DeleteSecret",
+                request: json!({"SecretId":"old", "RecoveryWindowInDays":7}),
+                status: 200,
+                response: json!({"Name":"old"}),
+            },
+        ],
+    ).await;
     assert!(matches!(
         manager(&server, default_settings)
             .async_rotate_secret("old", "new", &SecretValue::new("replacement"))
@@ -194,62 +183,62 @@ async fn recovery_window_alias_is_restored_updated_and_tagged(#[case] rotate: bo
     let write = json!({"Name":"key", "SecretString":"new", "Description":description,
         "KmsKeyId":"kms", "Tags":[{"Key":"stage", "Value":"test"}]});
     let actions = if rotate {
-        vec![(
-            "GetSecretValue",
-            json!({"SecretId":"old"}),
-            200,
-            json!({"SecretString":"old"}),
-        )]
+        vec![Action {
+            operation: "GetSecretValue",
+            request: json!({"SecretId":"old"}),
+            status: 200,
+            response: json!({"SecretString":"old"}),
+        }]
     } else {
         vec![]
     };
     let recovery = vec![
-        (
-            "CreateSecret",
-            write,
-            400,
-            json!({"__type":"ResourceExistsException"}),
-        ),
-        (
-            "DescribeSecret",
-            json!({"SecretId":"key"}),
-            200,
-            json!({"DeletedDate":1}),
-        ),
-        (
-            "RestoreSecret",
-            json!({"SecretId":"key"}),
-            200,
-            json!({"Name":"key"}),
-        ),
-        (
-            "UpdateSecret",
-            json!({"SecretId":"key", "SecretString":"new", "Description":description,
+        Action {
+            operation: "CreateSecret",
+            request: write,
+            status: 400,
+            response: json!({"__type":"ResourceExistsException"}),
+        },
+        Action {
+            operation: "DescribeSecret",
+            request: json!({"SecretId":"key"}),
+            status: 200,
+            response: json!({"DeletedDate":1}),
+        },
+        Action {
+            operation: "RestoreSecret",
+            request: json!({"SecretId":"key"}),
+            status: 200,
+            response: json!({"Name":"key"}),
+        },
+        Action {
+            operation: "UpdateSecret",
+            request: json!({"SecretId":"key", "SecretString":"new", "Description":description,
             "KmsKeyId":"kms"}),
-            200,
-            json!({"ARN":"restored-arn", "Name":"key", "VersionId":"new-version"}),
-        ),
-        (
-            "TagResource",
-            json!({"SecretId":"key", "Tags":[{"Key":"stage", "Value":"test"}]}),
-            200,
-            json!({}),
-        ),
+            status: 200,
+            response: json!({"ARN":"restored-arn", "Name":"key", "VersionId":"new-version"}),
+        },
+        Action {
+            operation: "TagResource",
+            request: json!({"SecretId":"key", "Tags":[{"Key":"stage", "Value":"test"}]}),
+            status: 200,
+            response: json!({}),
+        },
     ];
     let verification = if rotate {
         vec![
-            (
-                "GetSecretValue",
-                json!({"SecretId":"key"}),
-                200,
-                json!({"SecretString":"new"}),
-            ),
-            (
-                "DeleteSecret",
-                json!({"SecretId":"old", "RecoveryWindowInDays":7}),
-                200,
-                json!({}),
-            ),
+            Action {
+                operation: "GetSecretValue",
+                request: json!({"SecretId":"key"}),
+                status: 200,
+                response: json!({"SecretString":"new"}),
+            },
+            Action {
+                operation: "DeleteSecret",
+                request: json!({"SecretId":"old", "RecoveryWindowInDays":7}),
+                status: 200,
+                response: json!({}),
+            },
         ]
     } else {
         vec![]
@@ -308,18 +297,18 @@ async fn create_failure_does_not_overwrite_an_alias_without_a_deletion_date(
     scripted_actions(
         &server,
         vec![
-            (
-                "CreateSecret",
-                json!({"Name":"key", "SecretString":"new"}),
-                400,
-                json!({"__type":"ResourceExistsException"}),
-            ),
-            (
-                "DescribeSecret",
-                json!({"SecretId":"key"}),
+            Action {
+                operation: "CreateSecret",
+                request: json!({"Name":"key", "SecretString":"new"}),
+                status: 400,
+                response: json!({"__type":"ResourceExistsException"}),
+            },
+            Action {
+                operation: "DescribeSecret",
+                request: json!({"SecretId":"key"}),
                 status,
-                described,
-            ),
+                response: described,
+            },
         ],
     )
     .await;
@@ -347,23 +336,21 @@ enum RecoveryFailure {
 #[tokio::test]
 async fn creation_replicates_only_to_configured_regions(#[case] regions: Option<Vec<String>>) {
     let server = MockServer::start().await;
-    let create = vec![(
-        "CreateSecret",
-        json!({"Name":"key", "SecretString":"value", "KmsKeyId":"kms-key"}),
-        200,
-        json!({"Name":"key", "VersionId":"created"}),
-    )];
+    let create = vec![Action {
+        operation: "CreateSecret",
+        request: json!({"Name":"key", "SecretString":"value", "KmsKeyId":"kms-key"}),
+        status: 200,
+        response: json!({"Name":"key", "VersionId":"created"}),
+    }];
     let replicate = regions
         .as_ref()
         .filter(|regions| !regions.is_empty())
-        .map(|regions| {
-            (
-                "ReplicateSecretToRegions",
-                json!({"SecretId":"key", "AddReplicaRegions":regions.iter()
+        .map(|regions| Action {
+            operation: "ReplicateSecretToRegions",
+            request: json!({"SecretId":"key", "AddReplicaRegions":regions.iter()
             .map(|region| json!({"Region":region})).collect::<Vec<_>>()}),
-                200,
-                json!({"ARN":"replica-arn"}),
-            )
+            status: 200,
+            response: json!({"ARN":"replica-arn"}),
         });
     scripted_actions(&server, create.into_iter().chain(replicate).collect()).await;
     let environment: Arc<dyn litellm_core_utils::settings::Lookup + Send + Sync> = {
@@ -402,10 +389,19 @@ async fn creation_replicates_only_to_configured_regions(#[case] regions: Option<
 #[tokio::test]
 async fn direct_replication_returns_response_or_service_error(#[case] status: u16) {
     let server = MockServer::start().await;
-    scripted_actions(&server, vec![("ReplicateSecretToRegions",
-        json!({"SecretId":"key", "AddReplicaRegions":[{"Region":"region-a"}, {"Region":"region-b"}]}),
-        status, if status == 200 { json!({"ARN":"replicated-arn"}) }
-        else { json!({"__type":"AccessDeniedException"}) })]).await;
+    scripted_actions(
+        &server,
+        vec![Action {
+            operation: "ReplicateSecretToRegions",
+            request: json!({"SecretId":"key", "AddReplicaRegions":[{"Region":"region-a"}, {"Region":"region-b"}]}),
+            status,
+            response: if status == 200 {
+                json!({"ARN":"replicated-arn"})
+            } else {
+                json!({"__type":"AccessDeniedException"})
+            },
+        }],
+    ).await;
     let result = manager(&server, Default::default())
         .async_replicate_secret("key", &["region-a".into(), "region-b".into()])
         .await;
@@ -432,12 +428,7 @@ async fn write_and_replication_timeouts_remain_errors(#[case] replicate: bool) {
         .mount(&server)
         .await;
     let client = Client::from_conf(
-        aws_sdk_secretsmanager::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .region(Region::new("us-east-1"))
-            .credentials_provider(Credentials::new("test", "test", None, None, "test"))
-            .endpoint_url(server.uri())
-            .retry_config(RetryConfig::disabled())
+        client_builder(&server)
             .timeout_config(
                 aws_sdk_secretsmanager::config::timeout::TimeoutConfig::builder()
                     .operation_timeout(Duration::from_millis(50))
@@ -474,24 +465,24 @@ async fn write_read_delete_preserves_the_complete_secret_string(#[case] value: &
     scripted_actions(
         &server,
         vec![
-            (
-                "CreateSecret",
-                json!({"Name":"key", "SecretString":value, "Description":"description"}),
-                200,
-                json!({"Name":"key"}),
-            ),
-            (
-                "GetSecretValue",
-                json!({"SecretId":"key"}),
-                200,
-                json!({"SecretString":value}),
-            ),
-            (
-                "DeleteSecret",
-                json!({"SecretId":"key", "RecoveryWindowInDays":7}),
-                200,
-                json!({"Name":"key"}),
-            ),
+            Action {
+                operation: "CreateSecret",
+                request: json!({"Name":"key", "SecretString":value, "Description":"description"}),
+                status: 200,
+                response: json!({"Name":"key"}),
+            },
+            Action {
+                operation: "GetSecretValue",
+                request: json!({"SecretId":"key"}),
+                status: 200,
+                response: json!({"SecretString":value}),
+            },
+            Action {
+                operation: "DeleteSecret",
+                request: json!({"SecretId":"key", "RecoveryWindowInDays":7}),
+                status: 200,
+                response: json!({"Name":"key"}),
+            },
         ],
     )
     .await;
@@ -549,47 +540,47 @@ async fn failed_update_reschedules_deletion_of_a_restored_alias(#[case] failure:
         RecoveryFailure::DeleteAfterUpdate | RecoveryFailure::DeleteAfterTag
     ));
     let prefix = [
-        (
-            "CreateSecret",
-            json!({"Name":"key", "SecretString":"new", "Tags":[{"Key":"stage", "Value":"test"}]}),
-            400,
-            json!({"__type":"ResourceExistsException"}),
-        ),
-        (
-            "DescribeSecret",
-            json!({"SecretId":"key"}),
-            200,
-            json!({"DeletedDate":1}),
-        ),
-        (
-            "RestoreSecret",
-            json!({"SecretId":"key"}),
-            restore_status,
-            restore_body,
-        ),
+        Action {
+            operation: "CreateSecret",
+            request: json!({"Name":"key", "SecretString":"new", "Tags":[{"Key":"stage", "Value":"test"}]}),
+            status: 400,
+            response: json!({"__type":"ResourceExistsException"}),
+        },
+        Action {
+            operation: "DescribeSecret",
+            request: json!({"SecretId":"key"}),
+            status: 200,
+            response: json!({"DeletedDate":1}),
+        },
+        Action {
+            operation: "RestoreSecret",
+            request: json!({"SecretId":"key"}),
+            status: restore_status,
+            response: restore_body,
+        },
     ];
-    let update = (!matches!(failure, RecoveryFailure::Restore)).then_some((
-        "UpdateSecret",
-        json!({"SecretId":"key", "SecretString":"new"}),
-        update_status,
-        update_body,
-    ));
+    let update = (!matches!(failure, RecoveryFailure::Restore)).then_some(Action {
+        operation: "UpdateSecret",
+        request: json!({"SecretId":"key", "SecretString":"new"}),
+        status: update_status,
+        response: update_body,
+    });
     let tag = matches!(
         failure,
         RecoveryFailure::Tag | RecoveryFailure::DeleteAfterTag
     )
-    .then_some((
-        "TagResource",
-        json!({"SecretId":"key", "Tags":[{"Key":"stage", "Value":"test"}]}),
-        400,
-        json!({"__type":"InvalidRequestException"}),
-    ));
-    let delete = (!matches!(failure, RecoveryFailure::Restore)).then_some((
-        "DeleteSecret",
-        json!({"SecretId":"key", "RecoveryWindowInDays":7}),
-        delete_status,
-        delete_body,
-    ));
+    .then_some(Action {
+        operation: "TagResource",
+        request: json!({"SecretId":"key", "Tags":[{"Key":"stage", "Value":"test"}]}),
+        status: 400,
+        response: json!({"__type":"InvalidRequestException"}),
+    });
+    let delete = (!matches!(failure, RecoveryFailure::Restore)).then_some(Action {
+        operation: "DeleteSecret",
+        request: json!({"SecretId":"key", "RecoveryWindowInDays":7}),
+        status: delete_status,
+        response: delete_body,
+    });
     scripted_actions(
         &server,
         prefix

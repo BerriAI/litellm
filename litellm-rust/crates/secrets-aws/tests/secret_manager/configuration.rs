@@ -17,12 +17,8 @@ async fn credential_failures_are_not_swallowed_as_missing_secrets() {
         }
     }
     let server = MockServer::start().await;
-    let config = aws_sdk_secretsmanager::Config::builder()
-        .behavior_version(BehaviorVersion::latest())
-        .region(Region::new("us-east-1"))
+    let config = client_builder(&server)
         .credentials_provider(FailedCredentials)
-        .endpoint_url(server.uri())
-        .retry_config(RetryConfig::disabled())
         .build();
     let manager = AwsSecretsManagerV2::new(Client::from_conf(config), Default::default());
     let error = manager.async_read_secret("key").await.unwrap_err();

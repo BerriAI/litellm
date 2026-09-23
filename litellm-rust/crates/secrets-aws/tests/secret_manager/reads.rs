@@ -159,12 +159,7 @@ async fn read_timeout_is_an_error_and_cannot_be_mistaken_for_missing() {
         )
         .mount(&server)
         .await;
-    let config = aws_sdk_secretsmanager::Config::builder()
-        .behavior_version(BehaviorVersion::latest())
-        .region(Region::new("us-east-1"))
-        .credentials_provider(Credentials::new("test", "test", None, None, "test"))
-        .endpoint_url(server.uri())
-        .retry_config(RetryConfig::disabled())
+    let config = client_builder(&server)
         .timeout_config(
             aws_sdk_secretsmanager::config::timeout::TimeoutConfig::builder()
                 .operation_timeout(Duration::from_millis(30))

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
+use crate::compatibility::python_manager_string;
 use litellm_core_utils::{
     serde_compat::parse_str_bool,
     settings::{Lookup, ProcessEnvironment},
 };
-use litellm_python_compat::{Value, literal::literal_eval};
 
 use crate::state::{LookupTarget, normalize_secret_name};
 use crate::{Error, OidcResolver, Secret, SecretManagerState, SecretValue};
@@ -95,24 +95,10 @@ impl SecretResolver {
                 .map(|value| value.map(Secret::String));
         }
         let LookupTarget::Manager { backend, settings } = self.state.lookup_target(name) else {
-            return Ok(self.environment.get(name).map(|value| {
-                if self.python_compatible
-                    && self
-                        .state
-                        .settings()
-                        .is_some_and(|settings| settings.access_mode.readable())
-                {
-                    python_manager_string(SecretValue::new(value))
-                } else if self.python_compatible {
-                    parse_str_bool(&value)
-                        .map_or_else(|| Secret::String(SecretValue::new(value)), Secret::Bool)
-                } else {
-                    Secret::String(SecretValue::new(value))
-                }
-            }));
+            return Ok(self.environment_value(name));
         };
         let result = if self.python_compatible {
-            crate::handler::get_secret_from_python_manager(
+            crate::get_secret_from_python_manager(
                 backend,
                 name,
                 settings,
@@ -181,6 +167,24 @@ impl SecretResolver {
         }
     }
 
+    fn environment_value(&self, name: &str) -> Option<Secret> {
+        let value = self.environment.get(name)?;
+        if !self.python_compatible {
+            return Some(Secret::String(SecretValue::new(value)));
+        }
+        if self
+            .state
+            .settings()
+            .is_some_and(|settings| settings.access_mode.readable())
+        {
+            return Some(python_manager_string(SecretValue::new(value)));
+        }
+        Some(
+            parse_str_bool(&value)
+                .map_or_else(|| Secret::String(SecretValue::new(value)), Secret::Bool),
+        )
+    }
+
     fn manager_value(&self, secret: Secret) -> Option<Secret> {
         if !self.python_compatible {
             return Some(secret);
@@ -190,13 +194,6 @@ impl SecretResolver {
             return None;
         };
         Some(python_manager_string(value))
-    }
-}
-
-fn python_manager_string(value: SecretValue) -> Secret {
-    match literal_eval(value.expose()) {
-        Ok(Value::Bool(boolean)) => Secret::Bool(boolean),
-        _ => Secret::String(value),
     }
 }
 

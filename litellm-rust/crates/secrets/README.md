@@ -37,3 +37,5 @@ Google rejects malformed base64 and mismatched CRC32C values instead of acceptin
 ## Test parity
 
 [The Python test inventory](PARITY.md) maps each secret-manager test to Rust coverage or its owning boundary
+
+AWS, Vault, and CyberArk keep client/authentication, reads, and writes/rotation in private provider modules. Their existing integration-test targets group configuration, read/cache, and write/rotation cases, with shared fixtures local to each target. Python-compatible dispatch and string coercion live separately from native dispatch

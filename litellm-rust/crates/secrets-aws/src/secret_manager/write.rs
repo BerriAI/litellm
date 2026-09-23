@@ -19,52 +19,20 @@ impl AwsSecretsManagerV2 {
         description: Option<&str>,
         tags: Option<&BTreeMap<String, String>>,
     ) -> Result<CreateSecretOutput, Error> {
+        let tags = self.write_tags(tags);
         let request = client
             .create_secret()
             .name(name)
             .secret_string(value.expose())
             .set_description(description.filter(|v| !v.is_empty()).map(str::to_owned))
-            .set_kms_key_id(
-                self.write_settings
-                    .kms_key_id
-                    .clone()
-                    .filter(|v| !v.is_empty()),
-            )
-            .set_tags(tags.or(self.write_settings.tags.as_ref()).map(|tags| {
-                tags.iter()
-                    .map(|(key, value)| Tag::builder().key(key).value(value).build())
-                    .collect()
-            }));
+            .set_kms_key_id(self.write_kms_key_id())
+            .set_tags(tags.clone());
         let response = match request.send().await {
             Ok(response) => response,
-            Err(error) => {
-                let scheduled = client
-                    .describe_secret()
-                    .secret_id(name)
-                    .send()
-                    .await
-                    .is_ok_and(|response| response.deleted_date().is_some());
-                if !scheduled {
-                    return Err(Error::Create(Box::new(error)));
-                }
-                client
-                    .restore_secret()
-                    .secret_id(name)
-                    .send()
-                    .await
-                    .map_err(|error| Error::Restore(Box::new(error)))?;
-                let updated = self
-                    .update_restored_secret(client, name, value, description, tags)
-                    .await;
-                match updated {
-                    Ok(response) => response,
-                    Err(error) => {
-                        self.async_delete_secret_with_client(client, name, Some(7))
-                            .await?;
-                        return Err(error);
-                    }
-                }
-            }
+            Err(error) => self
+                .restore_and_update_secret(client, name, value, description, tags)
+                .await?
+                .ok_or_else(|| Error::Create(Box::new(error)))?,
         };
         if let Some(regions) = &self.write_settings.replica_regions
             && !regions.is_empty()
@@ -78,13 +46,64 @@ impl AwsSecretsManagerV2 {
         Ok(response)
     }
 
-    pub(super) async fn update_restored_secret(
+    async fn restore_and_update_secret(
         &self,
         client: &Client,
         name: &str,
         value: &SecretValue,
         description: Option<&str>,
-        tags: Option<&BTreeMap<String, String>>,
+        tags: Option<Vec<Tag>>,
+    ) -> Result<Option<CreateSecretOutput>, Error> {
+        let scheduled = client
+            .describe_secret()
+            .secret_id(name)
+            .send()
+            .await
+            .is_ok_and(|response| response.deleted_date().is_some());
+        if !scheduled {
+            return Ok(None);
+        }
+        client
+            .restore_secret()
+            .secret_id(name)
+            .send()
+            .await
+            .map_err(|error| Error::Restore(Box::new(error)))?;
+        match self
+            .update_restored_secret(client, name, value, description, tags)
+            .await
+        {
+            Ok(response) => Ok(Some(response)),
+            Err(error) => {
+                self.async_delete_secret_with_client(client, name, Some(7))
+                    .await?;
+                Err(error)
+            }
+        }
+    }
+
+    fn write_kms_key_id(&self) -> Option<String> {
+        self.write_settings
+            .kms_key_id
+            .clone()
+            .filter(|value| !value.is_empty())
+    }
+
+    fn write_tags(&self, tags: Option<&BTreeMap<String, String>>) -> Option<Vec<Tag>> {
+        tags.or(self.write_settings.tags.as_ref()).map(|tags| {
+            tags.iter()
+                .map(|(key, value)| Tag::builder().key(key).value(value).build())
+                .collect()
+        })
+    }
+
+    async fn update_restored_secret(
+        &self,
+        client: &Client,
+        name: &str,
+        value: &SecretValue,
+        description: Option<&str>,
+        tags: Option<Vec<Tag>>,
     ) -> Result<CreateSecretOutput, Error> {
         let response = client
             .update_secret()
@@ -95,24 +114,15 @@ impl AwsSecretsManagerV2 {
                     .filter(|value| !value.is_empty())
                     .map(str::to_owned),
             )
-            .set_kms_key_id(
-                self.write_settings
-                    .kms_key_id
-                    .clone()
-                    .filter(|value| !value.is_empty()),
-            )
+            .set_kms_key_id(self.write_kms_key_id())
             .send()
             .await
             .map_err(|error| Error::Update(Box::new(error)))?;
-        if let Some(tags) = tags.or(self.write_settings.tags.as_ref()) {
+        if let Some(tags) = tags {
             client
                 .tag_resource()
                 .secret_id(name)
-                .set_tags(Some(
-                    tags.iter()
-                        .map(|(key, value)| Tag::builder().key(key).value(value).build())
-                        .collect(),
-                ))
+                .set_tags(Some(tags))
                 .send()
                 .await
                 .map_err(|error| Error::Tag(Box::new(error)))?;

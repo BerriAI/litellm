@@ -1,15 +1,7 @@
 use super::*;
 
 pub(super) fn manager(server: &MockServer, settings: KeyManagementSettings) -> AwsSecretsManagerV2 {
-    let client = Client::from_conf(
-        aws_sdk_secretsmanager::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .region(Region::new("us-east-1"))
-            .credentials_provider(Credentials::new("test", "test", None, None, "test"))
-            .endpoint_url(server.uri())
-            .retry_config(RetryConfig::disabled())
-            .build(),
-    );
+    let client = Client::from_conf(client_builder(server).build());
     AwsSecretsManagerV2::new(client, (&settings).into())
 }
 
@@ -39,16 +31,17 @@ pub(super) fn default_settings() -> KeyManagementSettings {
     KeyManagementSettings::default()
 }
 
-pub(super) async fn scripted_actions(
-    server: &MockServer,
-    actions: Vec<(&'static str, serde_json::Value, u16, serde_json::Value)>,
-) {
+pub(super) async fn scripted_actions(server: &MockServer, actions: Vec<Action>) {
     let count = actions.len() as u64;
     let step = AtomicUsize::new(0);
     Mock::given(wiremock::matchers::method("POST"))
         .respond_with(move |request: &wiremock::Request| {
-            let (action, expected, status, response) =
-                &actions[step.fetch_add(1, Ordering::SeqCst)];
+            let Action {
+                operation: action,
+                request: expected,
+                status,
+                response,
+            } = &actions[step.fetch_add(1, Ordering::SeqCst)];
             assert_eq!(
                 request.headers["x-amz-target"],
                 format!("secretsmanager.{action}")
@@ -68,4 +61,20 @@ pub(super) async fn scripted_actions(
         .expect(count)
         .mount(server)
         .await;
+}
+
+pub(super) struct Action {
+    pub(super) operation: &'static str,
+    pub(super) request: serde_json::Value,
+    pub(super) status: u16,
+    pub(super) response: serde_json::Value,
+}
+
+pub(super) fn client_builder(server: &MockServer) -> aws_sdk_secretsmanager::config::Builder {
+    aws_sdk_secretsmanager::Config::builder()
+        .behavior_version(BehaviorVersion::latest())
+        .region(Region::new("us-east-1"))
+        .credentials_provider(Credentials::new("test", "test", None, None, "test"))
+        .endpoint_url(server.uri())
+        .retry_config(RetryConfig::disabled())
 }
