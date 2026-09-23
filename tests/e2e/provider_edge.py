@@ -795,17 +795,13 @@ def _truncated_steps(
     upstream had left, closing the upstream generator so its socket closes too.
     An upstream that dies on its own before the count is reached just passes
     its truncation through."""
-    relayed = 0
     with closing(steps) as source:
-        for step in source:
-            if isinstance(step, StreamChunk) and relayed >= truncate_after:
-                yield StreamTruncation(
-                    reason=f"edge truncated the upstream stream after {truncate_after} chunks"
-                )
-                return
-            if isinstance(step, StreamChunk):
-                relayed += 1
-            yield step
+        for relayed, step in enumerate(source):
+            if isinstance(step, StreamTruncation) or relayed < truncate_after:
+                yield step
+                continue
+            yield StreamTruncation(reason=f"edge truncated the upstream stream after {truncate_after} chunks")
+            return
 
 
 def _handle_live(

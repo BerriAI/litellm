@@ -9870,8 +9870,6 @@ def _anthropic_message_start_frame() -> bytes:
 
 @pytest.mark.asyncio
 async def test_sse_generator_yields_anthropic_error_event_on_interrupted_stream():
-    frames_seen: list = []
-
     async def _iterator_hook(**_kwargs):
         yield _anthropic_message_start_frame()
         raise Exception("upstream hung up")
@@ -9880,7 +9878,7 @@ async def test_sse_generator_yields_anthropic_error_event_on_interrupted_stream(
     proxy_logging_obj.async_post_call_streaming_iterator_hook = _iterator_hook
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
-    chunks = [
+    frames_seen: Final = [
         chunk
         async for chunk in ProxyBaseLLMRequestProcessing.async_sse_data_generator(
             response=MagicMock(),
@@ -9891,7 +9889,6 @@ async def test_sse_generator_yields_anthropic_error_event_on_interrupted_stream(
             restamp_model=None,
         )
     ]
-    frames_seen.extend(chunks)
 
     assert frames_seen[0] == _anthropic_message_start_frame(), (
         f"stream content before the failure was dropped: {frames_seen}"
