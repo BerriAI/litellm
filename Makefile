@@ -304,7 +304,11 @@ test-rust-extension:
 		--mypy-config-file tests/test_litellm/rust_bridge/stubtest.ini \
 		litellm.rust_bridge._native && \
 	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
-	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust $(RUST_EXTENSION_PYTEST_ARGS)
+	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust \
+		--cov="$$temporary/venv/lib/python3.12/site-packages/litellm" \
+		--cov-report=xml:coverage-rust.xml && \
+	"$$temporary/venv/bin/python" -I scripts/normalize_native_coverage.py \
+		coverage-rust.xml "$$temporary/venv/lib/python3.12/site-packages/litellm"
 
 test: install-test-deps
 	$(UV_RUN) pytest tests/
