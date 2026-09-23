@@ -1,6 +1,13 @@
 from collections.abc import Mapping
 from typing import Final
 
+_PROVIDER_HEADERS_TO_PASSTHROUGH: Final = frozenset(
+    {
+        "anthropic-ratelimit-unified-status",
+        "retry-after",
+    }
+)
+
 
 def get_response_headers(_response_headers: Mapping[str, str] | None = None) -> dict:
     """
@@ -29,7 +36,10 @@ def get_response_headers(_response_headers: Mapping[str, str] | None = None) -> 
     if "x-ratelimit-remaining-tokens" in _response_headers:
         openai_headers["x-ratelimit-remaining-tokens"] = _response_headers["x-ratelimit-remaining-tokens"]
     llm_provider_headers: Final = _get_llm_provider_headers(_response_headers)
-    return {**llm_provider_headers, **openai_headers}
+    passthrough_headers: Final = {
+        key: value for key, value in _response_headers.items() if key.lower() in _PROVIDER_HEADERS_TO_PASSTHROUGH
+    }
+    return {**llm_provider_headers, **openai_headers, **passthrough_headers}
 
 
 def _get_llm_provider_headers(response_headers: Mapping[str, str]) -> dict:
