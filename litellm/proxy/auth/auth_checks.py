@@ -15,7 +15,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, TypeAdapter
@@ -67,6 +67,15 @@ from litellm.proxy._types import (
     RoleBasedPermissions,
     SpecialModelNames,
     UserAPIKeyAuth,
+)
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
+    CeilingResolver,
+    resolve_agent_access_group_ceiling,
+)
+from litellm.proxy.agent_endpoints.auth.agent_caller import (
+    agent_caller_auth,
+    load_agent_caller_team,
+    load_agent_caller_user,
 )
 from litellm.proxy.auth.budget_throttle import (
     budget_throttle_percentage,
@@ -845,6 +854,7 @@ MODEL_DISCOVERY_ROUTES: Final = frozenset(
         "/v1/model/info",
         "/v2/model/info",
         "/model_group/info",
+        "/utils/model_info",
     }
 )
 
@@ -1004,6 +1014,16 @@ async def common_checks(
                         param=None,
                         code=status.HTTP_400_BAD_REQUEST,
                     )
+
+    await _check_agent_access_group_model_access(model=_model, valid_token=valid_token, llm_router=llm_router)
+    await _check_agent_caller_model_access(
+        model=_model,
+        valid_token=valid_token,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
     ## 2.1 If user can call model (if personal key)
     if _model and team_object is None and user_object is not None:
@@ -2296,23 +2316,19 @@ async def _load_team_membership_on_cache_miss(
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging | None,
 ) -> LiteLLM_TeamMembership | None:
-    try:
-        redis_cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
-        redis_membership: Final = _membership_from_cached_payload(redis_cached)
-        if not isinstance(redis_membership, _TeamMembershipCacheMiss):
-            return redis_membership
+    redis_cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
+    redis_membership: Final = _membership_from_cached_payload(redis_cached)
+    if not isinstance(redis_membership, _TeamMembershipCacheMiss):
+        return redis_membership
 
-        return await _fetch_team_membership_from_db(
-            user_id=user_id,
-            team_id=team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    except Exception:
-        verbose_proxy_logger.exception("Error getting team membership")
-        return None
+    return await _fetch_team_membership_from_db(
+        user_id=user_id,
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
 
 async def get_team_membership(
@@ -2681,9 +2697,15 @@ async def get_user_object(
         raise
     except Exception as e:
         _log_budget_lookup_failure("user", e)
-        raise ValueError(
-            f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call. Got error - {e}"
-        )
+        raise _user_read_failure(user_id=user_id, error=e)
+
+
+def _user_read_failure(user_id: str, error: Exception) -> Exception:
+    if PrismaDBExceptionHandler.is_database_service_unavailable_error(error):
+        return error
+    return ValueError(
+        f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call. Got error - {error}"
+    )
 
 
 async def _cache_management_object(
@@ -4254,7 +4276,7 @@ def _can_object_call_model(
     models: list[str],
     team_model_aliases: dict[str, str] | None = None,
     team_id: str | None = None,
-    object_type: Literal["user", "team", "key", "org", "project"] = "user",
+    object_type: Literal["user", "team", "key", "org", "project", "agent"] = "user",
     fallback_depth: int = 0,
 ) -> Literal[True]:
     """
@@ -4288,7 +4310,10 @@ def _can_object_call_model(
             )
         return True
 
-    potential_models: Final = [model]
+    from litellm.router_strategy.complexity_router.context_compaction import native_compaction_parent
+
+    compaction_parent: Final = native_compaction_parent(model)
+    potential_models: Final = [model, compaction_parent] if compaction_parent is not None else [model]
     if model in litellm.model_alias_map:
         potential_models.append(litellm.model_alias_map[model])
     elif llm_router and model in llm_router.model_group_alias:
@@ -4318,6 +4343,82 @@ def _can_object_call_model(
         param="model",
         code=status.HTTP_403_FORBIDDEN,
     )
+
+
+async def _check_agent_access_group_model_access(
+    model: str | list[str] | None,  # mutable-ok: _can_object_call_model and the client message helper take list[str]
+    valid_token: UserAPIKeyAuth | None,
+    llm_router: Router | None,
+    resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
+) -> Literal[True]:
+    """Attached groups naming no model deny every model; the empty allowlist in ``_can_object_call_model`` allows."""
+    if not model or valid_token is None or not valid_token.agent_id:
+        return True
+    ceiling: Final = await resolve_ceiling(valid_token.agent_id)
+    if ceiling is None:
+        return True
+    if not ceiling.models:
+        raise ModelAccessDeniedProxyException(
+            message=model_access_denied_client_message(model=model),
+            internal_message=f"agent {valid_token.agent_id} access groups {ceiling.access_group_ids} grant no models",
+            type=ProxyErrorTypes.agent_model_access_denied,
+            param="model",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+    return _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=sorted(ceiling.models),
+        team_id=valid_token.team_id,
+        object_type="agent",
+    )
+
+
+LoadedCallerTeam: TypeAlias = LiteLLM_TeamTable | None
+LoadedCallerUser: TypeAlias = LiteLLM_UserTable | None
+CallerTeamLoader: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LoadedCallerTeam]]  # mutable-ok: Callable params
+CallerUserLoader: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LoadedCallerUser]]  # mutable-ok: Callable params
+
+
+async def _check_agent_caller_model_access(
+    model: str | list[str] | None,  # mutable-ok: the model checks it delegates to take list[str]
+    valid_token: UserAPIKeyAuth | None,
+    llm_router: Router | None,
+    prisma_client: Optional["PrismaClient"],
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    load_team: CallerTeamLoader = load_agent_caller_team,
+    load_user: CallerUserLoader = load_agent_caller_user,
+) -> None:
+    """An agent key acting for an invoking user may call only what that user's own key could: the
+    invoking team's models (and per-member scope) when a team was echoed, else the user's models."""
+    if not model or valid_token is None:
+        return
+    caller_auth: Final = agent_caller_auth(valid_token)
+    if caller_auth is None:
+        return
+    caller_team: Final = await load_team(valid_token)
+    if caller_team is not None:
+        await can_team_access_model(
+            model=model,
+            team_object=caller_team,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+        )
+        await _check_team_member_model_access(
+            model=model,
+            team_object=caller_team,
+            valid_token=caller_auth,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        return
+    caller_user: Final = await load_user(valid_token)
+    if caller_user is None:
+        return
+    await can_user_call_model(model=model, llm_router=llm_router, user_object=caller_user)
 
 
 def _model_in_team_aliases(model: str, team_model_aliases: dict[str, str] | None = None) -> bool:

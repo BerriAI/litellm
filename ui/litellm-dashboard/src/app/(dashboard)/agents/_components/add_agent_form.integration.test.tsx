@@ -21,6 +21,9 @@ vi.mock("./agent_card_discovery", () => ({ default: () => <div data-testid="agen
 vi.mock("@/components/mcp_server_management/MCPServerSelector", () => ({ default: () => <div /> }));
 vi.mock("@/components/mcp_server_management/MCPToolPermissions", () => ({ default: () => <div /> }));
 vi.mock("@/components/guardrails/GuardrailSelector", () => ({ default: () => <div /> }));
+vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
+  useAccessGroups: () => ({ data: [], isLoading: false, isError: false }),
+}));
 vi.mock("@/components/common_components/team_dropdown", () => ({ default: () => <div /> }));
 
 const a2aInfo: AgentCreateInfo = {

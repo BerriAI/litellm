@@ -47,6 +47,7 @@ class MockPrismaClient:
 
         # Add locks for the transaction queues (matches real PrismaClient)
         self._spend_log_transactions_lock = asyncio.Lock()
+        self.spend_log_write_lock = asyncio.Lock()
         self._tool_usage_transactions_lock = asyncio.Lock()
         self._autorouter_turn_transactions_lock = asyncio.Lock()
 

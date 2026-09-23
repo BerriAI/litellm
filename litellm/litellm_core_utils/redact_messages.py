@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.classifier_logging import without_classifier_aud
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
+from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
 from litellm.llms.vertex_ai.common_utils import (
     redact_vertex_ai_metadata_from_litellm_params,
     redact_vertex_ai_metadata_from_logged_object,
@@ -245,6 +246,8 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                 if "audio" in choice["delta"]:
                     choice["delta"]["audio"] = None
                 _redact_tool_calls_dict(choice["delta"])
+            elif choice.get("text") is not None:
+                choice["text"] = redacted_str
         else:
             _redact_choice_content(choice)
 
@@ -265,6 +268,7 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     model_call_details["messages"] = [{"role": "user", "content": REDACTED_BY_LITELLM}]
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
+    model_call_details.pop(SERVED_OUTPUT_TEXTS_KEY, None)
     standard_logging_object: Final = model_call_details.get("standard_logging_object")
     if isinstance(standard_logging_object, Mapping):
         model_call_details["standard_logging_object"] = _redact_standard_logging_object(standard_logging_object)

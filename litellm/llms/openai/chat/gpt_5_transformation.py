@@ -1,5 +1,6 @@
 """Support for OpenAI gpt-5 model family."""
 
+import re
 from typing import Final
 
 import litellm
@@ -10,6 +11,8 @@ from litellm.utils import (
 )
 
 from .gpt_transformation import OpenAIGPTConfig
+
+_GPT_SERIES_VERSION: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?(?=[.-]|$)")
 
 
 def _catalogue_declares_default_effort() -> bool:
@@ -112,20 +115,28 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         model_name: Final = model.split("/")[-1]
         return model_name.startswith("gpt-5.4")
 
+    @staticmethod
+    def _gpt_series_version(model: str) -> tuple[int, int] | None:
+        match: Final = _GPT_SERIES_VERSION.match(model.split("/")[-1])
+        if match is None:
+            return None
+        return int(match.group(1)), int(match.group(2) or 0)
+
     @classmethod
     def is_model_gpt_5_4_plus_model(cls, model: str) -> bool:
         """Check if the model is gpt-5.4 or newer (5.4, 5.5, 5.6, etc., including pro)."""
-        model_name: Final = model.split("/")[-1]
-        if model_name.startswith("gpt-6"):
-            return True
-        if not model_name.startswith("gpt-5."):
-            return False
-        try:
-            version_str: Final = model_name.replace("gpt-5.", "").split("-")[0]
-            major: Final = version_str.split(".")[0]
-            return int(major) >= 4
-        except (ValueError, IndexError):
-            return False
+        version: Final = cls._gpt_series_version(model)
+        return version is not None and version >= (5, 4)
+
+    @classmethod
+    def is_model_gpt_5_6_plus_model(cls, model: str) -> bool:
+        version: Final = cls._gpt_series_version(model)
+        return version is not None and version >= (5, 6)
+
+    @classmethod
+    def is_model_gpt_6_plus_model(cls, model: str) -> bool:
+        version: Final = cls._gpt_series_version(model)
+        return version is not None and version >= (6, 0)
 
     @classmethod
     def _model_map_lookup_name(cls, model: str) -> str:

@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::hash::{Hash, Hasher};
 use veil::Redact;
 
 #[derive(Redact, Clone, Deserialize)]
@@ -22,6 +23,12 @@ impl PartialEq for SecretValue {
 }
 
 impl Eq for SecretValue {}
+
+impl Hash for SecretValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
 
 #[cfg(test)]
 mod tests {

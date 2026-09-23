@@ -115,8 +115,10 @@ export interface KeyResponse {
   next_rotation_at?: string;
   user?: {
     user_id: string;
-    user_email: string;
+    user_email: string | null;
     user_alias: string | null;
+    max_budget?: number | null;
+    budget_duration?: string | null;
   };
   created_by_user?: {
     user_id: string;

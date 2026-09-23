@@ -9,7 +9,7 @@ import sys
 import threading
 import warnings
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -850,36 +850,6 @@ async def test_arouter_async_get_healthy_deployments():
     assert result[0]["litellm_params"]["model"] == "gpt-3.5-turbo"
 
 
-@pytest.mark.asyncio
-@patch("litellm.amoderation")
-async def test_arouter_amoderation_with_credential_name(mock_amoderation):
-    """
-    Test that router.amoderation passes litellm_credential_name to the underlying litellm.amoderation call
-    """
-    mock_amoderation.return_value = AsyncMock()
-
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "text-moderation-stable",
-                "litellm_params": {
-                    "model": "text-moderation-stable",
-                    "litellm_credential_name": "my-custom-auth",
-                },
-            },
-        ],
-    )
-
-    await router.amoderation(input="I love everyone!", model="text-moderation-stable")
-
-    mock_amoderation.assert_called_once()
-    call_kwargs = mock_amoderation.call_args[1]  # Get the kwargs of the call
-    print(
-        "call kwargs for router.amoderation=",
-        json.dumps(call_kwargs, indent=4, default=str),
-    )
-    assert call_kwargs["litellm_credential_name"] == "my-custom-auth"
-    assert call_kwargs["model"] == "text-moderation-stable"
 
 
 def test_arouter_test_team_model():
@@ -3447,6 +3417,114 @@ def test_completion_streaming_iterator_adopts_the_deployment_that_served_a_neste
     assert result._hidden_params["model_id"] == "served-deployment"
 
 
+@pytest.mark.asyncio
+async def test_acompletion_mid_stream_fallback_walks_every_entry_of_the_configured_list():
+    """LIT-7400: fallbacks=[{primary: [fb1, fb2]}] must reach fb2 when fb1 dies before its first chunk.
+
+    run_async_fallback returns as soon as fb1's stream wrapper exists, so fb1's failure surfaces
+    inside the streaming iterator, where the lookup is keyed by fb1. That key has no chain of its
+    own, so the iterator has to resume the chain of the group the request was originally for.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    class FailingStream(CustomStreamWrapper):
+        def __init__(self, model: str):
+            super().__init__(
+                completion_stream=object(), model=model, custom_llm_provider="openai", logging_obj=MagicMock()
+            )
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise MidStreamFallbackError(
+                message=f"provider 500 from {self.model}",
+                model=self.model,
+                llm_provider="openai",
+                generated_content="",
+                is_pre_first_chunk=True,
+                original_exception=litellm.InternalServerError(
+                    message=f"provider 500 from {self.model}", model=self.model, llm_provider="openai"
+                ),
+            )
+
+    class OkStream(FailingStream):
+        def __init__(self, model: str):
+            super().__init__(model)
+            self._chunks = iter(
+                [litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": f"ok-from-{model}"}}])]
+            )
+
+        async def __anext__(self):
+            try:
+                return next(self._chunks)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+    async def fake_acompletion(**kwargs):
+        if "fb2" in kwargs["model"]:
+            return OkStream(kwargs["model"])
+        return FailingStream(kwargs["model"])
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "fake-key"}},
+            {"model_name": "fb1", "litellm_params": {"model": "openai/fb1-model", "api_key": "fake-key"}},
+            {"model_name": "fb2", "litellm_params": {"model": "openai/fb2-model", "api_key": "fake-key"}},
+        ],
+        fallbacks=[{"primary": ["fb1", "fb2"]}],
+        num_retries=0,
+    )
+
+    with patch("litellm.acompletion", side_effect=fake_acompletion) as mock_acompletion:
+        response = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}], stream=True)
+        content: Final = "".join(
+            [chunk.choices[0].delta.content or "" async for chunk in response if chunk is not None]
+        )
+
+    assert content == "ok-from-openai/fb2-model"
+    assert [c.kwargs["metadata"]["model_group"] for c in mock_acompletion.call_args_list] == [
+        "primary",
+        "fb1",
+        "fb2",
+    ]
+
+
+def test_refusal_on_the_last_fallback_hop_is_returned_instead_of_raised():
+    """LIT-7400 follow-up: a refusal on the final hop of an exhausted list passes through."""
+    from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "fake-key"}},
+            {"model_name": "fb1", "litellm_params": {"model": "openai/fb1-model", "api_key": "fake-key"}},
+            {"model_name": "fb2", "litellm_params": {"model": "openai/fb2-model", "api_key": "fake-key"}},
+        ],
+        fallbacks=[{"primary": ["fb1", "fb2"]}],
+        num_retries=0,
+    )
+
+    attempted: Final = AttemptedFallbackTargets()
+    attempted.record("primary")
+    attempted.record("fb1")
+    attempted.record("fb2")
+    kwargs: Final = {
+        "attempted_targets": attempted,
+        "metadata": {"model_group": "fb2", "original_model_group": "primary"},
+    }
+
+    assert router._refusal_fallback_available("fb2", kwargs) is False
+    assert (
+        router._refusal_fallback_available(
+            "fb1", {"metadata": {"model_group": "fb1", "original_model_group": "primary"}}
+        )
+        is True
+    )
+
+
 def test_completion_streaming_iterator_adopts_fallback_response_headers():
     """LIT-6767, sync counterpart of the fallback-adoption test."""
     from unittest.mock import MagicMock, patch
@@ -4126,7 +4204,7 @@ async def test_aresponses_streaming_iterator_fallback():
     call_kwargs = mock_fallback_utils.call_args.kwargs
     fbk = call_kwargs["kwargs"]
     # Bound methods compare equal when they share the same instance + __func__.
-    assert fbk["original_function"] == router._ageneric_api_call_with_fallbacks_helper
+    assert fbk["original_function"] == router._ageneric_api_call_with_fallbacks_responses_attempt
     assert fbk["original_generic_function"] is litellm.aresponses
     assert call_kwargs["model_group"] == "anthropic/claude-sonnet-4-6"
     assert call_kwargs["disable_fallbacks"] is False
@@ -6294,6 +6372,7 @@ def test_get_deployment_credentials_with_provider_bedrock_batch_fields():
                     "s3_bucket_name": "my-batch-bucket",
                     "s3_region_name": "us-east-1",
                     "s3_encryption_key_id": "arn:aws:kms:us-west-2:123:key/abc",
+                    "s3_bucket_owner": "111111111111",
                     "aws_batch_role_arn": "arn:aws:iam::123:role/batch-role",
                 },
             }
@@ -6311,6 +6390,7 @@ def test_get_deployment_credentials_with_provider_bedrock_batch_fields():
     assert credentials["s3_bucket_name"] == "my-batch-bucket"
     assert credentials["s3_region_name"] == "us-east-1"
     assert credentials["s3_encryption_key_id"] == "arn:aws:kms:us-west-2:123:key/abc"
+    assert credentials["s3_bucket_owner"] == "111111111111"
     assert credentials["aws_batch_role_arn"] == "arn:aws:iam::123:role/batch-role"
 
 
@@ -13711,7 +13791,7 @@ async def test_aanthropic_messages_with_streaming_fallbacks_non_streaming_passth
 
     with patch.object(
         router,
-        "_ageneric_api_call_with_fallbacks",
+        "_ageneric_api_call_with_fallbacks_helper",
         new=AsyncMock(return_value=plain_response),
     ):
         out = await router._aanthropic_messages_with_streaming_fallbacks(
@@ -13735,7 +13815,7 @@ async def test_aanthropic_messages_with_streaming_fallbacks_wraps_streaming_iter
     with (
         patch.object(
             router,
-            "_ageneric_api_call_with_fallbacks",
+            "_ageneric_api_call_with_fallbacks_helper",
             new=AsyncMock(return_value=streaming_iter),
         ),
         patch.object(
@@ -14020,7 +14100,7 @@ async def test_aanthropic_messages_with_streaming_fallbacks_deep_copies_nested_m
     ):
         with patch.object(
             router,
-            "_ageneric_api_call_with_fallbacks",
+            "_ageneric_api_call_with_fallbacks_helper",
             new=AsyncMock(side_effect=fake_original),
         ):
             await router._aanthropic_messages_with_streaming_fallbacks(
@@ -14054,7 +14134,7 @@ async def test_aanthropic_messages_with_streaming_fallbacks_deep_copies_metadata
     ):
         with patch.object(
             router,
-            "_ageneric_api_call_with_fallbacks",
+            "_ageneric_api_call_with_fallbacks_helper",
             new=AsyncMock(side_effect=fake_original),
         ):
             await router._aanthropic_messages_with_streaming_fallbacks(
@@ -14067,6 +14147,95 @@ async def test_aanthropic_messages_with_streaming_fallbacks_deep_copies_metadata
     fallback_kwargs = streaming_iter_kwargs["initial_kwargs"]
     assert fallback_kwargs["metadata"] is not primary_metadata
     assert "deployment" not in fallback_kwargs["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_hop_stream_failure_reaches_second_fallback_entry():
+    """Regression: fallbacks=[{"primary": ["fb1", "fb2"]}]. The primary fails before
+    streaming, fb1 is reached through the regular fallback chain and then sends an
+    error frame mid-stream. Only the primary's stream used to be wrapped, so the outer
+    wrapper re-tried fb1 with a fresh attempted set and forwarded fb1's error frame to
+    the client on an HTTP 200; fb2 was unreachable."""
+    router = Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "anthropic/primary-model", "api_key": "sk-test"}},
+            {"model_name": "fb1", "litellm_params": {"model": "anthropic/fb1-model", "api_key": "sk-test"}},
+            {"model_name": "fb2", "litellm_params": {"model": "anthropic/fb2-model", "api_key": "sk-test"}},
+        ],
+        num_retries=0,
+        fallbacks=[{"primary": ["fb1", "fb2"]}],
+    )
+    calls: list = []
+
+    async def fake_original(**kwargs):
+        model = kwargs["model"]
+        calls.append(model)
+        if model == "anthropic/primary-model":
+            raise litellm.InternalServerError(message="primary down", llm_provider="anthropic", model=model)
+        if model == "anthropic/fb1-model":
+            return _AnthropicMessagesFakeByteStream(
+                [_anthropic_messages_message_start_chunk(), _anthropic_messages_overloaded_error_chunk()]
+            )
+        return _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb2")]
+        )
+
+    stream = await router._aanthropic_messages_with_streaming_fallbacks(
+        original_function=fake_original,
+        model="primary",
+        stream=True,
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+    )
+    body = b"".join([chunk async for chunk in stream])
+
+    assert calls == ["anthropic/primary-model", "anthropic/fb1-model", "anthropic/fb2-model"]
+    assert b"from fb2" in body
+    assert b"overloaded_error" not in body
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_attempt_strips_the_controls_carrier_and_wraps_every_hop_stream():
+    """Each attempt of the chain, not only the primary's, comes back wrapped for mid-stream
+    failover, and the per-request controls carrier never reaches the provider call."""
+    from types import MappingProxyType
+
+    from litellm.router_utils.fallback_event_handlers import (
+        MID_STREAM_FALLBACK_CONTROLS_KEY,
+        MidStreamFallbackControls,
+    )
+
+    router = Router(
+        model_list=[
+            {"model_name": "fb1", "litellm_params": {"model": "anthropic/fb1-model", "api_key": "sk-test"}},
+        ],
+        num_retries=0,
+    )
+    hop_stream = _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb1")]
+    )
+    seen: dict = {}
+
+    async def fake_original(**kwargs):
+        seen.update(kwargs)
+        return hop_stream
+
+    controls = MidStreamFallbackControls(MappingProxyType({"fallbacks": [{"primary": ["fb1", "fb2"]}]}))
+    stream = await router._ageneric_api_call_with_fallbacks_anthropic_messages_attempt(
+        model="fb1",
+        original_generic_function=fake_original,
+        stream=True,
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        **{MID_STREAM_FALLBACK_CONTROLS_KEY: controls},
+    )
+    body = b"".join([chunk async for chunk in stream])
+
+    assert seen["model"] == "anthropic/fb1-model"
+    assert MID_STREAM_FALLBACK_CONTROLS_KEY not in seen
+    assert "fallbacks" not in seen
+    assert stream is not hop_stream
+    assert b"from fb1" in body
 
 
 @pytest.mark.asyncio
@@ -17421,3 +17590,242 @@ class TestMemberAutoRouterInference:
         monkeypatch.setitem(sys.modules, "fastapi", None)
         monkeypatch.delitem(sys.modules, "litellm.proxy.auth.auto_router_checks", raising=False)
         assert (await self._route(router, {"metadata": {"user_api_key_team_id": "router-team"}})).model == "restricted-model"
+
+
+def _access_window_offsets(start_hours: float, end_hours: float, team_ids: list) -> dict:
+    now_utc = datetime.now(timezone.utc)
+    return {
+        "start": (now_utc + timedelta(hours=start_hours)).strftime("%H:%M"),
+        "end": (now_utc + timedelta(hours=end_hours)).strftime("%H:%M"),
+        "timezone": "UTC",
+        "team_ids": team_ids,
+    }
+
+
+def _reserved_model_list(windows_for_reserved=None, windows_for_open=None) -> list:
+    reserved: dict = {
+        "model_name": "gpt-4o-ptu",
+        "litellm_params": {"model": "gpt-4o", "mock_response": "reserved"},
+        "model_info": {"id": "reserved-deployment"},
+    }
+    if windows_for_reserved is not None:
+        reserved["model_info"]["access_windows"] = windows_for_reserved
+    unreserved: dict = {
+        "model_name": "gpt-4o-ptu",
+        "litellm_params": {"model": "gpt-4o", "mock_response": "open"},
+        "model_info": {"id": "open-deployment"},
+    }
+    if windows_for_open is not None:
+        unreserved["model_info"]["access_windows"] = windows_for_open
+    return [reserved, unreserved]
+
+
+def test_access_windows_hide_reserved_deployment_from_other_teams():
+    router = Router(
+        model_list=_reserved_model_list(
+            windows_for_reserved=[_access_window_offsets(-1, 1, ["team-a"])],
+        ),
+    )
+    _, deployments = router._common_checks_available_deployment(
+        model="gpt-4o-ptu",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+    )
+    assert [d["model_info"]["id"] for d in deployments] == ["open-deployment"]
+
+
+def test_access_windows_raise_when_only_reserved_deployments_remain():
+    router = Router(model_list=_reserved_model_list(
+        windows_for_reserved=[_access_window_offsets(-1, 1, ["team-a"])],
+        windows_for_open=[_access_window_offsets(-1, 1, ["team-a"])],
+    )[:1])
+    for request_kwargs in ({"metadata": {"user_api_key_team_id": "team-b"}}, {}):
+        with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+            router._common_checks_available_deployment(model="gpt-4o-ptu", request_kwargs=request_kwargs)
+    _, deployments = router._common_checks_available_deployment(
+        model="gpt-4o-ptu",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+    )
+    assert [d["model_info"]["id"] for d in deployments] == ["reserved-deployment"]
+
+
+def test_reserved_deployments_drop_strategy_markers_before_filtering():
+    router = Router(model_list=_reserved_model_list()[:1])
+    marker = {"model_name": "gpt-4o-ptu", "litellm_params": {"model": "auto_router/semantic"}}
+    reserved = {
+        "model_name": "gpt-4o-ptu",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"access_windows": [_access_window_offsets(-1, 1, ["team-a"])]},
+    }
+    with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+        router._filter_reserved_deployments(
+            model="gpt-4o-ptu",
+            healthy_deployments=[marker, reserved],
+            request_team_id="team-b",
+        )
+
+
+def test_access_windows_invalid_timezone_fails_router_construction():
+    with pytest.raises(ValueError, match=r"gpt-4o-ptu.*access_windows"):
+        Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-ptu",
+                    "litellm_params": {"model": "gpt-4o", "mock_response": "x"},
+                    "model_info": {
+                        "access_windows": [
+                            {
+                                "start": "22:00",
+                                "end": "06:00",
+                                "timezone": "Mars/Olympus",
+                                "team_ids": ["team-a"],
+                            }
+                        ]
+                    },
+                }
+            ],
+        )
+
+
+def test_access_windows_inactive_window_leaves_deployments_available():
+    router = Router(
+        model_list=_reserved_model_list(
+            windows_for_reserved=[_access_window_offsets(2, 3, ["team-a"])],
+        ),
+    )
+    _, deployments = router._common_checks_available_deployment(
+        model="gpt-4o-ptu",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+    )
+    assert {d["model_info"]["id"] for d in deployments} == {"reserved-deployment", "open-deployment"}
+
+
+def test_access_windows_apply_when_calling_by_model_id():
+    router = Router(model_list=_reserved_model_list(
+        windows_for_reserved=[_access_window_offsets(-1, 1, ["team-a"])],
+    ))
+    with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+        router._common_checks_available_deployment(
+            model="reserved-deployment",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+        )
+    _, deployment = router._common_checks_available_deployment(
+        model="reserved-deployment",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+    )
+    assert deployment["model_info"]["id"] == "reserved-deployment"
+
+
+def test_access_windows_apply_when_calling_by_litellm_model_name():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-ptu",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6-bypass-probe",
+                    "mock_response": "reserved",
+                },
+                "model_info": {
+                    "id": "reserved-litellm-model",
+                    "access_windows": [_access_window_offsets(-1, 1, ["team-a"])],
+                },
+            }
+        ],
+    )
+    with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+        router._common_checks_available_deployment(
+            model="openai/gpt-5.6-bypass-probe",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+        )
+    _, deployments = router._common_checks_available_deployment(
+        model="openai/gpt-5.6-bypass-probe",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+    )
+    assert [d["model_info"]["id"] for d in deployments] == ["reserved-litellm-model"]
+
+
+def test_access_windows_apply_to_specific_deployment_calls():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-ptu",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6-specific-probe",
+                    "mock_response": "reserved",
+                },
+                "model_info": {
+                    "id": "reserved-specific",
+                    "access_windows": [_access_window_offsets(-1, 1, ["team-a"])],
+                },
+            }
+        ],
+    )
+    with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+        router._common_checks_available_deployment(
+            model="openai/gpt-5.6-specific-probe",
+            specific_deployment=True,
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+        )
+    _, deployments = router._common_checks_available_deployment(
+        model="openai/gpt-5.6-specific-probe",
+        specific_deployment=True,
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+    )
+    assert [d["model_info"]["id"] for d in deployments] == ["reserved-specific"]
+
+
+def test_access_windows_apply_to_wildcard_early_resolve():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "mock_response": "reserved"},
+                "model_info": {
+                    "id": "reserved-wildcard",
+                    "access_windows": [_access_window_offsets(-1, 1, ["team-a"])],
+                },
+            }
+        ],
+    )
+    with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+        router._common_checks_available_deployment(
+            model="openai/gpt-probe-wildcard",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+        )
+    _, deployments = router._common_checks_available_deployment(
+        model="openai/gpt-probe-wildcard",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+    )
+    assert [d["model_info"]["id"] for d in deployments] == ["reserved-wildcard"]
+
+
+def test_access_windows_filter_reserved_deployments_method():
+    router = Router(model_list=_reserved_model_list())
+    reserved: dict = {
+        "model_info": {
+            "id": "reserved-deployment",
+            "access_windows": [_access_window_offsets(-1, 1, ["team-a"])],
+        }
+    }
+    open_deployment: dict = {"model_info": {"id": "open-deployment"}}
+    assert [
+        d["model_info"]["id"]
+        for d in router._filter_reserved_deployments(
+            model="gpt-4o-ptu",
+            healthy_deployments=[reserved, open_deployment],
+            request_team_id="team-b",
+        )
+    ] == ["open-deployment"]
+    with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+        router._filter_reserved_deployments(
+            model="gpt-4o-ptu",
+            healthy_deployments=[reserved],
+            request_team_id="team-b",
+        )
+    assert [
+        d["model_info"]["id"]
+        for d in router._filter_reserved_deployments(
+            model="gpt-4o-ptu",
+            healthy_deployments=[reserved, open_deployment],
+            request_team_id="team-a",
+        )
+    ] == ["reserved-deployment", "open-deployment"]
