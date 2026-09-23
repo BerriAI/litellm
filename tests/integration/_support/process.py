@@ -1,18 +1,18 @@
 import os
-import socket
 import signal
+import socket
 import subprocess
 import sys
 import time
 import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
 import httpx
 import psutil
-
 from integration._support.client import Gateway
 
 
@@ -45,12 +45,43 @@ def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
     return True
 
 
+@dataclass(frozen=True, slots=True)
+class OwnedProxy:
+    gateway: Gateway
+    process: subprocess.Popen[bytes]
+    log: Path
+
+
 @contextmanager
-def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str], *, config: Path | None = None, num_workers: int = 1, remove_environment: tuple[str, ...] = ()) -> Iterator[Gateway]:
+def owned_proxy(
+    gateway: Gateway,
+    directory: Path,
+    overrides: Mapping[str, str],
+    *,
+    config: Path | None = None,
+    remove_environment: tuple[str, ...] = (),
+    workers: int = 1,
+) -> Iterator[Gateway]:
+    with owned_proxy_process(
+        gateway, directory, overrides, config=config, remove_environment=remove_environment, workers=workers
+    ) as owned:
+        yield owned.gateway
+
+
+@contextmanager
+def owned_proxy_process(
+    gateway: Gateway,
+    directory: Path,
+    overrides: Mapping[str, str],
+    *,
+    config: Path | None = None,
+    remove_environment: tuple[str, ...] = (),
+    workers: int = 1,
+) -> Iterator[OwnedProxy]:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         port: Final = reserve.getsockname()[1]
-    root: Final = Path(__file__).resolve().parents[3]
+    root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
     environment: Final = {
         **{name: value for name, value in os.environ.items() if name not in remove_environment},
         "LITELLM_MASTER_KEY": gateway.key,
@@ -60,7 +91,8 @@ def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str],
     }
     output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
-    with (output / f"owned-proxy-{uuid.uuid4().hex}.log").open("w") as log:
+    log_path: Final = output / f"owned-proxy-{uuid.uuid4().hex}.log"
+    with log_path.open("w") as log:
         process: Final = subprocess.Popen(
             [
                 sys.executable,
@@ -73,7 +105,7 @@ def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str],
                 "--port",
                 str(port),
                 "--num_workers",
-                str(num_workers),
+                str(workers),
                 "--use_prisma_db_push",
                 "--enforce_prisma_migration_check",
             ],
@@ -95,7 +127,7 @@ def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str],
                         pass
                     assert time.monotonic() < deadline, "Owned proxy readiness deadline exceeded"
                     time.sleep(0.1)
-                yield Gateway(client, gateway.key, gateway.upstream_url)
+                yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, log_path)
         finally:
             root_stopped: Final = stop_root_process(process)
             residual: Final = group_members(process.pid)

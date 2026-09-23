@@ -76,6 +76,7 @@ from litellm.litellm_core_utils.core_helpers import (
     reconstruct_model_name,
     set_response_cost_in_hidden_params,
 )
+from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
@@ -6100,6 +6101,7 @@ class StandardLoggingPayloadSetup:
             error_budget_entity_id=budget_error.entity_id if budget_error else None,
             error_budget_limit=budget_error.max_budget if budget_error else None,
             error_budget_spend=budget_error.current_cost if budget_error else None,
+            normalized_error=normalize_error(original_exception, error_status, error_message),
         )
 
     @staticmethod

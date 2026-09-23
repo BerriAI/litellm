@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -86,6 +86,15 @@ class BedrockError(BaseLLMException):
 
 
 _BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (*AWS_AUTH_PARAM_KEYS, "aws_region_name")
+_STREAM_CHUNK_SIZE_VALIDATOR: Final[TypeAdapter[int | None]] = TypeAdapter(int | None, config=ConfigDict(strict=True))
+
+
+def stream_chunk_size_from(litellm_params: Mapping[str, object]) -> int | None:
+    raw: Final = litellm_params.get("stream_chunk_size")
+    try:
+        return _STREAM_CHUNK_SIZE_VALIDATOR.validate_python(raw)
+    except ValidationError as e:
+        raise BedrockError(status_code=400, message=f"Invalid stream_chunk_size={raw!r}. Expected int. Error: {e}")
 
 
 def merge_bedrock_aws_request_params(
@@ -1593,7 +1602,7 @@ def _resolve_s3_setting(
         source.get(param_name) for source in (litellm_params, optional_params) if source is not None
     )
     explicit: Final = next((value for value in candidates if isinstance(value, str) and value), None)
-    return explicit or get_secret_str(env_var)
+    return explicit or get_secret_str(env_var) or None
 
 
 class CommonBatchFilesUtils:

@@ -1234,6 +1234,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Get Auto Router Availability */
+        post: operations["get_auto_router_availability_auto_router_availability_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/benchmarks": {
         parameters: {
             query?: never;
@@ -14468,6 +14485,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/session/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Session Logout
+         * @description Revoke the UI session key this request authenticated with.
+         *
+         *     Only accepts UI session keys (minted by dashboard login); any other
+         *     credential is refused, so this can never be used to delete arbitrary keys.
+         *     Revokes only the presented session, not the user's other sessions.
+         *     Idempotent: logging out an already-revoked session succeeds.
+         */
+        post: operations["session_logout_session_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/settings": {
         parameters: {
             query?: never;
@@ -17326,7 +17368,7 @@ export interface paths {
         };
         /**
          * Ui View Users
-         * @description Filter users based on partial match of user_id or email with pagination.
+         * @description Filter users based on partial match of user_id or email, or combined ``search``, with pagination.
          *
          *     Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
          *     (stored in the ``litellm_uisettings`` table):
@@ -21152,7 +21194,9 @@ export interface paths {
          * List Vector Stores
          * @description List all available vector stores with optional filtering and pagination.
          *     Combines both in-memory vector stores and those stored in the database.
-         *     Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
+         *     Database is the source of truth for stores it owns: deleted stores are removed from memory, updated stores
+         *     sync to memory. Stores declared in the config file are owned by the config file, are always listed, and are
+         *     never overwritten by database rows.
          *
          *     Parameters:
          *     - page: int - Page number for pagination (default: 1)
@@ -22455,7 +22499,9 @@ export interface paths {
          * List Vector Stores
          * @description List all available vector stores with optional filtering and pagination.
          *     Combines both in-memory vector stores and those stored in the database.
-         *     Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
+         *     Database is the source of truth for stores it owns: deleted stores are removed from memory, updated stores
+         *     sync to memory. Stores declared in the config file are owned by the config file, are always listed, and are
+         *     never overwritten by database rows.
          *
          *     Parameters:
          *     - page: int - Page number for pagination (default: 1)
@@ -24124,6 +24170,43 @@ export interface components {
             updated_values?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** AutoRouterAllowance */
+        AutoRouterAllowance: {
+            /**
+             * Available
+             * @default true
+             */
+            available: boolean;
+            /** Key */
+            key: string;
+            /** Limit */
+            limit: number | null;
+            /** Remaining */
+            remaining: number | null;
+            /**
+             * Used By This Router
+             * @default false
+             */
+            used_by_this_router: boolean;
+        };
+        /** AutoRouterAvailabilityRequest */
+        AutoRouterAvailabilityRequest: {
+            /** Complexity Router Config */
+            complexity_router_config?: {
+                [key: string]: unknown;
+            } | null;
+            /** Saved Model Id */
+            saved_model_id?: string | null;
+            /** Team Id */
+            team_id?: string | null;
+        };
+        /** AutoRouterAvailabilityResponse */
+        AutoRouterAvailabilityResponse: {
+            /** Allowances */
+            allowances: components["schemas"]["AutoRouterAllowance"][];
+            /** Error */
+            error?: string | null;
         };
         /**
          * AutoRouterBenchmarkGroup
@@ -30823,6 +30906,8 @@ export interface components {
             created_at?: string | null;
             /** Custom Llm Provider */
             custom_llm_provider?: string;
+            /** Is Config */
+            is_config?: boolean;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Params */
@@ -30894,6 +30979,11 @@ export interface components {
             created_at?: string | null;
             /** Custom Llm Provider */
             custom_llm_provider: string;
+            /**
+             * Is Config
+             * @default false
+             */
+            is_config: boolean;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Params */
@@ -38069,6 +38159,11 @@ export interface components {
             /** Timeout */
             timeout?: number | null;
         };
+        /** SessionLogoutResponse */
+        SessionLogoutResponse: {
+            /** Message */
+            message: string;
+        };
         /**
          * ShadowEvalJobResponse
          * @description A shadow-eval job over one or more targets, each with its own budget and stop state;
@@ -44135,6 +44230,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_auto_router_availability_auto_router_availability_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoRouterAvailabilityRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterAvailabilityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -60861,6 +60989,26 @@ export interface operations {
             };
         };
     };
+    session_logout_session_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionLogoutResponse"];
+                };
+            };
+        };
+    };
     active_callbacks_settings_get: {
         parameters: {
             query?: never;
@@ -64339,6 +64487,8 @@ export interface operations {
                 user_id?: string | null;
                 /** @description User email in the request parameters */
                 user_email?: string | null;
+                /** @description Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive). */
+                search?: string | null;
                 /** @description Team ID — used when a team admin searches for users to add to their team */
                 team_id?: string | null;
                 /** @description Page number for pagination */
