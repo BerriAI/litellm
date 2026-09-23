@@ -144,7 +144,6 @@ def test_guardrail_denial_prevents_provider_and_preserves_allowed_control(gatewa
             assert len(policy.drain()) == 2
 
 
-@pytest.mark.covers("other.observability.guardrails.panw_latest_only_scope_holds_on_responses_shapes")
 def test_panw_latest_role_message_only_scans_only_latest_turn_on_responses_input(
     gateway: Gateway, tmp_path: Path
 ) -> None:
