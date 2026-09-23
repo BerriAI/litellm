@@ -14,3 +14,11 @@ litellm_settings:
     port: os.environ/REDIS_PORT
 router_settings:
   disable_cooldowns: true
+vector_store_registry:
+  - vector_store_name: integration-config-store
+    litellm_params:
+      vector_store_id: vs_integration_config_store
+      custom_llm_provider: openai
+      api_base: os.environ/INTEGRATION_UPSTREAM_URL
+      api_key: integration-provider-key
+      vector_store_description: declared in tests/integration/proxy_config.yaml
