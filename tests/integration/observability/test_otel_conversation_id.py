@@ -6,7 +6,8 @@ import re
 import signal
 import threading
 import uuid
-from collections.abc import Iterator, Mapping
+from collections import deque
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -151,13 +152,12 @@ class Collector:
     outage: threading.Event
     rejection: threading.Event
     slow: threading.Event
-    batches: list[Request]
+    accepted: Sequence[Request]
 
     def attributes(self) -> tuple[dict[str, dict[str, JsonValue]], ...]:
-        self.batches.extend(self.wire.drain())
         return tuple(
             {attribute["key"]: attribute["value"] for attribute in span.get("attributes", ())}
-            for batch in self.batches
+            for batch in tuple(self.accepted)
             for resource in json.loads(batch.body)["resourceSpans"]
             for scope in resource["scopeSpans"]
             for span in scope["spans"]
@@ -190,18 +190,20 @@ def collector() -> Iterator[Collector]:
     outage: Final = threading.Event()
     rejection: Final = threading.Event()
     slow: Final = threading.Event()
+    accepted: Final[deque[Request]] = deque()  # mutable-ok: sink thread appends each accepted batch
 
-    def sink(_request: Request) -> Reply:
+    def sink(request: Request) -> Reply:
         if slow.is_set():
             threading.Event().wait(1.5)
         if outage.is_set():
             return Reply(status=503, body=b'{"error":"sink down"}')
         if rejection.is_set():
             return Reply(status=403, body=b'{"error":"forbidden"}')
+        accepted.append(request)
         return Reply()
 
     with wire_server(sink) as wire:
-        yield Collector(wire, outage, rejection, slow, [])
+        yield Collector(wire, outage, rejection, slow, accepted)
 
 
 @pytest.fixture(scope="session")
