@@ -74,7 +74,10 @@ def test_gemini_tts_detection_uses_model_metadata(monkeypatch):
     assert is_gemini_tts_model(model)
 
 
-@pytest.mark.parametrize("model", ["gemini-2.5-flash-preview-tts", "gemini-2.5-flash-tts", "gemini-2.5-pro-tts"])
+@pytest.mark.parametrize(
+    "model",
+    ["gemini-2.5-flash-preview-tts", "gemini-2.5-flash-tts", "gemini-2.5-pro-tts", "gemini-2.5-pro-preview-tts"],
+)
 @pytest.mark.parametrize("prefixed", [False, True])
 def test_existing_vertex_tts_models_keep_gemini_dispatch(model: str, prefixed: bool, monkeypatch):
     model_cost = _load_model_cost_map(Path(__file__).parents[2] / "model_prices_and_context_window.json")
@@ -83,3 +86,11 @@ def test_existing_vertex_tts_models_keep_gemini_dispatch(model: str, prefixed: b
     _invalidate_model_cost_lowercase_map()
     requested_model = f"vertex_ai/{model}" if prefixed else model
     assert is_gemini_tts_model(requested_model, custom_llm_provider="vertex_ai")
+
+
+def test_existing_gemini_pro_preview_tts_keeps_speech_dispatch() -> None:
+    assert is_gemini_tts_model("gemini/gemini-2.5-pro-preview-tts", custom_llm_provider="gemini")
+
+
+def test_gemini_music_model_does_not_use_speech_dispatch() -> None:
+    assert not is_gemini_tts_model("gemini/lyria-3-clip-preview", custom_llm_provider="gemini")
