@@ -190,3 +190,42 @@ fn get_token_type_cost_breakdown_scales_cache_audio_and_ttl_with_region() {
     assert!((breakdown.cache_creation_cost - (40.0 * 3e-6 + 60.0 * 4e-6) * 1.2).abs() < 1e-12);
     assert!((breakdown.reasoning_cost - 20.0 * 8e-6 * 1.2).abs() < 1e-12);
 }
+
+#[rstest]
+fn token_type_cost_breakdown_is_provider_agnostic_for_perplexity() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "perplexity/sonar-reasoning".to_string(),
+        json!({
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "output_cost_per_reasoning_token": 4e-6,
+            "cache_read_input_token_cost": 1e-7,
+            "litellm_provider": "perplexity"
+        }),
+    )]));
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 1000,
+        "completion_tokens": 2000,
+        "total_tokens": 3000,
+        "completion_tokens_details": {"reasoning_tokens": 400, "text_tokens": 1600},
+        "prompt_tokens_details": {"cached_tokens": 0, "text_tokens": 1000}
+    }}))
+    .unwrap()
+    .unwrap();
+    let breakdown = catalog.get_token_type_cost_breakdown(
+        ModelCostRequest {
+            model: "perplexity/sonar-reasoning",
+            provider: Some("perplexity"),
+            usage: &usage,
+            service_tier: None,
+            data_residency: None,
+            vertex_location: None,
+            region: None,
+            at: at("2026-01-01T12:00Z"),
+            response_time_ms: None,
+        },
+        None,
+    );
+    assert!((breakdown.reasoning_cost - 400.0 * 4e-6).abs() < 1e-12);
+    assert!((breakdown.cache_read_cost - 0.0).abs() < 1e-12);
+}

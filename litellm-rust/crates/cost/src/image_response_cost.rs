@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use jiff::Timestamp;
 use serde_json::Value;
 
+use crate::base_rate_selection::uses_inclusive_token_thresholds;
 use crate::gemini_cost::cost_per_web_search_request;
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::generic_input::get_cost_per_unit;
@@ -95,7 +96,7 @@ pub fn calculate_image_response_cost_from_usage(
         &usage,
         &model_info,
         None,
-        provider == Some("xai"),
+        uses_inclusive_token_thresholds(provider),
         None,
         None,
         at,

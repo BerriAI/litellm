@@ -133,3 +133,22 @@ fn prepared_input_prices_served_priority_rate() {
     assert!((prompt - 0.3).abs() < 1e-10);
     assert!((output - 0.2).abs() < 1e-10);
 }
+
+#[rstest]
+fn non_string_response_tier_defers_to_the_served_usage_tier() {
+    let response =
+        json!({"service_tier": {"name": "priority"}, "usage": {"service_tier": "priority"}});
+    assert_eq!(
+        select_service_tier(None, None, Some(&response), None),
+        Some("priority".to_owned())
+    );
+}
+
+#[rstest]
+#[case(json!({"name": "priority"}))]
+#[case(json!(5))]
+#[case(json!(true))]
+fn non_string_usage_tier_falls_back_to_standard(#[case] usage_tier: Value) {
+    let response = json!({"service_tier": {"name": "auto"}, "usage": {"service_tier": usage_tier}});
+    assert_eq!(select_service_tier(None, None, Some(&response), None), None);
+}

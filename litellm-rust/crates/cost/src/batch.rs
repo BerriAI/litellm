@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use crate::base_rate_selection::uses_inclusive_token_thresholds;
 use crate::generic_usage::{get_billable_input_tokens, parse_prompt_tokens_details};
 use crate::regional_uplift::get_regional_uplift_multiplier;
 use crate::responses_usage::ChatUsage;
@@ -267,7 +268,7 @@ pub fn batch_cost_from_model_info(
     provider: Option<&str>,
     data_residency: Option<&str>,
 ) -> Result<BatchCost, BatchError> {
-    let policy = if provider == Some("xai") {
+    let policy = if uses_inclusive_token_thresholds(provider) {
         ThresholdPolicy::Inclusive
     } else {
         ThresholdPolicy::Exclusive

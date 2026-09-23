@@ -276,3 +276,7 @@ pub fn get_token_base_cost(
         cache_read,
     }
 }
+
+pub fn uses_inclusive_token_thresholds(provider: Option<&str>) -> bool {
+    provider == Some("xai")
+}

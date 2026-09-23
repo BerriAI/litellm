@@ -222,3 +222,19 @@ fn route_default_image_cost_uses_requested_size_and_deployment_override() {
     .unwrap();
     assert_eq!(cost, 0.14);
 }
+
+#[rstest]
+fn deployment_pricing_reads_only_the_python_pricing_field_set() {
+    let model_info = json!({
+        "output_cost_per_image": 0.1,
+        "cache_read_input_token_cost": 1e-7,
+        "future_vendor_cost_per_widget": 5.0
+    });
+    let pricing = deployment_pricing(Some(&model_info)).expect("pricing");
+    assert_eq!(pricing.get("output_cost_per_image"), Some(&json!(0.1)));
+    assert_eq!(
+        pricing.get("cache_read_input_token_cost"),
+        Some(&json!(1e-7))
+    );
+    assert_eq!(pricing.get("future_vendor_cost_per_widget"), None);
+}

@@ -12,6 +12,7 @@ use crate::azure_ai_image_cost::{
     AzureAiImageRequest, cost_calculator as azure_ai_image_cost_calculator,
 };
 use crate::azure_cost::output_per_second_cost;
+use crate::base_rate_selection::uses_inclusive_token_thresholds;
 use crate::batch::{BatchError, batch_cost_from_model_info};
 use crate::bedrock_image_cost::cost_calculator as bedrock_image_cost_calculator;
 use crate::billed_token_rates::{
@@ -984,7 +985,7 @@ impl ModelInfoCatalog {
             request.usage,
             &model_info,
             request.service_tier,
-            request.provider == Some("xai"),
+            uses_inclusive_token_thresholds(request.provider),
             request.data_residency,
             request.vertex_location,
             request.at,

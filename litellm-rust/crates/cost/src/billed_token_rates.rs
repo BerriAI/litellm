@@ -1,6 +1,7 @@
 use jiff::Timestamp;
 use serde_json::Value;
 
+use crate::base_rate_selection::uses_inclusive_token_thresholds;
 use crate::base_rate_selection::{get_token_base_cost, tier_key};
 use crate::custom_pricing::CustomTokenRates;
 use crate::generic_cost::resolve_billed_reasoning_rate;
@@ -80,7 +81,7 @@ pub fn get_billed_token_rates(request: BilledRatesRequest<'_>) -> Option<BilledT
         &model_info,
         request.usage.prompt_tokens,
         request.service_tier,
-        request.provider == Some("xai"),
+        uses_inclusive_token_thresholds(request.provider),
         request.at,
     );
     let reasoning = resolve_billed_reasoning_rate(

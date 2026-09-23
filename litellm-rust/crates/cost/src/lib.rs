@@ -40,6 +40,7 @@ pub mod per_second;
 pub mod perplexity_cost;
 pub mod prompt_caching_savings;
 pub mod provider_cache;
+pub mod ptu_pricing;
 pub mod realtime_cost;
 pub mod regional_uplift;
 pub mod responses_usage;

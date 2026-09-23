@@ -218,3 +218,53 @@ fn handle_realtime_stream_cost_calculation_adds_transcription_events() {
     );
     assert!((actual - (100.0 * 0.002 + 20.0 * 0.003 + 2.0 * 0.02)).abs() < 1e-12);
 }
+
+#[rstest]
+#[case(true)]
+#[case(false)]
+fn realtime_combine_keeps_cached_split_when_only_one_usage_has_details(
+    #[case] details_first: bool,
+) {
+    let with_details = json!({"type": "response.done", "response": {"usage": {
+        "input_tokens": 283, "output_tokens": 0, "total_tokens": 283,
+        "input_token_details": {
+            "text_tokens": 116, "audio_tokens": 167, "cached_tokens": 192,
+            "cached_tokens_details": {"text_tokens": 64, "audio_tokens": 128}
+        }
+    }}});
+    let without_details = json!({"type": "response.done", "response": {"usage": {
+        "input_tokens": 150, "output_tokens": 0, "total_tokens": 150,
+        "input_token_details": {"text_tokens": 50, "audio_tokens": 100, "cached_tokens": 100}
+    }}});
+    let events = if details_first {
+        [with_details, without_details]
+    } else {
+        [without_details, with_details]
+    };
+    let usage = collect_and_combine_usage_from_realtime_stream_results(&events).unwrap();
+    let prompt = usage.prompt_tokens_details.unwrap();
+    assert_eq!(prompt.cached_tokens, 292);
+    let split = prompt.cached_tokens_details.unwrap();
+    assert_eq!(
+        (split.text_tokens, split.audio_tokens),
+        (Some(64), Some(128))
+    );
+}
+
+#[rstest]
+fn realtime_combine_leaves_cached_details_absent_when_no_event_carried_them() {
+    let events = [
+        json!({"type": "response.done", "response": {"usage": {
+            "input_tokens": 100, "output_tokens": 10, "total_tokens": 110,
+            "input_token_details": {"text_tokens": 100, "cached_tokens": 20}
+        }}}),
+        json!({"type": "response.done", "response": {"usage": {
+            "input_tokens": 50, "output_tokens": 5, "total_tokens": 55,
+            "input_token_details": {"text_tokens": 50, "cached_tokens": 10}
+        }}}),
+    ];
+    let usage = collect_and_combine_usage_from_realtime_stream_results(&events).unwrap();
+    let prompt = usage.prompt_tokens_details.unwrap();
+    assert_eq!(prompt.cached_tokens, 30);
+    assert!(prompt.cached_tokens_details.is_none());
+}

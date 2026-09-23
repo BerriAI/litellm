@@ -1,5 +1,6 @@
 use litellm_cost::base_rate_selection::{
     TokenBaseRates, get_tiered_reasoning_rate, get_token_base_cost_without_off_peak,
+    uses_inclusive_token_thresholds,
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -130,4 +131,19 @@ fn get_token_base_cost_without_off_peak_uses_image_output_rate_when_token_output
         get_token_base_cost_without_off_peak(&model_info, 100, None, false).output,
         8e-6
     );
+}
+
+#[rstest]
+fn inclusive_threshold_providers_stay_pinned_to_the_python_set() {
+    assert!(uses_inclusive_token_thresholds(Some("xai")));
+    for provider in [
+        Some("openai"),
+        Some("anthropic"),
+        Some("bedrock"),
+        Some("perplexity"),
+        Some("dashscope"),
+        None,
+    ] {
+        assert!(!uses_inclusive_token_thresholds(provider));
+    }
 }

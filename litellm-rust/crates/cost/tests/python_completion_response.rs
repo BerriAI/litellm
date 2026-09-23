@@ -1512,3 +1512,42 @@ fn unsupported_call_does_not_silently_bill_as_tokens() {
         Err(CompletionResponseCostError::UnsupportedCallType)
     );
 }
+
+#[rstest]
+fn rateless_custom_pricing_strips_provider_reported_cost_like_python() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "xai/grafling".to_string(),
+        json!({"input_cost_per_token": 3e-6, "output_cost_per_token": 15e-6, "litellm_provider": "xai"}),
+    )]));
+    let response = json!({
+        "model": "xai/grafling",
+        "usage": {"prompt_tokens": 1000, "completion_tokens": 500, "cost": 99.0}
+    });
+    let empty = json!({});
+    let base = request(
+        Some(&response),
+        Some("xai/grafling"),
+        Some("xai"),
+        &empty,
+        &empty,
+    );
+
+    let recomputed = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                model_selection: ModelSelectionRequest {
+                    custom_pricing: true,
+                    ..base.input.model_selection
+                },
+                ..base.input
+            },
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((recomputed.cost.total - (1000.0 * 3e-6 + 500.0 * 15e-6)).abs() < 1e-12);
+
+    let reported = completion_cost_from_response(&catalog, base).unwrap();
+    assert!((reported.cost.total - 99.0).abs() < 1e-12);
+}

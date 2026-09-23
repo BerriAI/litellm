@@ -2,6 +2,7 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::base_rate_selection::get_token_base_cost;
+use crate::base_rate_selection::uses_inclusive_token_thresholds;
 use crate::generic_input::calculate_cache_writing_cost;
 use crate::generic_usage::parse_prompt_tokens_details;
 use crate::provider_cache::apply_provider_cache_read_default;
@@ -25,7 +26,7 @@ pub fn calculate_prompt_caching_savings(request: PromptCachingSavingsRequest<'_>
         &model_info,
         request.usage.prompt_tokens,
         request.service_tier,
-        request.provider == Some("xai"),
+        uses_inclusive_token_thresholds(request.provider),
         request.at,
     );
     let details = parse_prompt_tokens_details(request.usage);

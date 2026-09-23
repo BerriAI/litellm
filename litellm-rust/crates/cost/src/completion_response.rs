@@ -133,6 +133,13 @@ fn price_candidates<T: Copy, E: Copy>(
     }
 }
 
+fn without_provider_stated_cost(usage: &ChatUsage) -> ChatUsage {
+    ChatUsage {
+        cost: None,
+        ..usage.clone()
+    }
+}
+
 fn price_with_custom(
     candidates: &[Option<String>; 3],
     usage: &ChatUsage,
@@ -572,9 +579,13 @@ fn price_responses_websocket(
                     .map(event_usage)
                     .collect::<Result<Vec<_>, _>>()?,
             )?;
+            let stripped_usage = (request.custom_cost != CustomPricing::NONE
+                || request.input.model_selection.custom_pricing)
+                .then(|| without_provider_stated_cost(&usage));
+            let usage = stripped_usage.as_ref().unwrap_or(&usage);
             let (model, (prompt, output)) = price_with_custom(
                 &prepared.model_candidates,
-                &usage,
+                usage,
                 request.custom_cost,
                 response_time_ms_for_cost(
                     request.input.model_selection.response,
@@ -586,7 +597,7 @@ fn price_responses_websocket(
                             model,
                             provider,
                             region,
-                            usage: &usage,
+                            usage,
                             service_tier: tier,
                             data_residency: request.data_residency,
                             vertex_location: request.vertex_location,
@@ -597,7 +608,7 @@ fn price_responses_websocket(
                 },
             )?;
             let built_in = if index == 0 {
-                built_in_tool_cost(catalog, request, &model, provider, region, Some(&usage))
+                built_in_tool_cost(catalog, request, &model, provider, region, Some(usage))
             } else {
                 0.0
             };
@@ -792,6 +803,10 @@ pub fn completion_cost_from_response(
         request.request_model
     };
     let empty_params = Value::Null;
+    let stripped_usage = (custom_pricing != CustomPricing::NONE
+        || request.input.model_selection.custom_pricing)
+        .then(|| without_provider_stated_cost(usage));
+    let usage = stripped_usage.as_ref().unwrap_or(usage);
     let (model, (prompt, output)) = price_with_custom(
         &prepared.model_candidates,
         usage,

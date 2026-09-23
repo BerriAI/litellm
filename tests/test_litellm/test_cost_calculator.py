@@ -604,7 +604,7 @@ def test_completion_cost_image_generation_registered_deployment_price_keeps_map_
 
     cost = completion_cost(
         completion_response=ImageResponse(data=[ImageObject(url="https://example.com/img.png")], usage=usage),
-        model="gemini/gemini-3.1-flash-image-preview",
+        model="gemini/gemini-3.1-flash-image",
         custom_llm_provider="gemini",
         call_type="image_generation",
         custom_pricing=True,
@@ -612,6 +612,8 @@ def test_completion_cost_image_generation_registered_deployment_price_keeps_map_
         litellm_logging_obj=SimpleNamespace(litellm_params={"metadata": {"model_info": {"id": deployment_id}}}),
     )
 
+    # token rates from the local map for gemini/gemini-3.1-flash-image
+    # (output billed at its 6e-05 image-token rate) win over the deployment's per-image price
     assert cost == pytest.approx(10 * 5e-07 + 1290 * 6e-05)
 
 

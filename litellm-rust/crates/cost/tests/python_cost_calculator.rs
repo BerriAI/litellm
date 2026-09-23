@@ -631,3 +631,21 @@ fn default_image_cost_calculator_prices_pixels_after_image_rates() {
         .unwrap();
     assert!((cost - 2.0 * 20.0 * 10.0 * 0.0001).abs() < 1e-12);
 }
+
+#[rstest]
+fn batch_model_info_honors_an_explicitly_zero_batch_rate() {
+    let model_info = json!({
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 15e-6,
+        "input_cost_per_token_batches": 0.0,
+        "output_cost_per_token_batches": 0.0
+    });
+    let usage = ChatUsage {
+        prompt_tokens: 1000,
+        completion_tokens: 500,
+        total_tokens: 1500,
+        ..ChatUsage::default()
+    };
+    let cost = batch_cost_from_model_info(&model_info, &usage, Some("anthropic"), None).unwrap();
+    assert_eq!((cost.prompt, cost.completion), (0.0, 0.0));
+}
