@@ -16,6 +16,7 @@ import {
   TokenThresholds,
   effectiveTierLabel,
   heuristicScoringRoleFor,
+  usesClassifierContext,
 } from "./ComplexityRouterConfig";
 
 /**
@@ -291,7 +292,8 @@ export const buildComplexityRouterConfig = ({
       classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
     ...(classifierType === "llm" &&
       classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
-    ...(classifierType === "llm" && classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
+    ...(usesClassifierContext(classifierType) &&
+      classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
     ...((classifierType === "llm" || classifierType === "jev") &&
       classifierContextWindowSize !== undefined && {
         classifier_context_window_size: classifierContextWindowSize,
