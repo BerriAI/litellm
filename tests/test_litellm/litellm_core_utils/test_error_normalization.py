@@ -163,6 +163,18 @@ def test_variants_of_one_failure_share_a_normalized_error(messages: tuple[Except
     assert normalized == {expected}
 
 
+def test_normalize_error_passthrough_prefix_wins_over_upstream_body_text() -> None:
+    from fastapi import HTTPException
+
+    for detail in (
+        'Upstream passthrough request failed with status 400: {"error": {"message": "no deployments available for this model"}}',
+        'Upstream passthrough request failed with status 400: {"error": {"message": "max budget reached"}}',
+    ):
+        exc = HTTPException(status_code=400, detail=detail)
+        message = f"400: {detail}"
+        assert normalize_error(exc, "400", message) == "500_UPSTREAM_PASSTHROUGH", message
+
+
 def test_router_no_healthy_deployment_wording_clusters_as_no_healthy_deployments() -> None:
     for message in (RouterErrors.no_healthy_deployments.value, "No healthy deployments found."):
         exc = litellm.BadRequestError(message, llm_provider="openai", model="gpt-4o")
