@@ -170,16 +170,35 @@ class CustomOpenAPISpec:
             Map of original def names to renamed component names for collision cases
         """
         schemas: Final = CustomOpenAPISpec._components_schemas(openapi_schema)
-        renames: Final = MappingProxyType(
+        renames: Final = CustomOpenAPISpec._fixed_renames(schemas, defs, namespace, MappingProxyType({}))
+        for def_name, def_schema in defs.items():
+            if def_name in schemas and def_name not in renames:
+                continue
+            schemas[renames.get(def_name, def_name)] = CustomOpenAPISpec._rewrite_defs_refs(def_schema, renames)
+        return renames
+
+    @staticmethod
+    def _def_collisions(
+        schemas: JsonObject, defs: Mapping[str, JsonValue], namespace: str, renames: Mapping[str, str]
+    ) -> Mapping[str, str]:
+        return MappingProxyType(
             {
                 name: f"{namespace}_{name}"
                 for name, d in defs.items()
-                if name in schemas and schemas[name] != CustomOpenAPISpec._rewrite_defs_refs(d, MappingProxyType({}))
+                if name in schemas and schemas[name] != CustomOpenAPISpec._rewrite_defs_refs(d, renames)
             }
         )
-        for def_name, def_schema in defs.items():
-            schemas[renames.get(def_name, def_name)] = CustomOpenAPISpec._rewrite_defs_refs(def_schema, renames)
-        return renames
+
+    @staticmethod
+    def _fixed_renames(
+        schemas: JsonObject, defs: Mapping[str, JsonValue], namespace: str, renames: Mapping[str, str]
+    ) -> Mapping[str, str]:
+        next_renames: Final = MappingProxyType(
+            {**renames, **CustomOpenAPISpec._def_collisions(schemas, defs, namespace, renames)}
+        )
+        if next_renames == renames:
+            return renames
+        return CustomOpenAPISpec._fixed_renames(schemas, defs, namespace, next_renames)
 
     @staticmethod
     def _rewritten_defs_entry(key: str, value: JsonValue, renames: Mapping[str, str]) -> JsonValue:

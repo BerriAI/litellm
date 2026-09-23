@@ -52,6 +52,14 @@ router: Final = APIRouter()
 _ResponseDocSchemas = dict[int | str, dict[str, Any]]  # pyright: ignore[reportExplicitAny]  # fastapi's responses kwarg
 
 RESPONSES_API_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": ResponsesAPIResponse}}
+RESPONSES_API_CREATE_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {
+    200: {
+        "model": ResponsesAPIResponse,
+        "content": {
+            "text/event-stream": {"schema": {"type": "string", "description": "Server sent events when stream=true"}}
+        },
+    }
+}
 DELETE_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": DeleteResponseResult}}
 RESPONSE_ITEM_LIST_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": ResponseItemList}}
 
@@ -192,19 +200,19 @@ async def _resolve_cursor_model_variant_before_auth(request: Request) -> None:
     "/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
-    responses=RESPONSES_API_RESPONSE_SCHEMAS,
+    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
 )
 @router.post(
     "/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
-    responses=RESPONSES_API_RESPONSE_SCHEMAS,
+    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
 )
 @router.post(
     "/openai/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
-    responses=RESPONSES_API_RESPONSE_SCHEMAS,
+    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
 )
 async def responses_api(
     request: Request,

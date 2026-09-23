@@ -273,3 +273,39 @@ def test_add_schema_to_components_keeps_name_for_identical_existing_def():
     schemas = openapi["components"]["schemas"]
     assert "Req_Same" not in schemas
     assert schemas["Req"]["properties"]["s"]["$ref"] == "#/components/schemas/Same"
+
+
+def test_responses_request_params_schema_requires_model_and_input():
+    from litellm.types.llms.openai import ResponsesAPIRequestParams
+
+    schema = CustomOpenAPISpec.get_pydantic_schema(ResponsesAPIRequestParams)
+
+    assert schema is not None
+    assert set(schema["required"]) == {"model", "input"}
+
+
+def test_move_defs_to_components_renames_defs_whose_refs_point_at_renamed_defs():
+    openapi = {
+        "components": {
+            "schemas": {
+                "Inner": {"type": "string"},
+                "Wrapper": {"$ref": "#/components/schemas/Inner"},
+            }
+        }
+    }
+
+    renames = CustomOpenAPISpec._move_defs_to_components(
+        openapi,
+        {
+            "Inner": {"type": "integer"},
+            "Wrapper": {"$ref": "#/$defs/Inner"},
+        },
+        "NS",
+    )
+
+    schemas = openapi["components"]["schemas"]
+    assert renames == {"Inner": "NS_Inner", "Wrapper": "NS_Wrapper"}
+    assert schemas["Inner"] == {"type": "string"}
+    assert schemas["NS_Inner"] == {"type": "integer"}
+    assert schemas["Wrapper"] == {"$ref": "#/components/schemas/Inner"}
+    assert schemas["NS_Wrapper"] == {"$ref": "#/components/schemas/NS_Inner"}

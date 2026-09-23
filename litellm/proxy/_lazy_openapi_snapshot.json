@@ -27176,6 +27176,12 @@
                   "schema": {
                     "$ref": "#/components/schemas/ResponsesAPIResponse"
                   }
+                },
+                "text/event-stream": {
+                  "schema": {
+                    "description": "Server sent events when stream=true",
+                    "type": "string"
+                  }
                 }
               },
               "description": "Successful Response"
