@@ -58,6 +58,18 @@ PRIORITY_LONG_CONTEXT = {
         "cache_read_input_token_cost_above_272k_tokens_priority": 4e-06,
         "cache_creation_input_token_cost_above_272k_tokens_priority": 5e-05,
     },
+    "gpt-6-sol": {
+        "input_cost_per_token_above_272k_tokens_priority": 8e-06,
+        "output_cost_per_token_above_272k_tokens_priority": 3e-05,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 8e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 1e-05,
+    },
+    "gpt-6-luna": {
+        "input_cost_per_token_above_272k_tokens_priority": 4e-07,
+        "output_cost_per_token_above_272k_tokens_priority": 1.5e-06,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 4e-08,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 5e-07,
+    },
 }
 
 EXPECTED = {**FLEX_LONG_CONTEXT, **PRIORITY_LONG_CONTEXT}
@@ -90,4 +102,6 @@ TIERED_COST_CASES = [
     ("gpt-5.6-terra", "priority", 8e-06, 3.6e-05),
     ("gpt-5.6-luna", "priority", 8e-07, 3.6e-06),
     ("gpt-6-astra", "priority", 4e-05, 0.00015),
+    ("gpt-6-sol", "priority", 8e-06, 3e-05),
+    ("gpt-6-luna", "priority", 4e-07, 1.5e-06),
 ]

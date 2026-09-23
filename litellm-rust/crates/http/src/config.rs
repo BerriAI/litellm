@@ -129,6 +129,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::TlsSource;
 
     fn settings(ssl_verify: Option<SslVerify>, ssl_cert_file: Option<&str>) -> HttpSettings {
         HttpSettings {
@@ -298,7 +299,11 @@ mod tests {
         };
         assert!(matches!(
             reqwest::ClientBuilder::try_from(&config),
-            Err(Error::Read { path: reported, .. }) if reported == path
+            Err(Error::Read {
+                path: reported,
+                tls_source: TlsSource::CaBundle,
+                ..
+            }) if reported == path
         ));
     }
 
@@ -315,7 +320,11 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         assert!(matches!(
             result,
-            Err(Error::InvalidPem { path: reported, .. }) if reported == path
+            Err(Error::InvalidPem {
+                path: reported,
+                tls_source: TlsSource::CaBundle,
+                ..
+            }) if reported == path
         ));
     }
 }
