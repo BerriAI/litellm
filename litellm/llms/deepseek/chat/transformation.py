@@ -228,7 +228,6 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     def _normalize_thinking_tool_choice(
         optional_params: dict[str, object], model: str, drop_params: bool
     ) -> dict[str, object]:
-        """Relax forced choices only when the caller opted into dropping unsupported parameters."""
         tool_choice: Final = optional_params.get("tool_choice")
         if tool_choice is None or tool_choice in ("none", "auto"):
             return optional_params
