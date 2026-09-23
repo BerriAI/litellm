@@ -33,6 +33,16 @@
     "tests/integration/management/test_key_updates.py::test_update_preserves_independent_fields_and_serving": [
       "mgmt.key.update.preserves_independent_fields"
     ],
+    "tests/integration/management/test_model_credential_name_updates.py::test_unrelated_patch_succeeds_when_resent_credential_name_is_dangling": [
+      "mgmt.model.update.unchanged_credential_name_is_not_revalidated"
+    ],
+    "tests/integration/management/test_model_credential_name_updates.py::test_non_admin_detach_and_empty_credential_name_still_rejected": [
+      "mgmt.model.update.non_admin_detach_is_rejected",
+      "mgmt.model.update.empty_credential_name_is_rejected"
+    ],
+    "tests/integration/management/test_model_credential_name_updates.py::test_changing_credential_name_to_missing_credential_is_rejected": [
+      "mgmt.model.update.changed_missing_credential_name_is_rejected"
+    ],
     "tests/integration/pricing/test_configured_prices.py::test_custom_price_is_reported_and_charged": [
       "quota_management.spend_tracking.custom_price.matches_input_rates"
     ],
