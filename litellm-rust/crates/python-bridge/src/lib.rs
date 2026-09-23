@@ -4,6 +4,7 @@ mod credentials;
 mod diagnostics;
 mod errors;
 mod http;
+mod logger;
 mod marshal;
 mod python_settings;
 mod routes;
@@ -20,6 +21,8 @@ mod _native {
     use crate::diagnostics::{gil_stats, process_state_started, reserve_process_for_forking};
     #[pymodule_export]
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
+    #[pymodule_export]
+    use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
@@ -87,6 +90,7 @@ mod tests {
                 "chat_completions",
                 "achat_completions",
                 "ResponsesWebSocketConnection",
+                "NativeDiagnosticProcessor",
                 "TokenCounter",
                 "Tokenizer",
                 "gil_stats",

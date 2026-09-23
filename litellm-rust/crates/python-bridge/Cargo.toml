@@ -19,6 +19,9 @@ huggingface = ["litellm-token-counter/huggingface"]
 tiktoken = ["litellm-token-counter/tiktoken"]
 
 [dependencies]
+fancy-regex.workspace = true
+litellm-tracing.workspace = true
+litellm-host.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 litellm-cache.workspace = true

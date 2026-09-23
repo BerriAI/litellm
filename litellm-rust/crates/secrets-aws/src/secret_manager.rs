@@ -216,7 +216,7 @@ impl AwsSecretsManagerV2 {
                 .await
                 .is_err()
         {
-            tracing::warn!("secret created but replication failed");
+            litellm_tracing::warn!("secret created but replication failed");
         }
         Ok(response)
     }

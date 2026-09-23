@@ -1,4 +1,3 @@
-import logging
 from typing import Final
 
 import httpx
@@ -58,13 +57,6 @@ def test_http_settings_ignores_environment_overrides(monkeypatch: pytest.MonkeyP
 
     assert result.user_agent == default_user_agent()
     assert result.ssl_verify is True
-
-
-def test_warn_reaches_the_litellm_logger(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        settings.warn("ssl_ecdh_curve 'secp521r1' is not supported")
-
-    assert [record.getMessage() for record in caplog.records] == ["ssl_ecdh_curve 'secp521r1' is not supported"]
 
 
 class _VaultSecrets(CustomSecretManager):

@@ -3017,6 +3017,7 @@ name = "litellm-core-utils"
 version = "0.1.0"
 dependencies = [
  "fancy-regex 0.19.2",
+ "litellm-tracing",
  "litellm-types",
  "rstest",
  "serde",
@@ -3146,6 +3147,7 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "bytes",
  "criterion",
+ "fancy-regex 0.19.2",
  "futures-util",
  "litellm-auth",
  "litellm-auth-aws",
@@ -3164,6 +3166,7 @@ dependencies = [
  "litellm-callbacks-legacy-python",
  "litellm-core",
  "litellm-core-utils",
+ "litellm-host",
  "litellm-host-python",
  "litellm-http",
  "litellm-llms",
@@ -3171,6 +3174,7 @@ dependencies = [
  "litellm-secrets-aws",
  "litellm-secrets-types",
  "litellm-token-counter",
+ "litellm-tracing",
  "litellm-types",
  "pyo3",
  "pyo3-async-runtimes",
@@ -3245,11 +3249,11 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-core-utils",
  "litellm-secrets-types",
+ "litellm-tracing",
  "rstest",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
- "tracing",
  "veil",
  "wiremock",
 ]
@@ -3281,6 +3285,7 @@ dependencies = [
  "base64 0.22.1",
  "litellm-core-utils",
  "litellm-secrets-types",
+ "litellm-tracing",
  "moka",
  "percent-encoding",
  "rcgen",
@@ -3291,7 +3296,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
- "tracing",
  "veil",
  "wiremock",
 ]
@@ -3404,6 +3408,19 @@ dependencies = [
  "rustc-hash",
  "thiserror 2.0.19",
  "tiktoken-rs",
+]
+
+[[package]]
+name = "litellm-tracing"
+version = "0.1.0"
+dependencies = [
+ "fancy-regex 0.19.2",
+ "percent-encoding",
+ "rstest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

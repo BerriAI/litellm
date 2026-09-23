@@ -62,12 +62,6 @@ class SecretManagerBinding:
     settings_object: object
 
 
-def warn(message: str) -> None:
-    from litellm._logging import verbose_logger
-
-    verbose_logger.warning("%s", message)
-
-
 def secret_manager(rules: Rules | None = None) -> SecretManager:
     import litellm
     from litellm.rust_bridge.catalog import SecretManagerContext, decision
