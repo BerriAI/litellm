@@ -321,6 +321,10 @@ def _member_auto_router_marker_for_update(
     return incoming_params.model is None or incoming_params.model == _effective_model(None, existing.litellm_params)
 
 
+AUTO_ROUTER_WRITE_SLOT_LOCK_KEY: Final = 5_872_301
+_WRITE_SLOT_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock($1)"
+
+
 @asynccontextmanager
 async def _member_auto_router_write_slot(
     prisma_client: PrismaClient,
@@ -345,6 +349,7 @@ async def _member_auto_router_write_slot(
     transaction_client: Final = _ModelTransactionClient.model_validate(prisma_client.db)
     async with transaction_client.tx(timeout=datetime.timedelta(seconds=30)) as tx_ctx:
         tables: Final[_TxModelTables] = tx_ctx
+        await tx_ctx.query_raw(_WRITE_SLOT_LOCK_SQL, AUTO_ROUTER_WRITE_SLOT_LOCK_KEY)
         config_rows: Final = () if llm_router is None else tuple(llm_router.config_deployments())
         if member_write.model_id is not None:
             await tx_ctx.query_raw(
