@@ -121,9 +121,9 @@ def enforce_fips_boot_verdict(verdict: FipsBootVerdict, announce: Callable[[str]
 
 def render_refusal(refusal: FipsBootRefusal) -> str:
     match refusal:
-        case MalformedFipsMode(value=value):
+        case MalformedFipsMode():
             return (
-                f"{REFUSAL_PREFIX}: {FIPS_MODE_ENV_VAR}={value} is not a boolean.\n"
+                f"{REFUSAL_PREFIX}: {FIPS_MODE_ENV_VAR}={refusal.value} is not a boolean.\n"
                 f"Set {FIPS_MODE_ENV_VAR} to true or false, or unset it."
             )
         case ProviderDoesNotEnforceFips():
@@ -133,21 +133,18 @@ def render_refusal(refusal: FipsBootRefusal) -> str:
                 "protected with algorithms the FIPS 140-3 policy forbids. Run the proxy from a FIPS image whose\n"
                 f"OpenSSL FIPS provider is enabled, or unset {FIPS_MODE_ENV_VAR} on a non-FIPS runtime."
             )
-        case TlsVerificationDisabled(sources=sources):
+        case TlsVerificationDisabled():
             return (
                 f"{REFUSAL_PREFIX}: {FIPS_MODE_ENV_VAR} is on but TLS certificate verification is disabled by "
-                f"{' and '.join(sources)}.\nFIPS deployments must verify upstream certificates, so remove the "
+                f"{' and '.join(refusal.sources)}.\nFIPS deployments must verify upstream certificates, so remove the "
                 "override or point ssl_verify at a CA bundle instead."
             )
-        case _:
-            assert_never(refusal)
+    return assert_never(refusal)
 
 
 def _is_off(value: object) -> bool:
-    match value:
-        case bool():
-            return value is False
-        case str():
-            return str_to_bool(value) is False
-        case _:
-            return False
+    if isinstance(value, bool):
+        return value is False
+    if isinstance(value, str):
+        return str_to_bool(value) is False
+    return False

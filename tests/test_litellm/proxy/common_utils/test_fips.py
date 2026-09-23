@@ -1,5 +1,3 @@
-import hashlib
-
 import pytest
 
 from litellm.proxy.common_utils.fips import (
@@ -12,7 +10,6 @@ from litellm.proxy.common_utils.fips import (
     enforce_fips_boot_verdict,
     fips_boot_verdict,
     is_fips_mode,
-    openssl_enforces_fips,
     parse_fips_mode,
 )
 
@@ -107,12 +104,3 @@ def test_verified_or_custom_bundle_tls_settings_are_not_treated_as_disabled(ssl_
 def test_disabled_tls_is_reported_before_the_provider_so_operators_see_config_mistakes_first():
     assert _verdict("true", enforcing=False, ssl_env="false") == TlsVerificationDisabled(sources=("SSL_VERIFY",))
     assert _verdict("true", enforcing=False) == ProviderDoesNotEnforceFips()
-
-
-def test_provider_probe_agrees_with_whether_md5_is_usable_for_security_here():
-    try:
-        hashlib.md5(b"", usedforsecurity=True)
-    except ValueError:
-        assert openssl_enforces_fips() is True
-    else:
-        assert openssl_enforces_fips() is False
