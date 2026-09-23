@@ -74,8 +74,8 @@ class TestBedrockRegionInModelPath:
         ],
     )
     def test_region_and_model_id_extraction(
-        self, model, expected_model_id, expected_region
-    ):
+        self, model: str, expected_model_id: str, expected_region: str | None
+    ) -> None:
         """
         Verify that completion() correctly extracts both modelId and aws_region_name
         from the bedrock/{region}/{model} path format.
@@ -418,8 +418,8 @@ async def test_acompletion_without_stream_chunk_size_uses_default_chunking(monke
 
 @pytest.mark.parametrize("stream_chunk_size,expected_chunk_size", [(64, 64), (None, None)])
 def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
-    monkeypatch: pytest.MonkeyPatch, stream_chunk_size, expected_chunk_size
-):
+    monkeypatch: pytest.MonkeyPatch, stream_chunk_size: int | None, expected_chunk_size: int | None
+) -> None:
     recorder: Final = record_litellm_params(monkeypatch)
     mock_response = MagicMock()
     mock_response.status_code = 200
