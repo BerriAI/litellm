@@ -1789,6 +1789,78 @@
     "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[bearer]": [
       "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
     ],
+    "tests/integration/management/test_budget_updates.py::test_shortening_budget_duration_moves_reset_at_onto_the_new_schedule": [
+      "mgmt.budget.update.duration_change_recomputes_reset_at"
+    ],
+    "tests/integration/management/test_organization_budget_clear.py::test_patch_organization_update_with_null_tpm_limit_clears_it_and_keeps_sibling_limits": [
+      "mgmt.organization.update.null_clears_budget_limit"
+    ],
+    "tests/integration/management/test_team_budget_duration_defaults.py::test_team_new_explicit_null_budget_duration_is_not_replaced_by_default": [
+      "mgmt.team.new.explicit_null_budget_duration_overrides_default"
+    ],
+    "tests/integration/management/test_team_member_budget_cache.py::test_team_member_default_budget_lands_in_redis_after_first_member_call": [
+      "mgmt.team_member_budget.default_budget_is_cached_in_redis_as_json"
+    ],
+    "tests/integration/observability/test_callback_delivery.py::test_streamed_responses_success_callback_carries_provider_apim_request_id": [
+      "other.observability.callbacks.streamed_responses_events_carry_provider_response_headers"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_bedrock_passthrough_converse_guardrail_ignores_denied_term_in_tool_definition": [
+      "other.observability.guardrails.bedrock_passthrough_converse_scans_only_caller_content"
+    ],
+    "tests/integration/pricing/test_configured_prices.py::test_cost_estimate_reports_configured_prices_for_model_absent_from_cost_map": [
+      "quota_management.cost_estimate.configured_price.reported_for_model_absent_from_cost_map"
+    ],
+    "tests/integration/pricing/test_configured_prices.py::test_saving_echoed_model_info_does_not_freeze_cost_map_price_into_deployment": [
+      "pricing.model_update.echoed_cost_map_price_is_not_persisted_as_override"
+    ],
+    "tests/integration/pricing/test_databricks_cache_pricing.py::test_databricks_cached_prompt_tokens_bill_at_cache_rates_not_input_rate": [
+      "pricing.databricks.cached_prompt_tokens_bill_at_cache_rates"
+    ],
+    "tests/integration/pricing/test_ocr_page_pricing.py::test_ocr_annotation_pages_are_billed_at_annotation_cost_per_page": [
+      "pricing.ocr.annotation_pages_billed_at_annotation_rate"
+    ],
+    "tests/integration/pricing/test_service_tier_pricing.py::test_ultrafast_service_tier_bills_ultrafast_rates_and_keeps_pricing_off_the_wire": [
+      "quota_management.spend_tracking.service_tier_pricing.ultrafast_bills_ultrafast_rates"
+    ],
+    "tests/integration/spend/test_batch_completion_accounting.py::test_completed_batch_spend_row_records_reasoning_tokens_and_error_file_failures": [
+      "quota_management.spend_tracking.batch_costs.reasoning_tokens_and_error_file_failures_recorded"
+    ],
+    "tests/integration/spend/test_batch_observability.py::test_batch_retrieval_row_sums_reasoning_tokens_and_counts_output_and_error_file_failures": [
+      "spend.batches.retrieval_row_aggregates_reasoning_tokens_and_per_request_counts"
+    ],
+    "tests/integration/spend/test_batch_poll_starvation.py::test_batches_gone_at_provider_do_not_starve_a_newer_batch_out_of_cost_polling": [
+      "quota_management.spend_tracking.batch_costs.uncostable_rows_retire_so_newer_batches_are_costed"
+    ],
+    "tests/integration/spend/test_cache_and_quota.py::test_in_flight_count_tokens_does_not_reserve_key_budget_away_from_a_completion": [
+      "quota_management.budget.key.in_flight_count_tokens_reserves_nothing_so_completion_reaches_provider"
+    ],
+    "tests/integration/spend/test_cache_and_quota.py::test_repeated_count_tokens_on_budgeted_key_does_not_reserve_budget_or_block_later_completion": [
+      "quota_management.budget.key.count_tokens_reserves_nothing_so_completion_within_budget_succeeds"
+    ],
+    "tests/integration/spend/test_daily_rollup_retry.py::test_failed_daily_user_rollup_commit_is_retried_so_spend_report_and_daily_activity_agree": [
+      "spend.daily_rollup.failed_user_commit_is_retried_until_report_and_daily_activity_agree"
+    ],
+    "tests/integration/spend/test_disconnected_bedrock_messages_stream_billing.py::test_client_disconnect_mid_bedrock_messages_stream_still_bills_terminal_usage": [
+      "spend.anthropic_messages_stream.client_disconnect_bills_terminal_bedrock_usage"
+    ],
+    "tests/integration/spend/test_failed_dispatch_tokens.py::test_provider_500_after_dispatch_records_estimated_prompt_tokens_on_failure_row": [
+      "spend.failed_dispatch.failure_row_records_estimated_input_tokens"
+    ],
+    "tests/integration/spend/test_model_router_selected_model.py::test_model_router_alias_without_router_in_name_keeps_selected_model_in_response_and_spend_log": [
+      "spend.model_router.selected_model_is_returned_and_persisted_for_plain_alias"
+    ],
+    "tests/integration/spend/test_org_budget_cli_session_token.py::test_cli_session_token_without_org_id_charges_and_caps_the_team_organization": [
+      "quota_management.organization_budget.cli_session_token_without_org_id_charges_team_organization"
+    ],
+    "tests/integration/spend/test_passthrough_budget_reservation.py::test_repeated_gemini_passthrough_calls_stay_served_while_key_spend_is_below_max_budget": [
+      "spend.budget_reservation.gemini_passthrough_success_releases_reservation_from_spend_counter"
+    ],
+    "tests/integration/spend/test_team_daily_activity_aggregated.py::test_aggregated_team_activity_reports_the_whole_range_team_spend_in_one_page": [
+      "quota_management.spend_tracking.team_daily_activity_aggregated_reports_whole_range_team_spend"
+    ],
+    "tests/integration/spend/test_team_member_spend.py::test_member_added_without_any_budget_is_charged_on_its_membership_row": [
+      "spend.team_member.member_without_budget_gets_membership_row_and_spend"
+    ],
     "tests/integration/management/test_vector_store_config_ownership.py::test_config_store_is_listed_beside_db_store_and_survives_listing": [
       "mgmt.vector_store.list.keeps_config_store_beside_db_stores"
     ],
@@ -1947,6 +2019,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/providers/test_anthropic_wire.py::test_anthropic_messages_slow_upstream_is_cut_off_at_the_deployment_request_timeout": [
+      "other.provider_wire.anthropic.messages_request_timeout_reaches_transport"
     ]
   },
   "browser": {
