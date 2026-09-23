@@ -179,14 +179,18 @@ class TestProviderResolution:
             )
         assert cfg is None
 
-    def test_the_shipped_price_map_signals_the_gpt_56_family(self):
+    @pytest.mark.parametrize(
+        ("family", "variants"),
+        [("gpt-5.6", ("sol", "terra", "luna")), ("gpt-6", ("astra", "sol", "luna"))],
+    )
+    def test_the_shipped_price_map_signals_the_openai_families(self, family: str, variants: tuple[str, ...]):
         """Reads the bundled backup directly rather than the network-fetched global."""
         shipped = json.loads(
             files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text(encoding="utf-8")
         )
         for prefix in ("us", "global"):
-            for variant in ("sol", "terra", "luna"):
-                model = f"{prefix}.openai.gpt-5.6-{variant}"
+            for variant in variants:
+                model = f"{prefix}.openai.{family}-{variant}"
                 assert bedrock_supports_openai_responses(model, shipped) is True, model
 
 
