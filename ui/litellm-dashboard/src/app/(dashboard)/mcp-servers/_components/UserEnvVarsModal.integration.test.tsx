@@ -1,5 +1,5 @@
 import React from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -217,7 +217,7 @@ describe("UserEnvVarsModal", () => {
     expect(networking.storeMCPUserEnvVars).not.toHaveBeenCalled();
   });
 
-  it("clears every stored value through the delete endpoint and reports the cleared status", async () => {
+  it("clears every stored value through the delete endpoint once the user confirms", async () => {
     const user = setup();
     const cleared = statusWith([{ name: "API_KEY", description: null, is_set: false }]);
     vi.mocked(networking.clearMCPUserEnvVars).mockResolvedValue(cleared);
@@ -225,6 +225,9 @@ describe("UserEnvVarsModal", () => {
 
     await fieldAfterOpen(/^API_KEY/);
     await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(networking.clearMCPUserEnvVars).not.toHaveBeenCalled();
+    const confirm = await screen.findByRole("alertdialog", { name: "Clear saved credentials" });
+    await user.click(within(confirm).getByRole("button", { name: "Clear credentials" }));
 
     await waitFor(() => {
       expect(onSaved).toHaveBeenCalledWith(cleared);
@@ -232,6 +235,24 @@ describe("UserEnvVarsModal", () => {
     expect(networking.clearMCPUserEnvVars).toHaveBeenCalledWith("sk-test", "srv-1");
     expect(networking.storeMCPUserEnvVars).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("keeps every stored value when the clear confirmation is cancelled", async () => {
+    const user = setup();
+    const { onSaved, onClose } = renderModal(statusWith([{ name: "API_KEY", description: null, is_set: true }]));
+
+    await fieldAfterOpen(/^API_KEY/);
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    const confirm = await screen.findByRole("alertdialog", { name: "Clear saved credentials" });
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+    expect(networking.clearMCPUserEnvVars).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Clear" })).toBeEnabled();
   });
 
   it("offers Clear only when a value is stored", async () => {
@@ -248,6 +269,8 @@ describe("UserEnvVarsModal", () => {
 
     await fieldAfterOpen(/^API_KEY/);
     await user.click(screen.getByRole("button", { name: "Clear" }));
+    const confirm = await screen.findByRole("alertdialog", { name: "Clear saved credentials" });
+    await user.click(within(confirm).getByRole("button", { name: "Clear credentials" }));
 
     await waitFor(() => {
       expect(networking.clearMCPUserEnvVars).toHaveBeenCalledTimes(1);

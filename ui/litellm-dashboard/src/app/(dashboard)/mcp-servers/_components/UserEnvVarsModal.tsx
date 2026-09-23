@@ -8,6 +8,14 @@ import { toast } from "@/lib/toast";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/shared/table_cells/status_badge";
@@ -100,6 +108,7 @@ const UserEnvVarsForm: React.FC<UserEnvVarsFormProps> = ({ required, isSaving, o
  */
 const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, accessToken, onClose, onSaved }) => {
   const queryClient = useQueryClient();
+  const [confirmingClear, setConfirmingClear] = React.useState(false);
   const queryKey = ["mcpUserEnvVars", server?.server_id];
   const {
     data: status,
@@ -150,6 +159,10 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
   const required = status?.required ?? [];
   const isSaving = saveMutation.isPending || clearMutation.isPending;
   const canClear = !!server && !!accessToken && required.some((spec) => spec.is_set);
+  const confirmClear = () => {
+    setConfirmingClear(false);
+    clearMutation.mutate();
+  };
 
   return (
     <Dialog open={open} onOpenChange={(opened) => !opened && onClose()}>
@@ -188,12 +201,31 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
                 required={required}
                 isSaving={isSaving}
                 onCancel={onClose}
-                onClear={canClear ? () => clearMutation.mutate() : undefined}
+                onClear={canClear ? () => setConfirmingClear(true) : undefined}
                 onSubmit={handleSave}
               />
             </>
           )}
         </div>
+        <AlertDialog open={confirmingClear} onOpenChange={(opened) => !opened && setConfirmingClear(false)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Clear saved credentials</AlertDialogTitle>
+              <AlertDialogDescription>
+                This deletes every per-user value you saved for {displayName}. Your next MCP request to this server
+                fails until you set them again.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <Button variant="outline" onClick={() => setConfirmingClear(false)}>
+                Cancel
+              </Button>
+              <Button variant="destructive" onClick={confirmClear}>
+                Clear credentials
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </DialogContent>
     </Dialog>
   );

@@ -110,6 +110,13 @@ test("per-user MCP env var stays updatable and clearable from the card after it 
         response.url().includes(statusUrl),
     );
     await dialog.getByRole("button", { name: "Clear", exact: true }).click();
+    const confirm = page.getByRole("alertdialog", {
+      name: "Clear saved credentials",
+    });
+    await expect(confirm).toContainText(serverName);
+    await confirm
+      .getByRole("button", { name: "Clear credentials", exact: true })
+      .click();
     const clearResponse = await cleared;
     expect(clearResponse.ok(), await clearResponse.text()).toBe(true);
     await expect(dialog).toHaveCount(0);
