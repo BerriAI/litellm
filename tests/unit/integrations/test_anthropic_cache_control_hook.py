@@ -16,6 +16,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     supports_openai_prompt_cache_breakpoint,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.integrations.anthropic_cache_control_hook import CacheControlMessageInjectionPoint
 from litellm.types.llms.openai import AllMessageValues
 
 
@@ -3783,7 +3784,11 @@ def _anthropic_response_mock() -> MagicMock:
     return mock_response
 
 
-async def _marked_messages(messages, points, monkeypatch: pytest.MonkeyPatch):
+async def _marked_messages(
+    messages: list[AllMessageValues],
+    points: list[CacheControlMessageInjectionPoint],
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[AllMessageValues]:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake_anthropic_key")
     monkeypatch.setattr(litellm, "callbacks", [AnthropicCacheControlHook()])
     client = AsyncHTTPHandler()
@@ -4052,3 +4057,47 @@ async def test_anthropic_cache_control_hook_two_points_stay_two_breakpoints(monk
             "content": [{"type": "text", "text": "[System: Empty message content sanitised to satisfy protocol]"}],
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_skips_a_tool_reference_block(monkeypatch: pytest.MonkeyPatch):
+    """
+    The tool_result conversion rebuilds a tool_reference from its type and tool_name
+    alone, so a marker written on one never reaches the provider.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "find a tool"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "tool_search", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [
+                    {"type": "text", "text": "found"},
+                    {"type": "tool_reference", "tool_name": "get_weather"},
+                ],
+            },
+        ],
+        [{"location": "message", "index": 2}],
+        monkeypatch,
+    )
+
+    assert marked[-1] == {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "call_1",
+                "content": [
+                    {"type": "text", "text": "found", "cache_control": {"type": "ephemeral"}},
+                    {"type": "tool_reference", "tool_name": "get_weather"},
+                ],
+            }
+        ],
+    }
