@@ -2074,6 +2074,62 @@ def test_ProxyConfig__load_environment_variables_blocks_dangerous_keys(monkeypat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("flag", "system"), (("use_google_kms", "google_kms"), ("use_azure_key_vault", "azure_key_vault"))
+)
+async def test_load_config_legacy_secret_manager_flags_capture_the_initialized_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str, system: str
+) -> None:
+    from azure.keyvault.secrets import SecretClient
+    from google.cloud.kms_v1 import KeyManagementServiceClient
+
+    from litellm.rust_bridge.secret_manager import native_secret_manager_config
+
+    credentials_file: Final = tmp_path / "credentials.json"
+    credentials_file.write_text(
+        json.dumps(
+            {
+                "type": "authorized_user",
+                "client_id": "test-client",
+                "client_secret": "test-secret",
+                "refresh_token": "test",
+            }
+        )
+    )
+    config_file: Final = tmp_path / "legacy-secret-manager.yaml"
+    config_file.write_text(
+        f"model_list: []\ngeneral_settings:\n  {flag}: true\n  key_management_settings:\n    access_mode: write_only\n"
+    )
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(credentials_file))
+    monkeypatch.setenv("GOOGLE_KMS_RESOURCE_NAME", "projects/test/locations/global/keyRings/test/cryptoKeys/test")
+    monkeypatch.setenv("AZURE_KEY_VAULT_URI", "https://test.vault.azure.net")
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
+    monkeypatch.setattr(litellm, "_google_kms_resource_name", None)
+    monkeypatch.setattr(litellm, "_key_management_settings", litellm._key_management_settings)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    client: Final = litellm.secret_manager_client
+    assert isinstance(client, (SecretClient, KeyManagementServiceClient))
+    try:
+        captured: Final = native_secret_manager_config(client)
+        assert captured is not None
+        assert captured.system == system
+        assert dict(captured.environment)["GOOGLE_APPLICATION_CREDENTIALS"] == str(credentials_file)
+        assert litellm._key_management_system is not None
+        assert litellm._key_management_system.value == system
+    finally:
+        if isinstance(client, SecretClient):
+            client.close()
+        else:
+            client.transport.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("flag", ("null", "false"))
 async def test_load_config_disabled_google_kms_does_not_initialize_a_manager(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str
