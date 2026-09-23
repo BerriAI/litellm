@@ -566,8 +566,8 @@ async def _get_deleted_keys_for_user(
 ) -> Sequence["PrismaDeletedVerificationToken"]:
     try:
         return await DeletedVerificationTokenRepository(prisma_client).table.find_many(
-            where={"user_id": user_id},
-            order={"deleted_at": "desc"},
+            where={"user_id": user_id},  # mutable-ok: Prisma query payload is consumed as a mutable mapping
+            order={"deleted_at": "desc"},  # mutable-ok: Prisma query payload is consumed as a mutable mapping
         )
     except Exception as e:
         verbose_proxy_logger.warning("Failed to fetch deleted key metadata for user %s: %s", user_id, e)
@@ -580,10 +580,12 @@ async def get_user_api_key_filter(
     api_key: str | None,
 ) -> list[str]:
     """Return the key digests that should scope a user's activity query."""
-    active_keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(where={"user_id": user_id})
+    active_keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(
+        where={"user_id": user_id},  # mutable-ok: Prisma query payload is consumed as a mutable mapping
+    )
     deleted_keys: Final = await _get_deleted_keys_for_user(prisma_client, user_id)
 
-    user_api_keys: Final = list(
+    user_api_keys: Final = list(  # mutable-ok: helper returns a list for the downstream SQL filter
         dict.fromkeys(
             key.token
             for key in (*active_keys, *deleted_keys)
@@ -592,7 +594,7 @@ async def get_user_api_key_filter(
     )
     if api_key is None:
         return user_api_keys
-    return [api_key] if api_key in user_api_keys else []
+    return [api_key] if api_key in user_api_keys else []  # mutable-ok: preserve the list return shape
 
 
 def _adjust_dates_for_timezone(

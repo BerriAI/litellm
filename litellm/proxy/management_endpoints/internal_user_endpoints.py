@@ -3033,7 +3033,9 @@ async def get_user_daily_activity_aggregated(
         if caller_user_id is not None and requested_user_id != caller_user_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": "Non-admin users can only view their own spend data."},
+                detail={
+                    "error": "Non-admin users can only view their own spend data."
+                },  # mutable-ok: FastAPI requires a mutable error payload
             )
 
         api_key_filter: Final = (
