@@ -1,47 +1,22 @@
 #!/usr/bin/env python3
 """Report SQL `IN (...)` lists whose length nothing bounds.
 
-Postgres refuses a prepared statement with more than 32,767 bind parameters, and a
-membership filter binds one parameter per value, so an `IN` list built from table
-data stops working the day the table outgrows the cap. The budget reset job did
-exactly that (LIT-7535, litellm#40564): one `UPDATE ... WHERE user_id IN (...)`
-naming every end user on a budget was rejected once a budget held 33,000 of them,
-and because the job reset every due budget in one transaction the rejection rolled
-all of them back, on every tick, until an operator split the population.
-
-Two shapes are reported, across litellm/ and enterprise/:
+Postgres caps a prepared statement at 32,767 bind parameters and a membership filter
+binds one per value, so a list built from table data breaks once the table outgrows
+the cap (LIT-7535). Reported, across litellm/ and enterprise/:
 
   prisma   a dict literal with an `"in"` / `"not_in"` key whose value has no fixed
-           size, such as `{"user_id": {"in": user_ids}}`. A list, tuple or set written
-           out in full has the length it shows, so `["a", "b"]` and `[user_id]` pass,
-           while a name, a call, a comprehension or a starred display does not. A name
-           bound once at module level to such a value passes too, bare or wrapped in
-           list/tuple/sorted/frozenset/set; an imported name does not, whatever its
-           casing, since its size is not visible from here.
-  raw-sql  a string literal whose `IN (` is followed by a value spliced in at
-           runtime: an f-string `IN ({placeholders})`, a `{}` or `%s` slot for
-           `.format` / `%`, or a literal that closes right after `IN (` so something
-           gets concatenated on. `IN (SELECT ...)`, `IN ($1, $2)` and
-           `= ANY($1::text[])` bind a fixed number of parameters and pass.
+           size. A list, tuple or set written out in full passes, as does a name the
+           module binds once to a tuple, frozenset or constant; any other name, a call,
+           a comprehension or a starred display does not.
+  raw-sql  a string literal whose `IN (` is followed by a value spliced in at runtime:
+           an f-string or format slot, a `%s`, or the end of the literal itself.
+           `IN (SELECT ...)`, `IN ($1, $2)` and `= ANY($1::text[])` pass.
 
-The Prisma engine (5.4.2, pinned by prisma 0.11.0) splits `create_many` rows across
-statements to stay under the cap, and chunks a `find_many` `in` in a way that still
-breaks with two large lists or extra criteria (prisma/prisma#21802), but sends an
-`update_many` / `delete_many` filter as one statement, which is the write that froze
-the reset job. Filters are mostly built away from the call that sends them, so every
-membership filter is reported rather than only the ones a write can be seen to use.
-
-A list with a real bound records it on the reported line, or alone on the line above:
-
-    where={"team_id": {"in": page_team_ids}}  # bounded-ok: one page of at most 100 ids
-
-The reason is required, and a marker without one is reported as its own finding. A
-list that grows with a table needs chunking instead (the PTU rollup prune splits its
-ids at `_PRUNE_ID_CHUNK_SIZE`), or a raw statement that takes the whole list as one
-array parameter (`= ANY($1::text[])`).
-
-This check only warns: it prints every finding as `path:line: kind message` and
-exits 0, so the output is the inventory of lists still waiting for a bound.
+The Prisma engine chunks `create_many` on its own but sends an `update_many` /
+`delete_many` filter whole. Record a real bound with `# bounded-ok: <reason>` on the
+reported line or alone on the line above; the reason is required. Warning only: every
+finding prints as `path:line: kind message` and the exit code is 0.
 
 Usage: python check_unbounded_in_lists.py [files-or-dirs...]   (default: litellm enterprise)
 """
@@ -64,6 +39,7 @@ DEFAULT_TARGETS: Final = ("litellm", "enterprise")
 
 MEMBERSHIP_KEYS: Final = frozenset({"in", "not_in", "notIn"})
 CONSTANT_WRAPPERS: Final = frozenset({"list", "tuple", "sorted", "frozenset", "set"})
+FREEZING_WRAPPERS: Final = frozenset({"tuple", "frozenset"})
 MIN_REASON_LEN: Final = 3
 
 MARKER: Final = re.compile(r"#\s*bounded-ok(?::[ \t]*(?P<reason>[^#]*))?")
@@ -149,17 +125,32 @@ def _module_binding(stmt: ast.stmt) -> tuple[tuple[str, ast.expr], ...]:
             return ()
 
 
+def _stays_fixed(value: ast.expr, constants: frozenset[str]) -> bool:
+    """has_fixed_size, less the shapes a later append or extend could grow."""
+    match value:
+        case ast.Tuple(elts=elts):
+            return not any(isinstance(elt, ast.Starred) for elt in elts)
+        case ast.Constant():
+            return True
+        case ast.Name(id=name):
+            return name in constants
+        case ast.Call(func=ast.Name(id=wrapper), args=[argument], keywords=[]) if wrapper in FREEZING_WRAPPERS:
+            return has_fixed_size(argument, constants)
+        case _:
+            return False
+
+
 def module_constants(tree: ast.Module) -> frozenset[str]:
-    """Module-level names bound exactly once to a value of fixed size, in binding order
-    so one constant may be built from another. Casing plays no part: an ALL_CAPS name
-    that is imported or filled at runtime is as unbounded as any other."""
+    """Module-level names bound exactly once to a frozen value of fixed size, in binding
+    order so one constant may be built from another. Casing plays no part: an ALL_CAPS
+    name that is imported or filled at runtime is as unbounded as any other."""
     bound: Final = tuple(binding for stmt in tree.body for binding in _module_binding(stmt))
     names: Final = tuple(name for name, _ in bound)
     rebound: Final = frozenset(name for name in names if names.count(name) > 1)
 
     def fold(constants: frozenset[str], binding: tuple[str, ast.expr]) -> frozenset[str]:
         name, value = binding
-        return constants | {name} if name not in rebound and has_fixed_size(value, constants) else constants
+        return constants | {name} if name not in rebound and _stays_fixed(value, constants) else constants
 
     return reduce(fold, bound, frozenset())
 

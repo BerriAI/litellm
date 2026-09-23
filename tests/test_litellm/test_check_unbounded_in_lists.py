@@ -78,6 +78,16 @@ class TestPrismaFilters:
         assert _kinds(tmp_path, 'from x import STATES\nwhere = {"s": {"in": list(STATES)}}\n') == ("prisma",)
         assert _kinds(tmp_path, 'terminal = ("done", "failed")\nwhere = {"s": {"in": terminal}}\n') == ()
 
+    def test_a_module_value_that_could_grow_is_not_a_constant(self, tmp_path):
+        assert _kinds(tmp_path, 'IDS = ["a"]\nIDS.append(late)\nwhere = {"x": {"in": IDS}}\n') == ("prisma",)
+        assert _kinds(tmp_path, 'IDS = sorted(("a", "b"))\nwhere = {"x": {"in": IDS}}\n') == ("prisma",)
+        assert _kinds(tmp_path, 'IDS = ("a",)\nwhere = {"x": {"in": IDS}}\n') == ()
+        assert _kinds(tmp_path, 'IDS = frozenset(["a", "b"])\nwhere = {"x": {"in": IDS}}\n') == ()
+
+    def test_an_alias_is_as_fixed_as_what_it_names(self, tmp_path):
+        assert _kinds(tmp_path, 'A = load_ids()\nB = A\nwhere = {"x": {"in": B}}\n') == ("prisma",)
+        assert _kinds(tmp_path, 'A = ("a",)\nB = A\nwhere = {"x": {"in": B}}\n') == ()
+
     def test_a_module_name_bound_twice_is_not_a_constant(self, tmp_path):
         source = 'IDS = ("a",)\nIDS = load_ids()\nwhere = {"user_id": {"in": IDS}}\n'
         assert _kinds(tmp_path, source) == ("prisma",)
