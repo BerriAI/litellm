@@ -6440,3 +6440,33 @@ def test_transform_response_applies_cache_creation_usage(include_creation):
         assert result.usage.prompt_tokens == 10010
         assert not hasattr(result.usage, "cache_creation_input_tokens")
         assert "vertex_ai_cached_content" not in result._hidden_params
+
+
+def test_streaming_chunk_parser_surfaces_cache_creation_usage_and_metadata():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
+
+    model = "gemini-3.8-flash"
+    cached_content = {
+        "name": "cached-content",
+        "model": model,
+        "total_token_count": 10000,
+        "create_time": None,
+        "expire_time": None,
+    }
+    litellm_logging = MagicMock()
+    litellm_logging.model_call_details = {"vertex_ai_cached_content": cached_content}
+    chunk = {
+        "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 1,
+            "totalTokenCount": 11,
+        },
+    }
+
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=litellm_logging)
+    streaming_chunk = iterator.chunk_parser(chunk)
+
+    assert streaming_chunk.usage.prompt_tokens == 10010
+    assert streaming_chunk.usage.cache_creation_input_tokens == 10000
+    assert streaming_chunk._hidden_params["vertex_ai_cached_content"] == cached_content

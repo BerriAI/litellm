@@ -197,7 +197,7 @@ def _handle_128k_pricing(
     input_rate: Final = input_cost_per_token_above_128k_tokens if above_tier else base_input_rate
 
     cache_read_rate: Final = model_info.get("cache_read_input_token_cost") or input_rate
-    cache_creation_rate: Final = model_info.get("cache_creation_input_token_cost") or base_input_rate
+    cache_creation_rate: Final = model_info.get("cache_creation_input_token_cost") or input_rate
 
     prompt_cost = (
         text_tokens * input_rate + cache_read_tokens * cache_read_rate + cache_creation_tokens * cache_creation_rate
