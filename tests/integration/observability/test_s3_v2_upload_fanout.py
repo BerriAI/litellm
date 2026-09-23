@@ -45,6 +45,8 @@ class S3Sink:
 
 
 def _chat_reply(request: Request) -> Reply:
+    if request.method != "POST" or not request.body:
+        return Reply(status=404)
     text: Final = json.loads(request.body)["messages"][0]["content"]
     return Reply(
         body=json.dumps(
@@ -131,7 +133,7 @@ def test_s3_v2_flush_bounds_concurrent_puts_to_the_default_of_sixteen(gateway: G
             key: Final = scenario.key(models=[model])
             ids: Final = _burst(candidate, model, key, marker)
             puts: Final = _collect(bucket, count_lines=False, expected=REQUESTS)
-    assert len(provider.drain()) == REQUESTS
+    assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
     assert sink.peak <= 16, f"peak concurrent PUTs {sink.peak} exceeded the default bound for {REQUESTS} queued logs"
     assert all(PER_REQUEST_KEY.match(put.target) for put in puts), [put.target for put in puts]
     assert frozenset(json.loads(put.body)["id"] for put in puts) == ids
@@ -161,7 +163,7 @@ def test_s3_v2_honors_configured_bound_and_env_backed_false_batch_flag(gateway: 
             key: Final = scenario.key(models=[model])
             ids: Final = _burst(candidate, model, key, marker)
             puts: Final = _collect(bucket, count_lines=False, expected=REQUESTS)
-    assert len(provider.drain()) == REQUESTS
+    assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
     assert sink.peak <= 4, f"peak concurrent PUTs {sink.peak} exceeded s3_max_concurrent_uploads=4"
     assert all(PER_REQUEST_KEY.match(put.target) for put in puts), [put.target for put in puts]
     assert frozenset(json.loads(put.body)["id"] for put in puts) == ids
@@ -181,7 +183,7 @@ def test_s3_v2_batch_file_upload_writes_one_jsonl_object_per_flush(gateway: Gate
             key: Final = scenario.key(models=[model])
             ids: Final = _burst(candidate, model, key, marker)
             puts: Final = _collect(bucket, count_lines=True, expected=REQUESTS)
-    assert len(provider.drain()) == REQUESTS
+    assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
     assert len(puts) <= 2, f"{len(puts)} PUTs for {REQUESTS} logs; batch mode must write one object per flush"
     assert all(BATCH_KEY.match(put.target) for put in puts), [put.target for put in puts]
     assert all(put.headers["content-type"] == "application/x-ndjson" for put in puts), [put.headers for put in puts]
@@ -209,7 +211,7 @@ def test_s3_v2_batch_file_upload_keeps_team_alias_prefix(gateway: Gateway, tmp_p
             key: Final = scenario.key(team_id=team, models=[model])
             ids: Final = _burst(candidate, model, key, marker)
             puts: Final = _collect(bucket, count_lines=True, expected=REQUESTS)
-    assert len(provider.drain()) == REQUESTS
+    assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
     assert len(puts) >= 1
     assert all(team_batch_key.match(put.target) for put in puts), [put.target for put in puts]
     lines: Final = tuple(line for put in puts for line in put.body.decode().splitlines())
@@ -302,7 +304,7 @@ def test_s3_v2_invalid_or_empty_bound_falls_back_to_sixteen(
                 )
             else:
                 assert "s3_max_concurrent_uploads" not in owned.log.read_text()
-    assert len(provider.drain()) == REQUESTS
+    assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
     assert sink.peak <= 16, f"peak concurrent PUTs {sink.peak} exceeded the fallback bound"
     assert frozenset(payload["id"] for payload in payloads) == ids
 
@@ -329,8 +331,8 @@ def test_s3_v2_sink_rejection_requeues_and_delivers_every_id_once(gateway: Gatew
             )
             readiness: Final = owned.gateway.client.get("/health/readiness")
             assert readiness.status_code == 200, readiness.text
-    assert len(provider.drain()) == REQUESTS
-    assert len(sink.store) == REQUESTS
+    assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
+    assert len(sink.objects()) == REQUESTS
     assert frozenset(payload["id"] for payload in payloads) == ids
 
 
@@ -350,7 +352,7 @@ def test_s3_v2_batch_retry_resends_identical_key_and_body(gateway: Gateway, tmp_
             ids: Final = _burst(candidate, model, key, marker)
             payloads: Final = collect_payloads(sink, REQUESTS, seconds=90)
     puts: Final = bucket.drain()
-    assert len(provider.drain()) == REQUESTS
+    assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
     by_target: Final = {}
     for put in puts:
         by_target.setdefault(put.target, set()).add(put.body)  # mutable-ok: grouping attempts seen so far per target
@@ -381,7 +383,7 @@ def test_s3_v2_unknown_model_rejection_keeps_other_requests_logging(gateway: Gat
             assert ghost.status_code in (400, 403, 404), ghost.text
             ids: Final = _burst(candidate, model, key, marker)
             payloads: Final = collect_payloads(sink, REQUESTS)
-    assert len(provider.drain()) == REQUESTS
+    assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
     assert ids <= frozenset(payload["id"] for payload in payloads)
     extras: Final = tuple(payload for payload in payloads if payload["id"] not in ids)
     assert all(payload["status"] == "failure" for payload in extras), extras
@@ -413,7 +415,7 @@ def test_s3_v2_batch_flag_ignored_when_s3_v2_is_cold_storage_logger(gateway: Gat
             assert response.status_code == 200, response.text
             request_id: Final = str(response.json()["id"])
             payloads: Final = collect_payloads(sink, 1)
-            assert all(PER_REQUEST_KEY.match(target) for target in sink.store), list(sink.store)
+            assert all(PER_REQUEST_KEY.match(target) for target in sink.objects()), list(sink.objects())
             eventually(
                 lambda: owned.log.read_text(),
                 lambda text: "s3_batch_file_upload is ignored because s3_v2 is the cold storage logger" in text,
@@ -421,7 +423,7 @@ def test_s3_v2_batch_flag_ignored_when_s3_v2_is_cold_storage_logger(gateway: Gat
             )
             spend: Final = eventually(
                 lambda: owned.gateway.request("GET", f"/spend/logs/ui/{request_id}"),
-                lambda reply: reply.status_code == 200 and bool(reply.json().get("messages")),
+                lambda reply: reply.status_code == 200 and bool((reply.json() or {}).get("messages")),
                 seconds=60,
             )
             assert spend.status_code == 200, spend.text
@@ -457,9 +459,9 @@ def test_s3_v2_identical_requests_land_distinct_objects(gateway: Gateway, tmp_pa
             with ThreadPoolExecutor(max_workers=16) as pool:
                 returned: Final = frozenset(pool.map(send, range(16)))
             payloads: Final = collect_payloads(sink, 16)
-    assert len(provider.drain()) == 16
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 16
     assert returned == {marker}, "the upstream echo keeps the same id for identical requests"
-    assert len(sink.store) == 16, "identical requests must still land as distinct objects"
+    assert len(sink.objects()) == 16, "identical requests must still land as distinct objects"
     assert all(payload["id"] == marker for payload in payloads)
 
 
@@ -479,9 +481,9 @@ def test_s3_v2_two_workers_bound_and_deliver_every_id(gateway: Gateway, tmp_path
             key: Final = scenario.key(models=[model])
             ids: Final = _burst(candidate, model, key, marker)
             payloads: Final = collect_payloads(sink, REQUESTS)
-    assert len(provider.drain()) == REQUESTS
+    assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
     assert sink.peak <= 32, f"peak concurrent PUTs {sink.peak} exceeded two workers at the default bound"
-    assert len(sink.store) == REQUESTS
+    assert len(sink.objects()) == REQUESTS
     assert frozenset(payload["id"] for payload in payloads) == ids
 
 
@@ -502,16 +504,13 @@ def test_s3_v2_slow_sink_never_duplicates_or_stalls_readiness(gateway: Gateway, 
             def delivered() -> int:
                 readiness: Final = candidate.client.get("/health/readiness")
                 assert readiness.status_code == 200, readiness.text
-                with sink.lock:
-                    return sum(len(body.splitlines()) for body in sink.store.values())
+                return sum(len(body.splitlines()) for body in sink.objects().values())
 
             eventually(delivered, lambda total: total >= REQUESTS, seconds=90)
-            payloads: Final = tuple(
-                json.loads(line) for body in tuple(sink.store.values()) for line in body.splitlines()
-            )
+            payloads: Final = sink.payloads()
     puts: Final = bucket.drain()
     targets: Final = tuple(put.target for put in puts)
-    assert len(provider.drain()) == REQUESTS
+    assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
     assert len(set(targets)) == len(targets), "the same object was PUT more than once"
     assert frozenset(payload["id"] for payload in payloads) == ids
     assert len(payloads) == REQUESTS
@@ -618,14 +617,9 @@ def test_s3_v2_sigterm_mid_burst_loses_only_inflight_without_duplicates(gateway:
         finally:
             owned.__exit__(None, None, None)
     answered: Final = frozenset(identity for identity, ok in results if ok)
-    landed: Final = frozenset(
-        payload["id"]
-        for body in tuple(sink.store.values())
-        for line in body.splitlines()
-        for payload in [json.loads(line)]
-    )
+    landed: Final = frozenset(payload["id"] for payload in sink.payloads())
     assert landed <= answered, (
         "a delivered object has no matching answered request; lost in-flight ids are expected, extras are not"
     )
-    targets: Final = tuple(sink.store.keys())
+    targets: Final = tuple(sink.objects())
     assert len(set(targets)) == len(targets), "the same object was PUT more than once"

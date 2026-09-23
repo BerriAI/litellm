@@ -41,7 +41,7 @@ def test_s3_v2_mixed_surface_burst_bounds_puts_one_object_per_response_id(gatewa
             key: Final = scenario.key(models=[openai_model, anthropic_model])
             answered: Final = mixed_burst(candidate, openai_model, anthropic_model, key, marker)
             payloads: Final = collect_payloads(sink, len(answered))
-            targets: Final = tuple(sink.store.keys())
+            targets: Final = tuple(sink.objects())
     assert len(provider.drain()) == 48
     assert sink.peak <= 16, f"peak concurrent PUTs {sink.peak} exceeded the default bound"
     assert all(PER_REQUEST_KEY.match(target) for target in targets), list(targets)
@@ -66,7 +66,7 @@ def test_s3_v2_mixed_surface_batch_writes_ndjson_lines_per_response_id(gateway: 
             key: Final = scenario.key(models=[openai_model, anthropic_model])
             answered: Final = mixed_burst(candidate, openai_model, anthropic_model, key, marker)
             payloads: Final = collect_payloads(sink, len(answered))
-            targets: Final = tuple(sink.store.keys())
+            targets: Final = tuple(sink.objects())
             puts: Final = bucket.drain()
     assert len(provider.drain()) == 48
     assert all(BATCH_KEY.match(target) for target in targets), list(targets)

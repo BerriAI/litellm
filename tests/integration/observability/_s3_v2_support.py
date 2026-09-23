@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import anthropic
@@ -56,6 +57,13 @@ class RecordingS3Sink:
         with self.lock:
             self.in_flight -= 1
         return Reply()
+
+    def objects(self) -> Mapping[str, bytes]:
+        with self.lock:
+            return MappingProxyType(dict(self.store))
+
+    def payloads(self) -> tuple[dict[str, JsonValue], ...]:
+        return tuple(object_value(json.loads(line)) for body in self.objects().values() for line in body.splitlines())
 
 
 def s3_config(
@@ -296,14 +304,10 @@ def collect_payloads(sink: RecordingS3Sink, count: int, seconds: float = 60) -> 
     """Wait until `count` stored payload lines exist, then return every stored payload object."""
 
     def delivered() -> int:
-        with sink.lock:
-            bodies: Final = tuple(sink.store.values())
-        return sum(len(body.splitlines()) for body in bodies)
+        return sum(len(body.splitlines()) for body in sink.objects().values())
 
     eventually(delivered, lambda total: total >= count, seconds=seconds)
-    with sink.lock:
-        stored: Final = tuple(sink.store.values())
-    return tuple(object_value(json.loads(line)) for body in stored for line in body.splitlines())
+    return sink.payloads()
 
 
 def mixed_burst(
