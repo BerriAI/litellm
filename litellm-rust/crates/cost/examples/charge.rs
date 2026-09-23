@@ -1,5 +1,6 @@
 use litellm_cost::non_token::{
-    ImageRates, ImageUsage, OcrRates, OcrUsage, calculate_image, calculate_ocr,
+    ImageRates, ImageUsage, OcrBatchRates, OcrRates, OcrUsage, VideoRates, calculate_image,
+    calculate_ocr, calculate_ocr_batch, calculate_video,
 };
 use litellm_cost::{
     Pricing, PromptConvention, Rate, Rates, Request, ServiceTier, ThresholdPolicy, Usage, compile,
@@ -67,4 +68,27 @@ fn main() {
     )
     .unwrap();
     println!("image={} ocr={}", image.total, ocr.total);
+    let video = calculate_video(
+        &VideoRates {
+            per_video_second: Rate::Missing,
+            per_second: Rate::Value(0.05),
+            resolution_rates: &[("1080p", Rate::Value(0.08))],
+        },
+        10.0,
+        Some("1080p"),
+    )
+    .unwrap();
+    let ocr_batch = calculate_ocr_batch(
+        Some(OcrBatchRates {
+            per_page_batch: Rate::Value(0.012),
+            per_page: Rate::Value(0.04),
+            per_annotation_page_batch: Rate::Missing,
+            per_annotation_page: Rate::Missing,
+        }),
+        None,
+        3,
+        0,
+    )
+    .unwrap();
+    println!("video={} ocr_batch={}", video.total, ocr_batch.total);
 }

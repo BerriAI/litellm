@@ -4,7 +4,7 @@ This crate calculates token and non-token charges from rates and usage supplied 
 
 Call `compile(&pricing)` once for an immutable plan, then `plan.calculate(&request)` for each supported request. `calculate(&pricing, &request)` compiles on each call. A successful result exposes pre-multiplier component costs, selected rates, the multiplier, and derived `input()`, `output()`, and `total()` values
 
-`non_token::calculate` totals priced units such as images, pixels, seconds, pages, requests, credits, and guardrail units. `non_token::calculate_image` selects the first available price from ordered pricing tables, with per-image rates ahead of per-pixel rates inside each table. `non_token::calculate_ocr_with_tables` selects each OCR rate from the first table that has it, then `non_token::calculate_ocr` prefers credit pricing when credits are present and otherwise prices pages and annotation pages. Unpriced OCR usage returns zero, as in Python. Invalid quantities and rates return errors
+`non_token::calculate` totals priced units such as images, pixels, seconds, pages, requests, credits, and guardrail units. `non_token::calculate_image` selects the first available price from ordered pricing tables, with per-image rates ahead of per-pixel rates inside each table. `non_token::calculate_ocr_with_tables` selects each OCR rate from the first table that has it, then `non_token::calculate_ocr` prefers credit pricing when credits are present and otherwise prices pages and annotation pages. `non_token::calculate_ocr_batch` uses deployment batch or standard rates for each page family, then published rates and the page rate as an annotation fallback. `non_token::calculate_video` selects a video-specific per-second rate, then a resolution rate, then the base per-second rate. Unpriced OCR and video usage returns zero, as in Python. Invalid quantities and rates return errors
 
 ## Python function map
 
@@ -15,6 +15,8 @@ The Rust module tree does not mirror Python's overall cost module tree. The Pyth
 | `litellm.litellm_core_utils.llm_cost_calc.utils.generic_cost_per_token` | `litellm_cost::calculate` | `test_llm_cost_calc_utils.py` | `calculation.rs`, `python_reference.tsv` |
 | `litellm.cost_calculator.default_image_cost_calculator` | `litellm_cost::non_token::calculate_image` | `test_cost_calculator.py::test_default_image_cost_calculator` | `python_cost_calculator.rs::default_image_cost_calculator_selects_first_priced_unit` |
 | `litellm.cost_calculator.ocr_cost` | `litellm_cost::non_token::calculate_ocr_with_tables` | `test_cost_calculator.py::test_ocr_cost_*` | `python_cost_calculator.rs::ocr_cost_*` |
+| `litellm.cost_calculator.ocr_batch_cost` | `litellm_cost::non_token::calculate_ocr_batch` | `litellm_core_utils/test_litellm_logging.py::test_ocr_only_deployment_pricing_reaches_batch_ocr_cost` | `python_cost_calculator.rs::ocr_batch_cost_*` |
+| `litellm.cost_calculator.default_video_cost_calculator` | `litellm_cost::non_token::calculate_video` | `test_video_generation.py::test_video_generation_cost_*` | `python_cost_calculator.rs::default_video_cost_calculator_*` |
 
 `cost_per_token`, `completion_cost`, `response_cost_calculator`, provider calculators, and Python's model lookup and response normalization have no Rust counterpart yet. The ported Rust cases use `rstest` and synthetic prices; they cover the corresponding Python tests' price selection and arithmetic, not their integration with Python model registration
 

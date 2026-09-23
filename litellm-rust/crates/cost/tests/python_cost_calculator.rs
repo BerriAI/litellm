@@ -1,6 +1,7 @@
 use litellm_cost::Rate;
 use litellm_cost::non_token::{
-    ImageRates, ImageUsage, OcrRates, OcrUsage, Unit, calculate_image, calculate_ocr_with_tables,
+    ImageRates, ImageUsage, OcrBatchRates, OcrRates, OcrUsage, Unit, VideoRates, calculate_image,
+    calculate_ocr_batch, calculate_ocr_with_tables, calculate_video,
 };
 use rstest::rstest;
 
@@ -120,4 +121,91 @@ fn default_image_cost_calculator_selects_first_priced_unit(
     let cost = calculate_image(&[rates], usage).unwrap();
     assert_eq!(cost.components[0].unit, unit);
     assert_eq!(cost.total, expected);
+}
+
+fn batch_rates(
+    page_batch: Rate,
+    page: Rate,
+    annotation_batch: Rate,
+    annotation: Rate,
+) -> OcrBatchRates {
+    OcrBatchRates {
+        per_page_batch: page_batch,
+        per_page: page,
+        per_annotation_page_batch: annotation_batch,
+        per_annotation_page: annotation,
+    }
+}
+
+#[rstest]
+#[case(
+    batch_rates(Rate::Value(0.0123), Rate::Value(0.0456), Rate::Missing, Rate::Missing),
+    batch_rates(
+        Rate::Value(0.003),
+        Rate::Value(0.01),
+        Rate::Value(0.007),
+        Rate::Value(0.02)
+    ),
+    3,
+    2,
+    0.0509
+)]
+#[case(
+    batch_rates(Rate::Missing, Rate::Value(0.04), Rate::Missing, Rate::Missing),
+    batch_rates(Rate::Value(0.003), Rate::Missing, Rate::Value(0.007), Rate::Missing),
+    3,
+    2,
+    0.134
+)]
+#[case(
+    batch_rates(Rate::Value(0.0), Rate::Value(0.04), Rate::Missing, Rate::Missing),
+    batch_rates(Rate::Value(0.003), Rate::Missing, Rate::Missing, Rate::Missing),
+    3,
+    2,
+    0.0
+)]
+fn ocr_batch_cost_selects_each_family_from_deployment_then_published(
+    #[case] deployment: OcrBatchRates,
+    #[case] published: OcrBatchRates,
+    #[case] pages: u64,
+    #[case] annotation_pages: u64,
+    #[case] expected: f64,
+) {
+    let cost =
+        calculate_ocr_batch(Some(deployment), Some(published), pages, annotation_pages).unwrap();
+    assert!((cost.total - expected).abs() < 1e-12);
+}
+
+#[rstest]
+#[case(None, None, 0.5)]
+#[case(Some("1080p"), None, 0.8)]
+#[case(Some(" 1080P "), None, 0.8)]
+#[case(Some("unknown"), None, 0.5)]
+#[case(Some("1080p"), Some(0.2), 2.0)]
+fn default_video_cost_calculator_selects_video_then_resolution_then_base_rate(
+    #[case] resolution: Option<&str>,
+    #[case] video_rate: Option<f64>,
+    #[case] expected: f64,
+) {
+    let rates = VideoRates {
+        per_video_second: video_rate.map_or(Rate::Missing, Rate::Value),
+        per_second: Rate::Value(0.05),
+        resolution_rates: &[("1080p", Rate::Value(0.08))],
+    };
+    let cost = calculate_video(&rates, 10.0, resolution).unwrap();
+    assert_eq!(cost.components[0].unit, Unit::Second);
+    assert!((cost.total - expected).abs() < 1e-12);
+}
+
+#[rstest]
+fn default_video_cost_calculator_returns_zero_for_known_model_without_a_rate() {
+    let rates = VideoRates {
+        per_video_second: Rate::Missing,
+        per_second: Rate::Missing,
+        resolution_rates: &[],
+    };
+    assert_eq!(
+        calculate_video(&rates, 5.0, Some("1080p")).unwrap().total,
+        0.0
+    );
 }

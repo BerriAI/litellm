@@ -66,6 +66,21 @@ pub struct OcrUsage {
     pub annotation_pages: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OcrBatchRates {
+    pub per_page_batch: Rate,
+    pub per_page: Rate,
+    pub per_annotation_page_batch: Rate,
+    pub per_annotation_page: Rate,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VideoRates<'a> {
+    pub per_video_second: Rate,
+    pub per_second: Rate,
+    pub resolution_rates: &'a [(&'a str, Rate)],
+}
+
 fn priced(rate: Rate) -> Option<f64> {
     match rate {
         Rate::Value(value) => Some(value),
@@ -185,5 +200,84 @@ pub fn calculate_ocr_with_tables(tables: &[OcrRates], usage: OcrUsage) -> Result
             .map_or(Rate::Missing, Rate::Value),
     };
     calculate_ocr(rates, usage)
+}
+
+pub fn calculate_ocr_batch(
+    deployment: Option<OcrBatchRates>,
+    published: Option<OcrBatchRates>,
+    pages: u64,
+    annotation_pages: u64,
+) -> Result<Cost, Error> {
+    let family_rate = |select: fn(OcrBatchRates) -> (Rate, Rate)| {
+        [deployment, published]
+            .into_iter()
+            .flatten()
+            .find_map(|rates| {
+                let (batch, standard) = select(rates);
+                priced(batch).or_else(|| priced(standard))
+            })
+    };
+    let page_rate = family_rate(|rates| (rates.per_page_batch, rates.per_page));
+    let annotation_rate =
+        family_rate(|rates| (rates.per_annotation_page_batch, rates.per_annotation_page))
+            .or(page_rate);
+    let charges: Vec<_> = [
+        page_rate.map(|rate| Charge {
+            unit: Unit::Page,
+            quantity: pages as f64,
+            rate,
+            units_per_rate: 1.0,
+        }),
+        annotation_rate.map(|rate| Charge {
+            unit: Unit::Page,
+            quantity: annotation_pages as f64,
+            rate,
+            units_per_rate: 1.0,
+        }),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    calculate(&charges)
+}
+
+pub fn calculate_video(
+    rates: &VideoRates<'_>,
+    duration_seconds: f64,
+    resolution: Option<&str>,
+) -> Result<Cost, Error> {
+    let resolution_rate = resolution.and_then(|value| {
+        let suffix: String = value
+            .trim()
+            .to_lowercase()
+            .chars()
+            .filter(|character| character.is_alphanumeric() || *character == '_')
+            .collect();
+        if suffix.is_empty() || suffix.len() > 24 {
+            return None;
+        }
+        rates
+            .resolution_rates
+            .iter()
+            .find(|(name, _)| *name == suffix)
+            .and_then(|(_, rate)| priced(*rate))
+    });
+    let rate = priced(rates.per_video_second)
+        .or(resolution_rate)
+        .or_else(|| priced(rates.per_second));
+    match rate {
+        Some(rate) => calculate(&[Charge {
+            unit: Unit::Second,
+            quantity: duration_seconds,
+            rate,
+            units_per_rate: 1.0,
+        }]),
+        None => {
+            if !duration_seconds.is_finite() || duration_seconds < 0.0 {
+                return Err(Error::InvalidQuantity);
+            }
+            calculate(&[])
+        }
+    }
 }
 use crate::Rate;
