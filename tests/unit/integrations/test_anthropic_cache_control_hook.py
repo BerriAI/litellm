@@ -4025,3 +4025,30 @@ async def test_anthropic_cache_control_hook_walks_back_off_a_thinking_only_turn(
         "content": [{"type": "text", "text": "a1", "cache_control": {"type": "ephemeral"}}],
     }
     assert marked[3] == {"role": "assistant", "content": [{"type": "thinking", "thinking": "t", "signature": "s"}]}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_two_points_stay_two_breakpoints(monkeypatch: pytest.MonkeyPatch):
+    """
+    The second point walks past the message the first one marked. Arriving on it,
+    finding it marked and dropping the point turns two configured breakpoints into one,
+    and the four exist so a prefix that stops matching at one can match at an earlier one.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "open"},
+            {"role": "assistant", "content": "ack"},
+            {"role": "user", "content": ""},
+        ],
+        [{"location": "message", "index": -1}, {"location": "message", "index": -2}],
+        monkeypatch,
+    )
+
+    assert marked == [
+        {"role": "user", "content": [{"type": "text", "text": "open", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "ack", "cache_control": {"type": "ephemeral"}}]},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "[System: Empty message content sanitised to satisfy protocol]"}],
+        },
+    ]
