@@ -104,11 +104,15 @@ def team_grants(
         team_soft_budget=team_object.soft_budget,
         team_model_max_budget=team_object.model_max_budget,
         team_spend=team_object.spend,
-        team_models=list(team_object.models),
+        team_models=list(team_object.models),  # mutable-ok: UserAPIKeyAuth declares a list field
         team_blocked=team_object.blocked,
-        team_metadata=dict(json_columns.metadata) if json_columns.metadata is not None else None,
+        team_metadata=(
+            dict(json_columns.metadata)
+            if json_columns.metadata is not None
+            else None  # mutable-ok: UserAPIKeyAuth declares a dict field
+        ),
         team_model_aliases=(
-            dict(json_columns.litellm_model_table.model_aliases)
+            dict(json_columns.litellm_model_table.model_aliases)  # mutable-ok: UserAPIKeyAuth declares a dict field
             if json_columns.litellm_model_table is not None
             and json_columns.litellm_model_table.model_aliases is not None
             else None

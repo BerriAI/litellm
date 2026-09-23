@@ -62,6 +62,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     _refresh_cached_team,
+    append_team_models,
     team_model_add,
     team_model_delete,
 )
@@ -962,7 +963,10 @@ async def patch_model(
                 str, get_utc_datetime()
             )  # mutable-ok: prisma update payload is dict-shaped
             async with _member_auto_router_write_slot(prisma_client, member_write=member_write) as table:
-                return await table.update(where={"model_id": model_id}, data=update_data)
+                return await table.update(
+                    where={"model_id": model_id},  # mutable-ok: prisma where clause
+                    data=update_data,
+                )
 
         # Handle team model updates with proper alias management
         updated_model: Final = await _update_team_model_in_db(
@@ -1241,6 +1245,8 @@ async def _add_team_model_to_db(
     - store the model in the db with the unique 'model_name'
     - add the public model name to the team's allowed models list
     """
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
     _team_id: Final = model_params.model_info.team_id
     if _team_id is None:
         return None
@@ -1268,13 +1274,14 @@ async def _add_team_model_to_db(
     )
 
     if original_model_name:
-        await team_model_add(
+        await append_team_models(
             data=TeamModelAddRequest(
                 team_id=_team_id,
                 models=[original_model_name],
             ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
     return model_response

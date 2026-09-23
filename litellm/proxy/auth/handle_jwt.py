@@ -1554,7 +1554,7 @@ class JWTAuthManager:
                             model=requested_model,
                             team_object=team_object,
                             llm_router=llm_router,
-                            team_model_aliases=dict(aliases)
+                            team_model_aliases=dict(aliases)  # mutable-ok: can_team_access_model takes a dict
                             if (aliases := team_model_aliases(team_object)) is not None
                             else None,
                         )
@@ -2093,7 +2093,7 @@ class JWTAuthManager:
                         model=requested_model,
                         team_object=team_object,
                         llm_router=llm_router,
-                        team_model_aliases=dict(aliases)
+                        team_model_aliases=dict(aliases)  # mutable-ok: can_team_access_model takes a dict
                         if (aliases := team_model_aliases(team_object)) is not None
                         else None,
                     )

@@ -1055,7 +1055,7 @@ class TestTeamModelSiblingRouting:
                     side_effect=mock_add_model_to_db,
                 ),
                 patch(
-                    "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add",
+                    "litellm.proxy.management_endpoints.model_management_endpoints.append_team_models",
                     mock_team_model_add,
                 ),
             ):
@@ -4592,7 +4592,7 @@ class TestTeamMemberAutoRouterWrites:
                 ),
             ),
             patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add", new=AsyncMock()
+                "litellm.proxy.management_endpoints.model_management_endpoints.append_team_models", new=AsyncMock()
             ) as appended,  # test-quality-ok: [TQ008] persistence boundary; the appended scope is asserted
         ):
             if access != "allowed":

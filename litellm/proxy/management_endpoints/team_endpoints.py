@@ -425,6 +425,58 @@ async def _refresh_cached_team(
     )
 
 
+async def append_team_models(
+    *,
+    data: TeamModelAddRequest,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> "prisma_models.LiteLLM_TeamTable":
+    # Atomic array append with dedup at the database level so concurrent
+    # BYOK model creates don't overwrite each other's team.models entries.
+    # When the team currently has models=[] (unrestricted access), the
+    # CASE expression inserts the 'all-proxy-models' sentinel first.
+    models_to_add: Final = list(data.models)
+    await prisma_client.db.execute_raw(
+        'UPDATE "LiteLLM_TeamTable" '
+        "SET models = ("
+        "  SELECT ARRAY(SELECT DISTINCT unnest("
+        "    CASE WHEN cardinality(COALESCE(models, ARRAY[]::text[])) = 0 "
+        "         THEN ARRAY['all-proxy-models']::text[] "
+        "         ELSE models "
+        "    END || $1::text[]"
+        "  ))"
+        ") "
+        "WHERE team_id = $2",
+        models_to_add,
+        data.team_id,
+    )
+    # Re-fetch via update (write-routed) instead of find_unique (read-routed)
+    # to avoid returning stale data from a read replica. The models column
+    # was already set by execute_raw above; this just retrieves the row from
+    # the writer and lets Prisma bump updated_at.
+    # `include` mirrors the relations the auth path consumes off the cached
+    # team object so that `_refresh_cached_team` doesn't null them out.
+    updated_team: Final = await _team_db(prisma_client).update(
+        where={"team_id": data.team_id},
+        data={"updated_at": datetime.now(timezone.utc)},
+        include={"litellm_model_table": True, "object_permission": True},  # mutable-ok: prisma include clause
+    )
+    if updated_team is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={data.team_id}"},
+        )
+
+    await _refresh_cached_team(
+        team_row=updated_team,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    return updated_team
+
+
 async def _verify_team_access(
     team_obj: LiteLLM_TeamTable,
     user_api_key_dict: UserAPIKeyAuth,
