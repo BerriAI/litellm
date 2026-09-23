@@ -1206,6 +1206,39 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
     assert control["key"] == "eu.amazon.nova-pro-v1:0"
 
 
+@pytest.mark.parametrize(
+    "bare_key",
+    [
+        "anthropic.claude-fable-5",
+        "anthropic.claude-fable-5-1",
+        "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic.claude-opus-4-5-20251101-v1:0",
+        "anthropic.claude-opus-4-6-v1",
+        "anthropic.claude-opus-4-7",
+        "anthropic.claude-opus-4-8",
+        "anthropic.claude-opus-5",
+        "anthropic.claude-opus-5-5",
+        "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "anthropic.claude-sonnet-4-6",
+        "anthropic.claude-sonnet-5",
+    ],
+)
+def test_bedrock_bare_claude_id_is_priced_in_region(local_model_cost_map, bare_key):
+    """A bare Bedrock Claude id is an in-region invocation, so it carries the same
+    in-region rate as its us. inference profile, not the cheaper global. rate."""
+    bare = litellm.model_cost[bare_key]
+    us = litellm.model_cost[f"us.{bare_key}"]
+    global_ = litellm.model_cost[f"global.{bare_key}"]
+    for field in (
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cache_creation_input_token_cost",
+        "cache_read_input_token_cost",
+    ):
+        assert bare[field] == us[field], field
+    assert bare["input_cost_per_token"] > global_["input_cost_per_token"]
+
+
 def test_get_model_info_bedrock_mantle_region_prefix_falls_back_to_the_mantle_row(local_model_cost_map):
     """A Mantle deployment name may carry the region as a prefix (bedrock_mantle/us-east-2/<model>).
     That name has no cost row of its own, so pricing must fall through to the region-free
