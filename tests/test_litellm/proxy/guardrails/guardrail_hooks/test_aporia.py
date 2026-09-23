@@ -68,6 +68,7 @@ async def test_an_intervention_is_not_forwarded_unchanged(action: str):
 @pytest.mark.parametrize(
     "body",
     [{"action": "BLOCK"}, {"action": "blocked"}, {"action": ""}, {"action": None}, {}],
+    ids=["BLOCK", "blocked", "empty", "null", "missing"],
 )
 async def test_a_verdict_it_cannot_read_is_not_taken_for_permission(body: dict[str, str | None]):
     guardrail, _ = _guardrail(body)
