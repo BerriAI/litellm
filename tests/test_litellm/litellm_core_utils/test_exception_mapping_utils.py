@@ -1278,7 +1278,7 @@ def test_bedrock_500_preserves_provider_response_headers():
             "bedrock",
             400,
             '{"message":"Could not process image"}',
-            litellm.InternalServerError,
+            litellm.BadRequestError,
         ),
     ],
 )
@@ -1309,6 +1309,41 @@ def test_bedrock_classified_errors_preserve_provider_response_headers(
         )
 
     assert exc_info.value.response.headers["x-amzn-requestid"] == "req-classified"
+
+
+@pytest.mark.parametrize(
+    "status_code, expected_exception",
+    [
+        (400, litellm.BadRequestError),
+        (503, litellm.ServiceUnavailableError),
+        (500, litellm.InternalServerError),
+    ],
+)
+def test_bedrock_unprocessable_image_keeps_provider_status_code(status_code, expected_exception):
+    """An unprocessable image maps to the status Bedrock sent, so the 400 it returns stays a client error."""
+    provider_message = '{"message":"The model returned the following errors: Could not process image"}'
+    provider_response = httpx.Response(
+        status_code=status_code,
+        text=provider_message,
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+    original_exception = BedrockError(
+        status_code=status_code,
+        message=provider_message,
+        headers=provider_response.headers,
+        response=provider_response,
+    )
+
+    with pytest.raises(expected_exception) as exc_info:
+        exception_type(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.status_code == status_code
 
 
 @pytest.mark.parametrize(
