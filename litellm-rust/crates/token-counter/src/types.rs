@@ -147,15 +147,28 @@ pub(crate) struct ToolCall {
     pub(crate) function: ToolCallFunction,
 }
 
+/// Python runs `str(function.get("arguments", ""))`: a missing key counts as
+/// empty, but an explicit null counts as the string "None". `serde(default)`
+/// keeps a missing key at `None`, and the deserializer turns an explicit null
+/// into "None" so the counter sees what Python counts.
+fn explicit_null_arguments_as_none<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    match Option::<String>::deserialize(deserializer)? {
+        Some(arguments) => Ok(Some(arguments)),
+        None => Ok(Some(String::from("None"))),
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub(crate) struct ToolCallFunction {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "explicit_null_arguments_as_none")]
     pub(crate) arguments: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub(crate) struct LegacyFunctionCall {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "explicit_null_arguments_as_none")]
     pub(crate) arguments: Option<String>,
 }
 

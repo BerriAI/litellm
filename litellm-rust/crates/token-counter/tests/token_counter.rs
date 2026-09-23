@@ -80,6 +80,17 @@ mod json {
     const ASSISTANT_CONTENT_WITH_TOOL_CALL: &str = r#"{"model":"claude-sonnet-4-5","messages":[
   {"role":"assistant","content":"calling","tool_calls":[{"id":"1","type":"function","function":{"name":"get_weather","arguments":"{\"city\": \"Paris, France\"}"}}]}]}"#;
 
+    const NULL_TOOL_CALL_ARGUMENTS: &str = r#"{"model":"claude-sonnet-4-5","messages":[
+  {"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"f","arguments":null}}]},
+  {"role":"tool","tool_call_id":"1","content":"x"}]}"#;
+
+    const MISSING_TOOL_CALL_ARGUMENTS: &str = r#"{"model":"claude-sonnet-4-5","messages":[
+  {"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"f"}}]},
+  {"role":"tool","tool_call_id":"1","content":"x"}]}"#;
+
+    const LEGACY_NULL_FUNCTION_CALL_ARGUMENTS: &str = r#"{"model":"claude-sonnet-4-5","messages":[
+  {"role":"assistant","function_call":{"name":"f","arguments":null}}]}"#;
+
     fn assert_count_request_matches_python_token_counter(
         load: JsonLoader,
         body: &str,
@@ -167,6 +178,9 @@ mod json {
             #[case::tool_calls_and_tool_result(super::TOOL_CALLS_AND_TOOL_RESULT, 24)]
             #[case::legacy_function_call(super::LEGACY_FUNCTION_CALL, 14)]
             #[case::assistant_content_with_tool_call(super::ASSISTANT_CONTENT_WITH_TOOL_CALL, 16)]
+            #[case::null_tool_call_arguments_count_as_none(super::NULL_TOOL_CALL_ARGUMENTS, 14)]
+            #[case::missing_tool_call_arguments_count_as_empty(super::MISSING_TOOL_CALL_ARGUMENTS, 13)]
+            #[case::legacy_null_function_call_arguments_count_as_none(super::LEGACY_NULL_FUNCTION_CALL_ARGUMENTS, 8)]
             fn count_request_matches_python_token_counter(
                 #[case] body: &str,
                 #[case] expected: usize,
