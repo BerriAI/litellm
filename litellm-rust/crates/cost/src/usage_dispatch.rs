@@ -43,7 +43,8 @@ fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
         (details, read, creation) => {
             let details = details.unwrap_or_default();
             let cache_write_tokens = creation
-                .or(details.cache_write_tokens)
+                .filter(|tokens| *tokens > 0)
+                .or(details.cache_write_tokens.filter(|tokens| *tokens > 0))
                 .or(details.cache_creation_tokens)
                 .or(details.cache_creation_input_tokens);
             Some(PromptTokenDetails {

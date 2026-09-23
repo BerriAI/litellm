@@ -33,6 +33,11 @@ pub struct PromptTokenDetails {
     pub cached_tokens_details: Option<CachedTokenDetails>,
     pub web_search_requests: Option<u64>,
     pub google_maps_grounding_requests: Option<u64>,
+    pub character_count: Option<u64>,
+    pub image_count: Option<u64>,
+    pub video_length_seconds: Option<f64>,
+    pub audio_length_seconds: Option<f64>,
+    pub query_count: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]

@@ -9,6 +9,7 @@ use litellm_cost::custom_pricing::{
     normalize_cache_usage,
 };
 use litellm_cost::gemini_cost::cost_per_web_search_request;
+use litellm_cost::generic_usage::parse_prompt_tokens_details;
 use litellm_cost::guardrail_cost::bedrock_guardrail_cost;
 use litellm_cost::non_token::{
     ImageRates, ImageUsage, OcrBatchRates, OcrRates, OcrUsage, VideoRates, calculate_image,
@@ -318,4 +319,25 @@ fn main() {
         }),
     );
     println!("gemini_search={search_cost:.2}");
+    let parsed = parse_prompt_tokens_details(
+        &get_usage_object(&json!({
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 100,
+                "total_tokens": 1100,
+                "prompt_tokens_details": {
+                    "cached_tokens": 200,
+                    "cached_tokens_details": {"audio_tokens": 80, "text_tokens": 90},
+                    "text_tokens": 500,
+                    "audio_tokens": 250
+                }
+            }
+        }))
+        .unwrap()
+        .unwrap(),
+    );
+    println!(
+        "parsed_input_text={} audio={} cached_audio={}",
+        parsed.text_tokens, parsed.audio_tokens, parsed.cache_hit_audio_tokens
+    );
 }
