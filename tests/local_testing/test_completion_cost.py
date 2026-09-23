@@ -351,7 +351,7 @@ def test_dalle_3_azure_cost_tracking():
         ],
     )
     response.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    response._hidden_params = {"model": "dall-e-3", "model_id": None}
+    response._hidden_params = {"model": "dall-e-3", "custom_llm_provider": "azure", "model_id": None}
     print(f"response hidden params: {response._hidden_params}")
     cost = litellm.completion_cost(
         completion_response=response, call_type="image_generation"

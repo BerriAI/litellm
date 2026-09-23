@@ -11845,6 +11845,9 @@
         "supports_reasoning": true,
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-northeast-1/minimax.minimax-m2.1": {
@@ -11858,6 +11861,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-northeast-1/minimax.minimax-m2.5": {
@@ -11872,6 +11878,9 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/ap-northeast-1/moonshotai.kimi-k2-thinking": {
@@ -11897,6 +11906,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-northeast-1/qwen.qwen3-coder-next": {
@@ -11910,6 +11921,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/moonshotai.kimi-k2-thinking": {
@@ -11937,7 +11951,9 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true
     },
     "bedrock/ap-south-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 3.18e-06,
@@ -11969,6 +11985,9 @@
         "supports_reasoning": true,
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-south-1/minimax.minimax-m2.1": {
@@ -11982,6 +12001,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-south-1/minimax.minimax-m2.5": {
@@ -11996,6 +12018,9 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/ap-south-1/moonshotai.kimi-k2-thinking": {
@@ -12021,6 +12046,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-south-1/qwen.qwen3-coder-next": {
@@ -12034,6 +12061,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-southeast-2/minimax.minimax-m2.5": {
@@ -12048,6 +12078,9 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "output_cost_per_token": 1.236e-06
     },
     "bedrock/ap-southeast-3/deepseek.v3.2": {
@@ -12148,6 +12181,9 @@
         "supports_reasoning": true,
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-north-1/minimax.minimax-m2.1": {
@@ -12161,6 +12197,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-north-1/minimax.minimax-m2.5": {
@@ -12175,6 +12214,9 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/eu-north-1/moonshotai.kimi-k2.5": {
@@ -12189,6 +12231,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-central-1/1-month-commitment/anthropic.claude-instant-v1": {
@@ -12289,6 +12333,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-central-1/minimax.minimax-m2.5": {
@@ -12303,6 +12350,9 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/eu-central-1/qwen.qwen3-coder-next": {
@@ -12316,6 +12366,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-west-1/meta.llama3-70b-instruct-v1:0": {
@@ -12347,6 +12400,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-west-1/minimax.minimax-m2.5": {
@@ -12361,6 +12417,9 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/eu-west-1/qwen.qwen3-coder-next": {
@@ -12374,6 +12433,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-west-2/meta.llama3-70b-instruct-v1:0": {
@@ -12405,6 +12467,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-west-2/minimax.minimax-m2.5": {
@@ -12419,6 +12484,9 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "output_cost_per_token": 1.86e-06
     },
     "bedrock/eu-west-2/nvidia.nemotron-super-3-120b": {
@@ -12449,6 +12517,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-west-3/mistral.mistral-7b-instruct-v0:2": {
@@ -12492,6 +12563,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-south-1/minimax.minimax-m2.5": {
@@ -12506,6 +12580,9 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/eu-south-1/qwen.qwen3-coder-next": {
@@ -12519,6 +12596,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0": {
@@ -12569,6 +12649,9 @@
         "supports_reasoning": true,
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/sa-east-1/minimax.minimax-m2.1": {
@@ -12582,6 +12665,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/sa-east-1/minimax.minimax-m2.5": {
@@ -12596,6 +12682,9 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/sa-east-1/moonshotai.kimi-k2-thinking": {
@@ -12621,6 +12710,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/sa-east-1/qwen.qwen3-coder-next": {
@@ -12634,6 +12725,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-1/1-month-commitment/anthropic.claude-instant-v1": {
@@ -12784,6 +12878,9 @@
         "supports_reasoning": true,
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-1/minimax.minimax-m2.1": {
@@ -12797,6 +12894,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-1/minimax.minimax-m2.5": {
@@ -12810,6 +12910,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-1/moonshotai.kimi-k2-thinking": {
@@ -12835,6 +12938,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-1/qwen.qwen3-coder-next": {
@@ -12848,6 +12953,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-2/deepseek.v3.2": {
@@ -12862,6 +12970,9 @@
         "supports_reasoning": true,
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-2/minimax.minimax-m2.1": {
@@ -12875,6 +12986,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-2/minimax.minimax-m2.5": {
@@ -12889,6 +13003,9 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "output_cost_per_token": 1.2e-06
     },
     "bedrock/us-east-2/moonshotai.kimi-k2-thinking": {
@@ -12914,6 +13031,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-2/qwen.qwen3-coder-next": {
@@ -12927,6 +13046,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-gov-east-1/amazon.nova-pro-v1:0": {
@@ -13385,6 +13507,9 @@
         "supports_reasoning": true,
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-west-2/minimax.minimax-m2.1": {
@@ -13398,6 +13523,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-west-2/minimax.minimax-m2.5": {
@@ -13411,6 +13539,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-west-2/moonshotai.kimi-k2-thinking": {
@@ -13436,6 +13567,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-west-2/qwen.qwen3-coder-next": {
@@ -13449,6 +13582,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0": {
@@ -42315,7 +42451,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
         "supports_native_structured_output": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "bedrock/ap-south-1/qwen.qwen3-next-80b-a3b": {
         "input_cost_per_token": 1.8e-07,
@@ -42328,7 +42467,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
         "supports_native_structured_output": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "bedrock/ap-southeast-2/qwen.qwen3-next-80b-a3b": {
         "input_cost_per_token": 1.545e-07,
@@ -42341,7 +42483,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
         "supports_native_structured_output": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "bedrock/eu-west-1/qwen.qwen3-next-80b-a3b": {
         "input_cost_per_token": 1.8e-07,
@@ -42354,7 +42499,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
         "supports_native_structured_output": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "bedrock/eu-west-2/qwen.qwen3-next-80b-a3b": {
         "input_cost_per_token": 2.3e-07,
@@ -42367,7 +42515,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
         "supports_native_structured_output": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "bedrock/sa-east-1/qwen.qwen3-next-80b-a3b": {
         "input_cost_per_token": 1.8e-07,
@@ -42380,7 +42531,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
         "supports_native_structured_output": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "qwen.qwen3-vl-235b-a22b": {
         "input_cost_per_token": 5.3e-07,
@@ -44718,7 +44872,10 @@
         "supports_function_calling": true,
         "supports_native_structured_output": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "us-gov.nvidia.nemotron-nano-12b-v2": {
         "input_cost_per_token": 2.4e-07,
@@ -44729,7 +44886,10 @@
         "mode": "chat",
         "output_cost_per_token": 7.2e-07,
         "supports_system_messages": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_response_schema": true
     },
     "us-gov.nvidia.nemotron-nano-9b-v2": {
         "input_cost_per_token": 7.2e-08,
@@ -44739,7 +44899,11 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 2.76e-07,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "us-gov.nvidia.nemotron-super-3-120b": {
         "input_cost_per_token": 1.8e-07,
@@ -44753,7 +44917,10 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "us-gov.openai.gpt-oss-20b-1:0": {
         "input_cost_per_token": 8.4e-08,
@@ -44999,7 +45166,10 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_native_structured_output": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "eu.deepseek.v3.2": {
         "input_cost_per_token": 7.4e-07,
@@ -45012,7 +45182,10 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_native_structured_output": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "us.meta.llama3-1-405b-instruct-v1:0": {
         "input_cost_per_token": 5.32e-06,
@@ -55766,6 +55939,9 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-west-2/zai.glm-5": {
@@ -55781,6 +55957,9 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0": {
@@ -61005,7 +61184,10 @@
         "supports_function_calling": true,
         "supports_native_structured_output": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "bedrock/us-gov-west-1/nvidia.nemotron-nano-12b-v2": {
         "input_cost_per_token": 2.4e-07,
@@ -61016,7 +61198,10 @@
         "mode": "chat",
         "output_cost_per_token": 7.2e-07,
         "supports_system_messages": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_response_schema": true
     },
     "bedrock/us-gov-west-1/nvidia.nemotron-nano-9b-v2": {
         "input_cost_per_token": 7.2e-08,
@@ -61026,7 +61211,11 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 2.76e-07,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "bedrock/us-gov-west-1/nvidia.nemotron-super-3-120b": {
         "input_cost_per_token": 1.8e-07,
@@ -61040,7 +61229,10 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "bedrock/us-gov-west-1/openai.gpt-oss-20b-1:0": {
         "input_cost_per_token": 8.4e-08,
@@ -61246,7 +61438,10 @@
         "supports_function_calling": true,
         "supports_native_structured_output": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "bedrock/us-gov-east-1/nvidia.nemotron-nano-12b-v2": {
         "input_cost_per_token": 2.4e-07,
@@ -61257,7 +61452,10 @@
         "mode": "chat",
         "output_cost_per_token": 7.2e-07,
         "supports_system_messages": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_response_schema": true
     },
     "bedrock/us-gov-east-1/nvidia.nemotron-nano-9b-v2": {
         "input_cost_per_token": 7.2e-08,
@@ -61267,7 +61465,11 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 2.76e-07,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "bedrock/us-gov-east-1/nvidia.nemotron-super-3-120b": {
         "input_cost_per_token": 1.8e-07,
@@ -61281,7 +61483,10 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "bedrock/us-gov-east-1/openai.gpt-oss-20b-1:0": {
         "input_cost_per_token": 8.4e-08,
