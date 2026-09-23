@@ -5544,7 +5544,9 @@ def _team_member_max_budget_alert_check(
         per_key_cfg=raw_config if isinstance(raw_config, Mapping) else None,
     )
     alert_email_config: Final = {
-        pct: emails for pct, emails in (merged_config or {}).items() if pct.isdigit() and 1 <= int(pct) <= 100
+        pct: emails
+        for pct, emails in (merged_config or {}).items()
+        if pct.isdigit() and len(pct) <= 3 and 1 <= int(pct) <= 100
     }
     if not alert_email_config or spend <= 0:
         return

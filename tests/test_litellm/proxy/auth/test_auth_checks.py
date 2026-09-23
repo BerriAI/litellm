@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 import time
 from collections.abc import Mapping
 from types import SimpleNamespace
@@ -3399,7 +3400,14 @@ async def test_team_member_max_budget_alert_check_drops_thresholds_outside_1_to_
     _team_member_max_budget_alert_check(
         team_id="team-1",
         team_alias="platform",
-        team_metadata={"team_member_max_budget_alert_emails": {"0": ["a@co.com"], "50": [], "150": ["b@co.com"]}},
+        team_metadata={
+            "team_member_max_budget_alert_emails": {
+                "0": ["a@co.com"],
+                "50": [],
+                "150": ["b@co.com"],
+                "1" * (sys.int_info.default_max_str_digits + 1): ["c@co.com"],
+            }
+        },
         organization_id="org-1",
         user_id="user-1",
         user_email="member@co.com",
