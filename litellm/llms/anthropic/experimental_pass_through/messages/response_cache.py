@@ -1,5 +1,5 @@
 import re
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -36,10 +36,12 @@ class AnthropicMessagesStreamCacheWriter:
     def __init__(
         self,
         stream: AsyncIterator[bytes | str],
-        caching_handler: "LLMCachingHandler",
+        caching_handler: "LLMCachingHandler | None" = None,
+        native_store: Callable[[Mapping[str, object]], Awaitable[None]] | None = None,
     ) -> None:
         self.stream = stream
         self.caching_handler = caching_handler
+        self.native_store = native_store
         self.collected_chunks: list[bytes] = []  # mutable-ok: rebuilding a tuple per SSE chunk is quadratic
         self.persisted = False
         self._hidden_params: dict[str, object] = dict(  # mutable-ok: callers stamp cache_key in here
@@ -66,12 +68,24 @@ class AnthropicMessagesStreamCacheWriter:
         await aclose_if_supported(self.stream)
 
     async def _persist(self) -> None:
-        if self.persisted or litellm.cache is None:
+        if self.persisted:
             return
         collected_stream: Final = b"".join(self.collected_chunks)
         if not _is_message_stop_chunk(collected_stream) or _is_provider_error_chunk(collected_stream):
             return
         self.persisted = True
+
+        if self.native_store is not None:
+            try:
+                native_events: Final = _split_sse_events(collected_stream.decode("utf-8"))
+                await self.native_store({CACHED_STREAM_EVENTS_KEY: native_events})
+            except Exception as error:  # noqa: BLE001  # a cache write must never surface as a client-visible stream error
+                verbose_logger.exception("Anthropic Messages stream cache write failed: %s", error)
+            return
+
+        if litellm.cache is None:
+            return
+        assert self.caching_handler is not None
 
         if not self.caching_handler._should_store_result_in_cache(
             original_function=self.caching_handler.original_function,

@@ -5,7 +5,8 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.caching.caching import Cache, LiteLLMCacheType
+from litellm._logging import trace_id_var
+from litellm.caching.caching import Cache, CacheMode, LiteLLMCacheType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.anthropic.experimental_pass_through.messages import handler as python_messages_handler
 from litellm.rust_bridge.catalog import CacheRule
@@ -414,7 +415,10 @@ async def test_native_messages_retries_invalid_thinking_signature_with_clean_his
     messages_server.expected_requests = 2
     messages_server.enqueue(
         ResponseSpec(
-            body={"type": "error", "error": {"type": "invalid_request_error", "message": "Invalid signature in thinking block"}},
+            body={
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "Invalid signature in thinking block"},
+            },
             status=400,
         )
     )
@@ -436,7 +440,8 @@ async def test_native_messages_retries_invalid_thinking_signature_with_clean_his
 
     assert response["content"] == MESSAGES_RESPONSE["content"]
     assert [block["type"] for block in messages_server.requests[0].body["messages"][0]["content"]] == [
-        "thinking", "text"
+        "thinking",
+        "text",
     ]
     assert messages_server.requests[1].body["messages"][0]["content"] == [{"type": "text", "text": "answer"}]
     assert len(recorder.wait_for("log_pre_api_call")) == 1
@@ -478,6 +483,12 @@ async def test_native_messages_share_the_configured_response_cache(
             rules=(CacheRule(Rollout.RUST_OPT_OUT, backends=frozenset({LiteLLMCacheType.LOCAL})),),
         )
         assert cache._native_cache is not None  # pyright: ignore[reportPrivateUsage]  # confirm the selected backend
+
+        async def unexpected_python_cache(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("native inference accessed the Python cache facade")
+
+        monkeypatch.setattr(cache, "async_get_cache", unexpected_python_cache)
+        monkeypatch.setattr(cache, "async_add_cache", unexpected_python_cache)
     monkeypatch.setattr(litellm, "cache", cache)
 
     first: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server))
@@ -489,10 +500,78 @@ async def test_native_messages_share_the_configured_response_cache(
 
 
 @pytest.mark.asyncio
-async def test_native_messages_no_cache_replaces_stored_response(
+async def test_native_cache_hit_runs_success_callbacks_without_replaying_inference(
     messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    await drain_logging()
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    cache._native_cache = resolve_response_cache(  # pyright: ignore[reportPrivateUsage]  # configure native storage for inference
+        cache,
+        rules=(CacheRule(Rollout.RUST_OPT_OUT, backends=frozenset({LiteLLMCacheType.LOCAL})),),
+    )
+    assert cache._native_cache is not None  # pyright: ignore[reportPrivateUsage]  # require the configured backend
+    monkeypatch.setattr(litellm, "cache", cache)
+    recorder: Final = RecordingLogger()
+    kwargs: Final = arguments(messages_server, callbacks=[recorder], litellm_trace_id="cache-child")
+    token: Final = trace_id_var.set("cache-hit-parent")
+
+    try:
+        first: Final = await litellm.anthropic.messages.acreate(**kwargs)
+        await asyncio.sleep(0.05)
+        second: Final = await litellm.anthropic.messages.acreate(**kwargs)
+        successes: Final = await recorder.wait_for_async("async_log_success_event", count=2)
+
+        assert first == second
+        assert_served_natively(messages_server)
+        assert len(successes) == 2
+        assert successes[1].kwargs["cache_hit"] is True
+        assert trace_id_var.get() == "cache-hit-parent"
+    finally:
+        trace_id_var.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_native_cache_hit_runs_deployment_hook_once_per_call(
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    cache._native_cache = resolve_response_cache(  # pyright: ignore[reportPrivateUsage]  # configure native storage for the cache hit
+        cache,
+        rules=(CacheRule(Rollout.RUST_OPT_OUT, backends=frozenset({LiteLLMCacheType.LOCAL})),),
+    )
+    assert cache._native_cache is not None  # pyright: ignore[reportPrivateUsage]  # require native storage
+    events: Final = []
+
+    class Deployment(CustomLogger):
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            events.append("deployment")
+            return kwargs
+
+    monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(litellm, "callbacks", [Deployment()])
+
+    first: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server))
+    await asyncio.sleep(0.05)
+    second: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server))
+
+    assert first == second
+    assert_served_natively(messages_server)
+    assert events == ["deployment", "deployment"]
+
+
+@pytest.mark.parametrize("native_cache", (False, True))
+@pytest.mark.asyncio
+async def test_native_messages_no_cache_replaces_stored_response(
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, native_cache: bool
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    if native_cache:
+        cache._native_cache = resolve_response_cache(  # pyright: ignore[reportPrivateUsage]  # exercise native cache directives
+            cache,
+            rules=(CacheRule(Rollout.RUST_OPT_OUT, backends=frozenset({LiteLLMCacheType.LOCAL})),),
+        )
+        assert cache._native_cache is not None  # pyright: ignore[reportPrivateUsage]  # require the configured backend
+    monkeypatch.setattr(litellm, "cache", cache)
     messages_server.expected_requests = 2
     replacement: Final = {
         **MESSAGES_RESPONSE,
@@ -504,15 +583,46 @@ async def test_native_messages_no_cache_replaces_stored_response(
 
     first: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server))
     await asyncio.sleep(0.05)
-    refreshed: Final = await litellm.anthropic.messages.acreate(
-        **arguments(messages_server, cache={"no-cache": True})
-    )
+    refreshed: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server, cache={"no-cache": True}))
     await asyncio.sleep(0.05)
     cached: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server))
 
     assert first["id"] != refreshed["id"]
     assert cached == refreshed
     assert len(messages_server.requests) == 2
+
+
+@pytest.mark.parametrize(
+    ("mode", "control", "requests"),
+    (
+        (CacheMode.default_on, {"no-store": True}, 2),
+        (CacheMode.default_off, {}, 2),
+        (CacheMode.default_off, {"use-cache": True}, 1),
+    ),
+)
+@pytest.mark.asyncio
+async def test_native_cache_honors_store_and_opt_in_policy(
+    messages_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: CacheMode,
+    control: dict[str, bool],
+    requests: int,
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, mode=mode)
+    cache._native_cache = resolve_response_cache(  # pyright: ignore[reportPrivateUsage]  # configure native cache policy
+        cache,
+        rules=(CacheRule(Rollout.RUST_OPT_OUT, backends=frozenset({LiteLLMCacheType.LOCAL})),),
+    )
+    assert cache._native_cache is not None  # pyright: ignore[reportPrivateUsage]  # require native storage
+    monkeypatch.setattr(litellm, "cache", cache)
+    messages_server.expected_requests = requests
+    kwargs: Final = arguments(messages_server, **({"cache": control} if control else {}))
+
+    await litellm.anthropic.messages.acreate(**kwargs)
+    await asyncio.sleep(0.05)
+    await litellm.anthropic.messages.acreate(**kwargs)
+
+    assert len(messages_server.requests) == requests
 
 
 @pytest.mark.parametrize("native_cache", (False, True))
@@ -527,6 +637,12 @@ async def test_native_messages_stream_is_replayed_from_the_configured_cache(
             rules=(CacheRule(Rollout.RUST_OPT_OUT, backends=frozenset({LiteLLMCacheType.LOCAL})),),
         )
         assert cache._native_cache is not None  # pyright: ignore[reportPrivateUsage]  # confirm the selected backend
+
+        async def unexpected_python_cache(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("native inference accessed the Python cache facade")
+
+        monkeypatch.setattr(cache, "async_get_cache", unexpected_python_cache)
+        monkeypatch.setattr(cache, "async_add_cache", unexpected_python_cache)
     monkeypatch.setattr(litellm, "cache", cache)
     messages_server.enqueue(STREAM)
 
@@ -538,6 +654,57 @@ async def test_native_messages_stream_is_replayed_from_the_configured_cache(
     assert first == second == sse_payload()
     assert second_stream._hidden_params["cache_hit"] is True
     assert_served_natively(messages_server)
+
+
+@pytest.mark.asyncio
+async def test_abandoned_native_cached_stream_does_not_store_partial_events(
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    cache._native_cache = resolve_response_cache(  # pyright: ignore[reportPrivateUsage]  # configure the native stream cache
+        cache,
+        rules=(CacheRule(Rollout.RUST_OPT_OUT, backends=frozenset({LiteLLMCacheType.LOCAL})),),
+    )
+    assert cache._native_cache is not None  # pyright: ignore[reportPrivateUsage]  # require native storage
+    monkeypatch.setattr(litellm, "cache", cache)
+    messages_server.expected_requests = 2
+    messages_server.enqueue(STREAM)
+    messages_server.enqueue(STREAM)
+
+    first: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server, stream=True))
+    await first.__anext__()
+    await first.aclose()
+    second: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server, stream=True))
+
+    assert b"".join([chunk async for chunk in second]) == sse_payload()
+    assert len(messages_server.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_native_cached_stream_replay_logs_success_once(
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await drain_logging()
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    cache._native_cache = resolve_response_cache(  # pyright: ignore[reportPrivateUsage]  # configure native stream caching
+        cache,
+        rules=(CacheRule(Rollout.RUST_OPT_OUT, backends=frozenset({LiteLLMCacheType.LOCAL})),),
+    )
+    assert cache._native_cache is not None  # pyright: ignore[reportPrivateUsage]  # require native storage
+    monkeypatch.setattr(litellm, "cache", cache)
+    recorder: Final = RecordingLogger()
+    kwargs: Final = arguments(messages_server, stream=True, callbacks=[recorder])
+    messages_server.enqueue(STREAM)
+
+    first: Final = await litellm.anthropic.messages.acreate(**kwargs)
+    assert b"".join([chunk async for chunk in first]) == sse_payload()
+    second: Final = await litellm.anthropic.messages.acreate(**kwargs)
+    assert b"".join([chunk async for chunk in second]) == sse_payload()
+    successes: Final = await recorder.wait_for_async("async_log_success_event", count=2)
+
+    assert_served_natively(messages_server)
+    assert len(successes) == 2
+    assert successes[1].kwargs["cache_hit"] is True
 
 
 def sse_payload() -> bytes:

@@ -1,10 +1,14 @@
 import inspect
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
+from pydantic import TypeAdapter
+
 import litellm
+from litellm._logging import verbose_logger
+from litellm.caching.caching import CacheMode
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages import handler as main
@@ -24,6 +28,7 @@ from litellm.rust_bridge.public_call import (
     optional_str,
     signature,
 )
+from litellm.rust_bridge.response_cache import NativeResponseCacheRuntime, ResponseCacheRuntime
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
@@ -51,6 +56,7 @@ _PYTHON_MESSAGES: Final = _python_messages()
 _MESSAGES: Final = signature(_PYTHON_MESSAGES)
 _PYTHON_AMESSAGES: Final = _python_amessages()
 _AMESSAGES: Final = signature(_PYTHON_AMESSAGES)
+_CALLBACKS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
 
 def _resolved_model_provider(model: str, provider: str | None) -> tuple[str, str] | None:
@@ -162,6 +168,169 @@ _ADISPATCH: Final = PublicDispatch(
 )
 
 
+def _cache_call_kwargs(args: tuple[object, ...], kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    fields: Final = bind(_AMESSAGES, args, kwargs)
+    assert fields is not None
+    extras: Final = optional_mapping(fields.get("kwargs")) or MappingProxyType({})
+    return MappingProxyType({**{name: value for name, value in fields.items() if name != "kwargs"}, **extras})
+
+
+def _legacy_cache_now() -> datetime:
+    return datetime.now(timezone.utc).astimezone().replace(tzinfo=None)
+
+
+def _has_custom_deployment_hook(kwargs: Mapping[str, object]) -> bool:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    def overridden(callback: object) -> bool:
+        if not isinstance(callback, CustomLogger):
+            return False
+        actual: Final = cast(  # cast-ok: compare hook identity without its untyped return
+            object, type(callback).async_pre_call_deployment_hook
+        )
+        default: Final = cast(  # cast-ok: compare hook identity without its untyped return
+            object, CustomLogger.async_pre_call_deployment_hook
+        )
+        return actual is not default
+
+    call_callbacks: Final = kwargs.get("callbacks")
+    dynamic: Final = (
+        _CALLBACKS_ADAPTER.validate_python(call_callbacks) if isinstance(call_callbacks, list | tuple) else ()
+    )
+    registered: Final = _CALLBACKS_ADAPTER.validate_python(litellm.callbacks)  # pyright: ignore[reportUnknownMemberType]  # validate the legacy callback registry
+    return any(overridden(callback) for callback in (*registered, *dynamic))
+
+
+def _native_cache_hit(
+    cached: object,
+    cache_key: str,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> MessagesResult:
+    from litellm._uuid import uuid
+    from litellm.caching.caching_handler import LLMCachingHandler
+    from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+        CachedAnthropicMessagesStreamIterator,
+    )
+    from litellm.utils import Rules, function_setup
+
+    started: Final = _legacy_cache_now()
+    call_kwargs: Final = _cache_call_kwargs(args, kwargs)
+    call_id: Final = call_kwargs.get("litellm_call_id") or str(uuid.uuid4())
+    logging_obj, prepared_kwargs = function_setup(
+        "anthropic_messages",
+        Rules(),
+        started,
+        **{**call_kwargs, "litellm_call_id": call_id},  # pyright: ignore[reportArgumentType]  # dynamic options do not set is_async_call
+    )
+    handler: Final = LLMCachingHandler(
+        original_function=_PYTHON_AMESSAGES,
+        request_kwargs=prepared_kwargs,
+        start_time=started,
+    )
+    handler.preset_cache_key = cache_key
+    logging_obj._llm_caching_handler = handler  # pyright: ignore[reportPrivateUsage]  # cache-hit callbacks read this handler
+    model_value: Final = prepared_kwargs.get("model")
+    model: Final = model_value if isinstance(model_value, str) else ""
+    resolved_model, provider, _, _ = litellm.get_llm_provider(
+        model=model,
+        custom_llm_provider=prepared_kwargs.get("custom_llm_provider"),
+        api_base=prepared_kwargs.get("api_base"),
+        api_key=prepared_kwargs.get("api_key"),
+    )
+    handler._update_litellm_logging_obj_environment(  # pyright: ignore[reportPrivateUsage]  # preserve cache-hit callback context
+        logging_obj=logging_obj,
+        model=resolved_model,
+        kwargs=prepared_kwargs,
+        cached_result=cached,
+        is_async=True,
+        custom_llm_provider=provider,
+    )
+    response: Final = handler._convert_cached_result_to_model_response(  # pyright: ignore[reportPrivateUsage]  # reuse the public cache-hit response conversion
+        cached_result=cached,
+        call_type="anthropic_messages",
+        kwargs=prepared_kwargs,
+        logging_obj=logging_obj,
+        model=resolved_model,
+        args=args,
+        custom_llm_provider=provider,
+    )
+    if not isinstance(response, CachedAnthropicMessagesStreamIterator):
+        handler._async_log_cache_hit_on_callbacks(  # pyright: ignore[reportPrivateUsage]  # preserve success callback timing
+            logging_obj=logging_obj,
+            cached_result=response,
+            start_time=started,
+            end_time=_legacy_cache_now(),
+            cache_hit=True,
+        )
+    if isinstance(response, CachedAnthropicMessagesStreamIterator):
+        response._hidden_params["cache_key"] = cache_key  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # cached stream exposes this metadata
+    return cast(MessagesResult, response)  # cast-ok: converter returns the public Messages result
+
+
+async def _native_amessages_with_native_cache(
+    hook: NativeAmessages,
+    request: LiteLLMMessagesRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+    runtime: ResponseCacheRuntime,
+    selected: NativeResponseCacheRuntime,
+) -> MessagesResult:
+    from litellm.caching.caching_handler import create_cache_write_task
+    from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+        AnthropicMessagesStreamCacheWriter,
+    )
+
+    cache: Final = litellm.cache
+    assert cache is not None
+    merged: Final = _cache_call_kwargs(args, kwargs)
+    call_kwargs: Final = MappingProxyType(
+        {name: value for name, value in merged.items() if name != "metadata" or value is not None}
+    )
+    cache_request: Final = runtime.request(cache, call_kwargs)
+    if cache_request is None:
+        return await hook(request, args, kwargs)
+    control_value: Final = call_kwargs.get("cache")
+    controls: Final[Mapping[object, object]] = (
+        cast(Mapping[object, object], control_value)  # cast-ok: runtime Mapping check narrows caller controls
+        if isinstance(control_value, Mapping)
+        else MappingProxyType({})
+    )
+    enabled: Final = cache.mode == CacheMode.default_on or controls.get("use-cache") is True
+    read: Final = enabled and call_kwargs.get("caching") is not False and controls.get("no-cache") is not True
+    write: Final = enabled and controls.get("no-store") is not True
+    if read:
+        try:
+            cached: Final = await selected.async_lookup(cache_request)
+        except Exception as error:  # noqa: BLE001  # cache read failure must not suppress inference
+            verbose_logger.exception("Anthropic Messages cache lookup failed: %s", error)
+        else:
+            if cached is not None:
+                return _native_cache_hit(cached, cache_request["key"]["preset"], args, kwargs)
+
+    result: Final = await hook(request, args, kwargs)
+    if not write:
+        return result
+    if isinstance(result, AsyncIterator):
+
+        async def store_stream(payload: Mapping[str, object]) -> None:
+            await selected.async_store(cache_request, payload)
+
+        return AnthropicMessagesStreamCacheWriter(
+            stream=cast(AsyncIterator[bytes | str], result),  # cast-ok: Messages stream yields provider SSE bytes
+            native_store=store_stream,
+        )
+
+    async def store_result() -> None:
+        try:
+            await selected.async_store(cache_request, result)
+        except Exception as error:  # noqa: BLE001  # cache write failures do not change the provider response
+            verbose_logger.exception("Anthropic Messages cache write failed: %s", error)
+
+    create_cache_write_task(store_result)
+    return result
+
+
 async def _native_amessages_with_cache(
     hook: NativeAmessages,
     request: LiteLLMMessagesRequest,
@@ -178,13 +347,21 @@ async def _native_amessages_with_cache(
     if cache is None or cache.supported_call_types is None or "anthropic_messages" not in cache.supported_call_types:
         return await hook(request, args, kwargs)
 
+    runtime: Final = cache._native_cache  # pyright: ignore[reportPrivateUsage]  # use the backend selected when litellm.cache was configured
+    if runtime is not None and kwargs.get("litellm_logging_obj") is None and not _has_custom_deployment_hook(kwargs):
+        from litellm.rust_bridge import _native
+
+        selected: Final = _native._CacheResolver(litellm).resolve()  # pyright: ignore[reportPrivateUsage]  # resolve the configured backend in Rust
+        if selected.kind == "native":
+            return await _native_amessages_with_native_cache(hook, request, args, kwargs, runtime, selected)
+
     from litellm.caching.caching_handler import LLMCachingHandler
 
     call_kwargs: Final = dict(kwargs)  # mutable-ok: legacy caching handler edits owned request kwargs
     caching_handler: Final = LLMCachingHandler(
         original_function=_PYTHON_AMESSAGES,
         request_kwargs=call_kwargs,
-        start_time=datetime.now(),
+        start_time=_legacy_cache_now(),
     )
     cached: Final = (
         await caching_handler._retrieve_from_cache(  # pyright: ignore[reportPrivateUsage]  # reuse the public decorator's key and cache policy
