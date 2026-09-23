@@ -4823,7 +4823,9 @@ async def test_model_refresh_updates_availability_catalog_and_retains_it_on_db_f
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_ignores_keys_no_write_api_can_produce(monkeypatch):
+async def test_ProxyConfig__update_general_settings_ignores_keys_no_write_api_can_produce(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
     pc = ProxyConfig()
     await pc._update_general_settings(
@@ -4842,7 +4844,9 @@ async def test_ProxyConfig__update_general_settings_ignores_keys_no_write_api_ca
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_logs_ignored_keys_once(monkeypatch):
+async def test_ProxyConfig__update_general_settings_logs_ignored_keys_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.proxy.proxy_server import _log_ignored_general_settings_keys
 
     warn = MagicMock()
