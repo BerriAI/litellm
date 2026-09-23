@@ -2055,6 +2055,9 @@
         ],
         "tests/integration/providers/test_websearch_interception_wire.py::test_database_created_search_tool_backend_receives_the_intercepted_query_over_a_same_named_config_tool": [
             "other.provider_wire.anthropic.websearch_interception_uses_database_search_tool_backend"
+        ],
+        "tests/integration/providers/test_bedrock_mantle_wire.py::test_bedrock_mantle_messages_stream_relays_anthropic_sse_instead_of_failing_on_event_stream_decode": [
+            "providers.bedrock_mantle.messages_stream_sends_stream_true_and_relays_sse_events"
         ]
     },
     "browser": {
