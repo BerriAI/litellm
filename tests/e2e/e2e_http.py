@@ -345,6 +345,50 @@ def request_with_retry[T: RetryableResponse](
     return issue()
 
 
+PROVIDER_RATE_LIMIT_MARKER: Final = "litellm.RateLimitError"
+PROVIDER_RATE_LIMIT_ATTEMPTS: Final = 4
+PROVIDER_RATE_LIMIT_BACKOFF_SECONDS: Final = 5.0
+
+
+def tolerate_provider_rate_limit[R: BaseModel](
+    issue: Callable[[], Result[R]],
+    *,
+    attempts: int = PROVIDER_RATE_LIMIT_ATTEMPTS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Result[R]:
+    """Retry a call up to `attempts` times while the proxy relays the provider's own 429;
+    any other outcome, the proxy's own 429 included, comes back at once."""
+    for attempt in range(1, attempts):
+        match issue():
+            case RateLimitedError(body=body, retry_after_seconds=retry_after) if PROVIDER_RATE_LIMIT_MARKER in body:
+                delay = retry_after or PROVIDER_RATE_LIMIT_BACKOFF_SECONDS * (1 << (attempt - 1))
+                print(
+                    f"e2e-http: provider rate limit relayed by the proxy; retry {attempt}/{attempts - 1} in {delay}s",
+                    flush=True,
+                )
+                sleep(delay)
+            case result:
+                return result
+    return issue()
+
+
+class ProxyErrorDetail(BaseModel):
+    message: str
+    type: str
+    code: str
+
+
+class _ProxyErrorBody(BaseModel):
+    error: ProxyErrorDetail
+
+
+def relayed_provider_rate_limit(outcome: RateLimitedError) -> ProxyErrorDetail | None:
+    """The provider's own 429 as the proxy relayed it, or None when the 429 is the proxy's own."""
+    if PROVIDER_RATE_LIMIT_MARKER not in outcome.body:
+        return None
+    return _ProxyErrorBody.model_validate_json(outcome.body).error
+
+
 class ClassifiableResponse(Protocol):
     """What classifying an outcome reads off a response. requests.Response satisfies
     it, and so does a fake, so the classification rules are testable on their own."""
@@ -931,7 +975,10 @@ class PreparedForward:
 
 
 def prepare_forward(
-    method: str, url: str, headers: dict[str, str], body: bytes | None,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: bytes | None,
 ) -> PreparedForward | NetworkError:
     try:
         with requests.Session() as session:
@@ -950,7 +997,8 @@ def forward_prepared_stream(prepared: PreparedForward, timeout: float) -> Stream
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
     return StreamHead(
-        resp.status_code, {name.lower(): value for name, value in resp.headers.items()},
+        resp.status_code,
+        {name.lower(): value for name, value in resp.headers.items()},
         primed_steps(_stream_steps(resp)),
     )
 
