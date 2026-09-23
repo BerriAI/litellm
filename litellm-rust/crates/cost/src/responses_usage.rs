@@ -13,6 +13,12 @@ pub struct CachedTokenDetails {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct CacheCreationTokenDetails {
+    pub ephemeral_5m_input_tokens: Option<u64>,
+    pub ephemeral_1h_input_tokens: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct PromptTokenDetails {
     #[serde(default)]
     pub cached_tokens: u64,
@@ -23,6 +29,7 @@ pub struct PromptTokenDetails {
     pub cache_write_tokens: Option<u64>,
     pub cache_creation_tokens: Option<u64>,
     pub cache_creation_input_tokens: Option<u64>,
+    pub cache_creation_token_details: Option<CacheCreationTokenDetails>,
     pub cached_tokens_details: Option<CachedTokenDetails>,
     pub web_search_requests: Option<u64>,
     pub google_maps_grounding_requests: Option<u64>,
@@ -49,6 +56,10 @@ pub struct ChatUsage {
 
 impl ChatUsage {
     pub fn token_usage(&self) -> Usage {
+        let cache_creation_details = self
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|details| details.cache_creation_token_details.as_ref());
         Usage {
             prompt_tokens: self.prompt_tokens,
             completion_tokens: self.completion_tokens,
@@ -61,8 +72,10 @@ impl ChatUsage {
                 .as_ref()
                 .and_then(|details| details.cache_write_tokens)
                 .unwrap_or(0),
-            cache_write_5m_tokens: None,
-            cache_write_1h_tokens: None,
+            cache_write_5m_tokens: cache_creation_details
+                .map(|details| details.ephemeral_5m_input_tokens.unwrap_or(0)),
+            cache_write_1h_tokens: cache_creation_details
+                .map(|details| details.ephemeral_1h_input_tokens.unwrap_or(0)),
             prompt_convention: PromptConvention::IncludesCache,
         }
     }

@@ -12,7 +12,7 @@ Call `compile(&pricing)` once for an immutable plan, then `plan.calculate(&reque
 
 `catalog::CostCatalog` accepts a caller-supplied map of model keys to token rates. Its `select_model_key` handles duplicate provider prefixes, optional region-specific keys, provider-prefixed keys, and bare-model fallback in the same order as Python's `cost_per_token`. Its `cost_per_token` method calculates generic token cost for the selected key. Catalog loading and provider-specific dispatch remain outside this method
 
-`responses_usage::transform_response_api_usage_to_chat_usage` converts Responses API and realtime token details into chat-shaped usage, including cache-write aliases, cached modality splits, reasoning text partitioning, and provider extras. `ChatUsage::token_usage` feeds its token counts into the generic Rust cost calculation. The broader `get_usage_object` dispatch across response types is still unported
+`responses_usage::transform_response_api_usage_to_chat_usage` converts Responses API and realtime token details into chat-shaped usage, including cache-write aliases, cached modality splits, reasoning text partitioning, and provider extras. `anthropic_usage::transform_anthropic_usage_to_chat_usage` handles Anthropic's cache-excluding input tokens, iteration cache splits, and reported thinking tokens. `usage_dispatch::get_usage_object` selects Anthropic, Responses, or chat-shaped conversion. `ChatUsage::token_usage` feeds normalized token counts and cache-write splits into the generic Rust calculator. Interactions and transcription usage conversion remain unported
 
 ## Python function map
 
@@ -33,6 +33,9 @@ The Rust module tree does not mirror Python's overall cost module tree. The Pyth
 | `litellm.responses.utils.ResponseAPILoggingUtils._is_response_api_usage` | `litellm_cost::responses_usage::is_response_api_usage` | `test_responses_utils.py::test_transform_response_api_usage_*` | `python_responses_usage.rs::is_response_api_usage_*` |
 | `litellm.responses.utils.ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage` | `litellm_cost::responses_usage::transform_response_api_usage_to_chat_usage` | `test_responses_utils.py::test_transform_response_api_usage_*`, `test_transform_realtime_usage_*` | `python_responses_usage.rs::transform_response_api_usage_to_chat_usage_*` |
 | `litellm.types.utils.text_tokens_without_nested_reasoning` | `litellm_cost::responses_usage::text_tokens_without_nested_reasoning` | `test_responses_utils.py::test_transform_realtime_usage_*` | `python_responses_usage.rs::text_tokens_without_nested_reasoning_*` |
+| `litellm.llms.anthropic.chat.transformation.AnthropicConfig.is_anthropic_usage_object` | `litellm_cost::anthropic_usage::is_anthropic_usage_object` | `test_anthropic_chat_transformation.py::test_is_anthropic_usage_object_*` | `python_anthropic_usage.rs::is_anthropic_usage_object_*` |
+| `litellm.llms.anthropic.chat.transformation.AnthropicConfig.calculate_usage` | `litellm_cost::anthropic_usage::transform_anthropic_usage_to_chat_usage` | `test_anthropic_chat_transformation.py::test_calculate_usage_*` | `python_anthropic_usage.rs::calculate_usage_*` |
+| `litellm.cost_calculator.get_usage_object` | `litellm_cost::usage_dispatch::get_usage_object` | `test_cost_calculator.py`, Anthropic and Responses usage tests | `python_usage_dispatch.rs::get_usage_object_*` |
 
 `cost_per_token`, `completion_cost`, `response_cost_calculator`, provider calculators, and Python's model lookup and response normalization have no Rust counterpart yet. The ported Rust cases use `rstest` and synthetic prices; they cover the corresponding Python tests' price selection and arithmetic, not their integration with Python model registration
 

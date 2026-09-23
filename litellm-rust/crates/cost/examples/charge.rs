@@ -13,6 +13,7 @@ use litellm_cost::non_token::{
     calculate_ocr, calculate_ocr_batch, calculate_video,
 };
 use litellm_cost::responses_usage::transform_response_api_usage_to_chat_usage;
+use litellm_cost::usage_dispatch::get_usage_object;
 use litellm_cost::{
     Pricing, PromptConvention, Rate, Rates, Request, ServiceTier, ThresholdPolicy, Usage,
     calculate, compile,
@@ -223,5 +224,21 @@ fn main() {
         "responses_input={:.6} responses_output={:.6}",
         response_cost.input(),
         response_cost.output()
+    );
+    let anthropic_usage = get_usage_object(&json!({
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "cache_read_input_tokens": 50,
+            "cache_creation_input_tokens": 25
+        }
+    }))
+    .unwrap()
+    .unwrap();
+    println!(
+        "anthropic_prompt={} cached={} write={}",
+        anthropic_usage.prompt_tokens,
+        anthropic_usage.token_usage().cache_read_tokens,
+        anthropic_usage.token_usage().cache_write_tokens
     );
 }
