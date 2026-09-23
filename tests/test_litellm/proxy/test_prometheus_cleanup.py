@@ -145,13 +145,15 @@ class TestMaybeSetupPrometheusMultiprocDir:
             os.environ.pop("prometheus_multiproc_dir", None)
 
             # Should not raise TypeError
-            ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
+            result_dir = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
                 num_workers=4,
                 litellm_settings=litellm_settings,
             )
 
             # Cleanup
             os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+            if result_dir is not None:
+                shutil.rmtree(result_dir, ignore_errors=True)
 
     @pytest.mark.parametrize(
         "num_workers, litellm_settings",
@@ -227,6 +229,7 @@ class TestMaybeSetupPrometheusMultiprocDir:
             assert os.path.isdir(result_dir)
 
             os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+            shutil.rmtree(result_dir, ignore_errors=True)
 
     def test_lowercase_env_var_is_reused_and_exported_uppercase(self, tmp_path):
         """prometheus_client honours both spellings; the metrics server only reads the uppercase one."""

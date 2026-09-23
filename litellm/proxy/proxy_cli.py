@@ -663,6 +663,7 @@ class ProxyInitializationHelpers:
         with prometheus configured as a callback in config.yaml, or the separate metrics server (always, since
         callbacks may also be enabled from the DB after startup).
         """
+        import shutil
         import tempfile
 
         if prometheus_metrics_port is None and (
@@ -680,7 +681,19 @@ class ProxyInitializationHelpers:
             multiproc_dir, action = configured_dir, "Using existing"
         else:
             # Unique per boot: a fixed shared name lets a second proxy on this host wipe the first one's counters.
+            import atexit
+
             multiproc_dir, action = tempfile.mkdtemp(prefix="litellm_prometheus_multiproc_"), "Auto-created"
+
+            # Only the creating process removes the dir on exit. Forked workers share it and
+            # must not delete samples their siblings are still writing.
+            creator_pid = os.getpid()
+
+            def _cleanup_auto_created_dir() -> None:
+                if os.getpid() == creator_pid:
+                    shutil.rmtree(multiproc_dir, ignore_errors=True)
+
+            atexit.register(_cleanup_auto_created_dir)
 
         os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
         print(f"LiteLLM: {action} PROMETHEUS_MULTIPROC_DIR={multiproc_dir}")
