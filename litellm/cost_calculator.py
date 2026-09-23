@@ -2375,6 +2375,11 @@ def default_image_cost_calculator(
         model_name_without_custom_llm_provider = model.replace(f"{custom_llm_provider}/", "")
         base_model_name = f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
     model_name_with_quality: Final = f"{quality}/{base_model_name}" if quality else base_model_name
+    provider_first_model_name_with_quality: Final = (
+        f"{custom_llm_provider}/{quality}/{size_str}/{model_name_without_custom_llm_provider or model}"
+        if quality and custom_llm_provider
+        else None
+    )
 
     # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
     model_name_with_v2_quality: Final = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
@@ -2386,6 +2391,7 @@ def default_image_cost_calculator(
 
     models_to_check: Final = (
         model_name_with_quality,
+        provider_first_model_name_with_quality,
         base_model_name,
         model_name_with_v2_quality,
         model_with_quality_without_provider,

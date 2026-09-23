@@ -1004,6 +1004,8 @@ def _stamp_deployment_attribution(
         return attribution
     metadata.setdefault("model_info", attribution["model_info"])
     metadata.setdefault("deployment", attribution["deployment"])
+    if isinstance(model_group, str):
+        metadata.setdefault("model_group", model_group)
     return attribution
 
 

@@ -1,3 +1,4 @@
+import { AutoRouterAvailabilityContext, useAutoRouterAvailability } from "../add_model/AutoRouterAvailability";
 import AutoRouterClassifierTabs from "../add_model/AutoRouterClassifierTabs";
 import { usesClassifierContext } from "../add_model/classifier_types";
 export type { StoredComplexityRouterConfig } from "../add_model/build_complexity_router_config";
@@ -244,6 +245,20 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   });
   const isComplexityRouterModel = isComplexityRouter(modelData?.litellm_params);
 
+  const routerAvailability = useAutoRouterAvailability(
+    accessToken,
+    {
+      saved_model_id: modelData?.model_info?.id,
+      team_id: modelData?.model_info?.team_id,
+      complexity_router_config: buildUpdatedComplexityRouterConfig(
+        modelData?.litellm_params?.complexity_router_config,
+        complexityRouterConfig,
+        customTechnicalKeywords,
+        { keywordTierRules, escalationKeywords, semanticMatchingEnabled, embeddingModel, matchThreshold },
+      ),
+    },
+    isVisible && isComplexityRouterModel,
+  );
   const schema = useMemo(
     () => (isComplexityRouterModel ? complexityRouterSchema : semanticRouterSchema),
     [isComplexityRouterModel],
@@ -253,7 +268,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   // Mirrors the create form: the button says why it is unavailable and disables on the same
   // answer. Tiers use this modal's own rule, which allows a partly filled router, so an edit that
   // is legal today stays legal.
-  const submitBlockedReason = !isComplexityRouterModel
+  const configBlockedReason = !isComplexityRouterModel
     ? null
     : (complexityRouterConfig.custom_tier_set
         ? getCustomTierRowsError(complexityRouterConfig.custom_tier_set) ??
@@ -269,6 +284,8 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       (heuristicScoringRole(complexityRouterConfig) === "decides"
         ? customDimensionsError(complexityRouterConfig.custom_dimensions)
         : null);
+
+  const submitBlockedReason = configBlockedReason ?? routerAvailability.saveBlockedReason;
 
   useEffect(() => {
     if (isVisible && modelData) {
@@ -384,6 +401,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   };
 
   const saveValues = async (values: EditAutoRouterFormValues) => {
+    if (routerAvailability.saveBlockedReason) {
+      toast.fromError(routerAvailability.saveBlockedReason);
+      return;
+    }
     if (isComplexityRouterModel) {
       const { tiers, custom_tier_set, classifier_llm_config } = complexityRouterConfig;
       const rows = activeTierRows(complexityRouterConfig);
@@ -575,143 +596,145 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   );
 
   return (
-    <Dialog open={isVisible} onOpenChange={(open) => !open && onCancel()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
-        <TooltipProvider>
-          <DialogHeader>
-            <DialogTitle>Edit Auto Router Configuration</DialogTitle>
-            <DialogDescription>
-              Edit the auto router configuration including routing logic, default models, and access settings.
-            </DialogDescription>
-          </DialogHeader>
+    <AutoRouterAvailabilityContext.Provider value={routerAvailability}>
+      <Dialog open={isVisible} onOpenChange={(open) => !open && onCancel()}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
+          <TooltipProvider>
+            <DialogHeader>
+              <DialogTitle>Edit Auto Router Configuration</DialogTitle>
+              <DialogDescription>
+                Edit the auto router configuration including routing logic, default models, and access settings.
+              </DialogDescription>
+            </DialogHeader>
 
-          <form onSubmit={(event) => event.preventDefault()} noValidate>
-            <FieldGroup>
-              {routerNameField}
+            <form onSubmit={(event) => event.preventDefault()} noValidate>
+              <FieldGroup>
+                {routerNameField}
 
-              {isComplexityRouterModel ? (
-                /* Complexity Router Configuration */
-                <div className="w-full">
-                  <AutoRouterClassifierTabs value={complexityRouterConfig} onChange={setComplexityRouterConfig}>
-                    <ComplexityRouterConfig
-                      editingTiers={editingTiers}
-                      onEditingTiersChange={setEditingTiers}
-                      showValidationErrors={showValidationErrors}
-                      modelInfo={modelInfo}
-                      value={complexityRouterConfig}
-                      onChange={(config) => {
-                        setComplexityRouterConfig(config);
-                      }}
-                      customTechnicalKeywords={customTechnicalKeywords}
-                      onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
-                      keywordTierRules={keywordTierRules}
-                      onKeywordTierRulesChange={setKeywordTierRules}
-                      keywordRulesError={getKeywordTierRulesError(
-                        keywordTierRules,
-                        activeTierRows(complexityRouterConfig),
-                      )}
-                      semanticMatchingEnabled={semanticMatchingEnabled}
-                      onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
-                      embeddingModel={embeddingModel}
-                      onEmbeddingModelChange={setEmbeddingModel}
-                      matchThreshold={matchThreshold}
-                      onMatchThresholdChange={setMatchThreshold}
-                      escalationKeywords={escalationKeywords}
-                      onEscalationKeywordsChange={setEscalationKeywords}
-                      autoRouterCompression={autoRouterCompression}
-                      onAutoRouterCompressionChange={isMemberManaged ? undefined : setAutoRouterCompression}
-                    />
-                  </AutoRouterClassifierTabs>
-                </div>
-              ) : (
-                <>
-                  {/* Router Configuration Builder */}
+                {isComplexityRouterModel ? (
+                  /* Complexity Router Configuration */
                   <div className="w-full">
-                    <RouterConfigBuilder
-                      modelInfo={modelInfo}
-                      value={routerConfig}
-                      onChange={(config) => {
-                        setRouterConfig(config);
-                      }}
-                    />
+                    <AutoRouterClassifierTabs value={complexityRouterConfig} onChange={setComplexityRouterConfig}>
+                      <ComplexityRouterConfig
+                        editingTiers={editingTiers}
+                        onEditingTiersChange={setEditingTiers}
+                        showValidationErrors={showValidationErrors}
+                        modelInfo={modelInfo}
+                        value={complexityRouterConfig}
+                        onChange={(config) => {
+                          setComplexityRouterConfig(config);
+                        }}
+                        customTechnicalKeywords={customTechnicalKeywords}
+                        onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
+                        keywordTierRules={keywordTierRules}
+                        onKeywordTierRulesChange={setKeywordTierRules}
+                        keywordRulesError={getKeywordTierRulesError(
+                          keywordTierRules,
+                          activeTierRows(complexityRouterConfig),
+                        )}
+                        semanticMatchingEnabled={semanticMatchingEnabled}
+                        onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
+                        embeddingModel={embeddingModel}
+                        onEmbeddingModelChange={setEmbeddingModel}
+                        matchThreshold={matchThreshold}
+                        onMatchThresholdChange={setMatchThreshold}
+                        escalationKeywords={escalationKeywords}
+                        onEscalationKeywordsChange={setEscalationKeywords}
+                        autoRouterCompression={autoRouterCompression}
+                        onAutoRouterCompressionChange={isMemberManaged ? undefined : setAutoRouterCompression}
+                      />
+                    </AutoRouterClassifierTabs>
                   </div>
+                ) : (
+                  <>
+                    {/* Router Configuration Builder */}
+                    <div className="w-full">
+                      <RouterConfigBuilder
+                        modelInfo={modelInfo}
+                        value={routerConfig}
+                        onChange={(config) => {
+                          setRouterConfig(config);
+                        }}
+                      />
+                    </div>
 
-                  <FormField control={form.control} name="auto_router_default_model" label="Default Model">
+                    <FormField control={form.control} name="auto_router_default_model" label="Default Model">
+                      {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                        <ModelChoiceCombobox
+                          id={id}
+                          value={value}
+                          onChange={onChange}
+                          choices={modelChoices}
+                          placeholder="Select a default model"
+                          ariaInvalid={ariaInvalid}
+                          ariaDescribedBy={ariaDescribedBy}
+                        />
+                      )}
+                    </FormField>
+
+                    <FormField control={form.control} name="auto_router_embedding_model" label="Embedding Model">
+                      {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                        <ModelChoiceCombobox
+                          id={id}
+                          value={value}
+                          onChange={onChange}
+                          choices={modelChoices}
+                          placeholder="Select an embedding model"
+                          ariaInvalid={ariaInvalid}
+                          ariaDescribedBy={ariaDescribedBy}
+                        />
+                      )}
+                    </FormField>
+                  </>
+                )}
+
+                {userRole === "Admin" && !isMemberManaged && (
+                  <FormField
+                    control={form.control}
+                    name="model_access_group"
+                    label={labelWithHint("Model Access Groups", "Control who can access this auto router")}
+                  >
                     {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                      <ModelChoiceCombobox
+                      <AccessGroupTagsCombobox
                         id={id}
                         value={value}
                         onChange={onChange}
-                        choices={modelChoices}
-                        placeholder="Select a default model"
+                        options={modelAccessGroups}
                         ariaInvalid={ariaInvalid}
                         ariaDescribedBy={ariaDescribedBy}
                       />
                     )}
                   </FormField>
+                )}
+              </FieldGroup>
+            </form>
 
-                  <FormField control={form.control} name="auto_router_embedding_model" label="Embedding Model">
-                    {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                      <ModelChoiceCombobox
-                        id={id}
-                        value={value}
-                        onChange={onChange}
-                        choices={modelChoices}
-                        placeholder="Select an embedding model"
-                        ariaInvalid={ariaInvalid}
-                        ariaDescribedBy={ariaDescribedBy}
-                      />
-                    )}
-                  </FormField>
-                </>
-              )}
-
-              {userRole === "Admin" && !isMemberManaged && (
-                <FormField
-                  control={form.control}
-                  name="model_access_group"
-                  label={labelWithHint("Model Access Groups", "Control who can access this auto router")}
-                >
-                  {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                    <AccessGroupTagsCombobox
-                      id={id}
-                      value={value}
-                      onChange={onChange}
-                      options={modelAccessGroups}
-                      ariaInvalid={ariaInvalid}
-                      ariaDescribedBy={ariaDescribedBy}
-                    />
-                  )}
-                </FormField>
-              )}
-            </FieldGroup>
-          </form>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={onCancel}>
-              Cancel
-            </Button>
-            {submitBlockedReason === null ? (
-              <Button disabled={loading} onClick={handleSubmit}>
-                {loading && <UiLoadingSpinner className="size-4" />}
-                Save Changes
+            <DialogFooter>
+              <Button variant="outline" onClick={onCancel}>
+                Cancel
               </Button>
-            ) : (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button disabled onClick={handleSubmit}>
-                      Save Changes
-                    </Button>
-                  }
-                />
-                <TooltipContent>{submitBlockedReason}</TooltipContent>
-              </Tooltip>
-            )}
-          </DialogFooter>
-        </TooltipProvider>
-      </DialogContent>
-    </Dialog>
+              {submitBlockedReason === null ? (
+                <Button disabled={loading} onClick={handleSubmit}>
+                  {loading && <UiLoadingSpinner className="size-4" />}
+                  Save Changes
+                </Button>
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button disabled onClick={handleSubmit}>
+                        Save Changes
+                      </Button>
+                    }
+                  />
+                  <TooltipContent>{submitBlockedReason}</TooltipContent>
+                </Tooltip>
+              )}
+            </DialogFooter>
+          </TooltipProvider>
+        </DialogContent>
+      </Dialog>
+    </AutoRouterAvailabilityContext.Provider>
   );
 };
 
