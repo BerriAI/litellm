@@ -59,6 +59,9 @@ use crate::speech_cost::{
     SpeechCostError, SpeechCostMetric, cost_per_second, generic_cost_per_character,
     lyria_generation_cost, select_cost_metric_for_model, transcription_usage_has_token_details,
 };
+use crate::together_cost::{
+    TogetherThresholds, get_model_params_and_category, has_together_registry_pricing,
+};
 use crate::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
 use crate::vertex_cost::{
     CostRoute, cost_per_character as vertex_cost_per_character,
@@ -604,18 +607,29 @@ impl ModelInfoCatalog {
         {
             return Ok((0.0, cost));
         }
-        let key = self
-            .select_model_key(request.model, request.provider, request.region)
-            .or_else(|| {
-                (request.provider == Some("fireworks_ai"))
-                    .then(|| {
-                        get_base_model_for_pricing(request.model, FireworksThresholds::default())
-                    })
-                    .and_then(|category| {
-                        self.select_model_key(category, request.provider, request.region)
-                    })
-            })
-            .ok_or(CatalogError::ModelNotFound)?;
+        let needs_together_fallback = (request.provider == Some("together_ai")
+            || request.model.contains("togethercomputer")
+            || request.model.contains("together_ai"))
+            && !has_together_registry_pricing(request.model, &self.entries);
+        let together_fallback = needs_together_fallback.then(|| {
+            get_model_params_and_category(
+                request.model,
+                "completion",
+                TogetherThresholds::default(),
+            )
+        });
+        let key = match together_fallback.as_deref() {
+            Some(category) => self.select_model_key(category, None, request.region),
+            None => self.select_model_key(request.model, request.provider, request.region),
+        }
+        .or_else(|| {
+            (request.provider == Some("fireworks_ai"))
+                .then(|| get_base_model_for_pricing(request.model, FireworksThresholds::default()))
+                .and_then(|category| {
+                    self.select_model_key(category, request.provider, request.region)
+                })
+        })
+        .ok_or(CatalogError::ModelNotFound)?;
         let model_info = apply_provider_cache_read_default(&self.entries[key], request.provider);
         if let Some(cost) = per_second_pricing_cost(&model_info, request.response_time_ms) {
             return Ok(cost);
@@ -676,6 +690,23 @@ impl ModelInfoCatalog {
             1.0
         };
         Ok((cost.0 * speed, cost.1 * speed))
+    }
+
+    pub fn together_ai_cost_per_token(
+        &self,
+        request: ModelCostRequest<'_>,
+        call_type: &str,
+    ) -> Result<(f64, f64), CatalogError> {
+        if has_together_registry_pricing(request.model, &self.entries) {
+            return self.cost_per_token(request);
+        }
+        let category =
+            get_model_params_and_category(request.model, call_type, TogetherThresholds::default());
+        self.cost_per_token(ModelCostRequest {
+            model: &category,
+            provider: Some("together_ai"),
+            ..request
+        })
     }
 
     pub fn get_billed_token_rates(

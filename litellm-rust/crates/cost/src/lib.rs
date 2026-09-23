@@ -37,6 +37,7 @@ pub mod retrieval_cost;
 pub mod search_cost;
 pub mod speech_cost;
 pub mod tiered_pricing;
+pub mod together_cost;
 pub mod tool_call_cost_tracking;
 pub mod tool_cost_dispatch;
 pub mod transcription_usage;
