@@ -169,6 +169,9 @@
       "other.provider_wire.anthropic.tool_history_system_cache_and_internal_fields",
       "quota_management.spend_tracking.cache_tokens.disjoint_classes_use_explicit_rates"
     ],
+    "tests/integration/providers/test_anthropic_thinking_signature_retry_wire.py::test_missing_thinking_signature_400_retries_once_without_thinking_blocks_and_returns_200": [
+      "providers.anthropic_messages.missing_thinking_signature_400_retries_without_thinking_blocks"
+    ],
     "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_video_create_status_and_content_follow_queue_wire_contract": [
       "other.provider_wire.fal_ai.video_queue_create_status_and_content_download"
     ],
