@@ -2569,6 +2569,7 @@ if MCP_AVAILABLE:
                         _stateful_session_auth_contexts[session_id] = auth_user
                         _stateful_session_auth_context_last_seen[session_id] = time.monotonic()
                         _stateful_session_owners[session_id] = owner_fingerprint
+                        operations.global_mcp_server_manager.track_gateway_session(session_id)
                         if client_info is not None:
                             _stateful_session_client_info[session_id] = client_info
                         break

@@ -10383,6 +10383,7 @@ class TestOBOConcurrencyLimit:
 
         manager = MCPServerManager()
         manager._create_mcp_client = AsyncMock(return_value=_SessionRecordingClient())
+        manager.track_gateway_session("gateway-1")
 
         for tool in ("select_project", "create_feature"):
             result = await manager._call_regular_mcp_tool(
@@ -14643,7 +14644,12 @@ async def test_upstream_session_is_shared_per_gateway_session_and_released_with_
     try:
         assert await manager._upstream_session_for(client, server, None) is None
         assert await manager._upstream_session_for(client, server, {"accept": "application/json"}) is None
+        assert await manager._upstream_session_for(client, server, {"mcp-session-id": "forged"}) is None, (
+            "an mcp-session-id the gateway never issued must not open a long-lived upstream session"
+        )
 
+        manager.track_gateway_session("gw-1")
+        manager.track_gateway_session("gw-2")
         first: Final = await manager._upstream_session_for(client, server, {"Mcp-Session-Id": "gw-1"})
         second: Final = await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-1"})
         other: Final = await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-2"})
@@ -14653,6 +14659,10 @@ async def test_upstream_session_is_shared_per_gateway_session_and_released_with_
         manager.release_upstream_sessions("gw-1")
         await asyncio.wait_for(first.wait_closed(), 5)
         assert first.closed and not other.closed
+        assert await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-1"}) is None, (
+            "a released gateway session must not reopen upstream sessions"
+        )
+        manager.track_gateway_session("gw-1")
         replacement: Final = await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-1"})
         assert replacement is not first and not replacement.closed
 

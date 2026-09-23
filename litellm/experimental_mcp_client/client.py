@@ -1191,6 +1191,15 @@ class MCPClient:
 
 _PendingOperation: TypeAlias = "tuple[Callable[[ClientSession], Awaitable[object]], asyncio.Future[object]]"
 _MAX_PENDING_OPERATIONS: Final = 64
+_SESSION_ENDING_ERRORS: Final = (
+    ValueError,
+    httpx2.HTTPError,
+    OSError,
+    MCPError,
+    anyio.BrokenResourceError,
+    anyio.ClosedResourceError,
+    anyio.EndOfStream,
+)
 
 
 class UpstreamSessionClosedError(RuntimeError):
@@ -1233,7 +1242,7 @@ class PersistentMCPSession:
                         future.set_exception(RuntimeError("upstream MCP operation was cancelled"))
                     else:
                         future.set_result(outcome)
-                if isinstance(outcome, (ValueError, httpx2.HTTPError, OSError, MCPError)):
+                if isinstance(outcome, _SESSION_ENDING_ERRORS):
                     return
                 self._active = None
 

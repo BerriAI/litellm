@@ -1869,6 +1869,7 @@ class MCPServerManager:
         )
         self.registry: dict[str, MCPServer] = {}
         self._upstream_sessions: dict[tuple[str, str, str], PersistentMCPSession] = {}  # mutable-ok: session registry
+        self._live_gateway_sessions: frozenset[str] = frozenset()
         self._openapi_health_probes: Callable[[str], _OpenAPIHealthProbe] = lru_cache(maxsize=128)(_OpenAPIHealthProbe)
         self.config_mcp_servers: dict[str, MCPServer] = {}
         """
@@ -5798,7 +5799,7 @@ class MCPServerManager:
             ),
             None,
         )
-        if gateway_session_id is None or mcp_server.transport == MCPTransport.stdio:
+        if gateway_session_id not in self._live_gateway_sessions or mcp_server.transport == MCPTransport.stdio:
             return None
         key: Final = (gateway_session_id, mcp_server.server_id, await client.discovery_auth_fingerprint())
         existing: Final = self._upstream_sessions.get(key)
@@ -5808,7 +5809,11 @@ class MCPServerManager:
         self._upstream_sessions[key] = opened
         return opened
 
+    def track_gateway_session(self, gateway_session_id: str) -> None:
+        self._live_gateway_sessions = self._live_gateway_sessions | frozenset((gateway_session_id,))
+
     def release_upstream_sessions(self, gateway_session_id: str) -> None:
+        self._live_gateway_sessions = self._live_gateway_sessions - frozenset((gateway_session_id,))
         for key in tuple(key for key in self._upstream_sessions if key[0] == gateway_session_id):
             self._upstream_sessions.pop(key).close()
 

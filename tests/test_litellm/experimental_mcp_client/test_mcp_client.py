@@ -3060,3 +3060,18 @@ async def test_closing_persistent_session_fails_a_caller_blocked_on_a_full_queue
         outcomes: Final = await asyncio.wait_for(asyncio.gather(*waiters, return_exceptions=True), 5)
         assert all(isinstance(outcome, RuntimeError) for outcome in outcomes), outcomes
         await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_ends_after_a_broken_stream_so_the_next_call_gets_a_fresh_one():
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        _, session = _client_with_session(app)
+
+        async def broken_stream(_: object) -> str:
+            raise anyio.BrokenResourceError()
+
+        with pytest.raises(anyio.BrokenResourceError):
+            await asyncio.wait_for(session.run(broken_stream), 5)
+        await asyncio.wait_for(session.wait_closed(), 5)
+        assert session.closed, "a dead transport must end the session instead of being reused"
