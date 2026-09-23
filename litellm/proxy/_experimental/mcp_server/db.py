@@ -1157,7 +1157,7 @@ async def _update_mcp_server_row(
 
     if not identifier_write:
         return await _update(_mcp_server_table_actions(prisma_client))
-    if "alias" in data_dict and data_dict["alias"] is None and "server_name" not in data_dict:
+    if "alias" in data_dict and not data_dict["alias"] and "server_name" not in data_dict:
         # Clearing the alias drops the prefix to the stored server_name, which
         # may already belong to another row, so that name needs the check too.
         existing: Final = await _db_find_mcp_server_row(prisma_client, server_id)

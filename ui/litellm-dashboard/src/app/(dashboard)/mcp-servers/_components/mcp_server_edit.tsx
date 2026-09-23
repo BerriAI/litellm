@@ -730,7 +730,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     const duplicate = findDuplicateMcpServer(
       existingServers,
       values.server_name || mcpServer.server_name,
-      values.alias || mcpServer.alias,
+      (values.alias ?? mcpServer.alias) || null,
       mcpServer.server_id,
     );
     if (duplicate) {
