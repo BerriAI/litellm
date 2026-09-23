@@ -293,6 +293,38 @@ def _capture_login(monkeypatch, on_login=lambda: None):
     return login_calls
 
 
+class TestSecureCreate:
+    def test_skips_fchmod_where_the_platform_lacks_it(self, monkeypatch, tmp_path):
+        """Windows only gained os.fchmod in 3.13; on 3.10-3.12 writing a credential file
+        through secure_create must not die on AttributeError (the profile directory's ACL
+        protects the file there)."""
+        monkeypatch.setattr(up_module.os, "name", "nt")
+        monkeypatch.delattr(up_module.os, "fchmod", raising=False)
+        path = tmp_path / "secret.json"
+
+        with up_module.secure_create(path) as f:
+            f.write("{}")
+
+        assert path.read_text() == "{}"
+
+    def test_still_applies_0600_before_writing_on_posix(self, monkeypatch, tmp_path):
+        modes = []
+        real_fchmod = up_module.os.fchmod
+
+        def spy(fd, mode):
+            modes.append(mode)
+            real_fchmod(fd, mode)
+
+        monkeypatch.setattr(up_module.os, "name", "posix")
+        monkeypatch.setattr(up_module.os, "fchmod", spy)
+        path = tmp_path / "secret.json"
+
+        with up_module.secure_create(path) as f:
+            f.write("{}")
+
+        assert modes == [0o600]
+
+
 class TestEnsureFreshLogin:
     """A token that is fresh but was issued for a *different* proxy must not be trusted: without
     this check, a user logged into proxy A who runs `up --base-url proxy-b` would silently get proxy A's
