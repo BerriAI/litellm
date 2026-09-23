@@ -5,6 +5,7 @@ import pytest
 
 from litellm.rust_bridge import bindings
 from litellm.rust_bridge.chat_completions import entrypoints as chat_completions
+from litellm.rust_bridge.embeddings import entrypoints as embeddings
 from litellm.rust_bridge.messages import entrypoints as messages
 from litellm.rust_bridge.ocr import entrypoints as ocr
 from litellm.rust_bridge.responses import entrypoints as responses
@@ -43,6 +44,8 @@ def test_binding_validates_native_attribute(
 ROUTE_BINDINGS: Final = (
     ("completion", chat_completions.NATIVE_COMPLETION),
     ("acompletion", chat_completions.NATIVE_ACOMPLETION),
+    ("embedding", embeddings.NATIVE_EMBEDDING),
+    ("aembedding", embeddings.NATIVE_AEMBEDDING),
     ("messages", messages.NATIVE_MESSAGES),
     ("amessages", messages.NATIVE_AMESSAGES),
     ("responses", responses.NATIVE_RESPONSES),
