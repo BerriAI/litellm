@@ -1332,6 +1332,12 @@ async def test_public_vault_rotation_failure_messages_and_request_counts_match_p
         actual: Final = await native_manager.async_rotate_secret("OLD", "NEW", "value")
         assert actual == reference
         assert actual["status"] == "error"
+        expected_paths: Final = (
+            ("/v1/secret/data/OLD",)
+            + (("/v1/secret/data/NEW",) if stage != "current" else ())
+            + (("/v1/secret/data/NEW",) if stage == "verify" else ())
+        )
+        assert tuple(urlsplit(request.path).path for request in server.requests) == expected_paths * 2
 
 
 @pytest.mark.parametrize("value", (None, "different", True, 42, 2**100, [1, "two"], [2**100], {"nested": 2**100}))
