@@ -18,6 +18,8 @@ _JPEG_FIRST_SEGMENT_OFFSET: Final = 2
 _JPEG_SOF_PAYLOAD_SIZE: Final = 5
 _HEADER_READ_SIZE: Final = 32
 _MIN_PNG_HEADER_SIZE: Final = 24
+_MIN_GIF_HEADER_SIZE: Final = 10
+_MIN_BMP_HEADER_SIZE: Final = 26
 _MIN_WEBP_HEADER_SIZE: Final = 30
 
 
@@ -37,10 +39,26 @@ def _png_dimensions(head: bytes) -> tuple[int, int] | None:
     return width, height
 
 
+def _gif_dimensions(head: bytes) -> tuple[int, int] | None:
+    if len(head) < _MIN_GIF_HEADER_SIZE:
+        return None
+    width: Final = int.from_bytes(head[6:8], "little")
+    height: Final = int.from_bytes(head[8:10], "little")
+    return width, height
+
+
+def _bmp_dimensions(head: bytes) -> tuple[int, int] | None:
+    if len(head) < _MIN_BMP_HEADER_SIZE:
+        return None
+    width: Final = int.from_bytes(head[18:22], "little", signed=True)
+    height: Final = int.from_bytes(head[22:26], "little", signed=True)
+    return width, abs(height)
+
+
 def _webp_dimensions(head: bytes) -> tuple[int, int] | None:
     if len(head) < _MIN_WEBP_HEADER_SIZE:
         return None
-    match head[12:16]:
+    match head[12:16]:  # pyright: ignore[reportMatchNotExhaustive]  # unknown fourccs fall through to the None below
         case b"VP8X":
             return int.from_bytes(head[24:27], "little") + 1, int.from_bytes(head[27:30], "little") + 1
         case b"VP8 ":
@@ -85,6 +103,10 @@ def _header_dimensions(stream: IO[bytes], position: int) -> tuple[int, int] | No
             return _webp_dimensions(head)
         case "jpeg":
             return _jpeg_sof_dimensions(stream, position, _JPEG_FIRST_SEGMENT_OFFSET, _MAX_JPEG_SEGMENTS)
+        case "gif":
+            return _gif_dimensions(head)
+    if head[:2] == b"BM":
+        return _bmp_dimensions(head)
     return None
 
 

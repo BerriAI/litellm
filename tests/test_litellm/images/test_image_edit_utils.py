@@ -86,21 +86,27 @@ JPEG_SOF2_MARKER: Final = 0xC2
 PADDED_JPEG: Final = JPEG_SOI + b"\xff\xff" + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
 SHORT_LENGTH_JPEG: Final = JPEG_SOI + bytes((0xFF, JPEG_APP0, 0x00, 0x01))
 TRUNCATED_SOF_JPEG: Final = JPEG_SOI + bytes((0xFF, JPEG_SOF0_MARKER, 0x00, 0x11, 0x08))
-SEGMENTS_63_JPEG: Final = JPEG_SOI + _jpeg_segment(JPEG_APP0, bytes(4)) * 63 + _jpeg_sof_segment(
-    JPEG_SOF0_MARKER, 320, 200
+SEGMENTS_63_JPEG: Final = (
+    JPEG_SOI + _jpeg_segment(JPEG_APP0, bytes(4)) * 63 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
 )
-SEGMENTS_65_JPEG: Final = JPEG_SOI + _jpeg_segment(JPEG_APP0, bytes(4)) * 65 + _jpeg_sof_segment(
-    JPEG_SOF0_MARKER, 320, 200
+SEGMENTS_65_JPEG: Final = (
+    JPEG_SOI + _jpeg_segment(JPEG_APP0, bytes(4)) * 65 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
 )
 PROGRESSIVE_JPEG: Final = JPEG_SOI + _jpeg_sof_segment(JPEG_SOF2_MARKER, 111, 55)
-DHT_JPEG: Final = JPEG_SOI + _jpeg_segment(JPEG_DHT, bytes(8)) + _jpeg_sof_segment(
-    JPEG_SOF0_MARKER, 400, 300
-)
+DHT_JPEG: Final = JPEG_SOI + _jpeg_segment(JPEG_DHT, bytes(8)) + _jpeg_sof_segment(JPEG_SOF0_MARKER, 400, 300)
 
 VP8_BODY: Final = bytes(3) + b"\x9d\x01\x2a" + struct.pack("<HH", 0xC000 | 500, 0xC000 | 250) + bytes(4)
 VP8L_BITS: Final = 299 | (199 << 14)
 VP8L_BODY: Final = b"\x2f" + VP8L_BITS.to_bytes(4, "little") + bytes(5)
 VP8X_BODY: Final = bytes(4) + (700 - 1).to_bytes(3, "little") + (350 - 1).to_bytes(3, "little")
+
+
+def _gif(version: bytes, width: int, height: int) -> bytes:
+    return version + struct.pack("<HH", width, height) + bytes(22)
+
+
+def _bmp(width: int, height: int) -> bytes:
+    return b"BM" + bytes(12) + struct.pack("<I", 40) + struct.pack("<ii", width, height) + bytes(6)
 
 
 @pytest.mark.parametrize(
@@ -119,7 +125,13 @@ VP8X_BODY: Final = bytes(4) + (700 - 1).to_bytes(3, "little") + (350 - 1).to_byt
         pytest.param(_webp_chunk(b"VP8Z", bytes(10)), None, id="webp-unknown-fourcc"),
         pytest.param(_webp_chunk(b"VP8X", VP8X_BODY)[:29], None, id="webp-shorter-than-30-bytes"),
         pytest.param(b"\x89PNG\r\n\x1a\n" + bytes(10), None, id="png-shorter-than-24-bytes"),
-        pytest.param(b"GIF89a" + bytes(26), None, id="unknown-format"),
+        pytest.param(_gif(b"GIF89a", 1024, 768), (1024, 768), id="gif89a"),
+        pytest.param(_gif(b"GIF87a", 320, 200), (320, 200), id="gif87a"),
+        pytest.param(b"GIF89a" + bytes(2), None, id="gif-shorter-than-10-bytes"),
+        pytest.param(_bmp(1024, 768), (1024, 768), id="bmp-positive-height"),
+        pytest.param(_bmp(1024, -768), (1024, 768), id="bmp-negative-height"),
+        pytest.param(b"BM" + bytes(18), None, id="bmp-shorter-than-26-bytes"),
+        pytest.param(b"II*\x00" + bytes(28), None, id="unknown-format"),
     ),
 )
 def test_measure_reference_image_parses_hand_built_headers(header: bytes, expected):
@@ -181,7 +193,7 @@ def test_measure_reference_image_returns_none_for_unreadable_bytes_paths_tuples_
     non_seekable: Final = _NonSeekableStream(png)
 
     assert measure_reference_image(io.BytesIO(b"image")) is None
-    assert measure_reference_image(b"GIF89a" + bytes(26)) is None
+    assert measure_reference_image(b"II*\x00" + bytes(26)) is None
     assert measure_reference_image(path) is None
     assert measure_reference_image(("ref.png", path, "image/png", {})) is None
     assert measure_reference_image(non_seekable) is None
@@ -192,6 +204,7 @@ def test_measure_reference_image_returns_none_for_unreadable_bytes_paths_tuples_
 
 def test_measure_reference_pixels_returns_none_when_any_reference_is_unmeasurable():
     assert measure_reference_pixels([_png(64, 64), CAT_JPEG.read_bytes()]) == 64 * 64 + 512 * 512
+    assert measure_reference_pixels([_png(64, 64), _gif(b"GIF89a", 100, 50)]) == 64 * 64 + 100 * 50
     assert measure_reference_pixels([_png(64, 64), io.BytesIO(b"image"), CAT_JPEG.read_bytes()]) is None
     assert measure_reference_pixels([]) == 0
 
@@ -481,9 +494,7 @@ class TestImageEditHandlerCredentialsForwarding:
             "vertex_ai_credentials": "/path/to/creds.json",
         }
 
-        with patch.object(
-            config, "_ensure_access_token", return_value=("token", "project")
-        ) as mock_ensure:
+        with patch.object(config, "_ensure_access_token", return_value=("token", "project")) as mock_ensure:
             config.validate_environment(
                 headers={},
                 model="test-model",
@@ -512,9 +523,7 @@ class TestImageEditHandlerCredentialsForwarding:
             "vertex_ai_credentials": "/path/to/creds.json",
         }
 
-        with patch.object(
-            config, "_ensure_access_token", return_value=("token", "project")
-        ) as mock_ensure:
+        with patch.object(config, "_ensure_access_token", return_value=("token", "project")) as mock_ensure:
             config.validate_environment(
                 headers={},
                 model="test-model",
@@ -584,10 +593,6 @@ class TestImageEditHandlerCredentialsForwarding:
             params = list(sig.parameters.keys())
 
             assert "litellm_params" in params, (
-                f"{config.__class__.__name__}.validate_environment "
-                "missing litellm_params parameter"
+                f"{config.__class__.__name__}.validate_environment missing litellm_params parameter"
             )
-            assert "api_base" in params, (
-                f"{config.__class__.__name__}.validate_environment "
-                "missing api_base parameter"
-            )
+            assert "api_base" in params, f"{config.__class__.__name__}.validate_environment missing api_base parameter"
