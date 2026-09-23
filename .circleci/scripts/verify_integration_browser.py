@@ -31,8 +31,8 @@ def main() -> None:
     result: Final = json.loads(Path(sys.argv[1]).read_text())
     assert not result.get("errors"), result.get("errors")
     expected: Final = json.loads(
-        (Path(__file__).resolve().parents[2] / "tests/integration/contracts.json").read_text()
-    )["browser"]
+        (Path(__file__).resolve().parents[2] / "tests/e2e/ui/tests/integrationCritical/expected.json").read_text()
+    )
     assert expected and result["stats"]["expected"] == len(expected)
     assert all(result["stats"][name] == 0 for name in ("unexpected", "flaky", "skipped"))
 
