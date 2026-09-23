@@ -1960,6 +1960,9 @@
     "tests/integration/providers/test_fireworks_ai_router_slug_wire.py::test_fireworks_router_slug_text_completion_sends_router_resource_not_models_path": [
       "other.provider_wire.fireworks_ai.router_slug_text_completion_sends_router_resource_name"
     ],
+    "tests/integration/providers/test_anthropic_messages_openai_bridge_wire.py::test_midturn_system_correction_is_forwarded_to_openai_responses": [
+      "providers.anthropic_messages_openai_bridge.midturn_system_correction_reaches_the_wire"
+    ],
     "tests/integration/providers/test_openai_chat_wire.py::test_openai_chat_tool_choice_without_tools_is_not_forwarded": [
       "providers.openai_chat_wire.tool_choice_without_tools_is_dropped_before_the_wire"
     ],
