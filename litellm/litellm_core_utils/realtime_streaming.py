@@ -440,18 +440,30 @@ class RealTimeStreaming:
         if event_obj.get("type") == "session.closed":
             usage: Final = event_obj.get("usage")
             output_seconds: Final = usage.get("output_seconds") if isinstance(usage, dict) else None
-            if isinstance(output_seconds, (int, float)):
-                input_seconds: Final = usage.get("input_seconds") if isinstance(usage, dict) else None
+            input_seconds: Final = usage.get("input_seconds") if isinstance(usage, dict) else None
+            synthetic_output_seconds: Final = (
+                self._translation_output_audio_bytes / self._translation_output_bytes_per_second
+                if self._translation_output_audio_bytes > 0
+                else None
+            )
+            resolved_output_seconds: Final = (
+                output_seconds if isinstance(output_seconds, (int, float)) else synthetic_output_seconds
+            )
+            if isinstance(input_seconds, (int, float)) or resolved_output_seconds is not None:
                 if not self._should_store_message(event_obj):
-                    self.messages.append(
-                        OpenAIRealtimeTranslationClosedEvent(
-                            type="session.closed",
-                            usage=OpenAIRealtimeTranslationDurationUsage(
-                                type="duration",
-                                output_seconds=output_seconds,
-                                **({"input_seconds": input_seconds} if isinstance(input_seconds, (int, float)) else {}),
-                            ),
+                    normalized_usage: Final = (
+                        OpenAIRealtimeTranslationDurationUsage(
+                            type="duration",
+                            input_seconds=float(input_seconds),
+                            output_seconds=float(resolved_output_seconds or 0.0),
                         )
+                        if isinstance(input_seconds, (int, float))
+                        else OpenAIRealtimeTranslationDurationUsage(
+                            type="duration", output_seconds=float(resolved_output_seconds or 0.0)
+                        )
+                    )
+                    self.messages.append(
+                        OpenAIRealtimeTranslationClosedEvent(type="session.closed", usage=normalized_usage)
                     )
                 self._translation_usage_finalized = True
             return
@@ -500,7 +512,10 @@ class RealTimeStreaming:
             if event.get("type") != "session.closed":
                 continue
             event_usage = event.get("usage")  # rebind-ok: each close event carries independent usage
-            if isinstance(event_usage, dict) and isinstance(event_usage.get("output_seconds"), (int, float)):
+            if isinstance(event_usage, dict) and (
+                isinstance(event_usage.get("input_seconds"), (int, float))
+                or isinstance(event_usage.get("output_seconds"), (int, float))
+            ):
                 self._translation_usage_finalized = True
                 return
         if self._translation_output_audio_bytes == 0:

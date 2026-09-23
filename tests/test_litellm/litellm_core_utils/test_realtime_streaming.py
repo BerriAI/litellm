@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from dataclasses import dataclass
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -2997,6 +2997,34 @@ def test_translation_prefers_provider_duration_over_audio_byte_estimate():
     closed_events = [event for event in streaming.messages if event.get("type") == "session.closed"]
     assert len(closed_events) == 1
     assert closed_events[0]["usage"] == {"type": "duration", "input_seconds": 0.25, "output_seconds": 0.5}
+
+
+@pytest.mark.parametrize(
+    ("output_audio_bytes", "expected_usage"),
+    [
+        (0, {"type": "duration", "input_seconds": 0.25, "output_seconds": 0.0}),
+        (48000, {"type": "duration", "input_seconds": 0.25, "output_seconds": 1.0}),
+    ],
+)
+def test_translation_preserves_input_only_provider_usage(
+    output_audio_bytes: int, expected_usage: Mapping[str, str | float]
+) -> None:
+    streaming = RealTimeStreaming(
+        websocket=MagicMock(),
+        backend_ws=MagicMock(),
+        logging_obj=MagicMock(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+    )
+    streaming._translation_output_audio_bytes = output_audio_bytes
+    streaming._capture_translation_output_audio(
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 0.25}}
+    )
+    streaming._finalize_translation_usage()
+
+    closed_events = [event for event in streaming.messages if event.get("type") == "session.closed"]
+    assert len(closed_events) == 1
+    assert closed_events[0]["usage"] == expected_usage
 
 
 @pytest.mark.asyncio

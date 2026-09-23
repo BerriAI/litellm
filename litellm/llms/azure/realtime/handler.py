@@ -42,10 +42,16 @@ async def forward_messages(client_ws: Any, backend_ws: Any):
 
 def azure_realtime_requires_ga(model: str) -> bool:
     try:
-        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="azure")
+        azure_model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="azure")
     except Exception:  # noqa: BLE001  # unmapped deployments can select a protocol explicitly
-        return False
-    return (model_info.get("provider_specific_entry") or {}).get("realtime_ga_only") == 1
+        try:
+            openai_model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="openai")
+        except Exception:  # noqa: BLE001  # unmapped deployments can select a protocol explicitly
+            return False
+        openai_entry: Final = openai_model_info.get("provider_specific_entry")
+        return openai_entry is not None and openai_entry.get("realtime_ga_only") == 1
+    azure_entry: Final = azure_model_info.get("provider_specific_entry")
+    return azure_entry is not None and azure_entry.get("realtime_ga_only") == 1
 
 
 def azure_realtime_protocol_for_client(

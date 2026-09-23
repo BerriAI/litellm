@@ -7877,16 +7877,15 @@ def _validate_gpt_transcription_request(
     language: str | None,
     languages: Sequence[str] | None,
     response_format: str | None,
-    api_version: str | None,
-) -> str | None:
-    model_cost_key: Final = f"{custom_llm_provider}/{model}" if custom_llm_provider == "azure" else model
-    model_info: Final = (
-        get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-        if model_cost_key in litellm.model_cost
-        else {}
+) -> None:
+    model_cost_key: Final = next(
+        (key for key in (f"{custom_llm_provider}/{model}", model) if key in litellm.model_cost), None
     )
-    supported_endpoints: Final = model_info.get("supported_endpoints")
-    provider_specific_entry: Final = model_info.get("provider_specific_entry") or {}
+    model_info: Final = (
+        get_model_info(model=model, custom_llm_provider=custom_llm_provider) if model_cost_key is not None else None
+    )
+    supported_endpoints: Final = model_info.get("supported_endpoints") if model_info is not None else None
+    provider_specific_entry: Final = model_info.get("provider_specific_entry") if model_info is not None else None
     if language is not None and languages is not None:
         raise litellm.UnsupportedParamsError(
             message="language and languages cannot be used together",
@@ -7899,17 +7898,16 @@ def _validate_gpt_transcription_request(
             model=model,
             llm_provider=custom_llm_provider,
         )
-    if provider_specific_entry.get("transcription_json_only") == 1 and response_format not in (None, "json"):
+    if (
+        provider_specific_entry is not None
+        and provider_specific_entry.get("transcription_json_only") == 1
+        and response_format not in (None, "json")
+    ):
         raise litellm.UnsupportedParamsError(
             message=f"{model} only supports response_format='json'",
             model=model,
             llm_provider=custom_llm_provider,
         )
-    if provider_specific_entry.get("transcription_deployment_api") == 1:
-        if api_version in ("v1", "latest", "preview"):
-            return litellm.AZURE_DEFAULT_API_VERSION
-        return api_version
-    return api_version
 
 
 @client
@@ -7976,13 +7974,12 @@ def transcription(
 
     api_key = dynamic_api_key if dynamic_api_key is not None else api_key
 
-    validated_api_version: Final = _validate_gpt_transcription_request(
+    _validate_gpt_transcription_request(
         model=model,
         custom_llm_provider=custom_llm_provider,
         language=language,
         languages=languages,
         response_format=response_format,
-        api_version=api_version,
     )
 
     optional_params: Final = get_optional_params_transcription(
@@ -8038,7 +8035,7 @@ def transcription(
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
-        azure_api_version: Final = validated_api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
+        azure_api_version: Final = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
 
         azure_ad_token: Final = kwargs.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")
 
