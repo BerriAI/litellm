@@ -61,7 +61,6 @@ from .config import (
     ComplexityRouterConfig,
     ComplexityTier,
     JevClassifierConfig,
-    TierDefinition,
 )
 from .jev_classifier import (
     DEFAULT_JEV_INSTRUCTIONS,
@@ -387,7 +386,7 @@ def _human_text(content: object, marker_pairs: tuple[tuple[str, str], ...] = _DE
 def _encrypted_classifier_task(
     request_kwargs: Mapping[str, object] | None,
     marker_pairs: tuple[tuple[str, str], ...],
-) -> dict[str, object] | None:
+) -> dict[str, object] | None:  # mutable-ok: builds one fresh result mapping
     from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 
     raw_input: Final = (request_kwargs or EMPTY_MAPPING).get("input")
@@ -401,7 +400,12 @@ def _encrypted_classifier_task(
         (
             item
             for item in reversed(items)
-            if (messages := resolve_structured_messages(messages=None, request_kwargs={"input": [item]}))
+            if (
+                messages := resolve_structured_messages(
+                    messages=None,
+                    request_kwargs={"input": [item]},  # mutable-ok: resolve wants a plain dict
+                )
+            )
             and any(_iter_human_asks_newest_first(messages, marker_pairs))
         ),
         None,
@@ -414,9 +418,11 @@ def _encrypted_classifier_task(
         return None
     if not any(part.get("type") == "encrypted_content" and part.get("encrypted_content") for part in parts):
         return None
-    return {
+    return {  # mutable-ok: rebuilt payload entry
         **current,
-        "content": [part for part in parts if part.get("type") in ("input_text", "encrypted_content")],
+        "content": [  # mutable-ok: rebuilt payload entry
+            part for part in parts if part.get("type") in ("input_text", "encrypted_content")
+        ],
     }
 
 
@@ -1641,8 +1647,12 @@ class ComplexityRouter(CustomLogger):
             "ComplexityRouter: %s, falling back to %s", reason, self.config.classifier_fallback
         )
         if self.config.classifier_fallback == "default_model":
-            outcome = self._default_model_fallback_outcome()
-            return outcome if signal is None else outcome._replace(signals=(*outcome.signals, signal))
+            default_outcome: Final = self._default_model_fallback_outcome()
+            return (
+                default_outcome
+                if signal is None
+                else default_outcome._replace(signals=(*default_outcome.signals, signal))
+            )
         if scored is not None:
             return scored if signal is None else scored._replace(signals=(*scored.signals, signal))
         tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)

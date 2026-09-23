@@ -34,7 +34,6 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.autorouter_session_rollup import AUTOROUTER_BENCHMARKS_SQL
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
-    refresh_proxy_server_request_body_snapshot,
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # shared owner of team-admin membership

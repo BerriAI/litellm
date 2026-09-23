@@ -3,8 +3,8 @@ Types for auto-router management endpoints
 """
 
 from collections.abc import Mapping, Sequence
-from types import MappingProxyType
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator

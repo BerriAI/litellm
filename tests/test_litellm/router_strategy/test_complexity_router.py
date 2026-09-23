@@ -2481,7 +2481,7 @@ class TestRouterPreRoutingAliasOverrides:
                 {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini"}},
             ]
         )
-        request_kwargs: Dict = {"reasoning_effort": "low"}
+        request_kwargs: dict = {"reasoning_effort": "low"}
 
         deployment = await router.async_get_available_deployment(
             model="smart-router",
@@ -7322,7 +7322,7 @@ class TestClassifierFallbackChoice:
             },
         )
         mock_router_instance.cache = DualCache()
-        request_kwargs: Dict = {"metadata": {"session_id": "session-flaky"}}
+        request_kwargs: dict = {"metadata": {"session_id": "session-flaky"}}
 
         mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
         first = await router.async_pre_routing_hook(

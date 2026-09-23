@@ -1963,8 +1963,10 @@ async def update_model(
             )
 
             ### MERGE WITH EXISTING DATA ###
-            _mp: Final[dict[str, object]] = model_params.litellm_params.dict()
-            merged_dictionary: Final = {
+            _mp: Final[dict[str, object]] = (  # mutable-ok: .dict() output is merged and encrypted below
+                model_params.litellm_params.dict()
+            )  # mutable-ok: .dict() output is merged and encrypted below
+            merged_dictionary: Final = {  # mutable-ok: merge builds the update payload dict
                 key: _existing_litellm_params_dict[key] if value is None else encrypted_params[key]
                 for key, value in _mp.items()
                 if value is not None or _existing_litellm_params_dict.get(key) is not None

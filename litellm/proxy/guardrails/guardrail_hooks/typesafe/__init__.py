@@ -20,8 +20,10 @@ if TYPE_CHECKING:
 
 
 def _coerce_event_hook(
-    mode: str | list[str] | Mode,
-) -> GuardrailEventHooks | list[GuardrailEventHooks] | Mode:
+    mode: str | list[str] | Mode,  # mutable-ok: callers pass a raw hook list, normalized below
+) -> (
+    GuardrailEventHooks | list[GuardrailEventHooks] | Mode  # mutable-ok: keeps the upstream signature
+):  # mutable-ok: callers pass a raw hook list, normalized below
     if isinstance(mode, Mode):
         return mode
     if isinstance(mode, list):
