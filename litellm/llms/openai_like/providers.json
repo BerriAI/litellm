@@ -47,6 +47,7 @@
   "nano-gpt": {
     "base_url": "https://nano-gpt.com/api/v1",
     "api_key_env": "NANOGPT_API_KEY",
+    "api_base_env": "NANOGPT_API_BASE",
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }

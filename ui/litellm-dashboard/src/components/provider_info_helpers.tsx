@@ -36,6 +36,7 @@ import microsoftAzureLogo from "../../public/assets/logos/microsoft_azure.svg";
 import minimaxLogo from "../../public/assets/logos/minimax.svg";
 import mistralLogo from "../../public/assets/logos/mistral.svg";
 import moonshotLogo from "../../public/assets/logos/moonshot.svg";
+import nanoGPTLogo from "../../public/assets/logos/nanogpt.svg";
 import morphLogo from "../../public/assets/logos/morph.svg";
 import nebiusLogo from "../../public/assets/logos/nebius.svg";
 import novitaLogo from "../../public/assets/logos/novita.svg";
@@ -133,6 +134,7 @@ export enum Providers {
   MistralAI = "Mistral AI",
   MOONSHOT = "Moonshot",
   MORPH = "Morph",
+  NANOGPT = "NanoGPT",
   NEBIUS = "Nebius",
   NLP_CLOUD = "Nlp Cloud",
   NOVITA = "Novita",
@@ -250,6 +252,7 @@ export const provider_map: Record<string, string> = {
   MistralAI: "mistral",
   MOONSHOT: "moonshot",
   MORPH: "morph",
+  NANOGPT: "nano-gpt",
   NEBIUS: "nebius",
   NLP_CLOUD: "nlp_cloud",
   NOVITA: "novita",
@@ -356,6 +359,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.MistralAI]: mistralLogo.src,
   [Providers.MOONSHOT]: moonshotLogo.src,
   [Providers.MORPH]: morphLogo.src,
+  [Providers.NANOGPT]: nanoGPTLogo.src,
   [Providers.NEBIUS]: nebiusLogo.src,
   [Providers.NOVITA]: novitaLogo.src,
   [Providers.NVIDIA_NIM]: nvidiaNimLogo.src,

@@ -10,6 +10,12 @@ import {
 
 describe("provider_info_helpers", () => {
   describe("getProviderLogoAndName", () => {
+    it.each(["nano-gpt", "NANOGPT"])("resolves %s to NanoGPT with its bundled logo", (provider) => {
+      const result = getProviderLogoAndName(provider);
+      expect(result.displayName).toBe("NanoGPT");
+      expect(result.logo).toContain("nanogpt.svg");
+    });
+
     it("should return empty logo and dash display name when providerValue is empty", () => {
       const result = getProviderLogoAndName("");
       expect(result).toEqual({ logo: "", displayName: "-" });
