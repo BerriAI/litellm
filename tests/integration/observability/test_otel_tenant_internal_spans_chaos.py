@@ -96,7 +96,6 @@ def _wait_trace_count(sink_url: str, call_ids: list[str | None], seconds: float)
     return result
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.c1_frozen_sink_delivers_after_resume")
 def test_frozen_tenant_sink_receives_every_span_after_resume(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     pid: Final = sink_pid(audit_sinks.tenant)
     with gateway.scenario() as scenario:
@@ -125,7 +124,6 @@ def test_frozen_tenant_sink_receives_every_span_after_resume(gateway: Gateway, a
             assert _classes(group)["internal"] == 0, f"internal spans leaked for {call_id}"
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.c3_slow_sink_no_duplicates")
 def test_slow_tenant_sink_exports_each_span_once(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     configure_sink(audit_sinks.tenant, delay_seconds=2.0)
     try:
@@ -152,7 +150,6 @@ def test_slow_tenant_sink_exports_each_span_once(gateway: Gateway, audit_sinks: 
         configure_sink(audit_sinks.tenant, delay_seconds=0.0)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.c4_proxy_restart_keeps_serving")
 def test_proxy_restart_mid_burst_keeps_serving(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue], otel_audit_config: AuditConfigWriter, tmp_path: Path) -> None:
     path: Final = otel_audit_config(tmp_path, {})
     overrides: Final = {"LITELLM_OTEL_V2": "1", "ARIZE_HTTP_ENDPOINT": audit_sinks.arize}
@@ -198,7 +195,6 @@ def test_proxy_restart_mid_burst_keeps_serving(gateway: Gateway, audit_sinks: Sp
         assert eventually(landed, bool, seconds=40), "post-restart trace never reached the operator sink"
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.c5_worker_kill_survivor_serves")
 def test_killing_one_worker_leaves_serving(
     gateway: Gateway,
     audit_sinks: SpanSinks,

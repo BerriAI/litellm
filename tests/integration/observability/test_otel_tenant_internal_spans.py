@@ -308,7 +308,6 @@ def _candidate(
         yield candidate
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h1_team_exclude_chat_completions_openai_sync")
 def test_team_exclude_chat_completions_openai_sync(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -326,7 +325,6 @@ def test_team_exclude_chat_completions_openai_sync(gateway: Gateway, audit_sinks
         _assert_upstream_saw(gateway.upstream_url, nonce)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h2_team_exclude_chat_completions_stream_async")
 def test_team_exclude_chat_completions_stream_openai_async(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -344,7 +342,6 @@ def test_team_exclude_chat_completions_stream_openai_async(gateway: Gateway, aud
         _assert_upstream_saw(gateway.upstream_url, nonce)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h3_team_exclude_messages_anthropic_sync")
 def test_team_exclude_messages_anthropic_sync(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -362,7 +359,6 @@ def test_team_exclude_messages_anthropic_sync(gateway: Gateway, audit_sinks: Spa
         _assert_upstream_saw(gateway.upstream_url, nonce)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h4_team_exclude_messages_stream_anthropic_async")
 def test_team_exclude_messages_stream_anthropic_async(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -393,7 +389,6 @@ def test_team_exclude_messages_stream_anthropic_async(gateway: Gateway, audit_si
         _assert_upstream_saw(gateway.upstream_url, nonce)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h5_team_exclude_responses_openai_sync")
 def test_team_exclude_responses_api(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -413,7 +408,6 @@ def test_team_exclude_responses_api(gateway: Gateway, audit_sinks: SpanSinks, la
         _assert_upstream_saw(gateway.upstream_url, nonce)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h6_team_exclude_responses_stream_httpx")
 def test_team_exclude_responses_stream(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -434,7 +428,6 @@ def test_team_exclude_responses_stream(gateway: Gateway, audit_sinks: SpanSinks,
         _assert_upstream_saw(gateway.upstream_url, nonce)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h7_team_include_explicit")
 def test_team_include_explicit_delivers_full_trace(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -450,7 +443,6 @@ def test_team_include_explicit_delivers_full_trace(gateway: Gateway, audit_sinks
         _assert_full(_trace_spans(audit_sinks.tenant, tenant_trace))
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h8_var_absent_defaults_include")
 def test_var_absent_defaults_to_include(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -468,7 +460,6 @@ def _key_logging_entry(callback_vars: Mapping[str, JsonValue], callback_name: st
     return [{"callback_name": callback_name, "callback_vars": dict(callback_vars)}]
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h9_key_var_exclude_no_team")
 def test_key_level_exclude_without_team_callbacks(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -484,7 +475,6 @@ def test_key_level_exclude_without_team_callbacks(gateway: Gateway, audit_sinks:
         _assert_full(_trace_spans(audit_sinks.operator, operator_trace))
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h10_key_include_beats_team_exclude")
 def test_key_include_wins_over_team_exclude(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -501,7 +491,6 @@ def test_key_include_wins_over_team_exclude(gateway: Gateway, audit_sinks: SpanS
         _assert_full(_trace_spans(audit_sinks.tenant, tenant_trace))
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h11_key_exclude_beats_team_include")
 def test_key_exclude_wins_over_team_include(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -518,7 +507,6 @@ def test_key_exclude_wins_over_team_include(gateway: Gateway, audit_sinks: SpanS
         _assert_excluded(_trace_spans(audit_sinks.tenant, tenant_trace))
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h12_two_destinations_independent_filters")
 def test_langfuse_exclude_arize_include_split(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -541,7 +529,6 @@ def test_langfuse_exclude_arize_include_split(gateway: Gateway, audit_sinks: Spa
         assert arize_trace == langfuse_trace
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h13_llm_only_scope_with_exclude")
 def test_llm_only_scope_under_exclude_keeps_model_span(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -568,7 +555,6 @@ def test_llm_only_scope_under_exclude_keeps_model_span(gateway: Gateway, audit_s
         assert all("gen_ai.operation.name" in span["attributes"] for span in group), names
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h14_additive_mode_exclude")
 def test_additive_mode_operator_full_tenant_excluded(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue], otel_audit_config: AuditConfigWriter, tmp_path: Path) -> None:
     with _candidate(gateway, tmp_path, audit_sinks, otel_audit_config, settings={"otel_tenant_destination_mode": "additive"}) as candidate:
         with candidate.scenario() as scenario:
@@ -586,7 +572,6 @@ def test_additive_mode_operator_full_tenant_excluded(gateway: Gateway, audit_sin
             _assert_excluded(_trace_spans(audit_sinks.tenant, tenant_trace))
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h15_operator_sink_untouched")
 def test_operator_sink_keeps_internal_spans_under_exclude(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -605,7 +590,6 @@ def test_operator_sink_keeps_internal_spans_under_exclude(gateway: Gateway, audi
         assert any("auth" in name or "redis" in name or "postgres" in name for name in internal_names), internal_names
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h16_guardrail_span_kept_under_exclude")
 def test_guardrail_span_survives_exclude(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue], otel_audit_config: AuditConfigWriter, tmp_path: Path) -> None:
     guardrail_name: Final = f"audit-filter-{uuid.uuid4().hex[:8]}"
     config: Final = yaml.safe_load(otel_audit_config(tmp_path, {}).read_text())
@@ -658,7 +642,6 @@ def test_guardrail_span_survives_exclude(gateway: Gateway, audit_sinks: SpanSink
             assert kept is not None, f"guardrail span missing at tenant sink: {tenant_spans}"
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.d1_env_exclude_applies")
 def test_env_exclude_applies_when_var_absent(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue], otel_audit_config: AuditConfigWriter, tmp_path: Path) -> None:
     with _candidate(gateway, tmp_path, audit_sinks, otel_audit_config, env={"LITELLM_OTEL_TENANT_INTERNAL_SPANS": "exclude"}) as candidate:
         with candidate.scenario() as scenario:
@@ -673,7 +656,6 @@ def test_env_exclude_applies_when_var_absent(gateway: Gateway, audit_sinks: Span
             _assert_excluded(_trace_spans(audit_sinks.tenant, tenant_trace))
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.d2_var_include_beats_env_exclude")
 def test_var_include_beats_env_exclude(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue], otel_audit_config: AuditConfigWriter, tmp_path: Path) -> None:
     with _candidate(gateway, tmp_path, audit_sinks, otel_audit_config, env={"LITELLM_OTEL_TENANT_INTERNAL_SPANS": "exclude"}) as candidate:
         with candidate.scenario() as scenario:
@@ -688,7 +670,6 @@ def test_var_include_beats_env_exclude(gateway: Gateway, audit_sinks: SpanSinks,
             _assert_full(_trace_spans(audit_sinks.tenant, tenant_trace))
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.d3_setting_exclude_applies")
 def test_litellm_setting_exclude_applies_when_var_absent(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue], otel_audit_config: AuditConfigWriter, tmp_path: Path) -> None:
     with _candidate(gateway, tmp_path, audit_sinks, otel_audit_config, settings={"otel_tenant_internal_spans": "exclude"}) as candidate:
         with candidate.scenario() as scenario:
@@ -703,7 +684,6 @@ def test_litellm_setting_exclude_applies_when_var_absent(gateway: Gateway, audit
             _assert_excluded(_trace_spans(audit_sinks.tenant, tenant_trace))
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.d4_setting_include_beats_env_exclude")
 def test_setting_include_beats_env_exclude(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue], otel_audit_config: AuditConfigWriter, tmp_path: Path) -> None:
     with _candidate(gateway, tmp_path, audit_sinks, otel_audit_config, env={"LITELLM_OTEL_TENANT_INTERNAL_SPANS": "exclude"}, settings={"otel_tenant_internal_spans": "include"}
     ) as candidate:
@@ -719,7 +699,6 @@ def test_setting_include_beats_env_exclude(gateway: Gateway, audit_sinks: SpanSi
             _assert_full(_trace_spans(audit_sinks.tenant, tenant_trace))
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.d5_env_whitespace_case_exclude")
 def test_env_exclude_with_whitespace_and_case(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue], otel_audit_config: AuditConfigWriter, tmp_path: Path) -> None:
     with _candidate(gateway, tmp_path, audit_sinks, otel_audit_config, env={"LITELLM_OTEL_TENANT_INTERNAL_SPANS": " EXCLUDE "}) as candidate:
         with candidate.scenario() as scenario:
@@ -734,7 +713,6 @@ def test_env_exclude_with_whitespace_and_case(gateway: Gateway, audit_sinks: Spa
             _assert_excluded(_trace_spans(audit_sinks.tenant, tenant_trace))
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.d6_env_bogus_falls_back_include")
 def test_env_bogus_value_falls_back_to_include(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue], otel_audit_config: AuditConfigWriter, tmp_path: Path) -> None:
     with _candidate(gateway, tmp_path, audit_sinks, otel_audit_config, env={"LITELLM_OTEL_TENANT_INTERNAL_SPANS": "bogus"}) as candidate:
         with candidate.scenario() as scenario:
@@ -749,7 +727,6 @@ def test_env_bogus_value_falls_back_to_include(gateway: Gateway, audit_sinks: Sp
             _assert_full(_trace_spans(audit_sinks.tenant, tenant_trace))
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.d7_empty_setting_falls_through_env")
 def test_empty_setting_falls_through_to_env(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue], otel_audit_config: AuditConfigWriter, tmp_path: Path) -> None:
     with _candidate(gateway, tmp_path, audit_sinks, otel_audit_config, env={"LITELLM_OTEL_TENANT_INTERNAL_SPANS": "exclude"}, settings={"otel_tenant_internal_spans": ""}
     ) as candidate:
@@ -770,7 +747,6 @@ def _bad_var_rejected(response: httpx.Response) -> None:
     assert INTERNAL_SPANS_VAR in response.text or "callback" in response.text, response.text
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s1_int_value_rejected")
 def test_callback_var_int_rejected(gateway: Gateway, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         team_id: Final = scenario.team()
@@ -778,7 +754,6 @@ def test_callback_var_int_rejected(gateway: Gateway, langfuse_vars: dict[str, Js
         _bad_var_rejected(response)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s2_list_value_rejected")
 def test_callback_var_list_rejected(gateway: Gateway, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         team_id: Final = scenario.team()
@@ -788,7 +763,6 @@ def test_callback_var_list_rejected(gateway: Gateway, langfuse_vars: dict[str, J
         _bad_var_rejected(response)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s3_empty_value_rejected")
 def test_callback_var_empty_string_rejected(gateway: Gateway, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         team_id: Final = scenario.team()
@@ -796,7 +770,6 @@ def test_callback_var_empty_string_rejected(gateway: Gateway, langfuse_vars: dic
         _bad_var_rejected(response)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s4_oversized_value_rejected")
 def test_callback_var_oversized_string_rejected(gateway: Gateway, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         team_id: Final = scenario.team()
@@ -804,7 +777,6 @@ def test_callback_var_oversized_string_rejected(gateway: Gateway, langfuse_vars:
         _bad_var_rejected(response)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s5_case_sensitive_rejected")
 def test_callback_var_case_sensitive_rejected(gateway: Gateway, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         team_id: Final = scenario.team()
@@ -812,7 +784,6 @@ def test_callback_var_case_sensitive_rejected(gateway: Gateway, langfuse_vars: d
         _bad_var_rejected(response)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s6_same_value_twice_accepted")
 def test_same_internal_spans_value_on_second_entry_accepted(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -836,7 +807,6 @@ def test_same_internal_spans_value_on_second_entry_accepted(gateway: Gateway, au
         _assert_excluded(_trace_spans(audit_sinks.tenant, tenant_trace))
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s7_conflicting_value_rejected")
 def test_conflicting_internal_spans_value_rejected(gateway: Gateway, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         team_id: Final = scenario.team()
@@ -851,7 +821,6 @@ def test_conflicting_internal_spans_value_rejected(gateway: Gateway, langfuse_va
         assert INTERNAL_SPANS_VAR in second.text, second.text
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s8_non_otel_callback_rejected")
 def test_internal_spans_on_non_otel_callback_rejected(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         team_id: Final = scenario.team()
@@ -865,7 +834,6 @@ def test_internal_spans_on_non_otel_callback_rejected(gateway: Gateway) -> None:
         assert "callback" in response.text, response.text
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s9_newrelic_accepts_var")
 def test_internal_spans_on_newrelic_accepted(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         team_id: Final = scenario.team()
@@ -882,7 +850,6 @@ def test_internal_spans_on_newrelic_accepted(gateway: Gateway) -> None:
         assert "newrelic" in data.get("success_callbacks", []) or "newrelic" in data.get("failure_callbacks", []), data
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s10_unauthenticated_callback_post")
 def test_unauthenticated_callback_post_rejected(gateway: Gateway, langfuse_vars: dict[str, JsonValue]) -> None:
     with httpx.Client(base_url=str(gateway.client.base_url), timeout=15, trust_env=False) as client:
         response: Final = client.post(
@@ -891,7 +858,6 @@ def test_unauthenticated_callback_post_rejected(gateway: Gateway, langfuse_vars:
     assert response.status_code == 401, f"expected 401, got {response.status_code}: {response.text}"
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s11_key_generate_bogus_rejected")
 def test_key_generate_bogus_internal_spans_rejected(gateway: Gateway, langfuse_vars: dict[str, JsonValue]) -> None:
     response: Final = gateway.request(
         "POST", "/key/generate", {"metadata": {"logging": _key_logging_entry({**langfuse_vars, INTERNAL_SPANS_VAR: "bogus"})}}
@@ -899,7 +865,6 @@ def test_key_generate_bogus_internal_spans_rejected(gateway: Gateway, langfuse_v
     assert response.status_code == 400, f"expected 400, got {response.status_code}: {response.text}"
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s12_key_update_bogus_rejected")
 def test_key_update_bogus_internal_spans_rejected(gateway: Gateway, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         key: Final = scenario.key()
@@ -911,7 +876,6 @@ def test_key_update_bogus_internal_spans_rejected(gateway: Gateway, langfuse_var
         assert response.status_code == 400, f"expected 400, got {response.status_code}: {response.text}"
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s13_team_update_unvalidated_drops_destination")
 def test_team_update_bogus_internal_spans_drops_destination(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -965,21 +929,18 @@ def _sink_status_flow(
         configure_sink(audit_sinks.tenant, status=200)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s14_tenant_sink_403_caller_unaffected")
 def test_tenant_sink_403_does_not_break_caller(
     gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]
 ) -> None:
     _sink_status_flow(gateway, audit_sinks, langfuse_vars, 403)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s15_tenant_sink_404_caller_unaffected")
 def test_tenant_sink_404_does_not_break_caller(
     gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]
 ) -> None:
     _sink_status_flow(gateway, audit_sinks, langfuse_vars, 404)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s16_upstream_500_under_exclude")
 def test_upstream_500_under_exclude_keeps_internal_spans_back(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     upstream_model: Final = "audit-chat"
     httpx.post(
@@ -1014,7 +975,6 @@ def test_upstream_500_under_exclude_keeps_internal_spans_back(gateway: Gateway, 
         httpx.delete(f"{gateway.upstream_url}/__scripts/{upstream_model}", trust_env=False, timeout=15)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s17_unrelated_key_unaffected")
 def test_unrelated_key_unaffected_by_tenant_sink_failure(gateway: Gateway, audit_sinks: SpanSinks) -> None:
     configure_sink(audit_sinks.tenant, status=403)
     try:
@@ -1027,7 +987,6 @@ def test_unrelated_key_unaffected_by_tenant_sink_failure(gateway: Gateway, audit
         configure_sink(audit_sinks.tenant, status=200)
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s18_key_health_with_exclude_team")
 def test_key_health_with_excluded_team_callback(gateway: Gateway, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         team_id: Final = scenario.team()
@@ -1038,7 +997,6 @@ def test_key_health_with_excluded_team_callback(gateway: Gateway, langfuse_vars:
         assert response.status_code == 200, f"/key/health failed: {response.status_code} {response.text}"
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.e1_var_update_takes_effect_within_ttl")
 def test_callback_var_update_include_to_exclude_takes_effect(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -1082,7 +1040,6 @@ def test_callback_var_update_include_to_exclude_takes_effect(gateway: Gateway, a
         assert trace is not None, "exclude never took effect within the cache TTL"
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.e2_callback_delete_stops_tenant_export")
 def test_callback_delete_stops_tenant_export(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -1113,7 +1070,6 @@ def test_callback_delete_stops_tenant_export(gateway: Gateway, audit_sinks: Span
         assert not leaked, f"tenant sink still received spans after callback delete: {leaked}"
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.e3_identical_requests_export_once")
 def test_identical_requests_export_exactly_once(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
@@ -1147,7 +1103,6 @@ def test_identical_requests_export_exactly_once(gateway: Gateway, audit_sinks: S
             assert len(operator_matching) == 1, f"operator exported {response_id} {len(operator_matching)} times"
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.e4_concurrent_requests_excluded_once")
 def test_concurrent_requests_all_excluded_once(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
 
     with gateway.scenario() as scenario:
@@ -1179,7 +1134,6 @@ def test_concurrent_requests_all_excluded_once(gateway: Gateway, audit_sinks: Sp
             assert workers, "no process attribution on tenant spans"
 
 
-@pytest.mark.covers("other.observability.otel.tenant_internal_spans.e5_failure_only_entry_anchors_no_destination")
 def test_failure_only_callback_entry_anchors_no_destination(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
