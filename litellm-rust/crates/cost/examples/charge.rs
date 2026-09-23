@@ -1,6 +1,10 @@
 use litellm_cost::batch::{
     BatchCostRates, BatchPricing, BatchUsage, ModalityRates, batch_cost_calculator,
 };
+use litellm_cost::custom_pricing::{
+    CustomPricing, CustomTokenRates, RawUsage, cost_per_token_custom_pricing_helper,
+    normalize_cache_usage,
+};
 use litellm_cost::non_token::{
     ImageRates, ImageUsage, OcrBatchRates, OcrRates, OcrUsage, VideoRates, calculate_image,
     calculate_ocr, calculate_ocr_batch, calculate_video,
@@ -126,5 +130,36 @@ fn main() {
     println!(
         "batch_input={} batch_output={}",
         batch.prompt, batch.completion
+    );
+    let normalized = normalize_cache_usage(RawUsage {
+        prompt_tokens: 1000.0,
+        completion_tokens: 100.0,
+        details_cached_tokens: Some(400.0),
+        details_cache_write_tokens: None,
+        details_cache_creation_tokens: None,
+        top_level_cache_read_tokens: None,
+        top_level_cache_creation_tokens: None,
+        fallback_cache_read_tokens: None,
+        fallback_cache_creation_tokens: None,
+    })
+    .unwrap();
+    let custom = cost_per_token_custom_pricing_helper(
+        normalized,
+        CustomPricing {
+            token: Some(CustomTokenRates {
+                input: 0.0000025,
+                output: 0.000015,
+                cache_read: Some(0.00000025),
+                cache_creation: None,
+            }),
+            per_second: None,
+        },
+        None,
+    )
+    .unwrap()
+    .unwrap();
+    println!(
+        "custom_input={} custom_output={}",
+        custom.input, custom.output
     );
 }

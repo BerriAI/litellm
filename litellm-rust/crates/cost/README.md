@@ -8,6 +8,8 @@ Call `compile(&pricing)` once for an immutable plan, then `plan.calculate(&reque
 
 `batch::get_batch_cost_rates` selects input, output, cache read, and cache creation rates independently at the highest crossed threshold. `batch::batch_cost_calculator` applies batch modality rates, cache rates, the regular-rate half-price fallback, and an optional regional multiplier to normalized usage. The caller supplies model prices, provider threshold policy, regional multiplier, and token details
 
+`custom_pricing::normalize_cache_usage` applies Python's cache field precedence and adjusts prompt tokens when cache counts use the Anthropic convention. `custom_pricing::cost_per_token_custom_pricing_helper` prices normalized usage with caller-supplied token or per-second rates. The module validates finite nonnegative quantities and rates before calculation
+
 ## Python function map
 
 The Rust module tree does not mirror Python's overall cost module tree. The Python entry points also look up models, normalize responses, and choose providers, while this crate starts with caller-supplied prices and usage. These mappings cover the calculation portions of the functions:
@@ -21,6 +23,8 @@ The Rust module tree does not mirror Python's overall cost module tree. The Pyth
 | `litellm.cost_calculator.default_video_cost_calculator` | `litellm_cost::non_token::calculate_video` | `test_video_generation.py::test_video_generation_cost_*` | `python_cost_calculator.rs::default_video_cost_calculator_*` |
 | `litellm.litellm_core_utils.llm_cost_calc.utils.get_batch_cost_rates` | `litellm_cost::batch::get_batch_cost_rates` | `test_cost_calculator.py::test_batch_cost_calculator_*` | `python_cost_calculator.rs::get_batch_cost_rates_*` |
 | `litellm.cost_calculator.batch_cost_calculator` | `litellm_cost::batch::batch_cost_calculator` | `test_cost_calculator.py::test_batch_cost_calculator_*` | `python_cost_calculator.rs::batch_cost_calculator_*` |
+| `litellm.cost_calculator.cost_per_token` cache normalization | `litellm_cost::custom_pricing::normalize_cache_usage` | `test_cost_calculator.py::test_custom_pricing_*` | `python_custom_pricing.rs::normalize_cache_usage_*` |
+| `litellm.cost_calculator._cost_per_token_custom_pricing_helper` | `litellm_cost::custom_pricing::cost_per_token_custom_pricing_helper` | `test_cost_calculator.py::test_custom_pricing_*` | `python_custom_pricing.rs::cost_per_token_custom_pricing_helper_*` |
 
 `cost_per_token`, `completion_cost`, `response_cost_calculator`, provider calculators, and Python's model lookup and response normalization have no Rust counterpart yet. The ported Rust cases use `rstest` and synthetic prices; they cover the corresponding Python tests' price selection and arithmetic, not their integration with Python model registration
 
