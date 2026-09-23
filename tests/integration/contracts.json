@@ -45,6 +45,21 @@
     "tests/integration/providers/test_request_boundary.py::test_upstream_rejects_corruption_and_accepts_supported_metadata": [
       "other.provider_wire.validator_rejects_corruption"
     ],
+    "tests/integration/providers/test_request_boundary.py::test_internal_key_forced_into_body_is_observed_at_emission": [
+      "other.provider_wire.internal_key_emission_observed"
+    ],
+    "tests/integration/providers/test_request_boundary.py::test_internal_key_forced_into_converse_body_is_observed_at_emission": [
+      "other.provider_wire.internal_key_emission_observed_bedrock_converse"
+    ],
+    "tests/integration/providers/test_request_boundary.py::test_internal_key_forced_into_embedding_body_is_observed_at_emission": [
+      "other.provider_wire.internal_key_emission_observed_embedding"
+    ],
+    "tests/integration/providers/test_request_boundary.py::test_internal_key_forced_into_responses_body_is_observed_at_emission": [
+      "other.provider_wire.internal_key_emission_observed_responses"
+    ],
+    "tests/integration/providers/test_request_boundary.py::test_internal_key_forced_into_async_responses_body_is_observed_at_emission": [
+      "other.provider_wire.internal_key_emission_observed_responses_async"
+    ],
     "tests/integration/pricing/test_configured_prices.py::test_loaded_router_preserves_cached_defaults_during_real_requests": [
       "quota_management.spend_tracking.default_prices.loaded_router_preserves_cached_defaults"
     ],

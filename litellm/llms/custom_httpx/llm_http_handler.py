@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     synthesize_subtitle_document,
 )
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
+from litellm.litellm_core_utils.internal_key_emission_guard import observe_internal_keys
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.realtime_errors import (
     close_after_upstream_handshake_refusal,
@@ -619,6 +620,7 @@ class BaseLLMHTTPHandler:
             transformed: dict[str, object],  # mutable-ok: async_completion takes dict
         ) -> tuple[dict[str, object], dict[str, object], bytes | None]:  # mutable-ok: async_completion takes dict
             data: Final = {**transformed, **extra_body} if extra_body is not None else transformed
+            observe_internal_keys(data, custom_llm_provider)
             signed: Final = cast(  # cast-ok: sign_request is declared as a bare dict
                 "tuple[dict[str, object], bytes | None]",
                 provider_config.sign_request(
@@ -1078,7 +1080,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
         )
 
-        data: Final = provider_config.transform_embedding_request(
+        data: Final[dict[str, object]] = provider_config.transform_embedding_request(
             model=model,
             input=input,
             optional_params=optional_params,
@@ -1086,6 +1088,7 @@ class BaseLLMHTTPHandler:
         )
         if embedding_extra_body:
             data.update(embedding_extra_body)
+        observe_internal_keys(data, custom_llm_provider)
 
         # Some providers (e.g. OCI) require request signing after the body is built.
         # The default BaseConfig.sign_request returns (headers, None) — a no-op for
@@ -2704,6 +2707,7 @@ class BaseLLMHTTPHandler:
 
         if extra_body:
             data.update(extra_body)
+        observe_internal_keys(data, custom_llm_provider)
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
@@ -2892,6 +2896,7 @@ class BaseLLMHTTPHandler:
 
         if extra_body:
             data.update(extra_body)
+        observe_internal_keys(data, custom_llm_provider)
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
