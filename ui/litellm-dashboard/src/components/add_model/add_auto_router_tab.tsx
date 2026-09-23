@@ -216,7 +216,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
     tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
-    classifier_type: "heuristic_v2",
+    classifier_type: "heuristic",
   });
 
   const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
@@ -233,7 +233,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [selectedPreset, setSelectedPreset] = useState<string | undefined>(undefined);
-  const [defaultClassifierPending, setDefaultClassifierPending] = useState(true);
 
   const [isRoutingTestVisible, setIsRoutingTestVisible] = useState<boolean>(false);
   const [isTestModalVisible, setIsTestModalVisible] = useState<boolean>(false);
@@ -344,7 +343,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   );
 
   const applyPrefill = (prefill: PresetPrefill) => {
-    setDefaultClassifierPending(false);
     setEditingTiers(false);
     setComplexityRouterConfig(prefill.complexityRouterConfig);
     setCustomTechnicalKeywords(prefill.customTechnicalKeywords);
@@ -421,17 +419,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     },
     !requiresTeamScope || Boolean(watchedTeamId),
   );
-  const saveBlockedReason =
-    submitBlockedReason ?? (!routerAvailability.isChecking ? routerAvailability.data?.error ?? null : null);
-  const hasFreshAvailability =
-    routerAvailability.isFetchedAfterMount && !routerAvailability.isFetching && !routerAvailability.isError;
-  if (defaultClassifierPending && routerAvailability.data && hasFreshAvailability) {
-    setDefaultClassifierPending(false);
-    const v2 = routerAvailability.data.allowances.find((entry) => entry.key === "heuristic_v2");
-    if (v2?.remaining === 0) setComplexityRouterConfig((current) => ({ ...current, classifier_type: "heuristic" }));
-  }
+  const saveBlockedReason = submitBlockedReason ?? routerAvailability.saveBlockedReason;
   const handleClassifierChange = (config: ComplexityRouterConfigValue) => {
-    setDefaultClassifierPending(false);
     setSelectedPreset(undefined);
     setComplexityRouterConfig(config);
   };

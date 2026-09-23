@@ -10,6 +10,7 @@ import {
   within,
   fireEvent,
   testQueryClient,
+  act,
   chooseSelectOption,
 } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
@@ -180,17 +181,13 @@ describe("AddAutoRouterTab", () => {
     mockFetchAllModelDeployments.mockResolvedValue([]);
   });
 
-  it.each([1, 0])("defaults to the available heuristic with %s v2 slots remaining", async (remaining) => {
+  it.each([1, 0])("defaults to Rule-based with %s v2 slots remaining", async (remaining) => {
     vi.mocked(apiClient.post).mockResolvedValueOnce({
       allowances: [{ key: "heuristic_v2", limit: 1, remaining, available: true }],
       error: null,
     });
     renderWithProviders(<Harness />);
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Heuristic" })).toHaveTextContent(
-        remaining ? "Heuristic v2" : "Rule-based",
-      ),
-    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "Heuristic" })).toHaveTextContent("Rule-based"));
   });
 
   it("does not show a tuning rejection for an incomplete Rule-based draft", async () => {
@@ -206,9 +203,9 @@ describe("AddAutoRouterTab", () => {
     expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
   });
 
-  it("refreshes a cached allowance before choosing the default when the form reopens", async () => {
+  it("keeps the Rule-based default when the form reopens with a cached allowance", async () => {
     const first = renderWithProviders(<Harness />);
-    await screen.findByText("1 of 1 available");
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalled());
     first.unmount();
     vi.mocked(apiClient.post).mockResolvedValueOnce({
       allowances: [{ key: "heuristic_v2", limit: 1, remaining: 0, available: true }],
@@ -259,7 +256,7 @@ describe("AddAutoRouterTab", () => {
     await user.click(screen.getByRole("button", { name: "Restore defaults" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     expect(screen.getByRole("radio", { name: "Jev" })).toBeChecked();
-    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     const saved = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config;
@@ -267,6 +264,37 @@ describe("AddAutoRouterTab", () => {
     expect(saved?.classifier_type).toBe("jev");
     expect(Object.keys(saved?.tiers ?? {})).toEqual(["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]);
     expect(saved?.tiers).toEqual(initialRequest.complexity_router_config.tiers);
+  });
+
+  it("blocks button and Enter submissions until the edited draft is checked", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    renderWithProviders(<Harness />);
+    await user.click(await screen.findByRole("button", { name: "Choose models for me" }));
+    await user.click(screen.getByRole("radio", { name: "Jev" }));
+    fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "checked-router" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+    let complete: ((result: unknown) => void) | undefined;
+    vi.mocked(apiClient.post).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    await user.click(screen.getByRole("button", { name: "Edit tiers" }));
+    fireEvent.change(screen.getByLabelText("Definition for tier 1"), { target: { value: "Custom definition" } });
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+    fireEvent.submit(screen.getByLabelText("Auto Router Name").closest("form")!);
+    await waitFor(() => expect(complete).toBeDefined());
+    expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+    await act(async () => complete?.({ allowances: [], error: "Custom tiers have no available allowance" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Custom tiers have no available allowance");
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Restore defaults" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
   });
 
   it("does not overwrite a classifier chosen while availability is loading", async () => {
@@ -339,7 +367,7 @@ describe("AddAutoRouterTab", () => {
         fireEvent.change(screen.getByLabelText("Maximum quality gap"), { target: { value: "0.05" } });
       }
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
       openAutoRouterAdvanced("Housekeeping Routing");
       openAutoRouterAdvanced("Affinity");
       openAutoRouterAdvanced("Response Format");
@@ -353,6 +381,7 @@ describe("AddAutoRouterTab", () => {
       expect(screen.queryByText("Classification Method")).not.toBeInTheDocument();
       openAutoRouterAdvanced("Affinity");
       expect(screen.getByText("Affinity")).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
       await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledTimes(1));
       const expected = {
@@ -509,6 +538,7 @@ describe("AddAutoRouterTab", () => {
     vi.mocked(getMissingTiersError).mockReturnValue(null);
     renderWithProviders(<Harness />);
 
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     expect(await screen.findByText("Auto router name is required")).toBeInTheDocument();
@@ -543,6 +573,7 @@ describe("AddAutoRouterTab", () => {
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "team-scoped-router");
     await user.selectOptions(screen.getByTestId("team-dropdown"), "team-1");
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -590,6 +621,7 @@ describe("AddAutoRouterTab", () => {
     expandDetailedConfiguration();
     expect(screen.queryByText("Compression")).not.toBeInTheDocument();
     expect(screen.queryByText("Model Access Groups")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(modelCreateCall).toHaveBeenCalled());
@@ -615,6 +647,7 @@ describe("AddAutoRouterTab", () => {
 
     renderWithProviders(<Harness />);
     await user.type(screen.getByPlaceholderText(/smart_router/i), "rejected-router");
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(validateAutoRouterConfig).toHaveBeenCalled());
@@ -634,8 +667,10 @@ describe("AddAutoRouterTab", () => {
     const { container } = renderWithProviders(<Harness />);
     fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "double-submit-router" } });
 
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     fireEvent.submit(container.querySelector("form")!);
-    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled());
+    await waitFor(() => expect(validateAutoRouterConfig).toHaveBeenCalledOnce());
+    expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
     fireEvent.submit(container.querySelector("form")!);
 
     resolveVerdict({ valid: true });
@@ -651,6 +686,7 @@ describe("AddAutoRouterTab", () => {
 
     renderWithProviders(<Harness />);
     await user.type(screen.getByPlaceholderText(/smart_router/i), "accepted-router");
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -690,7 +726,7 @@ describe("AddAutoRouterTab", () => {
 
     await addKeyword(user, screen.getByText("Keywords 1").closest("div") as HTMLElement, "invoice");
 
-    expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     expect(screen.queryByText("At least one keyword is required")).not.toBeInTheDocument();
   });
 
@@ -742,6 +778,7 @@ describe("AddAutoRouterTab", () => {
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
     const keywordsField = screen.getByText("Keywords 1").closest("div") as HTMLElement;
     await addKeyword(user, keywordsField, "invoice");
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -759,6 +796,7 @@ describe("AddAutoRouterTab", () => {
     );
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "team-scoped-router");
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     expect(await screen.findByText("Please select a team to continue")).toBeInTheDocument();
@@ -778,6 +816,7 @@ describe("AddAutoRouterTab", () => {
     await user.type(screen.getByPlaceholderText(/smart_router/i), "team-scoped-router");
     await user.selectOptions(screen.getByTestId("team-dropdown"), "team-1");
     await user.click(screen.getByTestId("team-dropdown-clear"));
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     expect(await screen.findByText("Please select a team to continue")).toBeInTheDocument();
@@ -797,6 +836,7 @@ describe("AddAutoRouterTab", () => {
       "Once per session",
     );
 
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -829,6 +869,7 @@ describe("AddAutoRouterTab", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "1.01" } });
     expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
     fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "0" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
@@ -847,6 +888,7 @@ describe("AddAutoRouterTab", () => {
     await user.click(automaticSetup);
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "reset-threshold-router" } });
     openAutoRouterAdvanced("Classification Method");
+    await selectAutoRouterOption("Heuristic", "Heuristic v2");
     fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "1.1" } });
     expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
 
@@ -854,6 +896,7 @@ describe("AddAutoRouterTab", () => {
     expect(screen.getByRole("textbox", { name: "Success threshold" })).toHaveValue("1.1");
     expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
     fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).not.toHaveProperty(
@@ -874,6 +917,7 @@ describe("AddAutoRouterTab", () => {
     expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Clear Heuristic v2 threshold" }));
     expect(screen.queryByRole("region", { name: "Inactive Heuristic v2 threshold" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).not.toHaveProperty(
@@ -895,6 +939,7 @@ describe("AddAutoRouterTab", () => {
     expect(screen.queryByLabelText("Window fit buffer")).not.toBeInTheDocument();
     await user.click(toggle);
 
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -917,6 +962,7 @@ describe("AddAutoRouterTab", () => {
     fireEvent.change(buffer, { target: { value: "1.5" } });
     fireEvent.blur(buffer, { target: { value: "1.5" } });
 
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -941,6 +987,7 @@ describe("AddAutoRouterTab", () => {
     fireEvent.change(buffer, { target: { value: "" } });
     fireEvent.blur(buffer, { target: { value: "" } });
 
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -957,6 +1004,7 @@ describe("AddAutoRouterTab", () => {
       renderWithProviders(<Harness />);
 
       await user.type(screen.getByPlaceholderText(/smart_router/i), "no-compression-router");
+      await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
       await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -980,6 +1028,7 @@ describe("AddAutoRouterTab", () => {
         "None (no compression)",
       );
 
+      await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
       await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1005,6 +1054,7 @@ describe("AddAutoRouterTab", () => {
       await user.click(screen.getByText("Use a different compression"));
       expect(screen.getByRole("combobox", { name: "Model call compression" })).toBeInTheDocument();
 
+      await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
       await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1029,6 +1079,7 @@ describe("AddAutoRouterTab", () => {
     await user.click(await screen.findByText("Advanced scoring"));
     fireEvent.change(await screen.findByLabelText("Minimum score"), { target: { value: "0" } });
 
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1052,6 +1103,7 @@ describe("AddAutoRouterTab", () => {
     fireEvent.change(ttl, { target: { value: "300" } });
     fireEvent.blur(ttl);
 
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1072,6 +1124,7 @@ describe("AddAutoRouterTab", () => {
     openAutoRouterAdvanced("Classification Method");
     await selectAutoRouterOption("How often to classify", "Every new user message");
 
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1091,6 +1144,7 @@ describe("AddAutoRouterTab", () => {
     openAutoRouterAdvanced("Classification Method");
     expect(await screen.findByRole("combobox", { name: "How often to classify" })).toHaveTextContent("Every request");
 
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1110,6 +1164,7 @@ describe("AddAutoRouterTab", () => {
     openAutoRouterAdvanced("Affinity");
     expect(await screen.findByRole("switch", { name: "Pin one model deployment per tier" })).toBeChecked();
 
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1129,6 +1184,7 @@ describe("AddAutoRouterTab", () => {
     openAutoRouterAdvanced("Affinity");
     await user.click(await screen.findByRole("switch", { name: "Pin one model deployment per tier" }));
 
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1145,6 +1201,7 @@ describe("AddAutoRouterTab", () => {
 
     fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "modality-router" } });
 
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1166,6 +1223,7 @@ describe("AddAutoRouterTab", () => {
     await user.click(await screen.findByRole("switch", { name: "Route image requests to vision-capable models" }));
     await user.click(await screen.findByRole("switch", { name: "Override session pin for image requests" }));
 
+    await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1384,6 +1442,7 @@ describe("AddAutoRouterTab", () => {
       await selectTemplate("Anthropic Family");
 
       await user.type(screen.getByPlaceholderText(/smart_router/i), "anthropic-router");
+      await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
       await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1405,7 +1464,7 @@ describe("AddAutoRouterTab", () => {
       await waitForPresetEnabled("Anthropic Family");
       await selectTemplate("Anthropic Family");
       fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "stale-model-router" } });
-      expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled();
+      await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
 
       // The model list changed after the tiers were filled in (e.g. a deployment removed
       // elsewhere) - update the query cache directly rather than a real refetch, since that's the
@@ -1430,6 +1489,7 @@ describe("AddAutoRouterTab", () => {
       await selectTemplate("Anthropic Family");
 
       await user.type(screen.getByPlaceholderText(/smart_router/i), "anthropic-router");
+      await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
       await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1466,6 +1526,7 @@ describe("AddAutoRouterTab", () => {
 
       await applyPresetAndPin(user);
       await user.type(screen.getByPlaceholderText(/smart_router/i), "pinned-router");
+      await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
       await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1485,7 +1546,7 @@ describe("AddAutoRouterTab", () => {
 
       await applyPresetAndPin(user);
       fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "stale-pin-router" } });
-      expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled();
+      await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
 
       // Only the pinned model disappears - the tier models all survive, so nothing but the pin can
       // be what blocks the submit.
@@ -1511,6 +1572,7 @@ describe("AddAutoRouterTab", () => {
       await waitForPresetEnabled("Anthropic Family");
       await selectTemplate("Anthropic Family");
       await user.type(screen.getByPlaceholderText(/smart_router/i), "no-plan-router");
+      await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
       await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1530,6 +1592,7 @@ describe("AddAutoRouterTab", () => {
       await user.click(await screen.findByRole("switch", { name: "Route plan-mode requests to a minimum tier" }));
 
       await user.type(screen.getByPlaceholderText(/smart_router/i), "plan-router");
+      await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
       await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1585,6 +1648,7 @@ describe("AddAutoRouterTab", () => {
       expect(screen.getByText("Keyword/Semantic Matching")).toBeInTheDocument();
 
       await user.type(screen.getByPlaceholderText(/smart_router/i), "renamed-router");
+      await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
       await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1679,6 +1743,7 @@ describe("AddAutoRouterTab", () => {
       await selectTemplate("Anthropic Family");
 
       await user.type(screen.getByPlaceholderText(/smart_router/i), "wildcard-router");
+      await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
       await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -1776,6 +1841,7 @@ describe("preset catalog fetch states", () => {
     await waitForPresetEnabled("Bounded JEV");
     await selectTemplate("Bounded JEV");
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "bounded-router" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());

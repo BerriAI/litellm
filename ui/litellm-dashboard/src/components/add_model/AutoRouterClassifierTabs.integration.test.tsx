@@ -90,9 +90,9 @@ describe("Auto-router classifier selection", () => {
   );
 
   it.each([
-    [1, "heuristic_v2"],
+    [1, "heuristic"],
     [0, "heuristic"],
-  ])("selects the available heuristic when %s slots remain", async (remaining, classifier) => {
+  ])("defaults to Rule-based when %s v2 slots remain", async (remaining, classifier) => {
     renderWithProviders(<Form remaining={Number(remaining)} />);
     fireEvent.click(screen.getByRole("radio", { name: /^Heuristics$/ }));
     expect(screen.getByRole("status", { name: "Classifier type" })).toHaveTextContent(String(classifier));
@@ -100,6 +100,19 @@ describe("Auto-router classifier selection", () => {
     expect(screen.getByRole("menuitemradio", { name: /^Heuristic v2/ })).toHaveTextContent(
       `${remaining} of 1 available`,
     );
+  });
+
+  it.each([
+    { data: undefined },
+    { isPending: true },
+    { isError: true },
+    { isChecking: true },
+    { data: { allowances: [], error: null } },
+    { data: { allowances: [{ key: "heuristic_v2", limit: 1, remaining: null, available: false }], error: null } },
+  ])("uses Rule-based when v2 availability is unverified: %j", async (availabilityState) => {
+    renderWithProviders(<Form availabilityState={availabilityState} />);
+    fireEvent.click(screen.getByRole("radio", { name: "Heuristics" }));
+    expect(screen.getByRole("status", { name: "Classifier type" })).toHaveTextContent(/^heuristic$/);
   });
 
   it("does not present Rule-based as having a classifier quota", () => {

@@ -3592,6 +3592,7 @@ async def test_start_shadow_eval_seeds_a_zero_funnel_row_per_leg(monkeypatch: py
 @pytest.mark.asyncio
 async def test_availability_counts_db_and_yaml_without_disclosing_router_names(monkeypatch):
     from litellm.models.model import LiteLLM_ProxyModelTable
+    from litellm.proxy.management_helpers.auto_router_availability import build_auto_router_catalog
     from litellm.types.management_endpoints.auto_router_endpoints import AutoRouterAvailabilityRequest
 
     row = LiteLLM_ProxyModelTable(
@@ -3610,15 +3611,13 @@ async def test_availability_counts_db_and_yaml_without_disclosing_router_names(m
             "complexity_router_config": {"classifier_type": "capability"},
         },
     }
+    find_many = AsyncMock(side_effect=AssertionError("Availability must not query the model table"))
     monkeypatch.setattr(
         proxy_server,
         "prisma_client",
-        SimpleNamespace(
-            db=SimpleNamespace(
-                litellm_proxymodeltable=SimpleNamespace(find_many=AsyncMock(return_value=[row])),
-            )
-        ),
+        SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))),
     )
+    monkeypatch.setattr(proxy_server.proxy_config, "auto_router_db_catalog", build_auto_router_catalog((row,)))
     monkeypatch.setattr(proxy_server, "llm_router", SimpleNamespace(config_deployments=lambda: (yaml_row,)))
     monkeypatch.setattr(proxy_server, "_license_check", SimpleNamespace(auto_router_capability_limit=lambda: 1))
     monkeypatch.setattr(proxy_server, "heuristic_v1_tuning_baselines", {})
@@ -3640,11 +3639,13 @@ async def test_availability_counts_db_and_yaml_without_disclosing_router_names(m
     assert edit.allowances[0].used_by_this_router
     assert edit.allowances[0].remaining == 1
     assert edit.error is None
+    find_many.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_availability_denies_another_teams_edit_exemption(monkeypatch):
     from litellm.models.model import LiteLLM_ProxyModelTable
+    from litellm.proxy.management_helpers.auto_router_availability import build_auto_router_catalog
     from litellm.types.management_endpoints.auto_router_endpoints import AutoRouterAvailabilityRequest
 
     row = LiteLLM_ProxyModelTable(
@@ -3654,15 +3655,13 @@ async def test_availability_denies_another_teams_edit_exemption(monkeypatch):
         model_info={"team_id": "other-team"},
         litellm_params={"model": "auto_router/complexity_router"},
     )
+    find_many = AsyncMock(side_effect=AssertionError("Availability must not query the model table"))
     monkeypatch.setattr(
         proxy_server,
         "prisma_client",
-        SimpleNamespace(
-            db=SimpleNamespace(
-                litellm_proxymodeltable=SimpleNamespace(find_many=AsyncMock(return_value=[row])),
-            )
-        ),
+        SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))),
     )
+    monkeypatch.setattr(proxy_server.proxy_config, "auto_router_db_catalog", build_auto_router_catalog((row,)))
     monkeypatch.setattr(proxy_server, "llm_router", SimpleNamespace(config_deployments=lambda: ()))
     monkeypatch.setattr(auto_router_endpoints, "_authorize_router_dry_run", AsyncMock(return_value=None))
     with pytest.raises(HTTPException) as error:
@@ -3671,3 +3670,14 @@ async def test_availability_denies_another_teams_edit_exemption(monkeypatch):
             UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="owner"),
         )
     assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_availability_waits_for_the_first_complete_catalog(monkeypatch):
+    from litellm.types.management_endpoints.auto_router_endpoints import AutoRouterAvailabilityRequest
+
+    monkeypatch.setattr(proxy_server.proxy_config, "auto_router_db_catalog", None)
+    monkeypatch.setattr(proxy_server, "llm_router", SimpleNamespace(config_deployments=lambda: ()))
+    with pytest.raises(HTTPException) as error:
+        await auto_router_endpoints.get_auto_router_availability(AutoRouterAvailabilityRequest(), ADMIN)
+    assert error.value.status_code == 503

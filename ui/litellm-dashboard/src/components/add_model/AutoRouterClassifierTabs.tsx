@@ -138,16 +138,13 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
   };
   const family = familyByType[classifierType];
   const hasCustomTiers = Boolean(value.custom_tier_set);
-  const v2 = availability.data?.allowances.find((entry) => entry.key === "heuristic_v2");
   const changeType = (next: ClassifierType) => {
     if (next !== classifierType) onChange(transitionClassifierType(value, next));
   };
 
   const changeFamily = (next: unknown) => {
     if (next === family) return;
-    if (next === "heuristics") {
-      changeType(v2?.limit != null && v2.remaining === 0 && !v2.used_by_this_router ? "heuristic" : "heuristic_v2");
-    }
+    if (next === "heuristics") changeType("heuristic");
     if (next === "llm") changeType("llm");
     if (next === "jev") changeType("jev");
   };

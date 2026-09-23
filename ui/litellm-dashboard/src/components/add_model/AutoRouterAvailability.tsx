@@ -45,10 +45,18 @@ export const useAutoRouterAvailability = (accessToken: string, body: Request, en
     retry: false,
   };
   const query = useQuery(options);
+  const isChecking = query.isFetching || query.isPlaceholderData || serialized !== debounced;
+  const saveBlockedReason = () => {
+    if (!enabled) return null;
+    if (query.isPending || isChecking) return "Checking availability";
+    if (query.isError || !query.data) return "Could not check availability. Retry before saving.";
+    return query.data.error ?? null;
+  };
   return {
     ...query,
     isPending: query.isPending || (query.isFetching && !query.isFetchedAfterMount),
-    isChecking: query.isPlaceholderData || serialized !== debounced,
+    isChecking,
+    saveBlockedReason: saveBlockedReason(),
   };
 };
 
@@ -60,7 +68,7 @@ export const allowanceLabel = (allowance?: Allowance): string | null => {
 };
 
 const availabilityLabel = (state: AvailabilityState, key: string) => {
-  if (state.isPending) return "Checking availability";
+  if (state.isPending || state.isChecking) return "Checking availability";
   if (state.isError) return "Availability unavailable";
   return allowanceLabel(state.data?.allowances.find((entry) => entry.key === key));
 };

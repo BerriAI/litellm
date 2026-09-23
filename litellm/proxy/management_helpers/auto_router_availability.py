@@ -1,9 +1,16 @@
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
+from pydantic import BaseModel, Json, TypeAdapter, ValidationError
+
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.router_utils.auto_router_model_naming import (
     GATED_AUTO_ROUTER_CAPABILITIES,
     capability_limit_violation,
+    classify_strategy_router_model,
     count_capability_routers,
     gated_capability_of,
 )
@@ -16,6 +23,61 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterAllowance,
     AutoRouterAvailabilityResponse,
 )
+
+
+class _CatalogModelInfo(BaseModel):
+    team_id: str | None = None
+
+
+class _CatalogSource(BaseModel):
+    model_id: str
+    created_by: str | None = None
+    litellm_params: Json[dict[str, object]] | dict[str, object]
+    model_info: Json[_CatalogModelInfo] | _CatalogModelInfo | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AutoRouterCatalogEntry:
+    model_id: str
+    team_id: str | None
+    created_by: str | None
+    deployment: Mapping[str, object]
+
+
+def _catalog_field(value: object, key: str) -> object:
+    if not isinstance(value, str):
+        return deepcopy(value)
+    return decrypt_value_helper(value, key=key, exception_type="debug", return_original_value=True)
+
+
+def build_auto_router_catalog(rows: Sequence[object]) -> tuple[AutoRouterCatalogEntry, ...] | None:
+    try:
+        sources: Final = TypeAdapter(tuple[_CatalogSource, ...]).validate_python(rows, from_attributes=True)
+    except ValidationError:
+        return None
+    return tuple(
+        AutoRouterCatalogEntry(
+            model_id=row.model_id,
+            team_id=row.model_info.team_id if row.model_info is not None else None,
+            created_by=row.created_by,
+            deployment=MappingProxyType(
+                {
+                    "litellm_params": MappingProxyType(
+                        {
+                            "model": model,
+                            "complexity_router_config": _catalog_field(
+                                row.litellm_params.get("complexity_router_config"), "complexity_router_config"
+                            ),
+                        }
+                    ),
+                    "model_info": MappingProxyType({"id": row.model_id, "db_model": True}),
+                }
+            ),
+        )
+        for row in sources
+        if isinstance(model := _catalog_field(row.litellm_params.get("model"), "model"), str)
+        and classify_strategy_router_model(model) == "complexity"
+    )
 
 
 def auto_router_availability(

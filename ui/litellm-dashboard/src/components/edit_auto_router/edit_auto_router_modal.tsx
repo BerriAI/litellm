@@ -285,8 +285,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         ? customDimensionsError(complexityRouterConfig.custom_dimensions)
         : null);
 
-  const submitBlockedReason =
-    configBlockedReason ?? (!routerAvailability.isChecking ? routerAvailability.data?.error ?? null : null);
+  const submitBlockedReason = configBlockedReason ?? routerAvailability.saveBlockedReason;
 
   useEffect(() => {
     if (isVisible && modelData) {
@@ -402,6 +401,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   };
 
   const saveValues = async (values: EditAutoRouterFormValues) => {
+    if (routerAvailability.saveBlockedReason) {
+      toast.fromError(routerAvailability.saveBlockedReason);
+      return;
+    }
     if (isComplexityRouterModel) {
       const { tiers, custom_tier_set, classifier_llm_config } = complexityRouterConfig;
       const rows = activeTierRows(complexityRouterConfig);
