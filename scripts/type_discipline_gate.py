@@ -13,11 +13,12 @@ emits is gated: LIT001 (mutable collection in any annotation), LIT002
 without codes or reason), LIT006 (cast), LIT008 (`**kwargs`), LIT009 (inert
 `# type: ignore`, dead syntax while enableTypeIgnoreComments is false), LIT010
 (assignment without a Final declaration; suppress deliberate rebinding with
-`# rebind-ok: <reason>`), LIT011 (parameter rebinding or in-place mutation), and
+`# rebind-ok: <reason>`), LIT011 (parameter rebinding or in-place mutation),
 LIT012 (TypedDict field without a `ReadOnly[...]` qualifier; suppress with
 `# writable-ok: <reason>`), and LIT013 (comprehension with more than one `for`
 or `if` clause; suppress with `# comprehension-ok: <reason>`) carry limits at
-or above their current count to ratchet down; LIT005 (`*-ok` suppression without a reason) is frozen at limit 0
+or above their current count to ratchet down; LIT005 (`*-ok` suppression
+without a reason) is frozen at limit 0
 so any net-new reasonless suppression trips the gate; and LIT007
 (TypeGuard/TypeIs) is a hard zero.
 LIT010 and LIT011 were seeded at 1.5x the count left after the sweep that
