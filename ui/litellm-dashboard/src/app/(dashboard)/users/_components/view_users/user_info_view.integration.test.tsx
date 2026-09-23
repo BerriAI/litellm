@@ -342,14 +342,17 @@ const routerUsageResponse = (saved: number): AutoRouterBenchmarksResponse => ({
     avg_turns_per_session: 1,
     avg_session_seconds: 0,
     avg_tokens_per_session: 100,
-    spend: 10,
+    spend: null,
+    llm_spend: null,
+    cost_coverage: "unavailable",
+    cost_requests: null,
     savings_estimated_turns: 2,
     savings_estimated_actual_spend: 10,
-    classifier_cost: 0,
+    classifier_cost: null,
     saved_spend: saved,
-    baseline_spend: 10 + saved,
-    saved_pct: (100 * saved) / (10 + saved),
-    saved_per_session: saved / 2,
+    baseline_spend: null,
+    saved_pct: null,
+    saved_per_session: 3,
     cache: {
       coverage_pct: 100,
       hit_rate_pct: 0,
@@ -405,7 +408,17 @@ describe("UserInfoView auto-router usage", () => {
       const params = new URL(request.url).searchParams;
       expect(params.get("user_id")).toBe("user-123");
       expect(params.has("api_key")).toBe(false);
-      expect(screen.getByText(/Older sessions recorded without a user ID are not included/)).toBeInTheDocument();
+      expect(
+        screen.getByText("Usage for this user across API keys and JWT-authenticated requests."),
+      ).toBeInTheDocument();
+      expect(screen.getByText("$3.00")).toBeInTheDocument();
+      expect(screen.getByText("Estimated baseline spend")).toBeInTheDocument();
+      expect(screen.getAllByRole("definition").map((node) => node.textContent)).toEqual([
+        "Unavailable",
+        "Unavailable",
+        "Unavailable",
+        "Unavailable",
+      ]);
     },
   );
 

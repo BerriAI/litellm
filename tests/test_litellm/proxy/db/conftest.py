@@ -100,6 +100,15 @@ if not earlier_calls and os.environ.get("FAKE_PRISMA_HANG_FIRST"):
     grandchild = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
     pathlib.Path(os.environ["FAKE_PRISMA_GRANDCHILD_PIDFILE"]).write_text(str(grandchild.pid))
     time.sleep(600)
+if sys.argv[1:3] == ["db", "execute"]:
+    if os.environ.get("FAKE_PRISMA_FAIL_DB_EXECUTE"):
+        sys.exit(1)
+    if not any(json.loads(call)[:2] == ["db", "execute"] for call in earlier_calls):
+        first_failure = os.environ.get("FAKE_PRISMA_FAIL_FIRST_DB_EXECUTE")
+        if first_failure == "timeout":
+            time.sleep(600)
+        if first_failure:
+            sys.exit(1)
 sys.exit(0)
 """
 
@@ -142,6 +151,8 @@ def fake_prisma_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generato
     monkeypatch.setenv("FAKE_PRISMA_GRANDCHILD_PIDFILE", str(cli.grandchild_pidfile))
     monkeypatch.setenv("LITELLM_PRISMA_COMMAND_TIMEOUT", "1")
     monkeypatch.delenv("FAKE_PRISMA_HANG_FIRST", raising=False)
+    monkeypatch.delenv("FAKE_PRISMA_FAIL_DB_EXECUTE", raising=False)
+    monkeypatch.delenv("FAKE_PRISMA_FAIL_FIRST_DB_EXECUTE", raising=False)
     yield cli
     if cli.grandchild_pidfile.exists():
         try:

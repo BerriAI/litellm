@@ -806,6 +806,13 @@ model LiteLLM_DailyUserSpend {
   prompt_caching_savings_spend Float       @default(0.0)
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
+  autorouter_accounted_requests BigInt @default(0)
+  autorouter_requests BigInt @default(0)
+  autorouter_llm_spend Float @default(0.0)
+  autorouter_classifier_cost Float @default(0.0)
+  autorouter_classifier_cost_recorded_requests BigInt @default(0)
+  autorouter_estimated_requests BigInt @default(0)
+  autorouter_estimated_actual_spend Float @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1580,6 +1587,7 @@ model LiteLLM_AutoRouterBaselineObservation {
   revision    BigInt
   data        String
   publication String?
+  daily_costs_publication String?
   conflicted  Boolean @default(false)
 
   @@index([scope, started_at, request_id], map: "idx_autorouter_baseline_event_order")

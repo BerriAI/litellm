@@ -15,10 +15,12 @@ from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
 from litellm.proxy.db.baseline_accounting import (
     BaselineAccountingRecord,
     BaselineAccountingStore,
+    BaselinePublication,
     DailyBaselineAttribution,
     DailyBaselineTarget,
 )
 from litellm.proxy.db.create_views import SupportsRawQueries
+from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, build_bulk_upsert, merge_by_conflict_key
 from litellm.proxy.spend_tracking.baseline_accounting import BaselineObservation
 from litellm.proxy.spend_tracking.savings import BaselineCostSnapshot
 from litellm.types.utils import Usage
@@ -107,6 +109,11 @@ async def _user_sessions(db: Prisma, record: BaselineAccountingRecord) -> dict[s
     return {str(row["user_id"]): row for row in rows}
 
 
+async def _daily_user(db: Prisma, record: BaselineAccountingRecord) -> dict[str, object]:
+    rows: Final = await db.query_raw('SELECT * FROM "LiteLLM_DailyUserSpend" WHERE api_key=$1', record.api_key)
+    return rows[0]
+
+
 async def test_late_replay_updates_all_projections_without_rebilling(db: Prisma, record: Callable[..., BaselineAccountingRecord]) -> None:
     store: Final = _store(db)
     late: Final = record("late", 10001.0, user_id="late-user")
@@ -117,6 +124,10 @@ async def test_late_replay_updates_all_projections_without_rebilling(db: Prisma,
     before: Final = await _session(db, late)
     assert before["savings_estimated_actual_spend"] == before["spend"] == 0.17
     assert before["saved_spend"] == 0.0
+    before_daily: Final = await _daily_user(db, late)
+    assert before_daily["autorouter_estimated_requests"] == 1
+    assert before_daily["autorouter_estimated_actual_spend"] == before["spend"]
+    assert before_daily["autorouter_savings_spend"] == 0.0
     before_users: Final = await _user_sessions(db, late)
     assert set(before_users) == {"late-user"}
     assert before_users["late-user"]["savings_estimated_turns"] == 1
@@ -126,6 +137,8 @@ async def test_late_replay_updates_all_projections_without_rebilling(db: Prisma,
     pending: Final = await _session(db, late)
     assert pending["spend"] == 0.34 and pending["savings_estimated_turns"] == 0
     assert pending["saved_spend"] == pending["savings_estimated_actual_spend"] == 0.0
+    pending_daily: Final = await _daily_user(db, late)
+    assert pending_daily["autorouter_estimated_requests"] == pending_daily["autorouter_estimated_actual_spend"] == 0
     pending_users: Final = await _user_sessions(db, late)
     assert set(pending_users) == {"late-user", "early-user"}
     for user in pending_users.values():
@@ -143,6 +156,14 @@ async def test_late_replay_updates_all_projections_without_rebilling(db: Prisma,
     assert logs[0]["spend"] == 0.17
     assert logs[0]["metadata"]["autorouter_savings_estimate"]["provenance"] == "modeled"
     assert after["saved_spend"] == pytest.approx(logs[0]["metadata"]["autorouter_savings"])
+    after_daily: Final = await _daily_user(db, late)
+    assert after_daily["autorouter_estimated_requests"] == after["savings_estimated_turns"]
+    assert after_daily["autorouter_estimated_actual_spend"] == after["savings_estimated_actual_spend"]
+    for field in (
+        "api_requests", "autorouter_accounted_requests", "autorouter_requests", "autorouter_llm_spend",
+        "autorouter_classifier_cost", "autorouter_classifier_cost_recorded_requests",
+    ):
+        assert after_daily[field] == 0
     after_users: Final = await _user_sessions(db, late)
     assert after_users["early-user"] == pending_users["early-user"]
     for field in (
@@ -179,6 +200,10 @@ async def test_commit_ack_loss_and_concurrent_duplicate_delivery_are_idempotent(
     session: Final = await _session(db, event)
     assert session["turns"] == session["savings_estimated_turns"] == 2
     assert session["spend"] == session["savings_estimated_actual_spend"] == 0.34
+    daily: Final = await _daily_user(db, event)
+    assert daily["autorouter_estimated_requests"] == session["savings_estimated_turns"]
+    assert daily["autorouter_estimated_actual_spend"] == session["savings_estimated_actual_spend"]
+    assert daily["autorouter_accounted_requests"] == daily["autorouter_requests"] == 0
     users: Final = await _user_sessions(db, event)
     assert set(users) == ({"first-user", "second-user"} if attributed else set())
     for user in users.values():
@@ -312,3 +337,155 @@ async def test_native_observation_enters_spend_pipeline_once_with_shared_daily_a
         assert tag_rows[0]["spend"] == tag_rows[0]["api_requests"] == 0
     finally:
         await client.db.disconnect()
+
+
+async def test_old_publisher_transitions_keep_daily_comparison_complete_after_retention(
+    db: Prisma, record: Callable[..., BaselineAccountingRecord]
+) -> None:
+    event: Final = record("old-publisher")
+    assert event.daily is not None
+    assert await _store(db).append(event) == "recorded"
+    existing_actual: Final = 5.0
+    other_savings: Final = 3.0
+    actual: Final = event.pricing.actual_spend
+    row: Final = {
+        **event.daily.model_dump(exclude={"targets"}),
+        "user_id": event.api_key,
+        "spend": existing_actual + actual,
+        "api_requests": 2,
+        "successful_requests": 2,
+        "autorouter_accounted_requests": 2,
+        "autorouter_requests": 2,
+        "autorouter_llm_spend": existing_actual + actual,
+        "autorouter_classifier_cost_recorded_requests": 2,
+        "autorouter_estimated_requests": 1,
+        "autorouter_estimated_actual_spend": existing_actual,
+        "autorouter_savings_spend": other_savings,
+    }
+    table: Final = DAILY_SPEND_TABLES["user"]
+    statement, values = build_bulk_upsert(table, merge_by_conflict_key(table, (row,)))
+    await db.execute_raw(statement, *values)
+
+    for status, baseline, savings_delta, expected_savings, count, covered_actual in (
+        ("estimated", actual + 0.5, 0.5, other_savings + 0.5, 2, existing_actual + actual),
+        ("estimated", actual, -0.5, other_savings, 2, existing_actual + actual),
+        ("unknown", None, 0.0, other_savings, 1, existing_actual),
+        ("estimated", actual + 0.2, 0.2, other_savings + 0.2, 2, existing_actual + actual),
+        ("estimated", actual + 0.2, 0.0, other_savings + 0.2, 2, existing_actual + actual),
+    ):
+        publication: Final = BaselinePublication(
+            comparison_id=event.scope,
+            comparison_started_at=event.observation.started_at,
+            status=status,
+            reason="legacy-publisher-transition",
+            actual_spend=actual if baseline is not None else None,
+            baseline_spend=baseline,
+        )
+        async with db.tx() as tx:
+            if savings_delta:
+                await tx.execute_raw(
+                    'UPDATE "LiteLLM_DailyUserSpend" SET autorouter_savings_spend=autorouter_savings_spend+$1::float8 '
+                    "WHERE api_key=$2 AND user_id=$3",
+                    savings_delta,
+                    event.api_key,
+                    event.api_key,
+                )
+            await tx.execute_raw(
+                'UPDATE "LiteLLM_AutoRouterBaselineObservation" SET publication=$1 WHERE request_id=$2',
+                publication.model_dump_json(),
+                event.observation.request_id,
+            )
+        daily: Final = await _daily_user(db, event)
+        assert daily["autorouter_estimated_requests"] == count
+        assert daily["autorouter_estimated_actual_spend"] == pytest.approx(covered_actual)
+        assert daily["autorouter_savings_spend"] == pytest.approx(expected_savings)
+        assert daily["api_requests"] == daily["autorouter_accounted_requests"] == daily["autorouter_requests"] == 2
+        assert daily["spend"] == daily["autorouter_llm_spend"] == pytest.approx(existing_actual + actual)
+        assert daily["autorouter_classifier_cost"] == 0
+        assert daily["autorouter_classifier_cost_recorded_requests"] == 2
+        shadow: Final = await db.query_raw(
+            "SELECT publication::jsonb = daily_costs_publication::jsonb AS accounted "
+            'FROM "LiteLLM_AutoRouterBaselineObservation" WHERE request_id=$1',
+            event.observation.request_id,
+        )
+        assert shadow == [{"accounted": True}]
+
+    retained: Final = await _daily_user(db, event)
+    await db.execute_raw(
+        'DELETE FROM "LiteLLM_AutoRouterBaselineObservation" WHERE request_id=$1', event.observation.request_id
+    )
+    assert await _daily_user(db, event) == retained
+
+
+@pytest.mark.parametrize("targets", ("missing", "duplicate", "null-and-empty"))
+async def test_legacy_zero_publication_repairs_shadow_once_for_normalized_user_targets(
+    db: Prisma, record: Callable[..., BaselineAccountingRecord], targets: str
+) -> None:
+    source: Final = record("legacy-zero")
+    assert source.daily is not None
+    identities: Final = (
+        () if targets == "missing" else ((None, "") if targets == "null-and-empty" else (source.api_key,) * 2)
+    )
+    event: Final = source.model_copy(
+        update={
+            "daily": source.daily.model_copy(
+                update={
+                    "targets": tuple(DailyBaselineTarget(entity="user", entity_id=identity) for identity in identities),
+                }
+            )
+        }
+    )
+    publication: Final = BaselinePublication(
+        comparison_id=event.scope,
+        comparison_started_at=event.observation.started_at,
+        status="estimated",
+        reason="legacy-zero",
+        actual_spend=event.pricing.actual_spend,
+        baseline_spend=event.pricing.actual_spend,
+    ).model_dump_json()
+    await db.execute_raw(
+        'INSERT INTO "LiteLLM_AutoRouterBaselineObservation" (request_id,scope,started_at,revision,data,publication) '
+        "VALUES ($1,$2,$3::float8,1,$4,$5)",
+        event.observation.request_id,
+        event.scope,
+        event.observation.started_at,
+        event.model_dump_json(),
+        publication,
+    )
+    before: Final = await db.query_raw(
+        'SELECT daily_costs_publication FROM "LiteLLM_AutoRouterBaselineObservation" WHERE request_id=$1',
+        event.observation.request_id,
+    )
+    assert before == [{"daily_costs_publication": None}]
+    for _ in range(2):
+        await db.execute_raw(
+            'UPDATE "LiteLLM_AutoRouterBaselineObservation" SET publication=$1 WHERE request_id=$2',
+            publication,
+            event.observation.request_id,
+        )
+        rows: Final = await db.query_raw(
+            "SELECT user_id,autorouter_estimated_requests,autorouter_estimated_actual_spend,autorouter_savings_spend, "
+            'api_requests,autorouter_requests,spend FROM "LiteLLM_DailyUserSpend" WHERE api_key=$1',
+            event.api_key,
+        )
+        assert rows == (
+            [
+                {
+                    "user_id": "" if targets == "null-and-empty" else event.api_key,
+                    "autorouter_estimated_requests": 1,
+                    "autorouter_estimated_actual_spend": event.pricing.actual_spend,
+                    "autorouter_savings_spend": 0,
+                    "api_requests": 0,
+                    "autorouter_requests": 0,
+                    "spend": 0,
+                }
+            ]
+            if identities
+            else []
+        )
+    shadow: Final = await db.query_raw(
+        "SELECT publication::jsonb = daily_costs_publication::jsonb AS accounted "
+        'FROM "LiteLLM_AutoRouterBaselineObservation" WHERE request_id=$1',
+        event.observation.request_id,
+    )
+    assert shadow == [{"accounted": True}]

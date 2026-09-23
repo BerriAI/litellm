@@ -19,6 +19,30 @@ from litellm.types.utils import Usage
 pytestmark = pytest.mark.usefixtures("local_model_cost_map")
 
 
+@pytest.mark.parametrize("estimate, saved, expected", [
+    (None, 0.0, 0.0),
+    (None, -0.5, -0.5),
+    (None, 0.5, 0.5),
+    (None, None, None),
+    (None, True, None),
+    (None, float("nan"), None),
+    ({"version": 3, "status": "estimated"}, 0.0, 0.0),
+    ({"version": 2, "status": "estimated"}, -0.5, -0.5),
+    ({"version": 1, "status": "unknown"}, 0.5, None),
+    ({"version": 0, "status": "estimated"}, 0.5, None),
+])
+def test_known_autorouter_savings_preserves_zero_and_legacy_provenance(
+    estimate: dict[str, object] | None, saved: object, expected: float | None,
+) -> None:
+    from litellm.proxy.spend_tracking.savings import known_autorouter_savings
+
+    result: Final = known_autorouter_savings(
+        model=None, custom_llm_provider=None, routing_decision=None, usage_object=None,
+        recorded_autorouter_savings=saved, recorded_autorouter_savings_estimate=estimate,
+    )
+    assert result == expected
+
+
 @pytest.mark.parametrize("model,usage", [
     (None, {"cache_read_input_tokens": 100}),
     ("claude-sonnet-5", None),

@@ -3,6 +3,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -740,16 +741,28 @@ ERROR: relation "SomeTable" already exists
         ),
     ),
 )
-def test_v2_migrations_use_the_direct_connection_with_the_runtime_schema(pooled, direct, expected):
+def test_v2_migrations_use_the_direct_connection_with_the_runtime_schema(
+    monkeypatch: pytest.MonkeyPatch, pooled: str, direct: str | None, expected: str
+) -> None:
+    from unittest.mock import Mock
+
+    import litellm_proxy_extras.utils as utils_module
     from litellm_proxy_extras.migration_lock import migration_environment
 
-    environment = {"DATABASE_URL": pooled, "PRISMA_OFFLINE_MODE": "true"}
-    configured = {**environment, **({"DIRECT_URL": direct} if direct else {})}
-    migrated = migration_environment(configured)
+    environment: Final = {"DATABASE_URL": pooled, "PRISMA_OFFLINE_MODE": "true"}
+    configured: Final = {**environment, **({"DIRECT_URL": direct} if direct else {})}
+    migrated: Final = migration_environment(configured)
+    run_prisma: Final = Mock()
+    monkeypatch.setattr(utils_module, "_get_prisma_env", lambda: configured)
+    monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", run_prisma)
+
+    ProxyExtrasDBManager.apply_autorouter_daily_coverage()
 
     assert migrated["DATABASE_URL"] == expected
     assert migrated["PRISMA_OFFLINE_MODE"] == "true"
     assert configured["DATABASE_URL"] == pooled
+    run_prisma.assert_called_once()
+    assert run_prisma.call_args.kwargs["env"] == migrated
 
 
 class _MigrateDeployHarness:

@@ -211,37 +211,56 @@ class AutoRouterCacheStats(BaseModel):
 
 
 class AutoRouterBenchmarkTotals(BaseModel):
-    """Session-shape and savings aggregates over auto-routed traffic in the window."""
+    """Request-date savings totals with statistics for whole sessions overlapping the window."""
 
     sessions: int
     turns: int
     avg_turns_per_session: float
     avg_session_seconds: float
     avg_tokens_per_session: float
-    spend: float = Field(description="What the routed traffic actually cost")
+    spend: float | None = Field(
+        description="Actual auto-router cost including classification. Totals use request dates; groups cover whole "
+        "overlapping sessions. Partial recorded history is identified by cost_coverage"
+    )
     classifier_cost: float | None = Field(
-        description="Recorded LLM classifier cost already included in spend; null when any session turns predate "
-        "subtotal recording, and zero for an empty window"
+        description="Classifier charges included in actual cost; null when any contributing request lacks the subtotal"
+    )
+    llm_spend: float | None = Field(default=None, description="Routed LLM cost excluding classifier charges")
+    cost_coverage: Literal["complete", "partial", "unavailable"] = Field(
+        default="unavailable", description="Whether recorded costs cover the entire selected population"
+    )
+    cost_requests: int | None = Field(
+        default=None,
+        description="Number of requests in the cost population; null when historical coverage is incomplete",
     )
     savings_estimated_turns: int = Field(
-        description="Turns covered by the current savings estimator; legacy estimates are excluded"
+        description="Requests with an available savings comparison. Totals use request dates and groups use session "
+        "coverage. Historical savings remain included even when their coverage was not tracked"
     )
     savings_estimated_actual_spend: float = Field(
-        description="Actual spend, including classifier cost, for covered turns only"
+        description="Actual spend including classification for requests covered by the savings comparison"
     )
     saved_spend: float | None = Field(
-        description="Signed savings for covered turns only; null when traffic has no current estimates"
+        description="Signed recorded savings, including historical and current estimates once. Totals use the same "
+        "request-date daily source as Overall cost optimization, including requests without sessions. Per-router "
+        "groups cover whole overlapping sessions. Turns without an estimate add no savings"
     )
-    baseline_spend: float | None = Field(description="Estimated single-model cost for covered turns only")
-    saved_pct: float | None = Field(description="Covered savings over covered baseline spend, as a percentage")
+    baseline_spend: float | None = Field(
+        description="Matching actual spend plus recorded savings. Daily totals compare estimated requests only; "
+        "null when historical cost coverage or the savings estimate is unavailable"
+    )
+    saved_pct: float | None = Field(
+        description="Recorded savings divided by the matching estimated baseline; null when that baseline is unavailable"
+    )
     saved_per_session: float | None = Field(
-        description="Average session savings; unavailable unless every turn is covered"
+        description="Recorded savings in whole overlapping sessions divided by their session count, independent "
+        "of request-date daily savings totals"
     )
     cache: AutoRouterCacheStats
 
 
 class AutoRouterBenchmarkGroup(AutoRouterBenchmarkTotals):
-    """One auto-router's slice of the benchmarks."""
+    """One auto-router's whole overlapping sessions, separate from request-date daily totals."""
 
     router_name: str = Field(description="The auto-router alias requests were sent to")
     router_type: str = Field(description="complexity, adaptive or quality")
@@ -273,27 +292,29 @@ class AutoRouterSessionResponse(BaseModel):
     savings_estimated_actual_spend: float = Field(
         description="Actual spend, including classifier cost, for covered turns only"
     )
-    saved_spend: float | None = Field(description="Estimated savings for covered turns only, net of classifier cost")
+    saved_spend: float | None = Field(
+        description="Recorded signed savings, retaining historical estimates and adding current estimates once"
+    )
     baseline_spend: float | None = Field(
-        description="Estimated single-model cost; unavailable unless every turn is covered"
+        description="Actual session spend plus recorded savings; turns without an estimate add no savings"
     )
     savings_estimated_baseline_spend: float | None = Field(
         description="Estimated single-model cost for covered turns only"
     )
     baseline_model: str | None = Field(
-        description="The savings baseline most covered turns were priced against, recorded turn by "
+        description="The savings baseline recorded by most session turns, including historical turns, recorded turn by "
         "turn, so it still names the counterfactual after the router is reconfigured or removed. None when no "
         "turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, "
         "which derive no baseline and so report no savings"
     )
     baseline_models: Mapping[str, int] = Field(
-        description="Covered turns priced against each baseline model; more than one entry means the router's "
-        "baseline changed mid-session and baseline_spend mixes both"
+        description="Session turns recording each baseline model, including historical turns; more than one entry "
+        "means the router's baseline changed mid-session. These counts do not imply savings-estimate coverage"
     )
 
 
 class AutoRouterBenchmarksResponse(BaseModel):
-    """Benchmarks for the auto-router dashboard, aggregated from the per-session rollup."""
+    """Daily recorded savings with tracked-session breakdowns for the auto-router dashboard."""
 
     start_date: str = Field(description="Window start day, YYYY-MM-DD UTC, inclusive")
     end_date: str = Field(description="Window end day, YYYY-MM-DD UTC, inclusive")

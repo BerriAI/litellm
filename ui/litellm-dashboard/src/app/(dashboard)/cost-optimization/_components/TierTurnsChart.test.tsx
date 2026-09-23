@@ -12,15 +12,19 @@ vi.mock("@/components/shared/charts", () => ({
 }));
 
 import TierTurnsChart, { tierDisplayLabel } from "./TierTurnsChart";
-import type { AutoRouterBenchmarkGroup, BenchmarkView } from "./autoRouterBenchmarks";
+import type { AutoRouterBenchmarkGroup, AutoRouterBenchmarkTotals, BenchmarkView } from "./autoRouterBenchmarks";
 
-const totalsOnly = {
+const totalsOnly: AutoRouterBenchmarkTotals = {
   sessions: 3,
   turns: 9,
   avg_turns_per_session: 3,
   avg_session_seconds: 60,
   avg_tokens_per_session: 100,
   spend: 1,
+  classifier_cost: 0,
+  llm_spend: 1,
+  cost_coverage: "complete",
+  cost_requests: null,
   savings_estimated_turns: 9,
   savings_estimated_actual_spend: 1,
   saved_spend: 1,

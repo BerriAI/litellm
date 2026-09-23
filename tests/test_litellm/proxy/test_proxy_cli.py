@@ -2266,6 +2266,7 @@ class TestRunServerDbSetup:
             use_migrate=True, use_v2_resolver=True
         )
 
+    @pytest.mark.parametrize("coverage_failure", [False, True])
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
@@ -2278,6 +2279,7 @@ class TestRunServerDbSetup:
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
+        coverage_failure: bool,
     ):
         """Test that proxy exits with code 1 when PrismaManager.setup_database returns False and --enforce_prisma_migration_check is set"""
         from litellm.proxy.proxy_cli import run_server
@@ -2285,6 +2287,9 @@ class TestRunServerDbSetup:
         mock_subprocess_run.return_value = MagicMock(returncode=0)
         mock_should_update_schema.return_value = True
         mock_setup_database.return_value = False
+        mock_setup_database.side_effect = (
+            RuntimeError("daily auto-router coverage installation failed") if coverage_failure else None
+        )
 
         mock_proxy_module = MagicMock(
             app=MagicMock(),
@@ -2324,13 +2329,13 @@ class TestRunServerDbSetup:
                     [
                         "--local",
                         "--skip_server_startup",
-                        "--enforce_prisma_migration_check",
+                        "--use_prisma_db_push" if coverage_failure else "--enforce_prisma_migration_check",
                     ],
                     standalone_mode=False,
                 )
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == (2 if coverage_failure else 1)
             mock_setup_database.assert_called_once_with(
-                use_migrate=True, use_v2_resolver=True
+                use_migrate=not coverage_failure, use_v2_resolver=True
             )
 
     @patch("subprocess.run")

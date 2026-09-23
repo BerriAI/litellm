@@ -70,6 +70,7 @@ class Session(NamedTuple):
     turns: int | None = None
     savings_estimated_turns: int | None = None
     savings_estimated_actual_spend: float | None = None
+    savings_estimated_baseline_spend: float | None = None
 
 
 class Credentials(NamedTuple):
@@ -210,7 +211,8 @@ def _session_from_payload(payload: Mapping[str, object]) -> Session | None:
     router_name: Final = printable(payload.get("router_name"))
     last_model: Final = printable(payload.get("last_model"))
     spend: Final = payload.get("spend")
-    baseline_spend: Final = payload.get("savings_estimated_baseline_spend", payload.get("baseline_spend"))
+    baseline_spend: Final = payload.get("baseline_spend")
+    estimated_baseline_spend: Final = payload.get("savings_estimated_baseline_spend")
     turns: Final = payload.get("turns")
     estimated_turns: Final = payload.get("savings_estimated_turns")
     estimated_actual: Final = payload.get("savings_estimated_actual_spend")
@@ -220,6 +222,12 @@ def _session_from_payload(payload: Mapping[str, object]) -> Session | None:
         return None
     if baseline_spend is not None and (
         not isinstance(baseline_spend, (int, float)) or isinstance(baseline_spend, bool) or not isfinite(baseline_spend)
+    ):
+        return None
+    if estimated_baseline_spend is not None and (
+        not isinstance(estimated_baseline_spend, (int, float))
+        or isinstance(estimated_baseline_spend, bool)
+        or not isfinite(estimated_baseline_spend)
     ):
         return None
     return Session(
@@ -242,11 +250,14 @@ def _session_from_payload(payload: Mapping[str, object]) -> Session | None:
             and estimated_actual >= 0
             else None
         ),
+        savings_estimated_baseline_spend=(
+            float(estimated_baseline_spend) if estimated_baseline_spend is not None else None
+        ),
     )
 
 
 def cache_path(cache_dir: Path, credentials: Credentials, session_id: str) -> Path:
-    identity: Final = "\n".join((credentials.base_url, credentials.api_key, session_id))
+    identity: Final = "\n".join(("v2", credentials.base_url, credentials.api_key, session_id))
     return cache_dir / hashlib.sha256(identity.encode()).hexdigest()
 
 
@@ -342,35 +353,41 @@ def render(model: str, session: Session | None, config_dir: Path, use_color: boo
     routed: Final = paint(BOLD, f"Routed to: {model}")
     if session is None:
         return routed
-    if session.savings_estimated_turns == 0 or session.baseline_spend is None:
+    covered_only: Final = session.baseline_spend is None
+    baseline_spend: Final = session.savings_estimated_baseline_spend if covered_only else session.baseline_spend
+    if baseline_spend is None or (covered_only and session.savings_estimated_turns == 0):
         return f"{routed}{SEPARATOR}Savings unavailable"
-    if session.baseline_model is None or session.baseline_spend <= 0:
+    if session.baseline_model is None or baseline_spend <= 0:
         return routed
-    if session.savings_estimated_turns is not None and (
-        session.savings_estimated_actual_spend is None
-        or session.turns is None
-        or session.savings_estimated_turns > session.turns
+    if (
+        covered_only
+        and session.savings_estimated_turns is not None
+        and (
+            session.savings_estimated_actual_spend is None
+            or session.turns is None
+            or session.savings_estimated_turns > session.turns
+        )
     ):
         return f"{routed}{SEPARATOR}Savings unavailable"
     compared_spend: Final = (
         session.savings_estimated_actual_spend
-        if session.savings_estimated_turns is not None and session.savings_estimated_actual_spend is not None
+        if covered_only and session.savings_estimated_actual_spend is not None
         else session.spend
     )
     coverage: Final = (
         f"{SEPARATOR}{session.savings_estimated_turns} of {session.turns} turns estimated"
-        if session.savings_estimated_turns is not None
+        if covered_only and session.savings_estimated_turns is not None
         else ""
     )
     reference: Final = baseline_label(session.baseline_model, config_dir)
-    pct: Final = round((session.baseline_spend - compared_spend) / session.baseline_spend * 100)
+    pct: Final = round((baseline_spend - compared_spend) / baseline_spend * 100)
     sign: Final = "-" if pct > 0 else "+" if pct < 0 else ""
     delta: Final = paint(LITELLM_COLOR, f"{sign}{abs(pct)}% vs {reference}")
-    peak: Final = max(compared_spend, session.baseline_spend)
+    peak: Final = max(compared_spend, baseline_spend)
     label_width: Final = max(_display_width(session.router_name), _display_width(reference))
     rows: Final = (
         (session.router_name, compared_spend, LITELLM_COLOR),
-        (reference, session.baseline_spend, BASELINE_COLOR),
+        (reference, baseline_spend, BASELINE_COLOR),
     )
     lines: Final = (
         f"{paint(DIM, label + ' ' * (label_width - _display_width(label)))} "

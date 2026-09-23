@@ -163,6 +163,27 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                     daily_transaction["timed_requests"] = (
                         payload.get("timed_requests", 0) or 0
                     ) + daily_transaction.get("timed_requests", 0)
+                    aggregated_daily_spend_update_transactions[_key] = {
+                        **daily_transaction,
+                        "autorouter_accounted_requests": daily_transaction.get("autorouter_accounted_requests", 0)
+                        + payload.get("autorouter_accounted_requests", 0),
+                        "autorouter_requests": daily_transaction.get("autorouter_requests", 0)
+                        + payload.get("autorouter_requests", 0),
+                        "autorouter_llm_spend": daily_transaction.get("autorouter_llm_spend", 0.0)
+                        + payload.get("autorouter_llm_spend", 0.0),
+                        "autorouter_classifier_cost": daily_transaction.get("autorouter_classifier_cost", 0.0)
+                        + payload.get("autorouter_classifier_cost", 0.0),
+                        "autorouter_classifier_cost_recorded_requests": daily_transaction.get(
+                            "autorouter_classifier_cost_recorded_requests", 0
+                        )
+                        + payload.get("autorouter_classifier_cost_recorded_requests", 0),
+                        "autorouter_estimated_requests": daily_transaction.get("autorouter_estimated_requests", 0)
+                        + payload.get("autorouter_estimated_requests", 0),
+                        "autorouter_estimated_actual_spend": daily_transaction.get(
+                            "autorouter_estimated_actual_spend", 0.0
+                        )
+                        + payload.get("autorouter_estimated_actual_spend", 0.0),
+                    }
 
                 else:
                     aggregated_daily_spend_update_transactions[_key] = deepcopy(payload)

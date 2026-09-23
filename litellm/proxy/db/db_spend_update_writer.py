@@ -75,9 +75,11 @@ from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
 from litellm.proxy.spend_tracking.savings import (
+    classifier_cost_from_decision,
     compute_savings_spend,
     extract_cache_creation_tokens,
     extract_cache_read_tokens,
+    known_autorouter_savings,
     marks_gateway_injection,
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
@@ -2729,6 +2731,29 @@ class DBSpendUpdateWriter:
                 endpoint = ROUTE_ENDPOINT_MAPPING.get(call_type, None)
 
             is_internal_call: Final = bool(_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))
+            routing_decision: Final = _metadata.get("routing_decision")
+            is_routed_request: Final = (
+                not is_internal_call
+                and payload.get("status") == "success"
+                and isinstance(routing_decision, Mapping)
+                and bool(routing_decision)
+            )
+            classifier_cost: Final = classifier_cost_from_decision(routing_decision) if is_routed_request else None
+            known_savings: Final = (
+                known_autorouter_savings(
+                    model=payload.get("model"),
+                    custom_llm_provider=payload.get("custom_llm_provider"),
+                    routing_decision=routing_decision,
+                    usage_object=usage_obj,
+                    model_id=payload.get("model_id"),
+                    llm_router=get_llm_router,
+                    cost_breakdown=_metadata.get("cost_breakdown"),
+                    recorded_autorouter_savings=_metadata.get("autorouter_savings"),
+                    recorded_autorouter_savings_estimate=_metadata.get("autorouter_savings_estimate"),
+                )
+                if is_routed_request
+                else None
+            )
             cache_read_input_tokens: Final = extract_cache_read_tokens(usage_obj)
             compression_saved_tokens: Final = extract_compression_saved_tokens(_metadata)
             savings_spend: Final = compute_savings_spend(
@@ -2773,6 +2798,15 @@ class DBSpendUpdateWriter:
                 prompt_caching_savings_spend=savings_spend.prompt_caching,
                 gateway_injected_caching_savings_spend=savings_spend.gateway_injected_caching,
                 autorouter_savings_spend=0.0 if is_internal_call else savings_spend.autorouter,
+                autorouter_accounted_requests=0 if is_internal_call else 1,
+                autorouter_requests=int(is_routed_request),
+                autorouter_llm_spend=payload["spend"] if is_routed_request else 0.0,
+                autorouter_classifier_cost=classifier_cost or 0.0,
+                autorouter_classifier_cost_recorded_requests=int(classifier_cost is not None),
+                autorouter_estimated_requests=int(known_savings is not None),
+                autorouter_estimated_actual_spend=(
+                    payload["spend"] + (classifier_cost or 0.0) if known_savings is not None else 0.0
+                ),
                 total_response_time_ms=timed_duration_ms or 0,
                 timed_requests=0 if timed_duration_ms is None else 1,
             )

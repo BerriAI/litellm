@@ -2,7 +2,9 @@
 Unit tests for auto router management endpoints
 """
 
+import json
 from collections.abc import Mapping, Sequence
+from datetime import date
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,6 +27,8 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.db.autorouter_daily_spend import AUTOROUTER_DAILY_COSTS_SQL, AutoRouterDailyCosts
+from litellm.proxy.db.autorouter_historical_spend import AUTOROUTER_HISTORICAL_COSTS_SQL
 from litellm.proxy.management_endpoints import auto_router_endpoints
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     preview_auto_router_routing,
@@ -39,6 +43,12 @@ from litellm.router_strategy.complexity_router.jev_classifier import (
 from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterBenchmarksResponse,
     AutoRouterRoutingTestRequest,
+)
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    DailySpendData,
+    DailySpendMetadata,
+    SpendAnalyticsPaginatedResponse,
+    SpendMetrics,
 )
 from litellm.types.router import Deployment
 from litellm.types.utils import Choices, Message, ModelResponse
@@ -629,18 +639,39 @@ class TestAutoRouterBenchmarks:
 
         monkeypatch.setattr(proxy_server, "llm_router", None)
 
+    @pytest.fixture(autouse=True)
+    def _daily_savings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy.management_endpoints import common_daily_activity
+
+        monkeypatch.setattr(
+            common_daily_activity,
+            "get_daily_activity_aggregated",
+            AsyncMock(return_value=self._daily_result(30.0)),
+        )
+
+    @staticmethod
+    def _daily_result(saved: float, *, has_rows: bool = True) -> SpendAnalyticsPaginatedResponse:
+        return SpendAnalyticsPaginatedResponse(
+            results=[DailySpendData(date=date(2026, 7, 15), metrics=SpendMetrics(autorouter_savings_spend=saved))]
+            if has_rows else [],
+            metadata=DailySpendMetadata(total_autorouter_savings_spend=saved),
+        )
+
     @staticmethod
     async def _benchmarks(
         monkeypatch: pytest.MonkeyPatch,
         rows: Sequence[Mapping[str, object]],
         model_list: Sequence[object],
         api_key: str | None = None,
+        costs: AutoRouterDailyCosts | None = None,
     ) -> AutoRouterBenchmarksResponse:
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
 
         class _DB:
             async def query_raw(self, sql: str, *params: object):
+                if sql in (AUTOROUTER_DAILY_COSTS_SQL, AUTOROUTER_HISTORICAL_COSTS_SQL):
+                    return [(costs or AutoRouterDailyCosts(complete=False)).model_dump()]
                 return rows
 
         monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
@@ -719,24 +750,208 @@ class TestAutoRouterBenchmarks:
         assert totals.saved_pct == -100.0
         assert totals.classifier_cost == 0.4
 
-    @pytest.mark.parametrize("estimated_turns", [0, 4])
-    def test_savings_compare_only_the_current_estimated_cohort(self, estimated_turns: int) -> None:
-        from litellm.proxy.management_endpoints.auto_router_endpoints import _benchmark_totals
-
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("estimated_turns,saved_spend,baseline_spend,saved_pct", [
+        (0, 30.0, 40.0, 75.0), (4, 30.0, 40.0, 75.0),
+        (0, 0.0, None, None), (4, 0.0, 10.0, 0.0), (0, -2.0, 8.0, -25.0),
+    ])
+    async def test_session_groups_preserve_history_and_only_compare_known_savings(
+        self, monkeypatch: pytest.MonkeyPatch, estimated_turns: int, saved_spend: float,
+        baseline_spend: float | None, saved_pct: float | None,
+    ) -> None:
         row: Final = self.ROW.model_copy(
             update={
+                "saved_spend": saved_spend,
                 "savings_estimated_turns": estimated_turns,
                 "savings_estimated_actual_spend": 2.0 if estimated_turns else 0.0,
                 "savings_estimated_saved_spend": -0.5 if estimated_turns else 0.0,
             }
         )
-        totals: Final = _benchmark_totals(row)
-        assert totals.spend == 10.0
-        assert totals.savings_estimated_turns == estimated_turns
-        assert totals.saved_spend == (-0.5 if estimated_turns else None)
-        assert totals.baseline_spend == (1.5 if estimated_turns else None)
-        assert totals.saved_pct == (pytest.approx(-33.3) if estimated_turns else None)
-        assert totals.saved_per_session is None
+        response: Final = await self._benchmarks(monkeypatch, rows=[row.model_dump()], model_list=[])
+        group: Final = response.groups[0]
+        assert group.spend == 10.0
+        assert group.saved_spend == saved_spend
+        assert group.baseline_spend == baseline_spend
+        assert group.saved_pct == saved_pct
+        assert group.saved_per_session == saved_spend / row.sessions
+
+    @pytest.mark.asyncio
+    async def test_tracked_session_groups_keep_historical_and_new_estimates_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        historical: Final = self.ROW.model_copy(
+            update={
+                "savings_estimated_turns": 0,
+                "savings_estimated_actual_spend": 0.0,
+                "savings_estimated_saved_spend": 0.0,
+            }
+        )
+        current: Final = self.ROW.model_copy(
+            update={
+                "router_name": "current-auto",
+                "sessions": 1,
+                "turns": 4,
+                "spend": 2.0,
+                "saved_spend": -0.5,
+                "savings_estimated_turns": 4,
+                "savings_estimated_actual_spend": 2.0,
+                "savings_estimated_saved_spend": -0.5,
+            }
+        )
+        response: Final = await self._benchmarks(
+            monkeypatch, rows=[historical.model_dump(), current.model_dump()], model_list=[]
+        )
+        assert [group.saved_spend for group in response.groups] == [30.0, -0.5]
+        assert response.groups[1].savings_estimated_turns == 4
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("api_key,user_id", [(None, None), ("key-hash", None), (None, "selected-user"),
+                                                ("key-hash", "selected-user")])
+    @pytest.mark.parametrize(
+        "daily_saved,has_daily_rows,has_sessions",
+        [(6.5, True, True), (-0.5, True, True), (0.0, True, True), (30.0, True, True),
+         (2.0, True, False), (0.0, False, True), (0.0, False, False)],
+        ids=["historical-and-new-plus-no-session", "signed-loss", "recorded-zero", "matching-is-not-proof",
+             "no-session-history", "out-of-window-session-only", "empty"],
+    )
+    async def test_total_uses_overall_request_date_savings_with_identical_filters(
+        self, monkeypatch: pytest.MonkeyPatch, api_key: str | None, user_id: str | None,
+        daily_saved: float, has_daily_rows: bool, has_sessions: bool,
+    ) -> None:
+        from litellm.proxy.management_endpoints import common_daily_activity
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
+
+        daily: Final = AsyncMock(return_value=self._daily_result(daily_saved, has_rows=has_daily_rows))
+        query: Final = AsyncMock(side_effect=[
+            [self.ROW.model_dump()] if has_sessions else [],
+            [AutoRouterDailyCosts(complete=not has_daily_rows, saved_spend=daily_saved).model_dump()],
+            [AutoRouterDailyCosts(complete=not has_daily_rows, saved_spend=daily_saved).model_dump()],
+        ])
+        prisma: Final = SimpleNamespace(db=SimpleNamespace(query_raw=query))
+        monkeypatch.setattr(common_daily_activity, "get_daily_activity_aggregated", daily)
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        response: Final = await get_auto_router_benchmarks(
+            user_api_key_dict=ADMIN, start_date="2026-07-01", end_date="2026-08-01",
+            api_key=api_key, user_id=user_id,
+        )
+
+        daily.assert_awaited_once_with(
+            prisma_client=prisma, table_name="litellm_dailyuserspend", entity_id_field="user_id",
+            entity_id=user_id, entity_metadata_field=None, start_date="2026-07-01", end_date="2026-08-01",
+            model=None, api_key=api_key,
+        )
+        assert query.call_args_list[0].args[1:] == ("2026-07-01T00:00:00", "2026-08-02T00:00:00", api_key, user_id)
+        assert query.call_args_list[1].args[1:] == ("2026-07-01", "2026-08-01", api_key, user_id)
+        assert response.totals.saved_spend == daily_saved
+        assert response.totals.sessions == (4 if has_sessions else 0)
+        assert response.totals.saved_per_session == (7.5 if has_sessions else 0.0)
+        assert [group.saved_spend for group in response.groups] == ([30.0] if has_sessions else [])
+        assert (
+            response.totals.spend, response.totals.classifier_cost, response.totals.baseline_spend,
+            response.totals.saved_pct,
+        ) == ((None,) * 4 if has_daily_rows else (0.0,) * 4)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "complete, classifier_requests, estimated, saved, recorded_saved, expected_spend, baseline, pct, coverage",
+        [
+            (True, 3, 2, 30.0, 30.0, 10.0, 32.5, 92.3, "complete"),
+            (True, 3, 0, 0.0, 0.0, 10.0, None, None, "complete"),
+            (True, 2, 2, 30.0, 30.0, 10.0, None, None, "partial"),
+            (False, 3, 2, 30.0, 30.0, 10.0, None, None, "partial"),
+            (True, 3, 2, 30.0, 29.0, 10.0, None, None, "complete"),
+            (True, 3, 2, -0.5, -0.5, 10.0, 2.0, -25.0, "complete"),
+        ],
+        ids=["covered-subset", "unknown-only", "missing-classifier", "partial-history", "pending-savings", "loss"],
+    )
+    async def test_daily_costs_preserve_actual_charges_and_compare_only_matching_estimates(
+        self, monkeypatch: pytest.MonkeyPatch, complete: bool, classifier_requests: int,
+        estimated: int, saved: float, recorded_saved: float, expected_spend: float | None,
+        baseline: float | None, pct: float | None, coverage: str,
+    ) -> None:
+        from litellm.proxy.management_endpoints import common_daily_activity
+
+        monkeypatch.setattr(common_daily_activity, "get_daily_activity_aggregated",
+                            AsyncMock(return_value=self._daily_result(saved)))
+        costs: Final = AutoRouterDailyCosts(
+            requests=3, llm_spend=9.7, classifier_cost=0.3, classifier_requests=classifier_requests,
+            estimated_requests=estimated, estimated_actual_spend=2.5 if estimated else 0.0,
+            saved_spend=recorded_saved, complete=complete,
+        )
+        response: Final = await self._benchmarks(monkeypatch, rows=[], model_list=[], costs=costs)
+        totals: Final = response.totals
+        assert totals.saved_spend == saved
+        assert totals.spend == expected_spend
+        assert totals.llm_spend == 9.7
+        assert totals.classifier_cost == (0.3 if classifier_requests == 3 else None)
+        assert totals.baseline_spend == baseline
+        assert totals.saved_pct == pct
+        assert totals.cost_coverage == coverage
+        assert totals.cost_requests == (3 if complete else None)
+        assert totals.savings_estimated_turns == estimated
+        assert totals.savings_estimated_actual_spend == (2.5 if estimated else 0.0)
+        assert totals.sessions == totals.turns == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("recovery", ["complete", "partial", "empty", "failure", "invalid", "not-needed"])
+    async def test_historical_cost_recovery_preserves_durable_savings_and_request_scope(
+        self, monkeypatch: pytest.MonkeyPatch, recovery: str,
+    ) -> None:
+        from litellm.proxy.management_endpoints import common_daily_activity
+        from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+
+        recovered: Final = AutoRouterDailyCosts(
+            requests=3, llm_spend=4.5, classifier_cost=0.5, classifier_requests=3,
+            estimated_requests=2, estimated_actual_spend=3.0, saved_spend=6.5,
+            complete=recovery != "partial",
+        )
+        recorded: Final = recovered if recovery == "not-needed" else AutoRouterDailyCosts(
+            requests=1, llm_spend=2.0, classifier_cost=0.25, classifier_requests=1,
+            estimated_requests=1, estimated_actual_spend=2.25, saved_spend=1.5, complete=False,
+        )
+        recovery_result: Final = {
+            "empty": [], "failure": RuntimeError("retained logs unavailable"), "invalid": [{"unexpected": True}],
+        }.get(recovery, [recovered.model_dump()])
+        query: Final = AsyncMock(side_effect=[[self.ROW.model_dump()], [recorded.model_dump()], recovery_result])
+        transaction: Final = SimpleNamespace(query_raw=query, execute_raw=AsyncMock())
+        reader: Final = MagicMock()
+        reader.tx.return_value.__aenter__.return_value = transaction
+        monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(
+            db=SimpleNamespace(query_raw=query), read_db=reader,
+        ))
+        monkeypatch.setattr(common_daily_activity, "get_daily_activity_aggregated",
+                            AsyncMock(return_value=self._daily_result(6.5)))
+        response: Final = await auto_router_endpoints.get_auto_router_benchmarks(
+            user_api_key_dict=ADMIN, start_date="2026-07-01", end_date="2026-08-01",
+            api_key="selected-key", user_id="selected-user",
+        )
+        totals: Final = response.totals
+        assert totals.saved_spend == 6.5
+        assert response.groups[0].saved_spend == self.ROW.saved_spend
+        fallback: Final = recovery in ("empty", "failure", "invalid")
+        assert (totals.spend, totals.llm_spend, totals.classifier_cost) == (
+            (2.25, 2.0, 0.25) if fallback else (5.0, 4.5, 0.5)
+        )
+        comparable: Final = recovery in ("complete", "not-needed")
+        assert (totals.baseline_spend, totals.saved_pct) == ((9.5, 68.4) if comparable else (None, None))
+        assert totals.cost_coverage == ("complete" if comparable else "partial")
+        assert query.await_count == (2 if recovery == "not-needed" else 3)
+        if recovery != "not-needed":
+            sql, start, end, key, user, endpoints = query.call_args.args
+            assert sql == AUTOROUTER_HISTORICAL_COSTS_SQL
+            assert (start, end, key, user) == ("2026-07-01", "2026-08-01", "selected-key", "selected-user")
+            assert json.loads(endpoints) == ROUTE_ENDPOINT_MAPPING
+
+    @pytest.mark.asyncio
+    async def test_daily_savings_failure_never_falls_back_to_session_savings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy.management_endpoints import common_daily_activity
+
+        monkeypatch.setattr(
+            common_daily_activity, "get_daily_activity_aggregated",
+            AsyncMock(side_effect=HTTPException(status_code=500, detail="Daily savings unavailable")),
+        )
+        with pytest.raises(HTTPException, match="Daily savings unavailable"):
+            await self._benchmarks(monkeypatch, rows=[self.ROW.model_dump()], model_list=[])
 
     def test_an_empty_window_folds_to_zeros(self):
         from litellm.proxy.management_endpoints.auto_router_endpoints import (
@@ -854,6 +1069,8 @@ class TestAutoRouterBenchmarks:
 
         class _DB:
             async def query_raw(self, sql: str, *params: object):
+                if sql in (AUTOROUTER_DAILY_COSTS_SQL, AUTOROUTER_HISTORICAL_COSTS_SQL):
+                    return [AutoRouterDailyCosts(complete=False).model_dump()]
                 captured["sql"] = sql
                 captured["params"] = params
                 return [TestAutoRouterBenchmarks.ROW.model_dump()]
@@ -870,9 +1087,12 @@ class TestAutoRouterBenchmarks:
         assert captured["params"] == ("2026-07-01T00:00:00", "2026-08-02T00:00:00", "key-hash", user_id)
         assert response.routers_in_scope == 1
         assert response.groups[0].router_name == "live-auto"
-        assert response.groups[0].saved_pct == response.totals.saved_pct == 75.0
-        assert response.groups[0].classifier_cost == response.totals.classifier_cost == 0.4
-        assert response.totals.spend - response.totals.classifier_cost == pytest.approx(9.6)
+        assert response.groups[0].saved_pct == 75.0
+        assert response.groups[0].classifier_cost == 0.4
+        assert response.totals.saved_spend == 30.0
+        assert response.totals.saved_pct is None
+        assert response.totals.classifier_cost is None
+        assert response.totals.spend is None
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("recorded_turns", [0, 3, 10])
@@ -899,12 +1119,12 @@ class TestAutoRouterBenchmarks:
         wire: Final = response.model_dump()
         assert wire["groups"][0]["classifier_cost"] == 0.4
         assert wire["groups"][1]["classifier_cost"] == (pytest.approx(0.2) if recorded_turns == 10 else None)
-        assert wire["totals"]["classifier_cost"] == (pytest.approx(0.6) if recorded_turns == 10 else None)
+        assert wire["totals"]["classifier_cost"] is None
         assert response.totals.turns == 50
-        assert response.totals.spend == 12.0
-        assert response.totals.saved_spend == 29.5
-        assert response.totals.baseline_spend == 41.5
-        assert response.totals.saved_pct == 71.1
+        assert response.totals.spend is None
+        assert response.totals.saved_spend == 30.0
+        assert response.totals.baseline_spend is None
+        assert response.totals.saved_pct is None
         assert response.totals.saved_per_session == 5.9
 
     @pytest.mark.asyncio
@@ -919,6 +1139,8 @@ class TestAutoRouterBenchmarks:
 
         class _DB:
             async def query_raw(self, sql: str, *params: object):
+                if sql in (AUTOROUTER_DAILY_COSTS_SQL, AUTOROUTER_HISTORICAL_COSTS_SQL):
+                    return [AutoRouterDailyCosts(complete=False).model_dump()]
                 return [{**TestAutoRouterBenchmarks.ROW.model_dump(), "tier_turns": wire_value}]
 
         monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
@@ -953,7 +1175,7 @@ class TestAutoRouterBenchmarks:
         assert len(response.groups) == 3
         assert response.routers_in_scope == 3
         assert by_name["live-auto"].spend == 10.0
-        assert response.totals.spend == 10.0
+        assert response.totals.spend is None
         assert response.totals.sessions == 4
         for name in ("idle-from-config", "idle-from-db"):
             idle = by_name[name]
@@ -1100,13 +1322,17 @@ class TestAutoRouterSession:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "turns, estimated", [(3, True), (10, True), (10, False)], ids=["full", "partial", "legacy"]
+        "turns, estimated, saved_spend",
+        [(3, True, 0.24), (10, True, 0.24), (10, False, 0.24), (10, False, 0.0),
+         (10, True, -0.24), (10, False, -0.24), (3, True, 0.0)],
+        ids=["full", "partial", "legacy", "unknown", "negative", "legacy-negative", "estimated-zero"],
     )
     async def test_a_key_reads_its_own_session_with_the_baseline_its_turns_were_priced_against(
         self,
         monkeypatch: pytest.MonkeyPatch,
         turns: int,
         estimated: bool,
+        saved_spend: float,
     ) -> None:
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_session
 
@@ -1115,10 +1341,12 @@ class TestAutoRouterSession:
             key: value for key, value in self.ROW.items() if estimated or not key.startswith("savings_estimated_")
         }
         spend: Final = 0.14 if turns == 3 else 10.0
-        if estimated and turns != 3:
-            row["savings_estimated_saved_spend"] = -0.04
+        if estimated:
+            row["savings_estimated_saved_spend"] = saved_spend if turns == 3 else -0.04
         self._rig(
-            monkeypatch, [{**row, "api_key": caller.api_key, "session_id": "sess-1", "turns": turns, "spend": spend}]
+            monkeypatch,
+            [{**row, "api_key": caller.api_key, "session_id": "sess-1", "turns": turns, "spend": spend,
+              "saved_spend": saved_spend}],
         )
         response = await get_auto_router_session(user_api_key_dict=caller, session_id="sess-1")
         assert response.model_dump() == {
@@ -1128,14 +1356,41 @@ class TestAutoRouterSession:
             "turns": turns,
             "last_model": "anthropic/claude-sonnet-5",
             "spend": spend,
-            "saved_spend": (0.24 if turns == 3 else -0.04) if estimated else None,
+            "saved_spend": saved_spend,
             "savings_estimated_turns": 3 if estimated else 0,
             "savings_estimated_actual_spend": 0.14 if estimated else 0.0,
-            "baseline_spend": pytest.approx(0.38) if turns == 3 else None,
-            "savings_estimated_baseline_spend": pytest.approx(0.38 if turns == 3 else 0.1) if estimated else None,
-            "baseline_model": "anthropic/claude-opus-5" if estimated else None,
-            "baseline_models": {"anthropic/claude-opus-5": 3} if estimated else {},
+            "baseline_spend": pytest.approx(spend + saved_spend) if estimated or saved_spend != 0 else None,
+            "savings_estimated_baseline_spend": pytest.approx(spend + saved_spend if turns == 3 else 0.1)
+            if estimated else None,
+            "baseline_model": "anthropic/claude-opus-5",
+            "baseline_models": {"anthropic/claude-opus-5": 3},
         }
+
+    @pytest.mark.asyncio
+    async def test_unknown_only_session_keeps_savings_unavailable_in_the_cli(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        from litellm.proxy.client.cli.commands.statusline_script import _session_from_payload, render
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_session
+
+        caller: Final = UserAPIKeyAuth(api_key="sk-caller")
+        self._rig(monkeypatch, [{
+            **self.ROW, "api_key": caller.api_key, "session_id": "unknown-only",
+            "saved_spend": 0.0, "savings_estimated_turns": 0,
+            "savings_estimated_actual_spend": 0.0, "savings_estimated_saved_spend": 0.0,
+            "savings_estimated_baseline_models": {},
+        }])
+
+        response: Final = await get_auto_router_session(user_api_key_dict=caller, session_id="unknown-only")
+        assert response.turns == 3 and response.savings_estimated_turns == 0
+        assert response.baseline_model == "anthropic/claude-opus-5"
+        assert response.baseline_spend is None
+        assert response.savings_estimated_baseline_spend is None
+        session: Final = _session_from_payload(response.model_dump())
+        assert session is not None
+        assert render("claude-sonnet-5", session, tmp_path, use_color=False) == (
+            "Routed to: claude-sonnet-5 · Savings unavailable"
+        )
 
     @pytest.mark.asyncio
     async def test_another_keys_session_is_a_404_even_for_an_admin(self, monkeypatch: pytest.MonkeyPatch):
@@ -1168,14 +1423,13 @@ class TestAutoRouterSession:
         assert response.router_name == "new-auto"
 
     @pytest.mark.asyncio
-    async def test_a_reconfigured_router_keeps_the_label_the_money_was_priced_against(
+    async def test_a_reconfigured_router_retains_historical_baseline_labels(
         self, monkeypatch: pytest.MonkeyPatch
-    ):
-        # The proxy's router now prices against a different baseline, but the row's money was priced
-        # against opus for two of three turns, and the label says so; the full split is on the response.
+    ) -> None:
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_session
 
-        priced = {"anthropic/claude-opus-5": 2, "anthropic/claude-sonnet-5": 1}
+        priced: Final = {"anthropic/claude-opus-5": 2, "anthropic/claude-sonnet-5": 1}
+        historical: Final = {"old-baseline": 100, **priced}
         self._rig(
             monkeypatch,
             [
@@ -1183,14 +1437,14 @@ class TestAutoRouterSession:
                     **self.ROW,
                     "api_key": ADMIN.api_key,
                     "session_id": "s",
-                    "baseline_models": {"old-baseline": 100},
+                    "baseline_models": historical,
                     "savings_estimated_baseline_models": priced,
                 }
             ],
         )
-        response = await get_auto_router_session(user_api_key_dict=ADMIN, session_id="s")
-        assert response.baseline_model == "anthropic/claude-opus-5"
-        assert response.baseline_models == priced
+        response: Final = await get_auto_router_session(user_api_key_dict=ADMIN, session_id="s")
+        assert response.baseline_model == "old-baseline"
+        assert response.baseline_models == historical
 
     @pytest.mark.asyncio
     async def test_an_oversized_client_session_id_is_bounded_like_the_writer_bounded_it(

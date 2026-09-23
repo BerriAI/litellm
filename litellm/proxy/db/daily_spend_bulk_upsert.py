@@ -99,13 +99,32 @@ _SPEND_COLUMNS: Final = (
     "gateway_injected_caching_savings_spend",
     "autorouter_savings_spend",
 )
+_AUTOROUTER_COUNTER_COLUMNS: Final = (
+    "autorouter_accounted_requests",
+    "autorouter_requests",
+    "autorouter_classifier_cost_recorded_requests",
+    "autorouter_estimated_requests",
+)
+_AUTOROUTER_SPEND_COLUMNS: Final = (
+    "autorouter_llm_spend",
+    "autorouter_classifier_cost",
+    "autorouter_estimated_actual_spend",
+)
 
 _CASTS: Final[Mapping[str, str]] = MappingProxyType(
     {
-        **{column: "bigint" for column in _COUNTER_COLUMNS},
-        **{column: "double precision" for column in _SPEND_COLUMNS},
+        **{column: "bigint" for column in (*_COUNTER_COLUMNS, *_AUTOROUTER_COUNTER_COLUMNS)},
+        **{column: "double precision" for column in (*_SPEND_COLUMNS, *_AUTOROUTER_SPEND_COLUMNS)},
     }
 )
+
+
+def _counter_columns(table: DailySpendTable) -> tuple[str, ...]:
+    return (*_COUNTER_COLUMNS, *(_AUTOROUTER_COUNTER_COLUMNS if table.name == "LiteLLM_DailyUserSpend" else ()))
+
+
+def _spend_columns(table: DailySpendTable) -> tuple[str, ...]:
+    return (*_SPEND_COLUMNS, *(_AUTOROUTER_SPEND_COLUMNS if table.name == "LiteLLM_DailyUserSpend" else ()))
 
 
 def _quoted(columns: Sequence[str]) -> str:
@@ -129,13 +148,13 @@ def conflict_key(table: DailySpendTable, transaction: SpendRow) -> tuple[str, ..
     return tuple(_as_text(transaction.get(column)) for column in (table.entity_id_column, *_KEY_COLUMNS))
 
 
-def _merge(group: Sequence[SpendRow]) -> SpendRow:
+def _merge(table: DailySpendTable, group: Sequence[SpendRow]) -> SpendRow:
     if len(group) == 1:
         return group[0]
     return {
         **group[0],
-        **{column: sum(_as_int(row.get(column)) for row in group) for column in _COUNTER_COLUMNS},
-        **{column: sum(_as_float(row.get(column)) for row in group) for column in _SPEND_COLUMNS},
+        **{column: sum(_as_int(row.get(column)) for row in group) for column in _counter_columns(table)},
+        **{column: sum(_as_float(row.get(column)) for row in group) for column in _spend_columns(table)},
     }
 
 
@@ -152,7 +171,9 @@ def merge_by_conflict_key(
     key keeps concurrent writers taking row locks in the same sequence.
     """
     ordered: Final = sorted(transactions, key=lambda transaction: conflict_key(table, transaction))
-    return tuple((key, _merge(tuple(group))) for key, group in groupby(ordered, key=lambda t: conflict_key(table, t)))
+    return tuple(
+        (key, _merge(table, tuple(group))) for key, group in groupby(ordered, key=lambda t: conflict_key(table, t))
+    )
 
 
 def _row_params(
@@ -165,8 +186,8 @@ def _row_params(
         str(uuid.uuid4()),
         *key,
         None if transaction.get("model_group") is None else _as_text(transaction.get("model_group")),
-        *(_as_int(transaction.get(column)) for column in _COUNTER_COLUMNS),
-        *(_as_float(transaction.get(column)) for column in _SPEND_COLUMNS),
+        *(_as_int(transaction.get(column)) for column in _counter_columns(table)),
+        *(_as_float(transaction.get(column)) for column in _spend_columns(table)),
         *((None if request_id is None else _as_text(request_id),) if table.carries_request_id else ()),
     )
 
@@ -177,8 +198,8 @@ def _insert_columns(table: DailySpendTable) -> tuple[str, ...]:
         table.entity_id_column,
         *_KEY_COLUMNS,
         "model_group",
-        *_COUNTER_COLUMNS,
-        *_SPEND_COLUMNS,
+        *_counter_columns(table),
+        *_spend_columns(table),
         *(("request_id",) if table.carries_request_id else ()),
     )
 
@@ -201,7 +222,7 @@ def build_bulk_upsert(
     )
     increments: Final = ", ".join(
         f'"{column}" = {quoted_table}."{column}" + EXCLUDED."{column}"'
-        for column in (*_COUNTER_COLUMNS, *_SPEND_COLUMNS)
+        for column in (*_counter_columns(table), *_spend_columns(table))
     )
     # request_id names one arbitrary contributing request, so an entry carrying none must
     # not blank out the one already recorded.

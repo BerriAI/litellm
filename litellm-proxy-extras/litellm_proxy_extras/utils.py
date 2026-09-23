@@ -1146,6 +1146,38 @@ class ProxyExtrasDBManager:
         )
 
     @staticmethod
+    def apply_autorouter_daily_coverage() -> None:
+        from litellm_proxy_extras.migration_lock import migration_environment
+
+        package_dir: Final = Path(__file__).resolve().parent
+        migration: Final = package_dir / "migrations" / "20260923000000_add_daily_autorouter_costs" / "migration.sql"
+        for attempt in range(MAX_MIGRATE_DEPLOY_ATTEMPTS):
+            try:
+                prisma_toolchain.run_prisma(
+                    [
+                        _get_prisma_command(),
+                        "db",
+                        "execute",
+                        "--schema",
+                        str(package_dir / "schema.prisma"),
+                        "--file",
+                        str(migration),
+                    ],
+                    timeout=prisma_command_timeout(),
+                    env=migration_environment(_get_prisma_env()),
+                    stdout=None,
+                    stderr=None,
+                )
+                return
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+                if isinstance(error, OSError) or attempt + 1 == MAX_MIGRATE_DEPLOY_ATTEMPTS:
+                    raise RuntimeError(
+                        "Failed to install daily auto-router coverage; database setup cannot continue"
+                    ) from error
+                logger.warning("Daily auto-router coverage installation attempt %s failed; retrying", attempt + 1)
+                time.sleep(random.uniform(0.5, 1.5))
+
+    @staticmethod
     def setup_database(
         use_migrate: bool = False, use_v2_resolver: bool = False
     ) -> bool:
@@ -1170,6 +1202,7 @@ class ProxyExtrasDBManager:
             use_migrate=use_migrate, use_v2_resolver=use_v2_resolver
         )
         if migrated:
+            ProxyExtrasDBManager.apply_autorouter_daily_coverage()
             ProxyExtrasDBManager.repair_invalid_indexes()
             ProxyExtrasDBManager.apply_replica_identity_full_if_requested()
         return migrated

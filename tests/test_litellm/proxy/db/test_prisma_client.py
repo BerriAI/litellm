@@ -3,6 +3,7 @@ import os
 import signal
 import sys
 import urllib.parse
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -11,6 +12,9 @@ from fastapi.testclient import TestClient
 
 
 from litellm.proxy.db.prisma_client import PrismaManager, PrismaWrapper, should_update_prisma_schema
+
+if TYPE_CHECKING:
+    from tests.test_litellm.proxy.db.conftest import FakePrismaCli
 
 
 @pytest.fixture(autouse=True)
@@ -213,7 +217,10 @@ def test_db_push_applies_replica_identity_full_when_requested(monkeypatch, fake_
 
     assert PrismaManager.setup_database(use_migrate=False) is True
 
-    assert fake_prisma_cli.calls == [DB_PUSH_ARGV]
+    assert len(fake_prisma_cli.calls) == 2
+    assert fake_prisma_cli.calls[0] == DB_PUSH_ARGV
+    assert fake_prisma_cli.calls[1][:2] == ["db", "execute"]
+    assert fake_prisma_cli.calls[1][-1].endswith("20260923000000_add_daily_autorouter_costs/migration.sql")
     assert applied == [True]
 
 
@@ -246,7 +253,47 @@ def test_db_push_proceeds_when_spend_logs_is_not_partitioned(monkeypatch, fake_p
     )
     assert PrismaManager.setup_database(use_migrate=False) is True
 
-    assert fake_prisma_cli.calls == [DB_PUSH_ARGV]
+    assert len(fake_prisma_cli.calls) == 2
+    assert fake_prisma_cli.calls[0] == DB_PUSH_ARGV
+    assert fake_prisma_cli.calls[1][:2] == ["db", "execute"]
+
+
+@pytest.mark.parametrize("use_migrate", [False, True])
+def test_db_push_cannot_succeed_without_daily_coverage_owner(
+    fake_prisma_cli: "FakePrismaCli",
+    unset_database_url: None,
+    monkeypatch: pytest.MonkeyPatch,
+    use_migrate: bool,
+) -> None:
+    monkeypatch.setenv("FAKE_PRISMA_FAIL_DB_EXECUTE", "1")
+
+    with patch("litellm_proxy_extras.utils.time.sleep"), pytest.raises(RuntimeError, match="daily auto-router coverage"):
+        PrismaManager.setup_database(use_migrate=use_migrate)
+
+    assert [call[:2] for call in fake_prisma_cli.calls if call != ["--version"]] == [
+        ["migrate", "deploy"] if use_migrate else ["db", "push"],
+        *([["db", "execute"]] * 4),
+    ]
+
+
+@pytest.mark.parametrize("use_migrate", [False, True])
+@pytest.mark.parametrize("failure", ["exit", "timeout"])
+def test_database_setup_retries_transient_daily_coverage_install(
+    fake_prisma_cli: "FakePrismaCli",
+    unset_database_url: None,
+    monkeypatch: pytest.MonkeyPatch,
+    use_migrate: bool,
+    failure: str,
+) -> None:
+    monkeypatch.setenv("FAKE_PRISMA_FAIL_FIRST_DB_EXECUTE", failure)
+
+    with patch("litellm_proxy_extras.utils.time.sleep"):
+        assert PrismaManager.setup_database(use_migrate=use_migrate) is True
+
+    assert [call[:2] for call in fake_prisma_cli.calls if call != ["--version"]] == [
+        ["migrate", "deploy"] if use_migrate else ["db", "push"],
+        ["db", "execute"], ["db", "execute"],
+    ]
 
 
 def _entra_jwt(expires_in_seconds: int) -> str:
@@ -439,7 +486,9 @@ def test_db_push_timeout_takes_its_process_tree_with_it(fake_prisma_cli, unset_d
     monkeypatch.setenv("FAKE_PRISMA_HANG_FIRST", "1")
 
     assert PrismaManager.setup_database(use_migrate=False) is True
-    assert fake_prisma_cli.calls == [DB_PUSH_ARGV, DB_PUSH_ARGV]
+    assert fake_prisma_cli.calls[:2] == [DB_PUSH_ARGV, DB_PUSH_ARGV]
+    assert len(fake_prisma_cli.calls) == 3
+    assert fake_prisma_cli.calls[2][:2] == ["db", "execute"]
     assert fake_prisma_cli.grandchild_is_gone(within_seconds=5)
 
 
