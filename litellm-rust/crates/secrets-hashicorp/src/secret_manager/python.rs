@@ -1,5 +1,6 @@
 use super::*;
 use rustify::{client::Client as _, endpoint::Endpoint};
+use serde_json::value::RawValue;
 use vaultrs::api::kv2::requests::{
     DeleteLatestSecretVersionRequest, ReadSecretRequest, SetSecretRequest,
 };
@@ -33,11 +34,11 @@ pub enum PythonFailureKind {
         elapsed: Duration,
     },
     Json(#[redact] Vec<u8>),
-    MissingGet(#[redact] Value),
+    MissingGet(#[redact] Vec<u8>),
     ValueMismatch {
         expected: SecretValue,
         #[redact]
-        actual: Value,
+        actual: Vec<u8>,
     },
 }
 
@@ -132,9 +133,13 @@ impl HashicorpVault {
                 },
             )
             .await?;
-        let parsed: Value = serde_json::from_slice(&response)
+        let parsed: &RawValue = serde_json::from_slice(&response)
             .map_err(|_| PythonFailureKind::Json(response.clone()))?;
-        if parsed.get("status").and_then(Value::as_str) == Some("error") {
+        let status = raw_object_field(parsed, "status")
+            .ok()
+            .flatten()
+            .and_then(|value| serde_json::from_str::<String>(value.get()).ok());
+        if status.as_deref() == Some("error") {
             return Ok(response);
         }
         let new_location = self.python_location(new_name, context)?;
@@ -144,18 +149,19 @@ impl HashicorpVault {
             .map_err(|failure| {
                 failure.during(PythonFailureStage::Replacement(new_name.to_owned()))
             })?;
-        let parsed: Value = serde_json::from_slice(&verification).map_err(|_| {
-            PythonFailure::from(PythonFailureKind::Json(verification))
+        let parsed: &RawValue = serde_json::from_slice(&verification).map_err(|_| {
+            PythonFailure::from(PythonFailureKind::Json(verification.clone()))
                 .during(PythonFailureStage::Replacement(new_name.to_owned()))
         })?;
-        let actual = verification_value(&parsed, &data_key(context)).map_err(|failure| {
+        let actual = verification_value(parsed, &data_key(context)).map_err(|failure| {
             PythonFailure::from(failure)
                 .during(PythonFailureStage::Replacement(new_name.to_owned()))
         })?;
-        if actual.as_str() != Some(value.expose()) {
+        let actual_string = serde_json::from_str::<String>(actual.get()).ok();
+        if actual_string.as_deref() != Some(value.expose()) {
             return Err(PythonFailureKind::ValueMismatch {
                 expected: value.clone(),
-                actual,
+                actual: actual.get().as_bytes().to_vec(),
             }
             .into());
         }
@@ -258,21 +264,24 @@ impl HashicorpVault {
     }
 }
 
-fn verification_value(document: &Value, key: &str) -> Result<Value, PythonFailureKind> {
-    let object = document
-        .as_object()
-        .ok_or_else(|| PythonFailureKind::MissingGet(document.clone()))?;
-    let Some(outer) = object.get("data") else {
-        return Ok(Value::Null);
+fn verification_value<'a>(
+    document: &'a RawValue,
+    key: &str,
+) -> Result<&'a RawValue, PythonFailureKind> {
+    let Some(outer) = raw_object_field(document, "data")? else {
+        return Ok(RawValue::NULL);
     };
-    let object = outer
-        .as_object()
-        .ok_or_else(|| PythonFailureKind::MissingGet(outer.clone()))?;
-    let Some(inner) = object.get("data") else {
-        return Ok(Value::Null);
+    let Some(inner) = raw_object_field(outer, "data")? else {
+        return Ok(RawValue::NULL);
     };
-    let object = inner
-        .as_object()
-        .ok_or_else(|| PythonFailureKind::MissingGet(inner.clone()))?;
-    Ok(object.get(key).cloned().unwrap_or(Value::Null))
+    Ok(raw_object_field(inner, key)?.unwrap_or(RawValue::NULL))
+}
+
+fn raw_object_field<'a>(
+    document: &'a RawValue,
+    key: &str,
+) -> Result<Option<&'a RawValue>, PythonFailureKind> {
+    let object: HashMap<String, &RawValue> = serde_json::from_str(document.get())
+        .map_err(|_| PythonFailureKind::MissingGet(document.get().as_bytes().to_vec()))?;
+    Ok(object.get(key).copied())
 }

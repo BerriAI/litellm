@@ -1334,7 +1334,7 @@ async def test_public_vault_rotation_failure_messages_and_request_counts_match_p
         assert actual["status"] == "error"
 
 
-@pytest.mark.parametrize("value", (None, "different", True, 42, [1, "two"]))
+@pytest.mark.parametrize("value", (None, "different", True, 42, 2**100, [1, "two"], [2**100], {"nested": 2**100}))
 async def test_public_vault_rotation_mismatches_do_not_delete_the_old_alias(
     monkeypatch: pytest.MonkeyPatch,
     value: JsonValue,
@@ -1537,7 +1537,9 @@ async def test_public_vault_mutations_preserve_missing_extension_selection(
             )
 
 
-@pytest.mark.parametrize("body", (None, [], 42, {"data": None}, {"data": {"data": []}}, {}, {"data": {}}))
+@pytest.mark.parametrize(
+    "body", (None, [], 42, 2**100, {"data": 2**100}, {"data": None}, {"data": {"data": []}}, {}, {"data": {}})
+)
 async def test_public_vault_rotation_preserves_malformed_verification_errors(
     monkeypatch: pytest.MonkeyPatch,
     body: JsonValue,

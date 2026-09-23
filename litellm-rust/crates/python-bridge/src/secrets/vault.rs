@@ -32,7 +32,7 @@ pub(super) fn failure_value(
             PythonFailureStage::Mutation => http_message(py, &method, &url, status)?,
         },
         PythonFailureKind::ValueMismatch { expected, actual } => {
-            let actual = litellm_host_python::to_py(py, &actual)?;
+            let actual = json_value(py, &actual)?;
             format!(
                 "New secret value mismatch. Expected: {}, Got: {}",
                 expected.expose(),
@@ -107,7 +107,7 @@ fn cause_message(
             }
         }
         PythonFailureKind::MissingGet(value) => {
-            let value = litellm_host_python::to_py(py, &value)?;
+            let value = json_value(py, &value)?;
             match value.bind(py).getattr("get") {
                 Err(error) => error.value(py).str()?.extract()?,
                 Ok(_) => "HashiCorp Vault response payload is malformed".to_owned(),
