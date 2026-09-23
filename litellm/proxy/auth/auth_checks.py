@@ -5524,6 +5524,44 @@ async def _virtual_key_max_budget_alert_check(
                 )
 
 
+TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY: Final = "team_member_max_budget_alert_emails"
+
+
+def _team_member_max_budget_alert_check(
+    team_id: str,
+    team_alias: str | None,
+    team_metadata: Mapping[str, object] | None,
+    organization_id: str | None,
+    user_id: str,
+    user_email: str | None,
+    proxy_logging_obj: ProxyLogging,
+    spend: float,
+    max_budget: float,
+) -> None:
+    raw_config: Final = (team_metadata or {}).get(TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY)
+    alert_email_config: Final = _merge_budget_alert_email_configs(
+        global_cfg=None,
+        per_key_cfg=raw_config if isinstance(raw_config, Mapping) else None,
+    )
+    if not alert_email_config or spend <= 0:
+        return
+    min_pct: Final = min((int(k) for k in alert_email_config if k.isdigit()), default=None)
+    if min_pct is None or spend < max_budget * (min_pct / 100.0):
+        return
+    call_info: Final = CallInfo(
+        spend=spend,
+        max_budget=max_budget,
+        user_id=user_id,
+        team_id=team_id,
+        team_alias=team_alias,
+        organization_id=organization_id,
+        user_email=user_email,
+        event_group=Litellm_EntityType.TEAM_MEMBER,
+        max_budget_alert_emails=alert_email_config,
+    )
+    asyncio.create_task(proxy_logging_obj.budget_alerts(type="max_budget_alert", user_info=call_info))
+
+
 async def _check_team_member_budget(
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
@@ -5589,7 +5627,22 @@ async def _check_team_member_budget(
                 max_budget=team_member_budget,
             )
 
-            if math.isfinite(team_member_budget) and team_member_spend >= team_member_budget:
+            if not math.isfinite(team_member_budget):
+                return
+
+            _team_member_max_budget_alert_check(
+                team_id=team_object.team_id,
+                team_alias=team_object.team_alias,
+                team_metadata=team_object.metadata,
+                organization_id=team_object.organization_id,
+                user_id=valid_token.user_id,
+                user_email=user_object.user_email if user_object is not None else None,
+                proxy_logging_obj=proxy_logging_obj,
+                spend=team_member_spend,
+                max_budget=team_member_budget,
+            )
+
+            if team_member_spend >= team_member_budget:
                 raise litellm.BudgetExceededError(
                     current_cost=team_member_spend,
                     max_budget=team_member_budget,

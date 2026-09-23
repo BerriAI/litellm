@@ -1794,6 +1794,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/spend/test_team_member_budget_alerts.py::test_team_member_budget_thresholds_email_member_and_configured_recipients": [
+      "quota_management.budget.team_member.alerts_at_configured_thresholds"
     ]
   },
   "browser": {

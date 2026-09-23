@@ -52,6 +52,7 @@ from litellm.proxy.auth.auth_checks import (
     _log_budget_lookup_failure,
     _tag_max_budget_check,
     _team_max_budget_check,
+    _team_member_max_budget_alert_check,
     _virtual_key_max_budget_alert_check,
     _check_agent_caller_model_access,
     _virtual_key_max_budget_check,
@@ -3334,6 +3335,55 @@ async def test_virtual_key_max_budget_alert_check_without_user_obj():
     assert alert_triggered is True
     assert captured_call_info is not None
     assert captured_call_info.user_email is None
+
+
+@pytest.mark.parametrize(
+    "spend, team_metadata, expect_alert",
+    [
+        (0.05, {"team_member_max_budget_alert_emails": {"50": [], "100": ["finance@co.com"]}}, True),
+        (0.10, {"team_member_max_budget_alert_emails": {"50": [], "100": ["finance@co.com"]}}, True),
+        (0.049, {"team_member_max_budget_alert_emails": {"50": [], "100": ["finance@co.com"]}}, False),
+        (0.0, {"team_member_max_budget_alert_emails": {"50": []}}, False),
+        (0.10, {"team_member_max_budget_alert_emails": {"abc": []}}, False),
+        (0.10, {"team_member_max_budget_alert_emails": "50"}, False),
+        (0.10, {"soft_budget_alerting_emails": ["finance@co.com"]}, False),
+        (0.10, None, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_member_max_budget_alert_check_dispatches_only_at_configured_thresholds(
+    spend, team_metadata, expect_alert
+):
+    captured: list[tuple[str, CallInfo]] = []
+
+    class RecordingProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            captured.append((type, user_info))
+
+    _team_member_max_budget_alert_check(
+        team_id="team-1",
+        team_alias="platform",
+        team_metadata=team_metadata,
+        organization_id="org-1",
+        user_id="user-1",
+        user_email="member@co.com",
+        proxy_logging_obj=RecordingProxyLogging(),
+        spend=spend,
+        max_budget=0.10,
+    )
+    await asyncio.sleep(0)
+
+    if not expect_alert:
+        assert captured == [], captured
+        return
+    assert [type for type, _ in captured] == ["max_budget_alert"], captured
+    call_info = captured[0][1]
+    assert call_info.event_group == Litellm_EntityType.TEAM_MEMBER
+    assert (call_info.spend, call_info.max_budget) == (spend, 0.10)
+    assert (call_info.user_id, call_info.user_email) == ("user-1", "member@co.com")
+    assert (call_info.team_id, call_info.team_alias, call_info.organization_id) == ("team-1", "platform", "org-1")
+    assert call_info.max_budget_alert_emails == {"50": [], "100": ["finance@co.com"]}
+    assert call_info.token is None
 
 
 @pytest.mark.parametrize(
