@@ -7907,6 +7907,10 @@ export const storeMCPUserEnvVars = async (
   });
 };
 
+export const clearMCPUserEnvVars = async (accessToken: string, serverId: string): Promise<MCPUserEnvVarsStatus> => {
+  return apiClient.delete<MCPUserEnvVarsStatus>(`/v1/mcp/server/${serverId}/user-env-vars`, { accessToken });
+};
+
 export const listMCPUserEnvVarStatus = async (accessToken: string): Promise<MCPUserEnvVarsStatus[]> => {
   // Best-effort status badges: a failure here must not break the page, so fall
   // back to an empty list rather than surfacing the error to the caller.
