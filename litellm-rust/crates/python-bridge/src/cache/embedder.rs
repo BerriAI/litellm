@@ -90,21 +90,7 @@ impl PythonEmbedder {
     }
 }
 
-impl litellm_cache_valkey_semantic::Embedder for PythonEmbedder {
-    fn embed(&self, prompt: &str, metadata: Option<&Value>) -> Result<Vec<f32>, Error> {
-        self.embed_sync(prompt, metadata)
-    }
-
-    fn async_embed(
-        &self,
-        _prompt: &str,
-        _metadata: Option<&Value>,
-    ) -> impl Future<Output = Result<Vec<f32>, Error>> + Send {
-        std::future::ready(Self::seeded_embedding())
-    }
-}
-
-impl litellm_cache_redis_semantic::Embedder for PythonEmbedder {
+impl litellm_cache::semantic::Embedder for PythonEmbedder {
     fn embed(&self, prompt: &str, metadata: Option<&Value>) -> Result<Vec<f32>, Error> {
         self.embed_sync(prompt, metadata)
     }
@@ -129,15 +115,14 @@ mod tests {
         let embedder = PythonEmbedder::new(object);
         let scoped_embedder = embedder.clone();
         let scoped = with_prepared_embedding(Ok(vec![0.25]), async move {
-            litellm_cache_redis_semantic::Embedder::async_embed(&scoped_embedder, "prompt", None)
-                .await
+            litellm_cache::semantic::Embedder::async_embed(&scoped_embedder, "prompt", None).await
         });
         assert_eq!(scoped.await, Ok(vec![0.25]));
         let unscoped =
-            litellm_cache_redis_semantic::Embedder::async_embed(&embedder, "prompt", None).await;
+            litellm_cache::semantic::Embedder::async_embed(&embedder, "prompt", None).await;
         assert_eq!(unscoped, Err(Error::Unavailable));
         let valkey = with_prepared_embedding(Ok(vec![0.5]), async move {
-            litellm_cache_valkey_semantic::Embedder::async_embed(&embedder, "prompt", None).await
+            litellm_cache::semantic::Embedder::async_embed(&embedder, "prompt", None).await
         });
         assert_eq!(valkey.await, Ok(vec![0.5]));
     }

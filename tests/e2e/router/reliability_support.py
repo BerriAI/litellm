@@ -15,13 +15,15 @@ reliability behavior.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Final
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from proxy_client import ProxyClient
 from e2e_config import CHEAP_OPENAI_MODEL, PROXY_BASE_URL, unique_marker
 from e2e_http import NetworkError, StreamHead, StreamingResponse
+from transport import Transport
 from models import (
     CacheControl,
     ChatMessage,
@@ -274,9 +276,36 @@ def chat_turns_override(
 ) -> StreamingResponse:
     """POST /chat/completions with an optional per-request router_settings_override,
     returning the raw outcome so tests read status, body, and reliability headers."""
-    return proxy.transport.send(
+    return chat_turns_override_via(
+        proxy.transport, key, model, turns, override=override, stream=stream, cache=cache, max_tokens=max_tokens
+    )
+
+
+def chat_override_via(
+    transport: Transport,
+    key: str,
+    model: str,
+    content: str,
+    override: RouterSettingsOverride | None = None,
+) -> StreamingResponse:
+    """`chat_override` aimed at one replica's transport (from `proxy.replicas`) instead of
+    the client's default, for cells that must know which gateway took the call."""
+    return chat_turns_override_via(transport, key, model, [ChatMessage(role="user", content=content)], override=override)
+
+
+def chat_turns_override_via(
+    transport: Transport,
+    key: str,
+    model: str,
+    turns: Sequence[ChatMessage],
+    override: RouterSettingsOverride | None = None,
+    stream: bool = False,
+    cache: dict[str, bool] | None = {"no-cache": True},
+    max_tokens: int = 512,
+) -> StreamingResponse:
+    return transport.send(
         "/chat/completions",
-        headers=proxy.transport.bearer(key),
+        headers=transport.bearer(key),
         json=ReliabilityChatBody(
             model=model,
             messages=turns,
@@ -337,6 +366,26 @@ def open_chat_stream(
 def model_id_of(resp: StreamingResponse) -> str | None:
     """The deployment the proxy served this response from, as it reports it."""
     return resp.headers.get("x-litellm-model-id")
+
+
+class _AzurePromptFilterResult(BaseModel):
+    content_filter_results: Mapping[str, object] | None = None
+
+
+class _AzureAnnotatedChatBody(BaseModel):
+    prompt_filter_results: Sequence[_AzurePromptFilterResult] | None = None
+
+
+def azure_prompt_filter_skipped(resp: StreamingResponse) -> bool:
+    """True when Azure's 200 recorded no prompt-filter verdict (every `content_filter_results`
+    empty), so the prompt has to be sent again."""
+    try:
+        annotated: Final = _AzureAnnotatedChatBody.model_validate_json(resp.body)
+    except ValidationError:
+        return False
+    if not annotated.prompt_filter_results:
+        return False
+    return all(not entry.content_filter_results for entry in annotated.prompt_filter_results)
 
 
 def _parsed(resp: StreamingResponse) -> ChatResponse | None:

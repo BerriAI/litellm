@@ -2029,7 +2029,14 @@ async def add_litellm_data_to_request(
         _headers,
         allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
     )
-    _logging_safe_headers: Final = redact_credential_headers(_headers)
+    from litellm.proxy._experimental.mcp_server.utils import upstream_credential_headers
+
+    _mcp_credential_headers: Final = upstream_credential_headers(_headers)
+    _logging_safe_headers: Final = redact_credential_headers(
+        MappingProxyType(
+            {name: value for name, value in _headers.items() if name.lower() not in _mcp_credential_headers}
+        )
+    )
     verbose_proxy_logger.debug("Request Headers: %s", _logging_safe_headers)
     verbose_proxy_logger.debug("Raw Headers: %s", _raw_headers)
 
@@ -3116,7 +3123,15 @@ async def move_guardrails_to_metadata(
     - If guardrails not set on API key, then checks request metadata
     - Adds guardrails from policies attached to key/team metadata
     - Adds guardrails from policy engine based on team/key/model context
+    - Moves include_guardrail_response into request metadata before provider dispatch
     """
+    if "include_guardrail_response" in data:
+        data[_metadata_variable_name][
+            "include_guardrail_response"
+        ] = (  # rebind-ok: pre-call hooks mutate the shared request dict in place
+            data.pop("include_guardrail_response") is True
+        )
+
     # Early-out: skip all guardrails processing when nothing is configured
     key_metadata: Final = user_api_key_dict.metadata
     team_metadata: Final = user_api_key_dict.team_metadata
