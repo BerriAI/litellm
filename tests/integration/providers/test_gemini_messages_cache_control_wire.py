@@ -17,7 +17,9 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 def _generate_content_reply(text: str) -> bytes:
     return json.dumps(
         {
-            "candidates": [{"content": {"parts": [{"text": text}], "role": "model"}, "finishReason": "STOP", "index": 0}],
+            "candidates": [
+                {"content": {"parts": [{"text": text}], "role": "model"}, "finishReason": "STOP", "index": 0}
+            ],
             "usageMetadata": {
                 "promptTokenCount": 1300,
                 "candidatesTokenCount": 5,
@@ -68,7 +70,9 @@ def test_gemini_messages_cache_control_creates_cached_content_and_generates_from
             {
                 "model": model,
                 "max_tokens": 32,
-                "system": [{"type": "text", "text": _CACHED_POLICY, "cache_control": {"type": "ephemeral", "ttl": "5m"}}],
+                "system": [
+                    {"type": "text", "text": _CACHED_POLICY, "cache_control": {"type": "ephemeral", "ttl": "5m"}}
+                ],
                 "messages": [{"role": "user", "content": user_prompt}],
             },
         )
