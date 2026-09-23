@@ -60,6 +60,13 @@ def _resolve_model_info(model: str) -> ModelInfo:
     try:
         return get_model_info(model=model, custom_llm_provider="fireworks_ai")
     except Exception:
+        return _resolve_routed_model_info(model)
+
+
+def _resolve_routed_model_info(model: str) -> ModelInfo:
+    try:
+        return get_model_info(model=model.removeprefix("fireworks_ai/"))
+    except Exception:
         base_model: Final = get_base_model_for_pricing(model_name=model)
         return get_model_info(model=base_model, custom_llm_provider="fireworks_ai")
 
