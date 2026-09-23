@@ -12,6 +12,7 @@ monkeypatches anything.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -21,6 +22,7 @@ import pytest
 from e2e_http import (
     PROVIDER_RATE_LIMIT_ATTEMPTS,
     PROVIDER_RATE_LIMIT_BACKOFF_SECONDS,
+    PROVIDER_RATE_LIMIT_MARKER,
     RETRY_ATTEMPTS,
     TRANSIENT_STATUSES,
     NoBody,
@@ -33,6 +35,7 @@ from e2e_http import (
     classify,
     request_with_retry,
     streaming_outcome,
+    relayed_provider_rate_limit,
     tolerate_provider_rate_limit,
     wire_body,
     without_retries,
@@ -115,13 +118,21 @@ class _Ocr(BaseModel):
     pages: int
 
 
-PROVIDER_429_BODY: Final = (
-    '{"error":{"message":"litellm.RateLimitError: RateLimitError: MistralException - (429, '
-    '\'{"message":"Rate limit exceeded","type":"rate_limited"}\') LiteLLM Retried: 3 times",'
-    '"type":"throttling_error","param":null,"code":"429"}}'
+PROVIDER_429_BODY: Final = json.dumps(
+    {
+        "error": {
+            "message": (
+                "litellm.RateLimitError: RateLimitError: MistralException - "
+                '(429, \'{"message":"Rate limit exceeded","type":"rate_limited"}\') LiteLLM Retried: 3 times'
+            ),
+            "type": "throttling_error",
+            "param": None,
+            "code": "429",
+        }
+    }
 )
-PROXY_429_BODY: Final = (
-    '{"error":{"message":"Max parallel request limit reached for key","type":"throttling_error","code":"429"}}'
+PROXY_429_BODY: Final = json.dumps(
+    {"error": {"message": "Max parallel request limit reached for key", "type": "throttling_error", "code": "429"}}
 )
 
 
@@ -169,6 +180,15 @@ class TestProviderRateLimitTolerance:
         sleep: Final = SleepRecorder()
         assert tolerate_provider_rate_limit(_results_from((first,)), sleep=sleep) is first
         assert sleep.delays == ()
+
+    def test_the_providers_429_is_parsed_out_of_the_relayed_envelope(self) -> None:
+        detail: Final = relayed_provider_rate_limit(RateLimitedError(body=PROVIDER_429_BODY))
+        assert detail is not None
+        assert (detail.type, detail.code) == ("throttling_error", "429")
+        assert detail.message.startswith(PROVIDER_RATE_LIMIT_MARKER)
+
+    def test_the_proxys_own_429_is_not_a_relayed_provider_error(self) -> None:
+        assert relayed_provider_rate_limit(RateLimitedError(body=PROXY_429_BODY)) is None
 
     def test_a_persistent_provider_429_is_bounded_and_returns_the_last_one(self) -> None:
         results: Final = tuple(

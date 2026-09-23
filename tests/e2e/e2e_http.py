@@ -372,6 +372,23 @@ def tolerate_provider_rate_limit[R: BaseModel](
     return issue()
 
 
+class ProxyErrorDetail(BaseModel):
+    message: str
+    type: str
+    code: str
+
+
+class _ProxyErrorBody(BaseModel):
+    error: ProxyErrorDetail
+
+
+def relayed_provider_rate_limit(outcome: RateLimitedError) -> ProxyErrorDetail | None:
+    """The provider's own 429 as the proxy relayed it, or None when the 429 is the proxy's own."""
+    if PROVIDER_RATE_LIMIT_MARKER not in outcome.body:
+        return None
+    return _ProxyErrorBody.model_validate_json(outcome.body).error
+
+
 class ClassifiableResponse(Protocol):
     """What classifying an outcome reads off a response. requests.Response satisfies
     it, and so does a fake, so the classification rules are testable on their own."""
@@ -934,7 +951,10 @@ class PreparedForward:
 
 
 def prepare_forward(
-    method: str, url: str, headers: dict[str, str], body: bytes | None,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: bytes | None,
 ) -> PreparedForward | NetworkError:
     try:
         with requests.Session() as session:
@@ -953,7 +973,8 @@ def forward_prepared_stream(prepared: PreparedForward, timeout: float) -> Stream
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
     return StreamHead(
-        resp.status_code, {name.lower(): value for name, value in resp.headers.items()},
+        resp.status_code,
+        {name.lower(): value for name, value in resp.headers.items()},
         primed_steps(_stream_steps(resp)),
     )
 
