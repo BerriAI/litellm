@@ -10217,6 +10217,32 @@ class TestOBOCallToolRetry:
         manager._create_mcp_client.assert_awaited_once()
         assert first.attempts == 1 and retry.attempts == 1
 
+    @pytest.mark.asyncio
+    async def test_session_closed_by_a_peers_refresh_retries_on_a_fresh_session_without_invalidating(self):
+        from litellm.experimental_mcp_client.client import UpstreamSessionClosedError
+
+        manager = self._manager()
+        success = CallToolResult(content=[], isError=False)
+        first = _RetryFakeClient(raises=UpstreamSessionClosedError())
+        retry = _RetryFakeClient(result=success)
+        manager._create_mcp_client = AsyncMock(return_value=retry)
+
+        result = await manager._obo_call_tool_with_retry(
+            client=first,
+            call_tool_params=MagicMock(),
+            host_progress_callback=None,
+            mcp_server=_obo_server(),
+            server_auth_header=None,
+            extra_headers=None,
+            stdio_env=None,
+            subject_token="caller-jwt",
+            user_api_key_auth=None,
+        )
+
+        assert result is success
+        manager._cred_provider.invalidate_credentials.assert_not_awaited()
+        assert first.attempts == 1 and retry.attempts == 1
+
 
 class TestOBOConcurrencyLimit:
     """OBO (token_exchange) tool calls must honor the server's max_concurrent_requests.

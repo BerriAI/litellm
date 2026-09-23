@@ -66,6 +66,7 @@ from litellm.experimental_mcp_client.client import (
     MCPClient,
     MCPSigV4Auth,
     PersistentMCPSession,
+    UpstreamSessionClosedError,
     strip_auth_scheme,
     to_basic_credentials,
 )
@@ -5845,12 +5846,14 @@ class MCPServerManager:
                 persistent_session=persistent_session,
             )
         except Exception as exc:
-            if _extract_upstream_auth_failure(exc) is None:
+            auth_failure: Final = _extract_upstream_auth_failure(exc)
+            if auth_failure is None and not isinstance(exc, UpstreamSessionClosedError):
                 return MCPClient.error_tool_result(exc)
-            self._drop_upstream_session(persistent_session)
-            spec: Final = to_server_spec(mcp_server)
-            if spec is not None:
-                await self._cred_provider.invalidate_credentials(to_subject(user_api_key_auth, subject_token), spec)
+            if auth_failure is not None:
+                self._drop_upstream_session(persistent_session)
+                spec: Final = to_server_spec(mcp_server)
+                if spec is not None:
+                    await self._cred_provider.invalidate_credentials(to_subject(user_api_key_auth, subject_token), spec)
             retry_client: Final = await self._create_mcp_client(
                 server=mcp_server,
                 mcp_auth_header=server_auth_header,

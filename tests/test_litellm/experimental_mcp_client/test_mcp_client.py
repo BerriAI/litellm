@@ -3034,3 +3034,28 @@ async def test_persistent_session_reports_an_upstream_cancellation_as_a_runtime_
             session.close()
         assert selected.is_error is False, "an upstream cancellation must not be mistaken for a cancelled caller"
         await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_closing_persistent_session_fails_a_caller_blocked_on_a_full_queue_instead_of_hanging():
+    from litellm.experimental_mcp_client.client import _MAX_PENDING_OPERATIONS
+
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        _, session = _client_with_session(app)
+        started: Final = asyncio.Event()
+
+        async def slow_operation(_: object) -> str:
+            started.set()
+            await asyncio.sleep(30)
+            return "never"
+
+        waiters: Final = tuple(
+            asyncio.ensure_future(session.run(slow_operation)) for _ in range(_MAX_PENDING_OPERATIONS + 2)
+        )
+        await asyncio.wait_for(started.wait(), 5)
+        await asyncio.sleep(0)
+        session.close()
+        outcomes: Final = await asyncio.wait_for(asyncio.gather(*waiters, return_exceptions=True), 5)
+        assert all(isinstance(outcome, RuntimeError) for outcome in outcomes), outcomes
+        await asyncio.wait_for(session.wait_closed(), 5)

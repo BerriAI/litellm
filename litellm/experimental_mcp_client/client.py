@@ -1193,6 +1193,11 @@ _PendingOperation: TypeAlias = tuple[Callable[[ClientSession], Awaitable[object]
 _MAX_PENDING_OPERATIONS: Final = 64
 
 
+class UpstreamSessionClosedError(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("upstream MCP session closed")
+
+
 class PersistentMCPSession:
     """One upstream MCP session kept open across operations.
 
@@ -1245,7 +1250,7 @@ class PersistentMCPSession:
         pending: Final = (self._ready, self._active, *(future for _, future in self._drained()))
         for future in pending:
             if future is not None and not future.done():
-                future.set_exception(RuntimeError("upstream MCP session closed") if cause is None else cause)
+                future.set_exception(UpstreamSessionClosedError() if cause is None else cause)
 
     def _drained(self) -> tuple[_PendingOperation, ...]:
         return tuple(self._queue.get_nowait() for _ in range(self._queue.qsize()))
@@ -1259,10 +1264,17 @@ class PersistentMCPSession:
         del quiet_on_error
         await self._ready
         if self.closed:
-            raise RuntimeError("upstream MCP session closed")
+            raise UpstreamSessionClosedError()
         future: Final[asyncio.Future[object]] = asyncio.get_running_loop().create_future()
         await self._queue.put((operation, future))
-        return cast(TSessionResult, await future)  # cast-ok: one queue serves operations of every result type
+        try:
+            _ = await asyncio.wait((future, self._task), return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            _ = future.cancel()
+            raise
+        if not future.done():
+            raise UpstreamSessionClosedError()
+        return cast(TSessionResult, future.result())  # cast-ok: one queue serves operations of every result type
 
     def close(self) -> None:
         _ = self._task.cancel()
