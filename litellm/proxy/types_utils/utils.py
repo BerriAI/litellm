@@ -52,7 +52,7 @@ def get_instance_fn(value: str, config_file_path: str | None = None) -> Any:
             module = importlib.import_module(module_name)
 
         # Get the instance from the module
-        instance: Final = getattr(module, instance_name)
+        instance: Final[object] = getattr(module, instance_name)
 
         return instance
     except ImportError as e:
@@ -167,7 +167,7 @@ def _load_instance_from_remote_storage(remote_url: str, config_file_path: str | 
         spec.loader.exec_module(module)
 
         # Get the instance
-        instance: Final = getattr(module, instance_name)
+        instance: Final[object] = getattr(module, instance_name)
 
         # Clean up the temporary file
         try:
