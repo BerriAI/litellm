@@ -13,6 +13,12 @@ BACKUP_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.js
 # In-Region rates for OpenAI models are the OpenAI API rate plus a 10% fee,
 # and Global cross-Region rates are the OpenAI API rate with no fee, so these
 # entries are the OpenAI rate for the same model times the matching multiplier.
+# See the Pricing tables on the published OpenAI model cards, e.g.
+# https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html
+# ("Commercial In-Region prices include a 10% fee over OpenAI rates"; Global CRIS
+# $10 / $50 = OpenAI rate) and
+# https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html
+# (Global CRIS $4 / $20 = OpenAI rate, Geo CRIS and In-Region $4.40 / $22).
 US_UPLIFT = 1.1
 GLOBAL_UPLIFT = 1.0
 BEDROCK_TO_OPENAI = {
