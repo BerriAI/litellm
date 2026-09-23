@@ -2080,8 +2080,10 @@ def test_ProxyConfig__load_environment_variables_blocks_dangerous_keys(monkeypat
 async def test_load_config_legacy_secret_manager_flags_capture_the_initialized_client(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str, system: str
 ) -> None:
-    from azure.keyvault.secrets import SecretClient
-    from google.cloud.kms_v1 import KeyManagementServiceClient
+    if system == "azure_key_vault":
+        client_type: Final = pytest.importorskip("azure.keyvault.secrets").SecretClient
+    else:
+        client_type: Final = pytest.importorskip("google.cloud.kms_v1").KeyManagementServiceClient
 
     from litellm.rust_bridge.secret_manager import native_secret_manager_config
 
@@ -2114,7 +2116,7 @@ async def test_load_config_legacy_secret_manager_flags_capture_the_initialized_c
     await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
     client: Final = litellm.secret_manager_client
-    assert isinstance(client, (SecretClient, KeyManagementServiceClient))
+    assert isinstance(client, client_type)
     try:
         captured: Final = native_secret_manager_config(client)
         assert captured is not None
@@ -2123,7 +2125,7 @@ async def test_load_config_legacy_secret_manager_flags_capture_the_initialized_c
         assert litellm._key_management_system is not None
         assert litellm._key_management_system.value == system
     finally:
-        if isinstance(client, SecretClient):
+        if system == "azure_key_vault":
             client.close()
         else:
             client.transport.close()
