@@ -66,7 +66,9 @@ class DatabaseRelay:
     async def _serve(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
         peer_port: Final = PORT.validate_python(client_writer.get_extra_info("peername")[1])
         pid: Final = _client_pid(peer_port, self.port)
-        if self._banned is not None and pid == self._banned:
+        if self.tripped.is_set() and (pid is None or self._banned is None or pid == self._banned):
+            if self._banned is None and pid is not None:
+                self._banned = pid
             self.refused += 1
             client_writer.close()
             return

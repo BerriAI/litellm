@@ -48,7 +48,11 @@ def test_reset_sweep_skips_ticks_while_another_pod_holds_the_lease_and_resumes_a
         key: Final = scenario.key(team_id=team)
         _make_team_budget_due(team, spend=0.5)
         assert _team_spend(team) == 0.5
-        assert cache.set(RESET_LEASE_KEY, PEER_POD_LEASE, ex=120, nx=True), "reset lease already held before the test"
+        eventually(
+            lambda: cache.set(RESET_LEASE_KEY, PEER_POD_LEASE, ex=120, nx=True),
+            lambda claimed: claimed is True,
+            seconds=60,
+        )
         try:
             with owned_proxy(gateway, tmp_path, FAST_RESET_TICK) as replica:
                 response: Final = replica.request(
@@ -68,4 +72,5 @@ def test_reset_sweep_skips_ticks_while_another_pod_holds_the_lease_and_resumes_a
                 assert swept == 0.0
                 eventually(lambda: cache.get(RESET_LEASE_KEY), lambda value: value is None, seconds=15)
         finally:
-            cache.delete(RESET_LEASE_KEY)
+            if cache.get(RESET_LEASE_KEY) == PEER_POD_LEASE.encode():
+                cache.delete(RESET_LEASE_KEY)
