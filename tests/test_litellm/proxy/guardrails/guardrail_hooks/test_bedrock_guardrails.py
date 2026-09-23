@@ -7250,6 +7250,7 @@ async def test_during_call_hook_refuses_serialized_tool_output_attachment_unknow
         )
 
     mock_post.assert_called_once()
+    assert "output_text" in data["messages"][0]["content"]
 
 
 @pytest.mark.asyncio
@@ -7332,6 +7333,7 @@ async def test_during_call_hook_drops_bare_attachment_shells():
         )
 
     mock_post.assert_called_once()
+    assert data["messages"][0]["content"][1] == {"type": "file"}
 
 
 @pytest.mark.asyncio
@@ -7420,3 +7422,4 @@ async def test_during_call_hook_tool_output_payloadless_shell_falls_through():
         )
 
     mock_post.assert_called_once()
+    assert "input_file" in data["messages"][0]["content"]
