@@ -1105,9 +1105,6 @@ class CustomPricing(BaseModel):
 
 
 class ResolvedModelInfo(CustomPricing):
-    """The capability flags /model/info resolves from the cost map alongside
-    pricing (supports_* booleans the proxy projects onto each deployment)."""
-
     supports_video_input: bool | None = None
 
 

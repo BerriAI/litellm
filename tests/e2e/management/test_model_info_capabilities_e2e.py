@@ -1,18 +1,3 @@
-"""Live e2e: /model/info surfaces the cost map's capability flags on a deployment.
-
-The cost map (model_prices_and_context_window.json) carries supports_video_input
-on the video-capable models, and /model/info must project it onto each
-deployment's model_info block. A proxy that drops the flag during resolution
-reports supports_video_input as absent for every model even though the cost map
-declares it.
-
-The deployment is registered through /model/new (deleted on teardown) on the
-gemini/gemini-2.5-pro backend; /model/info resolves capability flags from the
-cost map without calling the provider. The expected value is read back from the
-proxy's own cost map endpoint rather than hardcoded, so the test stays correct
-if the map's flag ever changes.
-"""
-
 import pytest
 
 from e2e_config import unique_marker
@@ -34,6 +19,7 @@ def _model_info_entry(entries: list[ModelInfoEntry], model_name: str) -> ModelIn
 
 
 class TestModelInfoCapabilities:
+    @pytest.mark.covers("mgmt.model.info.capability_flags")
     def test_model_info_surfaces_supports_video_input_from_cost_map(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:

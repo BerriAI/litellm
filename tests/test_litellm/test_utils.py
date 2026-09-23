@@ -198,9 +198,6 @@ def test_get_model_info_anthropic_compaction(
 
 
 def test_get_model_info_surfaces_supports_video_input(local_model_cost_map: None) -> None:
-    """`supports_video_input` is declared on the cost map's video-capable models;
-    get_model_info must project it the way it does supports_audio_input or
-    /model/info reports it absent for every model."""
     model: Final = "gemini/gemini-2.5-pro"
     expected = litellm.model_cost[model].get("supports_video_input")
     assert expected is not None, f"cost map no longer declares supports_video_input for {model}"
