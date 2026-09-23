@@ -7,7 +7,7 @@ import struct
 import zlib
 from datetime import datetime
 from types import SimpleNamespace
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Final
 from unittest.mock import Mock
 
@@ -3402,7 +3402,7 @@ def test_bedrock_invoke_eager_input_streaming_beta_not_duplicated_with_client_he
     assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
 
 
-def _bedrock_event_frame(payload: dict) -> bytes:
+def _bedrock_event_frame(payload: Mapping[str, object]) -> bytes:
     def _header(name: str, value: str) -> bytes:
         return (
             bytes([len(name)])
