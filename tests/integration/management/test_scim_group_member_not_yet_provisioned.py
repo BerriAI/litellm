@@ -20,8 +20,8 @@ def test_scim_group_patch_add_member_provisions_the_missing_user(gateway: Gatewa
                 ],
             },
         )
-        assert response.status_code == 200, response.text
         scenario.cleanups.callback(scenario.delete_user, missing_user)
+        assert response.status_code == 200, response.text
         team_info: dict[str, JsonValue] = gateway.get("/team/info", {"team_id": team})
         members: Final = object_value(team_info["team_info"]).get("members_with_roles") or []
         member_ids: Final = [
