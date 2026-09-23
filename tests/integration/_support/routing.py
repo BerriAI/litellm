@@ -96,7 +96,7 @@ def compare(expected: Expectation, observed: Observation) -> Report:
                 tuple(sorted(observed.queries[query])),
             )
             for query, expected_roles in expected.queries.items()
-            if query in observed.queries and observed.queries[query] != expected_roles
+            if query in observed.queries and not observed.queries[query] <= expected_roles
         ),
         *(
             Mismatch(
@@ -108,7 +108,8 @@ def compare(expected: Expectation, observed: Observation) -> Report:
             for test, queries in expected.tests.items()
             if test in observed.tests
             for query, expected_roles in queries.items()
-            if query in observed.tests[test] and observed.tests[test][query] != expected_roles
+            if query in observed.tests[test]
+            and not observed.tests[test][query] <= expected_roles | expected.queries.get(query, frozenset())
         ),
     )
     return Report(

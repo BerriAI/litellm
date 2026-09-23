@@ -80,9 +80,17 @@ def test_compare_reports_global_role_mismatch() -> None:
     assert report.failures() == (f"global: {TOKEN_QUERY}: expected [litellm_reader] observed [litellm_writer]",)
 
 
+def test_compare_allows_observed_roles_to_shrink() -> None:
+    expected: Final = _expectation({TOKEN_QUERY: ("litellm_reader", "litellm_writer")})
+    observed: Final = _observation({TOKEN_QUERY: ("litellm_reader",)})
+    report: Final = compare(expected, observed)
+    assert report.mismatches == ()
+    assert report.failures() == ()
+
+
 def test_compare_reports_per_test_mismatch_with_nodeid() -> None:
     expected: Final = _expectation(
-        {TOKEN_QUERY: ("litellm_reader",)},
+        {},
         {NODE_ID: {TOKEN_QUERY: ("litellm_reader",)}},
     )
     observed: Final = _observation(
@@ -92,6 +100,20 @@ def test_compare_reports_per_test_mismatch_with_nodeid() -> None:
     report: Final = compare(expected, observed)
     assert report.mismatches == (Mismatch(NODE_ID, TOKEN_QUERY, ("litellm_reader",), ("litellm_writer",)),)
     assert report.failures() == (f"{NODE_ID}: {TOKEN_QUERY}: expected [litellm_reader] observed [litellm_writer]",)
+
+
+def test_compare_per_test_allows_roles_in_global_expectation() -> None:
+    expected: Final = _expectation(
+        {TOKEN_QUERY: ("litellm_reader", "litellm_writer")},
+        {NODE_ID: {TOKEN_QUERY: ("litellm_reader",)}},
+    )
+    observed: Final = _observation(
+        {TOKEN_QUERY: ("litellm_reader", "litellm_writer")},
+        {NODE_ID: {TOKEN_QUERY: ("litellm_writer",)}},
+    )
+    report: Final = compare(expected, observed)
+    assert report.mismatches == ()
+    assert report.failures() == ()
 
 
 def test_compare_one_sided_queries_are_listed_not_failed() -> None:
