@@ -823,7 +823,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
-        "source": "https://aws.amazon.com/about-aws/whats-new/2025/10/claude-4-5-haiku-anthropic-amazon-bedrock",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1057,7 +1057,8 @@
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "high",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
@@ -1092,7 +1093,8 @@
         "supports_max_reasoning_effort": true,
         "bedrock_output_config_effort_ceiling": "max",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
@@ -1127,7 +1129,8 @@
         "supports_max_reasoning_effort": true,
         "bedrock_output_config_effort_ceiling": "max",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
@@ -1162,7 +1165,8 @@
         "supports_max_reasoning_effort": true,
         "bedrock_output_config_effort_ceiling": "max",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
@@ -1197,7 +1201,8 @@
         "supports_max_reasoning_effort": true,
         "bedrock_output_config_effort_ceiling": "max",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "au.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
@@ -1232,7 +1237,8 @@
         "supports_max_reasoning_effort": true,
         "bedrock_output_config_effort_ceiling": "max",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-opus-4-7": {
         "bedrock_converse_supports_strict_tools": false,
@@ -2963,7 +2969,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "bedrock_converse_supports_strict_tools": false,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -3000,7 +3007,8 @@
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 1024,
         "input_cost_per_token_batches": 1.5e-06,
-        "output_cost_per_token_batches": 7.5e-06
+        "output_cost_per_token_batches": 7.5e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-v1": {
         "input_cost_per_token": 8e-06,
@@ -3242,7 +3250,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "bedrock_converse_supports_strict_tools": false,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "assemblyai/best": {
         "input_cost_per_second": 3.333e-05,
@@ -3291,7 +3300,8 @@
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 1024,
         "input_cost_per_token_batches": 1.65e-06,
-        "output_cost_per_token_batches": 8.25e-06
+        "output_cost_per_token_batches": 8.25e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "azure/ada": {
         "input_cost_per_token": 1e-07,
@@ -21376,7 +21386,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 5.5e-06,
-        "source": "https://aws.amazon.com/about-aws/whats-new/2025/10/claude-4-5-haiku-anthropic-amazon-bedrock",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -21545,7 +21555,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "bedrock_converse_supports_strict_tools": false,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 4.125e-06,
@@ -21582,7 +21593,8 @@
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 1024,
         "input_cost_per_token_batches": 1.65e-06,
-        "output_cost_per_token_batches": 8.25e-06
+        "output_cost_per_token_batches": 8.25e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.meta.llama3-2-1b-instruct-v1:0": {
         "input_cost_per_token": 1.3e-07,
@@ -29743,7 +29755,8 @@
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 1024,
         "input_cost_per_token_batches": 1.5e-06,
-        "output_cost_per_token_batches": 7.5e-06
+        "output_cost_per_token_batches": 7.5e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.anthropic.claude-sonnet-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -29775,7 +29788,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "bedrock_converse_supports_strict_tools": false,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.anthropic.claude-haiku-4-5-20251001-v1:0": {
         "cache_creation_input_token_cost": 1.25e-06,
@@ -29789,7 +29803,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
-        "source": "https://aws.amazon.com/about-aws/whats-new/2025/10/claude-4-5-haiku-anthropic-amazon-bedrock",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -34571,7 +34585,8 @@
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 1024,
         "input_cost_per_token_batches": 1.65e-06,
-        "output_cost_per_token_batches": 8.25e-06
+        "output_cost_per_token_batches": 8.25e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-haiku-4-5-20251001-v1:0": {
         "cache_creation_input_token_cost": 1.375e-06,
@@ -34585,7 +34600,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 5.5e-06,
-        "source": "https://aws.amazon.com/about-aws/whats-new/2025/10/claude-4-5-haiku-anthropic-amazon-bedrock",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -35940,6 +35955,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 4e-08,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_audio_input": true,
         "supports_system_messages": true,
         "supports_native_structured_output": true
@@ -35952,6 +35968,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 3e-07,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_audio_input": true,
         "supports_system_messages": true,
         "supports_native_structured_output": true
@@ -44392,7 +44409,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 5.5e-06,
-        "source": "https://aws.amazon.com/about-aws/whats-new/2025/10/claude-4-5-haiku-anthropic-amazon-bedrock",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -44503,7 +44520,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 4.125e-06,
@@ -44540,7 +44558,8 @@
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 1024,
         "input_cost_per_token_batches": 1.65e-06,
-        "output_cost_per_token_batches": 8.25e-06
+        "output_cost_per_token_batches": 8.25e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 4.5e-06,
@@ -44570,7 +44589,8 @@
         "supports_vision": true,
         "supports_native_structured_output": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us-gov.anthropic.claude-sonnet-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -44857,7 +44877,8 @@
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 4096,
         "input_cost_per_token_batches": 5.5e-07,
-        "output_cost_per_token_batches": 2.75e-06
+        "output_cost_per_token_batches": 2.75e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-opus-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -44915,7 +44936,8 @@
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "high",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.anthropic.claude-opus-4-5-20251101-v1:0": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -44947,7 +44969,8 @@
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "high",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-opus-4-5-20251101-v1:0": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -44979,7 +45002,8 @@
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "high",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-sonnet-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -45011,7 +45035,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "bedrock_converse_supports_strict_tools": false,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.deepseek.r1-v1:0": {
         "input_cost_per_token": 1.35e-06,
