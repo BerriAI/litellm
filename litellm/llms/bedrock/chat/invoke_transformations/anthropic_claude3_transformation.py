@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME, RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
@@ -124,6 +124,13 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             and AnthropicModelInfo.forced_tool_use_unsupported(original_model)
         ):
             optional_params.pop("tool_choice")
+        if "response_format" in non_default_params and (
+            self.is_thinking_enabled(non_default_params)
+            or AnthropicModelInfo.forced_tool_use_unsupported(original_model)
+        ):
+            for tool in optional_params.get("tools", ()):
+                if tool.get("name") == RESPONSE_FORMAT_TOOL_NAME:
+                    tool["description"] = RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
 
         return optional_params
 
