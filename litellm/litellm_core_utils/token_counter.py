@@ -10,11 +10,11 @@ import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
-from tokenizers import Tokenizer
 from typing_extensions import ParamSpec, TypeVar
 
 import litellm
 from litellm import verbose_logger
+from litellm._lazy_imports import _get_default_encoding
 from litellm.constants import (
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
@@ -29,9 +29,10 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
+from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, HuggingFaceTokenizer, OpenAIEncoding
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
     AnthropicContentParamSource,
     AnthropicContentParamSourceFileId,
@@ -46,6 +47,8 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionDocumentObject,
     ChatCompletionNamedToolChoiceParam,
+    ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolParam,
     OpenAIMessageContentListBlock,
 )
@@ -620,9 +623,11 @@ def _get_exact_count_function(
     if model is not None or custom_tokenizer is not None:
         tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)
         if tokenizer_json["type"] == "huggingface_tokenizer":
-            tokenizer: Final[Tokenizer] = tokenizer_json["tokenizer"]
+            tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
 
             def count_tokens(text: str) -> int:
+                if isinstance(tokenizer, HuggingFaceTokenizer):
+                    return tokenizer.count(text)
                 return len(tokenizer.encode_batch_fast([text])[0])
 
             return count_tokens
@@ -630,31 +635,43 @@ def _get_exact_count_function(
             encoding: Final = openai_tokenizer_encoding(model)
 
             def encode_length(text: str) -> int:
-                return len(encoding.encode(text, disallowed_special=()))
+                return _encoding_count(encoding, text)
 
             return _get_tiktoken_count_function(encode_length)
         else:
             raise ValueError("Unsupported tokenizer type")
     else:
+        default_encoding: Final = _get_default_encoding()
 
         def encode_length(text: str) -> int:
-            return len(default_encoding.encode(text, disallowed_special=()))
+            return _encoding_count(default_encoding, text)
 
         return _get_tiktoken_count_function(encode_length)
 
 
-def openai_tokenizer_encoding(model: str) -> tiktoken.Encoding:
-    """The tiktoken encoding `token_counter` uses for a model on the `openai_tokenizer` path."""
+def _encoding_count(encoding: Encoding, text: str) -> int:
+    if isinstance(encoding, OpenAIEncoding):
+        return encoding.count(text)
+    return len(encoding.encode(text, disallowed_special=()))
+
+
+def openai_tokenizer_encoding(model: str) -> Encoding:
+    """The encoding `token_counter` uses for a model on the `openai_tokenizer` path."""
+    return get_encoding(openai_tokenizer_encoding_name(model))
+
+
+def openai_tokenizer_encoding_name(model: str) -> str:
+    """The tiktoken encoding name for `model`, without loading the encoding."""
     from litellm.utils import print_verbose
 
     model_to_use: Final = _fix_model_name(model)
     if "gpt-4o" in model_to_use:
-        return tiktoken.get_encoding("o200k_base")
+        return "o200k_base"
     try:
-        return tiktoken.encoding_for_model(model_to_use)
+        return tiktoken.encoding_name_for_model(model_to_use)
     except KeyError:
         print_verbose("Warning: model not found. Using cl100k_base encoding.")
-        return tiktoken.get_encoding("cl100k_base")
+        return "cl100k_base"
 
 
 def uses_legacy_message_accounting(model: str) -> bool:
@@ -854,6 +871,8 @@ def _count_content_list(
     content_list: str
     | Iterable[
         OpenAIMessageContentListBlock
+        | ChatCompletionThinkingBlock
+        | ChatCompletionRedactedThinkingBlock
         | AnthropicMessagesTextParam
         | AnthropicMessagesImageParam
         | AnthropicMessagesDocumentParam
@@ -898,9 +917,9 @@ def _count_content_list(
                     use_default_image_token_count,
                     default_token_count,
                 )
-            elif c["type"] == "thinking":
+            elif c["type"] in ("thinking", "redacted_thinking"):
                 # Claude extended thinking content block
-                # Count the thinking text and skip signature (opaque signature blob)
+                # Count the thinking text and skip the opaque blobs (signature, redacted data)
                 thinking_text = str(c.get("thinking", ""))
                 if thinking_text:
                     num_tokens += count_function(thinking_text)
@@ -920,7 +939,8 @@ def _count_content_list(
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
-                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, tool_reference)."
+                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
+                    f"tool_reference)."
                 )
         return num_tokens
     except Exception as e:

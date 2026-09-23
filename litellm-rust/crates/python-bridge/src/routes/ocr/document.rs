@@ -1,13 +1,15 @@
 use std::path::PathBuf;
 
 use bytes::Bytes;
-use pyo3::exceptions::{PyTypeError, PyValueError};
-use pyo3::gc::{PyTraverseError, PyVisit};
-use pyo3::prelude::*;
-use pyo3::pybacked::PyBackedBytes;
-use pyo3::types::{PyBytes, PyString};
-
-use litellm_core::ocr::{OcrDocumentInput, OcrFileContent};
+use litellm_core::ocr::types::{OcrDocumentInput, OcrFileContent};
+use pyo3::{
+    exceptions::{PyTypeError, PyValueError},
+    gc::{PyTraverseError, PyVisit},
+    prelude::*,
+    pybacked::PyBackedBytes,
+    sync::PyOnceLock,
+    types::{PyBytes, PyString, PyType},
+};
 
 #[derive(Debug)]
 pub(super) struct PythonFileReader {
@@ -83,7 +85,8 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
                 "OCR file input does not accept bare str values. Pass bytes, a pathlib.Path, or a file-like object.",
             ));
         }
-        if file.is_instance(&py.import("os")?.getattr("PathLike")?)? {
+        static PATH_LIKE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+        if file.is_instance(PATH_LIKE.import(py, "os", "PathLike")?)? {
             return Ok(Self {
                 input: OcrDocumentInput::Path {
                     path: file.extract::<PathBuf>()?,
@@ -128,8 +131,9 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pyo3::types::PyDict;
+
+    use super::*;
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);

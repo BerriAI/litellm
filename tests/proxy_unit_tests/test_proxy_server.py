@@ -1372,6 +1372,7 @@ async def test_create_team_member_add_team_admin(
     from fastapi import Request
 
     from litellm.proxy._types import (
+        LiteLLM_TeamMembership,
         LiteLLM_TeamTableCachedObj,
         LiteLLM_UserTable,
         Member,
@@ -1454,6 +1455,10 @@ async def test_create_team_member_add_team_admin(
         team_mock_client.update = AsyncMock(
             return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
         )
+        membership_mock_client = AsyncMock()
+        membership_mock_client.upsert = AsyncMock(
+            return_value=LiteLLM_TeamMembership(user_id="1234", team_id=_team_id)
+        )
 
         tx_cm = _member_add_tx_cm(team_mock_client)
 
@@ -1462,6 +1467,11 @@ async def test_create_team_member_add_team_admin(
                 litellm.proxy.proxy_server.prisma_client.db,
                 "litellm_teamtable",
                 team_mock_client,
+            ),
+            patch.object(  # test-quality-ok: legacy test swaps the prisma table on the module-level client
+                litellm.proxy.proxy_server.prisma_client.db,
+                "litellm_teammembership",
+                membership_mock_client,
             ),
             patch.object(
                 litellm.proxy.proxy_server.prisma_client,
@@ -2372,7 +2382,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):  # noqa: F811  # py
 
 @pytest.mark.asyncio
 async def test_proxy_server_prisma_setup():
-    from litellm.proxy.proxy_server import ProxyStartupEvent, proxy_state
+    from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
     from litellm.caching import DualCache
 
@@ -2383,34 +2393,27 @@ async def test_proxy_server_prisma_setup():
     ) as mock_prisma_client:
         mock_client = mock_prisma_client.return_value  # This is the mocked instance
         mock_client.connect = AsyncMock()  # Mock the connect method
-        mock_client.check_view_exists = AsyncMock()  # Mock the check_view_exists method
+        mock_client.start_view_setup_task = MagicMock()
         mock_client.health_check = AsyncMock()  # Mock the health_check method
-        mock_client._set_spend_logs_row_count_in_proxy_state = (
-            AsyncMock()
-        )  # Mock the _set_spend_logs_row_count_in_proxy_state method
         mock_client.start_db_health_watchdog_task = AsyncMock()
         # Mock the db attribute with start_token_refresh_task for RDS IAM token refresh
         mock_db = MagicMock()
         mock_db.start_token_refresh_task = AsyncMock()
         mock_client.db = mock_db
 
-        await ProxyStartupEvent._setup_prisma_client(
+        prisma_client = await ProxyStartupEvent._setup_prisma_client(
             database_url=os.getenv("DATABASE_URL"),
             proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
             user_api_key_cache=user_api_key_cache,
         )
 
-        # Verify our mocked methods were called
+        assert prisma_client is mock_client
         mock_client.connect.assert_called_once()
-        mock_client.check_view_exists.assert_called_once()
+        mock_client.start_view_setup_task.assert_called_once()
 
         # Note: This is REALLY IMPORTANT to check that the health check is called
         # This is how we ensure the DB is ready before proceeding
         mock_client.health_check.assert_called_once()
-
-        # check that the spend logs row count is set in proxy state
-        mock_client._set_spend_logs_row_count_in_proxy_state.assert_called_once()
-        assert proxy_state.get_proxy_state_variable("spend_logs_row_count") is not None
 
 
 @pytest.mark.asyncio
@@ -3067,6 +3070,9 @@ async def test_update_config_success_callback_normalization():
 
     class MockProxyConfig:
         async def add_deployment(self, prisma_client=None, proxy_logging_obj=None):  # noqa: F811  # pytest fixture, not a redefinition
+            return None
+
+        def reject_config_owned_writes(self, *, section_name, changed_keys):
             return None
 
     setattr(proxy_server, "proxy_config", MockProxyConfig())

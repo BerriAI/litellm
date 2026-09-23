@@ -9,6 +9,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     changed_team_fields,
     resolve_team_admin_editable_fields,
     team_admin_edit_verdict,
+    team_admin_may_manage_projects,
     team_admin_request_or_raise,
 )
 
@@ -30,6 +31,25 @@ class TestResolveTeamAdminEditableFields:
     @pytest.mark.parametrize("raw", ["tpm_limit", 7, {"tpm_limit": True}, [1, 2]])
     def test_malformed_setting_fails_closed(self, raw):
         assert resolve_team_admin_editable_fields({"team_admin_editable_team_fields": raw}, _SUPPORTED) == frozenset()
+
+    def test_projects_permission_is_not_a_team_field(self):
+        configured = {"team_admin_editable_team_fields": ["projects", "tpm_limit"]}
+        assert resolve_team_admin_editable_fields(configured, _SUPPORTED) == frozenset({"tpm_limit"})
+
+
+class TestTeamAdminMayManageProjects:
+    def test_missing_setting_denies(self):
+        assert team_admin_may_manage_projects({}) is False
+
+    def test_team_fields_alone_do_not_grant_projects(self):
+        assert team_admin_may_manage_projects({"team_admin_editable_team_fields": ["tpm_limit", "max_budget"]}) is False
+
+    def test_projects_entry_grants(self):
+        assert team_admin_may_manage_projects({"team_admin_editable_team_fields": ["max_budget", "projects"]}) is True
+
+    @pytest.mark.parametrize("raw", ["projects", 7, [1, 2]])
+    def test_malformed_setting_denies(self, raw):
+        assert team_admin_may_manage_projects({"team_admin_editable_team_fields": raw}) is False
 
 
 class TestChangedTeamFields:

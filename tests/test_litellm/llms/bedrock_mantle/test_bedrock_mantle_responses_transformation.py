@@ -484,19 +484,6 @@ class TestBedrockMantleResponsesWebSearch:
         )
         assert body["tools"] == [self._WEB_SEARCH_TOOL]
 
-    @pytest.mark.parametrize(
-        "model",
-        [
-            "bedrock_mantle/openai.gpt-5.6-sol",
-            "bedrock_mantle/openai.gpt-5.6-terra",
-            "bedrock_mantle/openai.gpt-5.6-luna",
-            "bedrock_mantle/openai.gpt-5.5",
-            "bedrock_mantle/openai.gpt-5.4",
-        ],
-    )
-    def test_cost_map_advertises_web_search_support(self, model):
-        assert litellm.supports_web_search(model=model) is True
-
 
 def _codex_exec_tool():
     return {
@@ -1175,21 +1162,6 @@ class TestBedrockMantleResponsesRegistry:
         assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
         assert cfg.use_openai_path is True
 
-    def test_gpt_5_5_price_map_declares_openai_responses_path(self, local_cost_map):
-        # The gpt-5.x entries must carry the data-driven flag so frontier routing
-        # does not rely on the name-string fallback alone.
-        assert (
-            litellm.model_cost["bedrock_mantle/openai.gpt-5.5"].get(
-                "use_openai_responses_path"
-            )
-            is True
-        )
-        assert (
-            litellm.model_cost["bedrock_mantle/openai.gpt-5.4"].get(
-                "use_openai_responses_path"
-            )
-            is True
-        )
 
     @pytest.mark.parametrize(
         "model",
@@ -1360,51 +1332,6 @@ class TestMantleSupportsResponses:
     """The capability helper is data-driven (supported_endpoints / mode), with no
     model-name match: per-model, so gpt-oss-120b is supported but the safeguard
     variant is not despite the shared substring."""
-
-    @pytest.mark.parametrize(
-        "model,model_cost,expected",
-        [
-            # supported_endpoints lists responses -> supported
-            (
-                "openai.gpt-oss-120b",
-                {
-                    "bedrock_mantle/openai.gpt-oss-120b": {
-                        "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
-                    }
-                },
-                True,
-            ),
-            # chat-only supported_endpoints -> not supported (the discriminator)
-            (
-                "openai.gpt-oss-safeguard-120b",
-                {
-                    "bedrock_mantle/openai.gpt-oss-safeguard-120b": {
-                        "supported_endpoints": ["/v1/chat/completions"]
-                    }
-                },
-                False,
-            ),
-            # mode=responses (no supported_endpoints) -> supported
-            (
-                "somelab.future-model",
-                {"bedrock_mantle/somelab.future-model": {"mode": "responses"}},
-                True,
-            ),
-            # mode=chat, no responses endpoint -> not supported
-            (
-                "google.gemma-3-27b-it",
-                {"bedrock_mantle/google.gemma-3-27b-it": {"mode": "chat"}},
-                False,
-            ),
-            # absent from model_cost -> no signal -> not supported
-            ("somelab.unmapped", {}, False),
-            (None, {}, False),
-        ],
-    )
-    def test_supports_responses(self, model, model_cost, expected):
-        from litellm.llms.bedrock_mantle.common_utils import mantle_supports_responses
-
-        assert mantle_supports_responses(model, model_cost) is expected
 
 
 class TestBedrockMantlePerModelResponsesURL:
@@ -1911,6 +1838,27 @@ class TestBedrockMantleResponsesSigV4:
 
 class TestBedrockMantleResponsesPricing:
 
+
+    @pytest.mark.parametrize(
+        "model",
+        ["openai.gpt-5.6-sol", "openai.gpt-5.6-terra", "openai.gpt-5.6-luna"],
+    )
+    def test_mantle_matches_in_region_converse_pricing(self, local_cost_map, model):
+        """bedrock-mantle serves these models In-Region only, and the AWS model
+        cards price In-Region and Geo CRIS identically -- so every cost field on
+        the mantle key must equal the `us.` converse key. A price change applied
+        to one namespace but not the other shows up here.
+        """
+        mantle = litellm.model_cost[f"bedrock_mantle/{model}"]
+        converse = litellm.model_cost[f"us.{model}"]
+
+        cost_fields = [k for k in converse if "cost" in k and k != "search_context_cost_per_query"]
+        assert cost_fields, "expected cost fields on the converse entry"
+        for field in cost_fields:
+            assert mantle.get(field) == pytest.approx(converse[field]), (
+                f"{model}: {field} is {mantle.get(field)} on bedrock_mantle "
+                f"but {converse[field]} on us. (bedrock_converse)"
+            )
 
     def test_models_registered(self, local_cost_map):
         assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models

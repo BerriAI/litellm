@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Final
 
 import requests
@@ -69,8 +70,8 @@ class CredentialsManagementClient:
     def create(
         self,
         credential_name: str,
-        credential_info: dict[str, Any],
-        credential_values: dict[str, Any],
+        credential_info: Mapping[str, object],
+        credential_values: Mapping[str, object],
         return_request: bool = False,
     ) -> dict[str, Any] | requests.Request:
         """

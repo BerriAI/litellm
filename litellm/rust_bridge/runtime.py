@@ -8,7 +8,7 @@ from typing_extensions import assert_never
 
 from litellm.exceptions import APIError
 from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
-from litellm.rust_bridge.catalog import RULES, Context, Rules, decision
+from litellm.rust_bridge.catalog import RouteContext, Rules, decision
 from litellm.rust_bridge.configuration import Decision
 from litellm.rust_bridge.response_metadata import mark_rust_response
 
@@ -42,14 +42,14 @@ class BridgeErrorContext:
 
 
 def run(
-    context: Context,
+    context: RouteContext,
     *,
     binding: NativeBinding[NativeT],
     native: Callable[[NativeT], ResultT],
     python: Callable[[], ResultT],
     rules: Rules | None = None,
 ) -> ResultT:
-    selected: Final = decision(context, RULES if rules is None else rules)
+    selected: Final = decision(context, rules)
     match selected:
         case Decision.PYTHON:
             return python()
@@ -70,14 +70,14 @@ def run(
 
 
 async def arun(
-    context: Context,
+    context: RouteContext,
     *,
     binding: NativeBinding[NativeT],
     native: Callable[[NativeT], Awaitable[ResultT]],
     python: Callable[[], Awaitable[ResultT]],
     rules: Rules | None = None,
 ) -> ResultT:
-    selected: Final = decision(context, RULES if rules is None else rules)
+    selected: Final = decision(context, rules)
     match selected:
         case Decision.PYTHON:
             return await python()
@@ -101,7 +101,7 @@ def _identity(value: ResultT) -> ResultT:
     return value
 
 
-def _error_context(context: Context) -> BridgeErrorContext:
+def _error_context(context: RouteContext) -> BridgeErrorContext:
     return BridgeErrorContext(route=context.route.value, provider=context.provider or "", model=context.model or "")
 
 

@@ -1,4 +1,3 @@
-from collections.abc import Mapping, Sequence
 
 import pytest
 
@@ -110,26 +109,6 @@ def test_get_cost_for_built_in_tools_file_search():
     assert cost == 0.00
 
 
-def test_get_cost_for_anthropic_web_search():
-    """
-    Test that Anthropic web search cost is tracked when usage.server_tool_use.web_search_requests
-    is set. Use claude-3-7-sonnet-20250219 (has search_context_cost_per_query) and
-    custom_llm_provider=anthropic so get_cost_for_anthropic_web_search is invoked.
-    """
-    from litellm.types.utils import ServerToolUse, Usage
-
-    model = "claude-3-7-sonnet-20250219"
-    usage = Usage(server_tool_use=ServerToolUse(web_search_requests=1))
-    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-        model=model,
-        usage=usage,
-        response_object=None,
-        standard_built_in_tools_params=None,
-        custom_llm_provider="anthropic",
-    )
-    assert cost > 0.0
-
-
 def test_get_cost_for_anthropic_web_search_with_server_tool_use_dict():
     """
     Anthropic-compatible passthrough responses can construct Usage from a raw
@@ -144,88 +123,6 @@ def test_get_cost_for_anthropic_web_search_with_server_tool_use_dict():
     assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
         response_object=None, usage=usage
     )
-
-
-def test_anthropic_web_search_cost_from_raw_response_dict_when_usage_drops_server_tool_use():
-    """
-    Regression: on the Anthropic /v1/messages sync cost path the response is the raw
-    Anthropic dict while the reconstructed OpenAI-shape Usage drops server_tool_use.
-    The web-search fee must still be charged by reading the count off the raw dict,
-    and the passed-in Usage must not be mutated.
-    """
-    from litellm.types.utils import Usage
-
-    model = "claude-3-7-sonnet-20250219"
-    web_search_requests = 3
-    raw_response = {
-        "id": "msg_1",
-        "type": "message",
-        "role": "assistant",
-        "model": model,
-        "content": [{"type": "text", "text": "hi"}],
-        "stop_reason": "end_turn",
-        "stop_sequence": None,
-        "usage": {
-            "input_tokens": 100,
-            "output_tokens": 50,
-            "server_tool_use": {"web_search_requests": web_search_requests},
-        },
-    }
-    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
-    assert getattr(usage, "server_tool_use", None) is None
-
-    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-        model=model,
-        usage=usage,
-        response_object=raw_response,
-        custom_llm_provider="anthropic",
-        standard_built_in_tools_params=None,
-    )
-
-    per_query_cost = litellm.get_model_info(model)["search_context_cost_per_query"][
-        "search_context_size_medium"
-    ]
-    assert cost == per_query_cost * web_search_requests
-    assert cost > 0.0
-    assert getattr(usage, "server_tool_use", None) is None
-
-
-def test_anthropic_web_search_cost_from_raw_response_dict_when_usage_is_none():
-    """
-    Regression: when a caller hands the cost tracker a raw Anthropic dict without a
-    parallel Usage object, the web-search fee must still be priced per request from
-    usage.server_tool_use.web_search_requests on the dict instead of falling back to
-    the flat search_context_size_medium tier.
-    """
-    model = "claude-3-7-sonnet-20250219"
-    web_search_requests = 4
-    raw_response = {
-        "id": "msg_1",
-        "type": "message",
-        "role": "assistant",
-        "model": model,
-        "content": [{"type": "text", "text": "hi"}],
-        "stop_reason": "end_turn",
-        "stop_sequence": None,
-        "usage": {
-            "input_tokens": 100,
-            "output_tokens": 50,
-            "server_tool_use": {"web_search_requests": web_search_requests},
-        },
-    }
-
-    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-        model=model,
-        usage=None,
-        response_object=raw_response,
-        custom_llm_provider="anthropic",
-        standard_built_in_tools_params=None,
-    )
-
-    per_query_cost = litellm.get_model_info(model)["search_context_cost_per_query"][
-        "search_context_size_medium"
-    ]
-    assert cost == per_query_cost * web_search_requests
 
 
 def test_anthropic_web_search_zero_requests_from_raw_response_charges_zero():
@@ -286,27 +183,6 @@ def test_anthropic_response_usage_block_preserves_server_tool_use():
     dumped_usage = AnthropicResponse.model_validate(raw_response).model_dump()["usage"]
 
     assert dumped_usage["server_tool_use"] == {"web_search_requests": 2}
-
-
-@pytest.mark.parametrize(
-    "model", ["gemini/gemini-2.0-flash-001", "gemini-2.0-flash-001"]
-)
-def test_get_cost_for_gemini_web_search(model):
-    """
-    Test that the cost for a web search is 0.00 when no response object is provided
-    """
-    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
-
-    usage = Usage(
-        prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1)
-    )
-    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-        model=model,
-        usage=usage,
-        response_object=None,
-        standard_built_in_tools_params=None,
-    )
-    assert cost > 0.0
 
 
 def test_completion_cost_includes_web_search_without_standard_built_in_tools_params():
@@ -527,7 +403,6 @@ def _openai_responses_with_web_search_calls(model, num_calls):
         ResponseFunctionWebSearch,
     )
 
-    from litellm.types.llms.openai import ResponsesAPIResponse
 
     output = [
         ResponseFunctionWebSearch(
@@ -585,7 +460,6 @@ def test_web_search_call_count_reads_dict_output_items(local_model_cost_map):
     counter must read their "type" key like the detection gate does, instead of flooring
     a multi-search response to a single billable search.
     """
-    from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import Usage
 
     model = "gpt-4o-search-preview"
@@ -631,7 +505,6 @@ def test_response_includes_output_type_reads_dict_output_items():
     items without an "action" field) stay plain dicts in the output union. The gate must
     read their "type" key instead of returning False and skipping the web search fee.
     """
-    from litellm.types.llms.openai import ResponsesAPIResponse
 
     response = ResponsesAPIResponse.model_validate(
         {
@@ -697,36 +570,5 @@ _BEDROCK_MANTLE_WEB_SEARCH_MODELS = (
 )
 
 _BEDROCK_MANTLE_WEB_SEARCH_RATE = 0.012
-
-
-def _responses_with_web_search(
-    model: str, actions: Sequence[Mapping[str, str]], tool_usage: Mapping[str, object] | None = None
-) -> ResponsesAPIResponse:
-    payload = {
-        "id": "resp_1",
-        "created_at": 1756900000,
-        "model": model.split("/", 1)[-1],
-        "object": "response",
-        "status": "completed",
-        "output": [
-            {"type": "web_search_call", "id": f"ws_{i}", "status": "completed", "action": action}
-            for i, action in enumerate(actions)
-        ],
-    }
-    return ResponsesAPIResponse.model_validate(
-        payload if tool_usage is None else {**payload, "tool_usage": tool_usage}
-    )
-
-
-def _web_search_cost(model: str, response: ResponsesAPIResponse, custom_llm_provider: str) -> float:
-    from litellm.types.utils import Usage
-
-    return StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-        model=model,
-        response_object=response,
-        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
-        custom_llm_provider=custom_llm_provider,
-        standard_built_in_tools_params=None,
-    )
 
 

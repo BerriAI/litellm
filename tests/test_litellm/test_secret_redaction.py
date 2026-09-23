@@ -19,7 +19,11 @@ from litellm._logging import (
     verbose_proxy_logger,
     verbose_router_logger,
 )
-from litellm.litellm_core_utils.secret_redaction import redact_internal_details, redact_string
+from litellm.litellm_core_utils.secret_redaction import (
+    redact_internal_details,
+    redact_string,
+    redact_structured_value,
+)
 
 SECRET = "sk-proj-abc123def456ghi789jklmnopqrst"
 
@@ -69,6 +73,17 @@ def test_redact_string_catches_secret_patterns():
 
     normal = "Loaded model gpt-4 with 3 replicas on us-east-1"
     assert redact_string(normal) == normal
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_diagnostic_redaction_policy_matches_across_backends(monkeypatch: pytest.MonkeyPatch, native: bool) -> None:
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+
+    assert redact_string("GET /v1?api_key=abcdefgh12345&page=2") == "GET /v1?REDACTED&page=2"
+    assert redact_structured_value("db_url", "postgresql://reader@example.org/database") == "REDACTED"
+    assert redact_internal_details("failed at /etc/service/keys on db.internal") == "failed at REDACTED on REDACTED"
 
 
 @pytest.mark.parametrize(
@@ -626,6 +641,25 @@ def test_aws_credential_redaction_catches_quoted_values():
         assert "IQoJb3JpZ2luX2VjEaCXVzLWVhc3QtMSJHMEUCIQ" not in result
 
     safe = "'aws_region_name': 'us-east-1'"
+    assert redact_string(safe) == safe
+
+
+def test_bedrock_batch_s3_credential_redaction_in_deployment_dump():
+    """The router logs each deployment's litellm_params at DEBUG. A Bedrock batch
+    deployment carries s3_secret_access_key there, which the aws_* key-name rule
+    did not cover, so the S3 secret was printed verbatim (LIT-8290)."""
+    cases = (
+        "{'s3_secret_access_key': 'wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY'}",
+        "s3_secret_access_key=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY",
+        "{'s3_access_key_id': 'not-an-akia-shaped-value'}",
+    )
+    for secret_line in cases:
+        result = redact_string(secret_line)
+        assert "REDACTED" in result, f"S3 credential redaction missed: {secret_line!r}"
+        assert "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY" not in result
+        assert "not-an-akia-shaped-value" not in result
+
+    safe = "'s3_bucket_name': 'my-batch-bucket'"
     assert redact_string(safe) == safe
 
 

@@ -1,24 +1,31 @@
 import asyncio
 import copy
+import gc
 import queue
 import threading
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
+from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
+from tests.test_litellm_rust.support.isolation import isolated_callback_registries
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import (
     OCR_DOCUMENT,
     OCR_RESPONSE,
+    call_native,
     call_native_aocr,
     call_native_ocr,
     request_body,
     request_headers,
 )
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -123,9 +130,7 @@ async def test_native_ocr_pre_call_nested_document_edit_updates_caller_callback_
         "callbacks": [Retain(), Edit()],
     }
     response: Final = (
-        await call_native_aocr(ocr_server, **arguments)
-        if asynchronous
-        else call_native_ocr(ocr_server, **arguments)
+        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
     )
 
     assert aliases == [True]
@@ -289,6 +294,153 @@ def test_native_ocr_dispatches_each_callback_phase_once_when_logger_is_registere
     assert recorder.names.count("logging_hook") == 1
     assert recorder.names.count("log_success_event") == 1
     assert "log_failure_event" not in recorder.names
+
+
+JSON_SCALARS: Final = (
+    st.none()
+    | st.booleans()
+    | st.integers(min_value=-(2**63), max_value=2**63 - 1)
+    | st.floats(allow_nan=False, allow_infinity=False)
+    | st.text(max_size=8)
+)
+JSON_VALUES: Final = st.recursive(
+    JSON_SCALARS,
+    lambda children: st.lists(children, max_size=3) | st.dictionaries(st.text(max_size=6), children, max_size=3),
+    max_leaves=8,
+)
+
+
+class ApplyEdits(CustomLogger):
+    def __init__(self, edits: Mapping[str, object]) -> None:
+        super().__init__()
+        self.edits: Final = edits
+
+    def log_pre_api_call(self, model, messages, kwargs):
+        request_body(kwargs).update(copy.deepcopy(dict(self.edits)))
+
+
+@settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(edits=st.dictionaries(st.from_regex(r"x_[a-z]{1,6}", fullmatch=True), JSON_VALUES, max_size=3))
+def test_native_ocr_provider_receives_the_body_exactly_as_pre_call_callbacks_left_it(
+    ocr_server: RecordingServer, edits: dict[str, object]
+) -> None:
+    ocr_server.expected_requests = None
+
+    with isolated_callback_registries():
+        call_native_ocr_with_callbacks(ocr_server, [ApplyEdits(MappingProxyType(edits))])
+
+    assert ocr_server.requests[-1].body == {"model": "mistral-ocr-latest", "document": OCR_DOCUMENT, **edits}
+
+
+@pytest.mark.parametrize("hook", ["log_pre_api_call", "logging_hook", "log_success_event"])
+def test_native_ocr_sync_hooks_see_no_running_event_loop(ocr_server: RecordingServer, hook: str) -> None:
+    recorder: Final = RecordingLogger()
+
+    call_native_ocr_with_callbacks(ocr_server, [recorder])
+
+    [event] = recorder.wait_for(hook)
+    assert event.loop is None
+    assert (event.thread is threading.current_thread()) == (hook == "log_pre_api_call")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_ocr_payload_a_callback_retains_outlives_the_call_intact(
+    ocr_server: RecordingServer, asynchronous: bool
+) -> None:
+    retained: Final = []
+
+    class Retain(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            retained.append((kwargs, request_body(kwargs), request_headers(kwargs)))
+
+    await call_native(ocr_server, asynchronous, callbacks=[Retain()])
+    await drain_logging()
+    gc.collect()
+
+    [(details, body, headers)] = retained
+    assert body == ocr_server.requests[0].body
+    assert headers
+    assert all(ocr_server.requests[0].headers[name.lower()] == value for name, value in headers.items())
+    assert details["additional_args"]["complete_input_dict"] is body
+    assert details["additional_args"]["headers"] is headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("family", ["sync", "async"])
+async def test_native_ocr_success_callbacks_share_one_logging_payload(ocr_server: RecordingServer, family: str) -> None:
+    queued: Final = []
+    finished: Final = threading.Event()
+
+    def queue_payload(kwargs: dict[str, object]) -> None:
+        queued.append(kwargs["standard_logging_object"])
+
+    def strip_payload(kwargs: dict[str, object]) -> None:
+        payload: Final = kwargs["standard_logging_object"]
+        assert isinstance(payload, dict)
+        payload["stripped-by-a-later-callback"] = True
+        finished.set()
+
+    class QueuePayload(CustomLogger):
+        if family == "sync":
+
+            def log_success_event(self, kwargs, response_obj, start_time, end_time):
+                queue_payload(kwargs)
+
+        else:
+
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+                queue_payload(kwargs)
+
+    class StripPayload(CustomLogger):
+        if family == "sync":
+
+            def log_success_event(self, kwargs, response_obj, start_time, end_time):
+                strip_payload(kwargs)
+
+        else:
+
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+                strip_payload(kwargs)
+
+    await call_native(ocr_server, family == "async", callbacks=[QueuePayload(), StripPayload()])
+    await drain_logging()
+
+    assert await asyncio.to_thread(finished.wait, 10)
+    assert [payload["stripped-by-a-later-callback"] for payload in queued] == [True]
+
+
+@pytest.mark.asyncio
+async def test_native_aocr_state_stashed_before_a_blocking_hook_raises_reaches_failure_callbacks(
+    ocr_server: RecordingServer,
+) -> None:
+    token: Final = object()
+    observed: Final = []
+
+    class Blocked(Exception):
+        pass
+
+    class Block(CustomLogger):
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            request_data["litellm_logging_obj"].model_call_details["blocked-by"] = token
+            raise Blocked("blocked after the provider answered")
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            observed.append(("success", None, None))
+
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            observed.append(("sync", kwargs.get("blocked-by"), kwargs["exception"]))
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            observed.append(("async", kwargs.get("blocked-by"), kwargs["exception"]))
+
+    litellm.callbacks.append(Block())
+
+    with pytest.raises(Blocked) as raised:
+        await call_native_aocr(ocr_server)
+    await drain_logging()
+
+    assert observed == [("sync", token, raised.value), ("async", token, raised.value)]
 
 
 @pytest.mark.asyncio

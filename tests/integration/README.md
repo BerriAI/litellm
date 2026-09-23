@@ -2,7 +2,9 @@
 
 These tests exercise a running gateway, PostgreSQL and Redis with an owned local upstream. CircleCI owns this suite. Tests are grouped by behavior, with no automatic test retries or fallback to paid provider calls
 
-Use `tests/integration/run.py management`, `accounting`, `database`, `providers`, `extensions` or `sdk` to run a selected group. Set `INTEGRATION_PROXY_URL`, `INTEGRATION_UPSTREAM_URL`, `INTEGRATION_MASTER_KEY` and `DATABASE_URL` to an isolated test deployment. The runner selects the new domain directories explicitly; the legacy OCI and sandbox selections remain separate
+The `cost` group is driven by `cost_tracking_cases.json`, which contains the cost map, literal requests, literal provider responses and expected accounting values. Each case has a name, contract ID, cost-map model, optional deployment overrides, request body, tagged response and exact or recount expectations. Request bodies use `$MODEL` for the registered proxy model, while responses use `$REQUEST_ID` for the per-run scenario ID. To add a case, add a cost-map entry when the model is new, add the request body and exact provider response data, add hand-computed expected values and register the node ID in `contracts.json`. The upstream serves each stored response for any path under `/<scenario_id>`, while the test-owned cost map is served over loopback through `LITELLM_MODEL_COST_MAP_URL`
+
+Use `tests/integration/run.py management`, `accounting`, `database`, `providers`, `extensions`, `sdk` or `cost` to run a selected group. Set `INTEGRATION_PROXY_URL`, `INTEGRATION_UPSTREAM_URL`, `INTEGRATION_MASTER_KEY` and `DATABASE_URL` to an isolated test deployment. The runner selects the new domain directories explicitly; the legacy OCI and sandbox selections remain separate
 
 Management also requires `INTEGRATION_PEER_URL`, `REDIS_HOST` and `REDIS_PORT`. CircleCI starts two directly addressed proxy processes sharing only that job's stores. The test-only CLI wrapper supplies enterprise route entitlement, following the existing behavior suite's convention. It does not qualify license validation; run it with one worker and no reload
 
@@ -10,9 +12,9 @@ The generated lifecycle models use 20 examples, eight steps, generation and shri
 
 Reuse the existing canned provider handlers through `_support/upstream.py`. It rejects internal request fields and exposes actual received requests for independent assertions. Register every created resource for cleanup immediately, keep expected values independent of production calculations, and assert readback plus the runtime effect of a change
 
-The CircleCI workflow starts its own database and Redis, restricts test-phase egress to its owned services and writes JUnit plus an executed-node manifest. Missing setup, skipped tests, failed cleanup or a selected test without a passed call fail qualification. Existing GitHub Actions jobs do not own these tests
+The CircleCI workflow starts its own database and Redis, restricts test-phase egress to its owned services and writes JUnit plus an executed-node manifest. Missing setup, failed cleanup or a selected test with neither a passed call nor a skip fail qualification. Skipped nodes are listed under `skipped` in `execution.json`, so the skip reasons double as the open bug list. Existing GitHub Actions jobs do not own these tests
 
-Define integration contract IDs and their canonical test nodes in `contracts.json`. Every node must declare the same IDs with `covers`. The runner checks exact collected and passed selections against that mapping. These IDs belong to this CircleCI suite and must not be added to the separate E2E coverage registry. A manifest declaration alone does not mean a test passed
+Define integration contract IDs and their canonical test nodes in `contracts.json`. Every node must declare the same IDs with `covers`. The runner checks exact collected and passed-or-skipped selections against that mapping. These IDs belong to this CircleCI suite and must not be added to the separate E2E coverage registry. A manifest declaration alone does not mean a test passed
 
 Provider sentinels currently use the controlled server, not live recordings. The provider shard also runs the existing strict replay controls for changed requests, exhausted interactions, leftover interactions and no provider connection. Future recorded scenarios must use that replay-only implementation; missing recordings cannot fall back to a real provider. The observation endpoint is destructive and the current selection runs serially against one owned upstream
 
@@ -20,7 +22,7 @@ Fixtures must contain synthetic data only. Keep private incident records and sou
 
 Database cases own their temporary schemas, roles, constraints and proxy processes. They prove reader-versus-writer execution with PostgreSQL lock observations, exercise real transaction wait limits and verify rollback after a reached database failure
 
-Accounting cases compare persisted input and output cost components against literal rates, including zero and default prices. Cache state models assert actual upstream calls, response identity and every persisted charge. Generated accounting tests have a 180-second test limit to accommodate the asynchronous spend writer; CircleCI keeps the whole shard capped at 11 minutes
+Accounting cases compare persisted input and output cost components against literal rates, including zero and default prices. Cache state models assert actual upstream calls, response identity and every persisted charge. Generated accounting tests have a 180-second test limit to accommodate the asynchronous spend writer
 
 Provider contracts exercise actual TCP requests with synthetic credentials and local protocol peers. The S3 verifier uses independently implemented equations, a published known-answer vector, a fixed signing clock and deliberately invalid signed requests. Bedrock cases clear ambient AWS credential sources and check the literal model path, loaded role references, STS requests and bearer-only behavior
 

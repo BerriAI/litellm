@@ -1,16 +1,17 @@
-use std::collections::BTreeMap;
-use std::future::Future;
-use std::path::Path;
-use std::pin::Pin;
-use std::sync::Arc;
+use std::{collections::BTreeMap, future::Future, path::Path, pin::Pin, sync::Arc};
 
 use gcp_auth::{CustomServiceAccount, TokenProvider};
+use litellm_auth_types::{
+    CredentialPlacement, Error, InputSource, SecretValue, Sourced, http::apply_credential,
+};
 use moka::future::Cache;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use litellm_auth::http::apply_credential;
-use litellm_auth::{CredentialPlacement, Error, InputSource, SecretValue, Sourced};
+#[cfg(feature = "google-sdk")]
+mod sdk;
+#[cfg(feature = "google-sdk")]
+pub use sdk::GoogleCredentials;
 
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const GOOGLE_OAUTH_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
@@ -22,6 +23,16 @@ const VERTEXAI_PROJECT_ENV: &str = "VERTEXAI_PROJECT";
 const VERTEXAI_LOCATION_ENV: &str = "VERTEXAI_LOCATION";
 const VERTEX_LOCATION_ENV: &str = "VERTEX_LOCATION";
 
+pub const SECRET_NAMES: &[&str] = &[
+    VERTEX_AI_API_KEY_ENV,
+    VERTEXAI_API_KEY_ENV,
+    VERTEXAI_CREDENTIALS_ENV,
+    GOOGLE_APPLICATION_CREDENTIALS_ENV,
+    VERTEXAI_PROJECT_ENV,
+    VERTEXAI_LOCATION_ENV,
+    VERTEX_LOCATION_ENV,
+];
+
 #[derive(Clone, Debug, Default)]
 pub struct VertexConfig {
     credentials: Option<Sourced<SecretValue>>,
@@ -30,19 +41,41 @@ pub struct VertexConfig {
 }
 
 impl VertexConfig {
+    pub fn new(
+        credentials: Option<Sourced<SecretValue>>,
+        project_id: Option<String>,
+        location: Option<String>,
+    ) -> Self {
+        Self {
+            credentials: credentials.filter(|value| !value.value().expose().trim().is_empty()),
+            project_id: project_id.filter(|value| !value.trim().is_empty()),
+            location: location.filter(|value| !value.trim().is_empty()),
+        }
+    }
+
     pub fn from_sourced_optional_params(
         params: &Map<String, Value>,
         sources: &BTreeMap<String, InputSource>,
     ) -> Result<Self, Error> {
-        Ok(Self {
-            credentials: optional_credentials(
+        Ok(Self::new(
+            optional_credentials(
                 params,
                 sources,
                 &["vertex_credentials", "vertex_ai_credentials"],
             )?,
-            project_id: optional_string(params, &["vertex_project", "vertex_ai_project"])?,
-            location: optional_string(params, &["vertex_location", "vertex_ai_location"])?,
-        })
+            optional_string(params, &["vertex_project", "vertex_ai_project"])?,
+            optional_string(params, &["vertex_location", "vertex_ai_location"])?,
+        ))
+    }
+
+    pub fn or_configured(self, project_id: Option<&str>, location: Option<&str>) -> Self {
+        let configured =
+            |value: Option<&str>| value.filter(|value| !value.is_empty()).map(str::to_string);
+        Self {
+            project_id: self.project_id.or_else(|| configured(project_id)),
+            location: self.location.or_else(|| configured(location)),
+            ..self
+        }
     }
 
     pub fn project_id(&self) -> Option<&str> {
@@ -103,6 +136,14 @@ impl VertexAuth {
             providers: Cache::builder().max_capacity(64).build(),
             loader,
         }
+    }
+
+    pub async fn access_token(
+        &self,
+        config: &VertexConfig,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<String, Error> {
+        self.load_provider(config, env_lookup).await?.token().await
     }
 
     pub async fn validate_environment(
@@ -375,6 +416,7 @@ fn auth_acquisition_error(error: gcp_auth::Error) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use serde_json::json;
@@ -445,6 +487,27 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn secret_names_cover_environment_reads() {
+        let seen = Arc::new(std::sync::Mutex::new(BTreeSet::<String>::new()));
+        let recorded = seen.clone();
+        let env = |name: &str| {
+            recorded.lock().unwrap().insert(name.to_string());
+            None
+        };
+        let auth = auth(Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        auth.validate_environment(Vec::new(), None, &VertexConfig::default(), &env)
+            .await
+            .unwrap();
+        get_vertex_ai_location(&VertexConfig::default(), &env);
+        assert!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .all(|name| SECRET_NAMES.contains(&name.as_str()))
+        );
+    }
+
     #[test]
     fn empty_primary_values_fall_back_to_python_aliases() {
         let config = config(json!({
@@ -461,6 +524,39 @@ mod tests {
         );
         assert_eq!(config.project_id(), Some("alias-project"));
         assert_eq!(config.location(), Some("alias-location"));
+    }
+
+    #[test]
+    fn typed_config_preserves_source_and_empty_value_fallback() {
+        let configured = VertexConfig::new(
+            Some(Sourced::new(
+                SecretValue::new("inline-json"),
+                InputSource::Request,
+            )),
+            Some("project".into()),
+            Some("location".into()),
+        );
+        assert!(matches!(
+            credential_source(&configured, &|_| Some("environment-json".into())),
+            CredentialSource::Inline(value) if value.expose() == "inline-json"
+        ));
+        let empty = VertexConfig::new(
+            Some(Sourced::new(SecretValue::new(" "), InputSource::Request)),
+            Some(" ".into()),
+            Some(" ".into()),
+        );
+        assert!(matches!(
+            credential_source(&empty, &|_| None),
+            CredentialSource::Adc
+        ));
+        assert_eq!(
+            get_vertex_ai_project(&empty, &|_| Some("env-project".into())).as_deref(),
+            Some("env-project")
+        );
+        assert_eq!(
+            get_vertex_ai_location(&empty, &|_| Some("env-location".into())).as_deref(),
+            Some("env-location")
+        );
     }
 
     #[test]
@@ -570,5 +666,30 @@ mod tests {
         }
         assert_eq!(loads.load(Ordering::SeqCst), 1);
         assert_eq!(calls.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn configured_defaults_sit_between_call_params_and_the_environment() {
+        let env = |name: &str| Some(format!("env-{name}"));
+        let from_config =
+            VertexConfig::default().or_configured(Some("global-project"), Some("global-location"));
+        assert_eq!(
+            get_vertex_ai_project(&from_config, &env).as_deref(),
+            Some("global-project")
+        );
+        assert_eq!(
+            get_vertex_ai_location(&from_config, &env).as_deref(),
+            Some("global-location")
+        );
+        let from_call =
+            config(json!({"vertex_project":"call-project","vertex_location":"call-location"}))
+                .or_configured(Some("global-project"), Some("global-location"));
+        assert_eq!(from_call.project_id(), Some("call-project"));
+        assert_eq!(from_call.location(), Some("call-location"));
+        let empty_global = VertexConfig::default().or_configured(Some(""), None);
+        assert_eq!(
+            get_vertex_ai_project(&empty_global, &env).as_deref(),
+            Some("env-VERTEXAI_PROJECT")
+        );
     }
 }
