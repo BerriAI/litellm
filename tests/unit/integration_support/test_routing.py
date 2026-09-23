@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
+from collections.abc import Iterator
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -13,6 +11,8 @@ import pytest
 from tests.integration._support.routing import (
     DIFF_FILE,
     OBSERVED_FILE,
+    READER_ROLE,
+    WRITER_ROLE,
     Mismatch,
     Observation,
     compare,
@@ -231,29 +231,26 @@ def test_compare_skips_per_test_mismatches_for_xdist_shape() -> None:
     assert report.failures() == ()
 
 
-_DUMP_SNIPPET: Final = """
-import sys
-sys.path.insert(0, ".")
-from types import MappingProxyType
-from tests.integration._support.routing import Observation, dump_observation
-queries = {f"SELECT {index}": frozenset({"litellm_writer", "litellm_reader"}) for index in range(4)}
-observation = Observation(
-    MappingProxyType(queries),
-    MappingProxyType({"node": MappingProxyType(queries)}),
-    MappingProxyType({"litellm_reader": 1, "litellm_writer": 2}),
-    0,
-)
-print(dump_observation(observation), end="")
-"""
+class _WriterFirst(frozenset[str]):
+    def __iter__(self) -> Iterator[str]:
+        return iter((WRITER_ROLE, READER_ROLE))
 
 
-def test_dump_observation_sorts_role_lists_for_every_hash_seed(tmp_path: Path) -> None:
+def test_dump_observation_sorts_role_lists_and_round_trips(tmp_path: Path) -> None:
     queries: Final = [f"SELECT {index}" for index in range(4)]
+    observation: Final = Observation(
+        MappingProxyType({query: _WriterFirst({WRITER_ROLE, READER_ROLE}) for query in queries}),
+        MappingProxyType(
+            {NODE_ID: MappingProxyType({query: _WriterFirst({WRITER_ROLE, READER_ROLE}) for query in queries})}
+        ),
+        MappingProxyType({READER_ROLE: 1, WRITER_ROLE: 2}),
+        0,
+    )
     expected: Final = (
         json.dumps(
             {
                 "queries": {query: ["litellm_reader", "litellm_writer"] for query in queries},
-                "tests": {"node": {query: ["litellm_reader", "litellm_writer"] for query in queries}},
+                "tests": {NODE_ID: {query: ["litellm_reader", "litellm_writer"] for query in queries}},
                 "calls": {"litellm_reader": 1, "litellm_writer": 2},
                 "dealloc": 0,
             },
@@ -262,24 +259,13 @@ def test_dump_observation_sorts_role_lists_for_every_hash_seed(tmp_path: Path) -
         )
         + "\n"
     )
-    outputs: Final = [
-        subprocess.run(
-            [sys.executable, "-c", _DUMP_SNIPPET],
-            cwd=Path(__file__).resolve().parents[3],
-            env={"PATH": os.environ["PATH"], "PYTHONHASHSEED": seed},
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        for seed in ("0", "1", "2", "3", "4", "5", "6", "7")
-    ]
-    for output in outputs:
-        assert output == expected
+    dumped: Final = dump_observation(observation)
+    assert dumped == expected
     path: Final = tmp_path / OBSERVED_FILE
-    path.write_text(outputs[0])
-    observation: Final = load_observation(path)
-    assert observation.queries == _routing({query: ("litellm_writer", "litellm_reader") for query in queries})
-    assert observation.tests == {"node": observation.queries}
+    path.write_text(dumped)
+    loaded: Final = load_observation(path)
+    assert loaded.queries == _routing({query: (WRITER_ROLE, READER_ROLE) for query in queries})
+    assert loaded.tests == {NODE_ID: loaded.queries}
 
 
 def _write_observed(results: Path, observation: Observation) -> None:
