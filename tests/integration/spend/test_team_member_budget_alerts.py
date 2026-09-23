@@ -25,7 +25,6 @@ def _deliveries_for(mailbox: Mailbox, seen: list[Delivery]) -> list[Delivery]:
     return seen
 
 
-@pytest.mark.covers("quota_management.budget.team_member.alerts_at_configured_thresholds")
 def test_team_member_budget_thresholds_email_member_and_configured_recipients(gateway: Gateway, tmp_path: Path) -> None:
     member_email: Final = f"member-{uuid.uuid4().hex}@integration.test"
     finance_email: Final = f"finance-{uuid.uuid4().hex}@integration.test"
