@@ -17,6 +17,15 @@ use crate::realtime_cost::{
     partition_results_by_service_tier,
 };
 use crate::responses_usage::{ChatUsage, UsageError};
+use crate::tool_call_cost_tracking::{DefaultToolRates, ResponseKind as ToolResponseKind};
+use crate::tool_cost_dispatch::BuiltInToolCostRequest;
+
+#[derive(Clone, Copy, Debug)]
+pub struct BuiltInToolCostConfig<'a> {
+    pub response_kind: ToolResponseKind,
+    pub params: &'a Value,
+    pub defaults: DefaultToolRates,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct CompletionResponseCostRequest<'a> {
@@ -37,6 +46,7 @@ pub struct CompletionResponseCostRequest<'a> {
     pub image_size: Option<&'a str>,
     pub image_count: Option<u64>,
     pub built_in_tool_cost: f64,
+    pub built_in_tool_config: Option<BuiltInToolCostConfig<'a>>,
     pub additional_costs: &'a [f64],
     pub discount_config: &'a Value,
     pub margin_config: &'a Value,
@@ -366,6 +376,36 @@ fn add_completion_costs(first: CompletionCost, second: CompletionCost) -> Comple
     }
 }
 
+fn built_in_tool_cost(
+    catalog: &ModelInfoCatalog,
+    request: CompletionResponseCostRequest<'_>,
+    model: &str,
+    provider: Option<&str>,
+    region: Option<&str>,
+    usage: Option<&ChatUsage>,
+) -> f64 {
+    let Some(config) = request.built_in_tool_config else {
+        return request.built_in_tool_cost;
+    };
+    let Some(response) = request.input.model_selection.response else {
+        return request.built_in_tool_cost;
+    };
+    request.built_in_tool_cost
+        + catalog.built_in_tool_cost(
+            model,
+            provider,
+            region,
+            BuiltInToolCostRequest {
+                response,
+                response_kind: config.response_kind,
+                usage,
+                provider,
+                params: config.params,
+                defaults: config.defaults,
+            },
+        )
+}
+
 fn price_responses_websocket(
     catalog: &ModelInfoCatalog,
     request: CompletionResponseCostRequest<'_>,
@@ -408,7 +448,7 @@ fn price_responses_websocket(
                 CandidatePriceError::Price(error) => CompletionResponseCostError::Realtime(error),
             })?;
             let built_in = if index == 0 {
-                request.built_in_tool_cost
+                built_in_tool_cost(catalog, request, &model, provider, region, Some(&usage))
             } else {
                 0.0
             };
@@ -576,7 +616,7 @@ pub fn completion_cost_from_response(
     let cost = completion_cost(
         prompt,
         output,
-        request.built_in_tool_cost,
+        built_in_tool_cost(catalog, request, &model, provider, region, Some(usage)),
         request.additional_costs,
         provider,
         request.discount_config,

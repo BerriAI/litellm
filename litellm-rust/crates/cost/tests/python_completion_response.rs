@@ -3,9 +3,11 @@ use std::collections::HashMap;
 use litellm_cost::catalog::ModelInfoCatalog;
 use litellm_cost::completion_input::{CompletionInputRequest, ResponseKind};
 use litellm_cost::completion_response::{
-    CompletionResponseCostError, CompletionResponseCostRequest, completion_cost_from_response,
+    BuiltInToolCostConfig, CompletionResponseCostError, CompletionResponseCostRequest,
+    completion_cost_from_response,
 };
 use litellm_cost::model_selection::ModelSelectionRequest;
+use litellm_cost::tool_call_cost_tracking::{DefaultToolRates, ResponseKind as ToolResponseKind};
 use rstest::rstest;
 use serde_json::{Value, json};
 
@@ -52,6 +54,7 @@ fn request<'a>(
         image_size: None,
         image_count: None,
         built_in_tool_cost: 0.0,
+        built_in_tool_config: None,
         additional_costs: &[],
         discount_config: discount,
         margin_config: margin,
@@ -85,6 +88,55 @@ fn metadata_priced_calls_use_logging_details_without_catalog_pricing(
     )
     .unwrap();
     assert_eq!(result.cost.total, expected);
+}
+
+#[rstest]
+fn response_cost_prices_built_in_web_search_from_selected_model() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/served".to_owned(),
+        json!({
+            "input_cost_per_token": 0.01,
+            "output_cost_per_token": 0.0,
+            "search_context_cost_per_query": {"search_context_size_medium": 0.02}
+        }),
+    )]));
+    let response = json!({
+        "model": "served",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 0},
+        "output": [{"type": "web_search_call"}, {"type": "web_search_call"}]
+    });
+    let empty = json!({});
+    let base = request(
+        Some(&response),
+        Some("unpriced"),
+        Some("openai"),
+        &empty,
+        &empty,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            built_in_tool_cost: 0.005,
+            built_in_tool_config: Some(BuiltInToolCostConfig {
+                response_kind: ToolResponseKind::Responses,
+                params: &empty,
+                defaults: DefaultToolRates {
+                    file_search_per_call: 0.0,
+                    azure_file_search_per_gb_day: 0.0,
+                    azure_vector_store_per_gb_day: 0.0,
+                    azure_computer_input_per_1k_tokens: 0.0,
+                    azure_computer_output_per_1k_tokens: 0.0,
+                    code_interpreter_per_session: None,
+                    xai_web_search_per_call: 0.0,
+                    groq_browser_open_per_call: 0.0,
+                },
+            }),
+            ..base
+        },
+    )
+    .unwrap();
+    assert_eq!(result.model, "openai/served");
+    assert!((result.cost.total - 0.145).abs() < 1e-12);
 }
 
 #[rstest]
