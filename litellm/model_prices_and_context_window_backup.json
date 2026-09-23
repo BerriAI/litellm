@@ -64072,7 +64072,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 6.6e-06,
-        "source": "https://www.baseten.co/library/glm-53-fast/",
+        "source": "https://inference.baseten.co/v1/models",
         "supported_modalities": [
             "text",
             "image"
