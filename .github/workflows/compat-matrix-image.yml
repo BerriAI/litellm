@@ -1,0 +1,33 @@
+name: Compat Matrix Image
+
+on:
+  pull_request:
+    paths:
+      - tests/e2e/claude_code/cron_vm/**
+      - .github/workflows/compat-matrix-image.yml
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compat-matrix-image:
+    name: compat-matrix-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Build the Render cron image
+        run: docker build -f tests/e2e/claude_code/cron_vm/Dockerfile -t compat-matrix:${{ github.sha }} tests/e2e
+
+      - name: Run the pinned binaries as the cron user
+        run: |
+          docker run --rm compat-matrix:${{ github.sha }} bash -c 'set -e; whoami; claude --version; gh --version; uv --version'
