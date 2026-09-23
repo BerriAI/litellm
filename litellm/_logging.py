@@ -470,7 +470,7 @@ def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit:
         else _python_process_diagnostic(message, exception, stack, leaves, redact, base64_limit, text_limit)
     )
     raw_template_changed: Final = raw_template is not None and processed_leaves[len(extra_leaves)] != raw_template
-    safe_message: Final = "REDACTED" if raw_template_changed else processed_message
+    safe_message: Final = "REDACTED" if raw_template_changed and processed_message == message else processed_message
     if redact or safe_message != message:
         record.msg = safe_message  # rebind-ok: the Filter interface mutates the record
         record.args = None  # rebind-ok: the rendered message replaces interpolation inputs
@@ -486,7 +486,7 @@ def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit:
     raw_color_changed: Final = (
         raw_color is not None and processed_leaves[len(extra_leaves) + int(raw_template is not None)] != raw_color
     )
-    if raw_color_changed:
+    if raw_color_changed and getattr(record, "color_message", None) == substituted_color:
         setattr(record, "color_message", "REDACTED")
     setattr(record, _REDACTED_RECORD_ATTR, _REDACTED_STAMP)
     return True

@@ -868,6 +868,21 @@ def test_malformed_interpolation_still_scrubs_a_record(monkeypatch, native):
     assert record.color_message == "REDACTED"
 
 
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_key_pattern_template_keeps_the_rendered_redacted_line(monkeypatch, native):
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.INFO, "password=%s ok", ("hunter2",))
+    record.color_message = "password=%s ok"
+
+    assert DiagnosticProcessingFilter().filter(record) is True
+
+    assert record.getMessage() == "REDACTED ok"
+    assert record.color_message == "REDACTED ok"
+
+
 def test_disabled_diagnostic_call_does_not_render_arguments(caplog):
     class Unrenderable:
         def __str__(self):
