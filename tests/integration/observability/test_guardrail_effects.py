@@ -5,7 +5,8 @@ from typing import Final
 
 import pytest
 import yaml
-from integration._support.client import Gateway
+from integration._support.client import Gateway, eventually, object_value
+from integration._support.database import read_rows
 from integration._support.mcp import mcp_peer, register_mcp, tool_names
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
@@ -86,6 +87,91 @@ def test_guardrail_rewrites_system_and_user_in_actual_anthropic_request(gateway:
             assert response.json()["choices"][0]["finish_reason"] == "stop"
             assert response.json()["usage"]["total_tokens"] == 15
             assert len(policy.drain()) == len(upstream.drain()) == 1
+
+
+@pytest.mark.covers("other.observability.guardrails.anthropic_messages_caller_metadata_keeps_guardrail_spend_log")
+def test_anthropic_messages_with_caller_metadata_keeps_guardrail_information_in_spend_log(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    prompt: Final = "synthetic allowed prompt " + identity
+    caller_metadata: Final = {"user_id": "device-account-session"}
+
+    def guardrail(request: Request) -> Reply:
+        assert request.target == "/beta/litellm_basic_guardrail_api"
+        assert json.loads(request.body)["texts"] == [prompt]
+        return Reply(body=json.dumps({"action": "NONE"}).encode())
+
+    def provider(request: Request) -> Reply:
+        assert request.target == "/v1/messages"
+        body: Final = json.loads(request.body)
+        assert body["messages"] == [{"role": "user", "content": prompt}]
+        assert body["metadata"] == caller_metadata
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": identity,
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-5-20250929",
+                    "content": [{"type": "text", "text": "permitted response"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 11, "output_tokens": 4},
+                }
+            ).encode()
+        )
+
+    with wire_server(guardrail) as policy, wire_server(provider) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["guardrails"] = [
+            {
+                "guardrail_name": identity,
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": "pre_call",
+                    "default_on": True,
+                    "api_base": policy.url,
+                    "api_key": "synthetic-guardrail-key",
+                },
+            }
+        ]
+        path: Final = tmp_path / "caller-metadata.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(
+                model="anthropic/claude-sonnet-4-5-20250929", api_base=upstream.url, api_key="synthetic-anthropic-key"
+            )
+            response: Final = candidate.request(
+                "POST",
+                "/v1/messages",
+                {
+                    "model": model,
+                    "max_tokens": 16,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "metadata": caller_metadata,
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["content"] == [{"type": "text", "text": "permitted response"}], response.text
+            assert response.headers["x-litellm-applied-guardrails"] == identity, dict(response.headers)
+            assert len(policy.drain()) == len(upstream.drain()) == 1
+            rows: Final = eventually(
+                lambda: read_rows(
+                    'SELECT call_type, metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s',
+                    (model,),
+                ),
+                lambda values: len(values) == 1,
+                seconds=70,
+            )
+            assert rows[0]["call_type"] == "anthropic_messages", rows[0]
+            saved: Final = object_value(rows[0]["metadata"])
+            entries: Final = saved["guardrail_information"]
+            assert isinstance(entries, list) and len(entries) == 1, saved
+            entry: Final = object_value(entries[0])
+            assert entry["guardrail_name"] == identity, saved
+            assert entry["guardrail_mode"] == "pre_call", saved
+            assert entry["guardrail_status"] == "success", saved
 
 
 @pytest.mark.covers("other.observability.guardrails.denial_prevents_provider_with_allowed_control")
