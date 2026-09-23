@@ -41,6 +41,7 @@ from litellm.llms.anthropic.chat.transformation import (
     AnthropicConfig,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -1314,12 +1315,6 @@ class AmazonConverseConfig(BaseConfig):
                 cache_point["ttl"] = ttl
         return cache_point
 
-    # Note shown when a mid-conversation system entry is converted to a user
-    # turn. Mirrors AnthropicMessagesTransformation._CONVERTED_SYSTEM_NOTE.
-    _CONVERTED_MID_CONVERSATION_SYSTEM_NOTE: Final = (
-        "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
-    )
-
     @staticmethod
     def _is_system_role_message(message: object) -> bool:
         return isinstance(message, dict) and message.get("role") == "system"
@@ -1366,8 +1361,6 @@ class AmazonConverseConfig(BaseConfig):
         place so the cached prefix stays byte-identical."""
         message: Final = messages[index]
         if self._opens_with_tool_result(message):
-            # With consecutive tool results, emit the run only after the last
-            # one so the results stay in one unbroken block.
             if index + 1 < len(messages) and self._opens_with_tool_result(messages[index + 1]):
                 return (message,)
             tool_run_start: Final = next(
@@ -1414,7 +1407,6 @@ class AmazonConverseConfig(BaseConfig):
         elif isinstance(content, list):
             for m in content:
                 if isinstance(m, dict) and m.get("type") == "text" and m.get("text"):
-                    # loop-rebuilt block
                     text_block = {"type": "text", "text": m["text"]}  # mutable-ok: per-entry text block
                     if m.get("cache_control") is not None:
                         text_block["cache_control"] = m["cache_control"]
@@ -1422,7 +1414,7 @@ class AmazonConverseConfig(BaseConfig):
         converted: dict = {  # mutable-ok: converted message build
             "role": "user",
             "content": [  # mutable-ok: fresh Bedrock message body
-                {"type": "text", "text": self._CONVERTED_MID_CONVERSATION_SYSTEM_NOTE}
+                {"type": "text", "text": CONVERTED_SYSTEM_NOTE}
             ]
             + text_blocks,
         }
@@ -1431,10 +1423,6 @@ class AmazonConverseConfig(BaseConfig):
     def _transform_system_message(
         self, messages: list[AllMessageValues], model: str | None = None
     ) -> tuple[list[AllMessageValues], list[SystemContentBlock]]:
-        # Only the leading run of system entries is hoisted to the top-level
-        # Bedrock ``system`` block. Mid-conversation entries are converted to
-        # user turns in place so the ``system`` prefix (and the implicit
-        # prompt cache keyed on the prompt prefix) is stable across turns.
         leading_count: Final = next(
             (i for i, m in enumerate(messages) if not self._is_system_role_message(m)),
             len(messages),
@@ -1468,8 +1456,6 @@ class AmazonConverseConfig(BaseConfig):
                 converted = self._system_role_message_as_user(
                     cast(Mapping, message)  # cast-ok: narrow message to mapping
                 )
-                # Drop entries with no text (same as the old hoist, which
-                # extracted nothing from them) instead of injecting a bare note.
                 if len(converted["content"]) > 1:
                     new_messages.append(converted)
             else:

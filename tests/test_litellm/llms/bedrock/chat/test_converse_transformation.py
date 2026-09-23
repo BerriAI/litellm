@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm import ModelResponse
+from litellm.llms.anthropic.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.types.llms.bedrock import ConverseTokenUsageBlock
 
@@ -7637,7 +7638,7 @@ def test_mid_conversation_system_list_content_with_cache_control():
     out_messages, system_blocks = config._transform_system_message(messages)
     assert system_blocks == []
     blocks = out_messages[1]["content"]
-    assert blocks[0]["text"] == config._CONVERTED_MID_CONVERSATION_SYSTEM_NOTE
+    assert blocks[0]["text"] == CONVERTED_SYSTEM_NOTE
     assert blocks[1] == {
         "type": "text",
         "text": "keep this",
@@ -7645,3 +7646,4 @@ def test_mid_conversation_system_list_content_with_cache_control():
     }
     assert blocks[2] == {"type": "text", "text": "plain"}
     assert len(blocks) == 3
+
