@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Any, Final, cast
 
 import litellm
+from litellm.llms.compaction import get_responses_compaction_codec
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     build_tool_call_item_kwargs,
@@ -640,18 +641,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             getattr(chunk, "provider_specific_fields", None),
             getattr(delta, "provider_specific_fields", None),
         ):
-            if isinstance(src, dict) and any(
-                key in src for key in ("compaction_blocks", "compaction_start", "compaction_delta")
-            ):
+            if get_responses_compaction_codec().is_streaming_compaction(src):
                 return True
         return False
 
     def _maybe_queue_compaction_events(self) -> None:
         if self._compaction_present:
             return
-        encoded: Final = LiteLLMCompletionResponsesConfig.latest_encoded_compaction_block(
-            self._accumulated_provider_specific_fields.get("compaction_blocks")
-        )
+        encoded: Final = get_responses_compaction_codec().encode(self._accumulated_provider_specific_fields)
         if encoded is None:
             return
         self._compaction_present = True

@@ -614,11 +614,13 @@ class TestLiteLLMCompletionResponsesConfig:
             {"type": "compaction", "id": "cmp_c", "encrypted_content": json.dumps({"type": "text", "text": "x"})},
         ],
     )
-    def test_unreplayable_compaction_input_items_are_dropped(self, item):
+    @pytest.mark.parametrize("replay_reasoning", [True, False])
+    def test_unreplayable_compaction_input_items_are_dropped(self, item, replay_reasoning):
         """A compaction input item that this deployment did not write (no encrypted_content,
-        empty, or not a compaction block once decoded) must not reach the request."""
+        empty, or not a compaction block once decoded) must not reach the request, and
+        inspection callers get nothing to scan from it either."""
         messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=[item], responses_api_request={}, replay_reasoning=True
+            input=[item], responses_api_request={}, replay_reasoning=replay_reasoning
         )
         assert [m for m in messages if m.get("role") == "assistant"] == []
 
