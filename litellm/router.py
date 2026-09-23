@@ -10196,10 +10196,7 @@ class Router:
         """
         if not isinstance(model_info, Mapping):
             return False
-        return (
-            model_info.get("max_input_tokens") is not None
-            and model_info.get("max_output_tokens") is not None
-        )
+        return model_info.get("max_input_tokens") is not None and model_info.get("max_output_tokens") is not None
 
     async def arefresh_model_info(self, *, client: AsyncHTTPHandler | None = None) -> None:
         """Refresh token limits advertised by configured OpenAI-compatible deployments."""
