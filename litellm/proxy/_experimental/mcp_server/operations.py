@@ -1,5 +1,6 @@
 """Shared MCP operation policy and dispatch."""
 
+import asyncio
 import traceback
 import types
 import uuid
@@ -49,7 +50,7 @@ from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
     cache_byok_credential,
     get_cached_byok_credential,
 )
-from litellm.proxy._experimental.mcp_server.catalog import TargetCatalog, catalog_operation, global_manager
+from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.contracts import (
     AuthorizedToolCall,
     OperationContext,
@@ -1153,17 +1154,24 @@ async def _get_tools_from_mcp_servers(
                 verbose_logger.exception("Error getting tools from server %s: %s", server.name, e)
                 return [], classify_list_exception(e)
 
-        listing: Final = await TargetCatalog.aggregate_list(
-            allowed_mcp_servers, _fetch_and_filter_server_tools, _aggregate_server_key
-        )
-        all_tools: Final = listing.tools
-        server_outcomes: Final = listing.outcomes
+        # Fetch tools from all servers in parallel
+        tasks: Final = [_fetch_and_filter_server_tools(server) for server in allowed_mcp_servers]
+        results: Final = await asyncio.gather(*tasks)
+
+        # Flatten results into single list
+        all_tools: Final[list[MCPTool]] = [tool for tools, _ in results for tool in tools]
+        server_outcomes: Final[dict[str, ServerOutcome]] = {
+            _aggregate_server_key(server): outcome
+            for server, (_, outcome) in zip(allowed_mcp_servers, results)
+            if server is not None
+        }
 
         # If logging is enabled, enrich spend_logs_metadata with counts
         if litellm_logging_obj:
             per_server_tool_counts: Final[dict[str, int]] = {
-                key: outcome.tool_count if isinstance(outcome, ServerListOk) else 0
-                for key, outcome in server_outcomes.items()
+                _aggregate_server_key(server): len(server_tools)
+                for server, (server_tools, _) in zip(allowed_mcp_servers, results)
+                if server is not None
             }
 
             metadata_dict: Final = litellm_logging_obj.model_call_details.get("metadata")

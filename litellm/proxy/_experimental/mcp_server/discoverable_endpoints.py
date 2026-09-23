@@ -2919,7 +2919,7 @@ async def register_client(request: Request, mcp_server_name: str | None = None):
         )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
-    async with global_mcp_server_manager.catalog.operation(request=request):
+    async with global_mcp_server_manager.catalog.operation():
         dummy_return: Final = {
             "client_id": mcp_server_name or "dummy_client",
             "client_secret": "dummy",

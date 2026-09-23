@@ -10,19 +10,14 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import wraps
-from inspect import signature
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, ParamSpec, TypeVar
 
 from litellm._logging import verbose_logger
 
 if TYPE_CHECKING:
-    from mcp.types import Tool as SDKTool
     from pydantic import BaseModel
-    from starlette.requests import Request
 
-    from litellm.proxy._experimental.mcp_server.auth.admission import MCPAdmissionLimiter
-    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing, ServerOutcome
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.types.mcp_server.tool_registry import MCPTool
@@ -86,7 +81,6 @@ class TargetCatalog:
         self._arrival_ticket = 0
         self._completed_ticket = 0
         self._shared_snapshot: CatalogSnapshot | None = None
-        self._admission: MCPAdmissionLimiter | None = None
         self._warned_shadowed_config_server_ids: frozenset[str] = frozenset()
         self._warned_capturing_config_server_ids: frozenset[str] = frozenset()
         self._operation: ContextVar[tuple[CatalogSnapshot, asyncio.Event, int] | None] = ContextVar(
@@ -136,18 +130,8 @@ class TargetCatalog:
                 raise HTTPException(status_code=503, detail="MCP server configuration could not be refreshed")
             return self._shared_snapshot
 
-    async def _acquire_snapshot(self, request: Request | None) -> CatalogSnapshot:
-        if request is None:
-            return await self._fresh_snapshot()
-        from litellm.proxy._experimental.mcp_server.auth.admission import MCPAdmissionLimiter, admission_source
-
-        if self._admission is None:
-            self._admission = MCPAdmissionLimiter()
-        with self._admission.admit(admission_source(request)):
-            return await self._fresh_snapshot()
-
-    async def list(self, *, request: Request | None = None) -> Mapping[str, MCPServer]:
-        async with self.operation(request=request) as snapshot:
+    async def list(self) -> Mapping[str, MCPServer]:
+        async with self.operation() as snapshot:
             return snapshot.servers
 
     def assert_current(self, server: MCPServer) -> None:
@@ -168,7 +152,7 @@ class TargetCatalog:
             raise HTTPException(status_code=503, detail="MCP server configuration changed; retry the operation")
 
     @asynccontextmanager
-    async def operation(self, *, request: Request | None = None) -> AsyncIterator[CatalogSnapshot]:
+    async def operation(self) -> AsyncIterator[CatalogSnapshot]:
         current: Final = self.current()
         scoped: Final = self._operation.get()
         if current is not None and scoped is not None and scoped[2] == id(asyncio.current_task()):
@@ -176,7 +160,7 @@ class TargetCatalog:
             return
         from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
 
-        shared: Final = await self._acquire_snapshot(request)
+        shared: Final = await self._fresh_snapshot()
         snapshot: Final = replace(
             shared,
             servers=MappingProxyType({key: value.model_copy(deep=True) for key, value in shared.servers.items()}),
@@ -241,27 +225,6 @@ class TargetCatalog:
         resolved: Final = await resolve(selected)
         _check_oauth_revision(selected, resolved)
         return resolved
-
-    @staticmethod
-    async def aggregate_list(
-        servers: Sequence[MCPServer],
-        fetch: Callable[[MCPServer], Awaitable[tuple[list[SDKTool], ServerOutcome]]],
-        server_key: Callable[[MCPServer], str],
-    ) -> AggregateToolListing:
-        from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
-
-        tasks: Final = tuple(asyncio.ensure_future(fetch(server)) for server in servers)
-        try:
-            results: Final = await asyncio.gather(*tasks)
-            return AggregateToolListing(
-                tools=[tool for tools, _ in results for tool in tools],
-                outcomes={server_key(server): outcome for server, (_, outcome) in zip(servers, results)},
-            )
-        finally:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def reload(self) -> None:
         async with self._refresh_lock:
@@ -559,18 +522,6 @@ def global_manager() -> MCPServerManager:
     return global_mcp_server_manager
 
 
-def public_catalog_operation(function: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
-    parameters: Final = signature(function)
-
-    @wraps(function)
-    async def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:  # kwargs-ok: preserves ParamSpec
-        from starlette.requests import Request
-
-        arguments: Final = parameters.bind(*args, **kwargs).arguments
-        request: Final = arguments.get("request")
-        if not isinstance(request, Request):
-            raise TypeError("Public MCP operations require a Request")
-        async with global_manager().catalog.operation(request=request):
-            return await function(*args, **kwargs)
-
-    return wrapped
+public_catalog_operation: Final[Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]] = (
+    catalog_operation(global_manager)
+)

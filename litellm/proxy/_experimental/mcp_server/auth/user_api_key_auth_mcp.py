@@ -446,7 +446,7 @@ class MCPRequestHandler:
         Raises:
             HTTPException: If headers are invalid or missing required headers
         """
-        async with global_manager().catalog.operation(request=Request(scope)):
+        async with global_manager().catalog.operation():
             headers: Final = MCPRequestHandler._safe_get_headers_from_scope(scope)
 
             # Check if there is an explicit LiteLLM API key (primary header)
