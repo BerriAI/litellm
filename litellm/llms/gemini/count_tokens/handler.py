@@ -4,6 +4,8 @@ import httpx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.vertex_ai import SystemInstructions, Tools
 from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
@@ -51,7 +53,7 @@ class GoogleAIStudioTokenCounter:
         """
         Construct the URL for the Google Gen AI Studio countTokens endpoint.
         """
-        base_url: Final = api_base or "https://generativelanguage.googleapis.com"
+        base_url: Final = api_base or get_secret_str("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
         return f"{base_url}/v1beta/models/{model}:countTokens"
 
     async def validate_environment(
@@ -84,6 +86,8 @@ class GoogleAIStudioTokenCounter:
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
+        system_instruction: SystemInstructions | None = None,
+        tools: list[Tools] | None = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         """
@@ -130,7 +134,18 @@ class GoogleAIStudioTokenCounter:
 
         # Prepare request body - clean up contents to remove unsupported fields
         cleaned_contents: Final = self._clean_contents_for_gemini_api(contents)
-        request_body: Final = {"contents": cleaned_contents}
+        request_body: Final = (
+            {"contents": cleaned_contents}
+            if system_instruction is None and tools is None
+            else {
+                "generateContentRequest": {
+                    "model": f"models/{model}",
+                    "contents": cleaned_contents,
+                    **({"systemInstruction": system_instruction} if system_instruction is not None else {}),
+                    **({"tools": tools} if tools is not None else {}),
+                }
+            }
+        )
 
         async_httpx_client: Final = get_async_httpx_client(
             llm_provider=LlmProviders.GEMINI,

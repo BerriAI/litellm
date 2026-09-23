@@ -495,17 +495,43 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         import copy
 
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
+        from litellm.llms.gemini.count_tokens.transformation import build_count_tokens_payload
+
+        if contents is None and not messages:
+            return None
 
         deployment = deployment or {}
         count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
+        payload: Final = (
+            build_count_tokens_payload(model=model_to_use, messages=messages, system=system, tools=tools)
+            if contents is None
+            else None
+        )
         count_tokens_params: Final = {
             "model": model_to_use,
-            "contents": contents,
+            "contents": payload.contents if payload is not None else contents,
+            **(
+                {"system_instruction": payload.system_instruction}
+                if payload is not None and payload.system_instruction is not None
+                else {}
+            ),
+            **({"tools": payload.tools} if payload is not None and payload.tools is not None else {}),
         }
         count_tokens_params_request.update(count_tokens_params)
-        result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
-            **count_tokens_params_request,
-        )
+        try:
+            result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
+                **count_tokens_params_request,
+            )
+        except (litellm.APIError, litellm.APIConnectionError) as e:
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="gemini_api",
+                error=True,
+                error_message=e.message,
+                status_code=e.status_code,
+            )
 
         if result is not None:
             return TokenCountResponse(
