@@ -67,7 +67,6 @@ class TestSlackAlerting(unittest.TestCase):
 
     def test_get_event_and_event_message_max_budget(self):
         event = None
-        event_message = get_budget_alert_type("user_budget").get_event_message()
 
         # Test case 1: When spend exceeds max_budget
         user_info = CallInfo(
@@ -76,32 +75,33 @@ class TestSlackAlerting(unittest.TestCase):
             soft_budget=None,
             event_group=Litellm_EntityType.KEY,
         )
+        event_message = get_budget_alert_type("user_budget").get_event_message(user_info)
         event, event_message = self.slack_alerting._get_event_and_event_message(
             user_info=user_info, event=event, event_message=event_message
         )
         self.assertEqual(event, "budget_crossed")
         self.assertTrue("Budget Crossed" in event_message)
 
-        event_message = get_budget_alert_type("user_budget").get_event_message()
         user_info = CallInfo(
             max_budget=100.0,
             spend=95.0,
             soft_budget=None,
             event_group=Litellm_EntityType.KEY,
         )
+        event_message = get_budget_alert_type("user_budget").get_event_message(user_info)
         event, event_message = self.slack_alerting._get_event_and_event_message(
             user_info=user_info, event=event, event_message=event_message
         )
         self.assertEqual(event, "threshold_crossed")
         self.assertEqual(event_message, "User Budget: 5% or less of budget remaining")
 
-        event_message = get_budget_alert_type("user_budget").get_event_message()
         user_info = CallInfo(
             max_budget=100.0,
             spend=85.0,
             soft_budget=None,
             event_group=Litellm_EntityType.KEY,
         )
+        event_message = get_budget_alert_type("user_budget").get_event_message(user_info)
         event, event_message = self.slack_alerting._get_event_and_event_message(
             user_info=user_info, event=event, event_message=event_message
         )

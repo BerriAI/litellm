@@ -551,7 +551,7 @@ class SlackAlerting(CustomBatchLogger):
         budget_alert_class: Final = get_budget_alert_type(type)
         _id: Final = budget_alert_class.get_id(user_info)
         user_info_str: Final = self._get_user_info_str(user_info)
-        event_message = budget_alert_class.get_event_message()
+        event_message = budget_alert_class.get_event_message(user_info)
 
         # Set default event unless we're in projected_limit_exceeded
         event: (
