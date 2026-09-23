@@ -40,7 +40,8 @@ LIT003  noqa suppression without rule codes or without a reason.
 LIT004  pyright/mypy ignore without bracketed codes or without a reason.
         Required shape: `# pyright: ignore[reportArgumentType]  # <reason>`
 LIT005  A `# mutable-ok` / `# cast-ok` / `# guard-ok` / `# kwargs-ok` /
-        `# rebind-ok` / `# writable-ok` suppression without a reason.
+        `# rebind-ok` / `# writable-ok` / `# comprehension-ok` suppression
+        without a reason.
 LIT006  `cast(...)` call. typing.cast is an unchecked assertion (the moral equivalent
         of TypeScript's `as`); it lies to the type checker with zero runtime guarantee.
         Validate into a concrete frozen type at the boundary instead.
@@ -99,6 +100,13 @@ LIT012  TypedDict field without a `ReadOnly[...]` qualifier. A writable key lets
         the functional form (`X = TypedDict("X", {...})`) is checked too. A base
         imported from another module is out of reach without import resolution.
         Suppress with `# writable-ok: <reason>`.
+LIT013  Comprehension with more than one `for` clause or more than one `if` clause,
+        in any of the four forms (list, set, dict, generator expression). Stacked
+        `for`s and `if`s read as nested loops and guards squashed onto one line;
+        split the comprehension into a helper generator, a named intermediate, or
+        a plain loop instead. A comprehension nested inside another's element or
+        iterable is its own node and is judged separately. Suppress with
+        `# comprehension-ok: <reason>`.
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
@@ -182,6 +190,7 @@ GUARD_OK_RE = re.compile(r"#\s*guard-ok(?::\s*(?P<reason>.*))?")
 KWARGS_OK_RE = re.compile(r"#\s*kwargs-ok(?::\s*(?P<reason>.*))?")
 REBIND_OK_RE = re.compile(r"#\s*rebind-ok(?::\s*(?P<reason>.*))?")
 WRITABLE_OK_RE = re.compile(r"#\s*writable-ok(?::\s*(?P<reason>.*))?")
+COMPREHENSION_OK_RE = re.compile(r"#\s*comprehension-ok(?::\s*(?P<reason>.*))?")
 
 # Suppression tokens that must each carry a reason (LIT005).
 OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -191,6 +200,7 @@ OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("kwargs-ok", KWARGS_OK_RE),
     ("rebind-ok", REBIND_OK_RE),
     ("writable-ok", WRITABLE_OK_RE),
+    ("comprehension-ok", COMPREHENSION_OK_RE),
 )
  
  
@@ -214,6 +224,7 @@ class Comments:
     kwargs_ok_lines: frozenset[int]
     rebind_ok_lines: frozenset[int]
     writable_ok_lines: frozenset[int]
+    comprehension_ok_lines: frozenset[int]
  
  
 # --------------------------------------------------------------------------- #
@@ -269,7 +280,7 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
         # tokenize raises TokenError (EOF mid-construct) or a SyntaxError subclass
         # (IndentationError / TabError) on malformed source; defer to ast.parse below,
         # which re-raises and is reported as LIT000 rather than crashing the run.
-        return Comments(frozenset(), frozenset(), frozenset(), frozenset(), frozenset(), frozenset()), ()
+        return Comments(frozenset(), frozenset(), frozenset(), frozenset(), frozenset(), frozenset(), frozenset()), ()
 
     def _lines_with(regex: re.Pattern[str]) -> frozenset[int]:
         return frozenset(line for line, text in comment_toks if _valid_ok(regex, text))
@@ -282,6 +293,7 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
             kwargs_ok_lines=_lines_with(KWARGS_OK_RE),
             rebind_ok_lines=_lines_with(REBIND_OK_RE),
             writable_ok_lines=_lines_with(WRITABLE_OK_RE),
+            comprehension_ok_lines=_lines_with(COMPREHENSION_OK_RE),
         ),
         tuple(v for line, text in comment_toks for v in _comment_violations(path, line, text)),
     )
@@ -1034,6 +1046,33 @@ def iter_typeddict_violations(path: Path, tree: ast.AST, comments: Comments) -> 
 
 
 # --------------------------------------------------------------------------- #
+# Stacked comprehension clauses (LIT013)
+# --------------------------------------------------------------------------- #
+
+COMPREHENSION_NODES = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+
+def iter_comprehension_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+    for node in ast.walk(tree):
+        if not isinstance(node, COMPREHENSION_NODES):
+            continue
+        for_count = len(node.generators)
+        if_count = sum(len(g.ifs) for g in node.generators)
+        if for_count <= 1 and if_count <= 1:
+            continue
+        if node.lineno in comments.comprehension_ok_lines:
+            continue
+        yield Violation(
+            path,
+            node.lineno,
+            "LIT013",
+            f"comprehension with {for_count} `for` clauses and {if_count} `if` clauses: "
+            f"at most one of each is allowed. Split it into a helper generator, a named "
+            f"intermediate, or a plain loop (suppress: `# comprehension-ok: <reason>`)",
+        )
+
+
+# --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
  
@@ -1060,6 +1099,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
         *iter_final_violations(path, tree, comments),
         *iter_param_violations(path, tree, comments),
         *iter_typeddict_violations(path, tree, comments),
+        *iter_comprehension_violations(path, tree, comments),
     )
  
  
