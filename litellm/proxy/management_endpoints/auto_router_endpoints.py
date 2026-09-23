@@ -34,6 +34,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.autorouter_session_rollup import AUTOROUTER_BENCHMARKS_SQL
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
+    refresh_proxy_server_request_body_snapshot,
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # shared owner of team-admin membership
@@ -464,14 +465,13 @@ async def preview_auto_router_routing(
         user_api_key_dict=actor,
         _metadata_variable_name="metadata",
     )
+    refresh_proxy_server_request_body_snapshot(request_kwargs)
 
     try:
         hook_response: Final = await complexity_router.async_pre_routing_hook(
             model=resolved.router_name,
             request_kwargs=request_kwargs,
-            messages=[  # mutable-ok: the routing hook's signature takes a list of message dicts
-                {"role": "user", "content": data.prompt},  # mutable-ok: a message is dict-shaped
-            ],
+            messages=request_kwargs["messages"],
         )
     except Exception as e:  # noqa: BLE001 -- surfaces any classifier/plugin failure to the caller as a 400 instead of a 500, since the config under test is caller input
         verbose_proxy_logger.exception("Auto router routing test failed. Due to error - %s", e)
