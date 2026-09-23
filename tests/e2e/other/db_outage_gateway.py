@@ -23,8 +23,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
-from e2e_http import NoBody
+from e2e_http import NoBody, is_ok
 from idp import Keycloak, stop_process_group
+from models import LiteLLMParamsBody, ModelDeleteBody
 from proxy_client import ProxyClient, build_proxy_client
 from pydantic import TypeAdapter
 
@@ -196,11 +197,6 @@ def owned_db_outage_gateway(idp: Keycloak, model: str, directory: Path, cleanup:
 
     config: Final = directory / "db-outage-gateway.yaml"
     config.write_text(
-        "model_list:\n"
-        f"  - model_name: {model}\n"
-        "    litellm_params:\n"
-        f"      model: openai/{model}\n"
-        "      api_key: os.environ/OPENAI_API_KEY\n"
         "general_settings:\n"
         "  master_key: os.environ/LITELLM_MASTER_KEY\n"
         f"  database_url: os.environ/{RELAY_DATABASE_URL_ENV}\n"
@@ -238,4 +234,25 @@ def owned_db_outage_gateway(idp: Keycloak, model: str, directory: Path, cleanup:
     )
     cleanup.callback(gateway.stop)
     gateway.start()
+    model_id: Final = gateway.proxy.create_model(
+        model_name=model,
+        litellm_params=LiteLLMParamsBody(model=f"openai/{model}", api_key="os.environ/OPENAI_API_KEY"),
+    )
+
+    def _delete_model_when_db_back() -> None:
+        relay.restore()
+        deadline: Final = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if is_ok(
+                gateway.proxy.transport.post(
+                    "/model/delete",
+                    headers=gateway.proxy.management_headers(),
+                    json=ModelDeleteBody(id=model_id),
+                    response_type=NoBody,
+                )
+            ):
+                return
+            time.sleep(1)
+
+    cleanup.callback(_delete_model_when_db_back)
     return gateway

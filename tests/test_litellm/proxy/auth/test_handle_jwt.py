@@ -18,6 +18,7 @@ from litellm.proxy._types import (
     LiteLLM_ModelTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
     Member,
@@ -7775,3 +7776,63 @@ async def test_find_team_with_model_access_missing_team_still_403():
 
     assert exc_info.value.status_code == 403
     assert "No team has access to the requested model" in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize("team_id_order", [("team-a", "team-b"), ("team-b", "team-a")])
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_outage_still_tries_cached_team(team_id_order):
+    outage = httpx.ConnectError("db down")
+
+    def _find_unique(*args, **kwargs):
+        where = kwargs.get("where") or {}
+        if where.get("team_id") == "team-a":
+            raise outage
+        return None
+
+    prisma_client = _team_read_failing_client(_find_unique)
+    user_api_key_cache = DualCache()
+    await user_api_key_cache.async_set_cache(
+        "team_id:team-b",
+        LiteLLM_TeamTableCachedObj(team_id="team-b", models=["gpt-4o"]),
+    )
+
+    team_id, team_object = await JWTAuthManager.find_team_with_model_access(
+        team_ids=set(team_id_order),
+        requested_model="gpt-4o",
+        route="/chat/completions",
+        jwt_handler=_jwt_handler(),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert team_id == "team-b"
+    assert team_object is not None
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_outage_wins_over_missing_team():
+    outage = httpx.ConnectError("db down")
+
+    def _find_unique(*args, **kwargs):
+        where = kwargs.get("where") or {}
+        if where.get("team_id") == "team-a":
+            raise outage
+        return None
+
+    prisma_client = _team_read_failing_client(_find_unique)
+
+    with pytest.raises(httpx.ConnectError) as exc_info:
+        await JWTAuthManager.find_team_with_model_access(
+            team_ids={"team-a", "team-b"},
+            requested_model="gpt-4o",
+            route="/chat/completions",
+            jwt_handler=_jwt_handler(),
+            prisma_client=prisma_client,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc_info.value is outage

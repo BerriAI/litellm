@@ -1693,14 +1693,19 @@ class JWTAuthManager:
             return None, None
 
         any_claim_team_resolved = False
+        db_outage: Exception | None = None
         for team_id in team_ids:
-            team_object = await _read_claim_team(
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-            )
+            try:
+                team_object = await _read_claim_team(
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except Exception as e:  # noqa: BLE001  # deferred so another claim team can still grant access
+                db_outage = e  # rebind-ok: first outage seen across team claims
+                continue
             if team_object is None:
                 continue
             any_claim_team_resolved = True
@@ -1739,6 +1744,9 @@ class JWTAuthManager:
 
         if denied_auth_enforced_pass_through_route:
             JWTAuthManager._raise_team_passthrough_route_denial(route=route)
+
+        if db_outage is not None:
+            raise db_outage
 
         if requested_model and (any_claim_team_resolved or not jwt_handler.litellm_jwtauth.team_claim_fallback):
             # Claim resolved but no model access, or fallback disabled — deny.
