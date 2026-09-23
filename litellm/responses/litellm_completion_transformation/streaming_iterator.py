@@ -656,14 +656,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return
         self._compaction_present = True
         self._cached_compaction_item_id = f"cmp_{uuid.uuid4()}"
-        # index 0 is the compaction item, 1 the leading message/reasoning item; tools start at 2
+        # reserve index 0 for compaction and 1 for the message or reasoning item
         self._next_tool_output_index = max(self._next_tool_output_index, 2)
         item_id: Final = self._cached_compaction_item_id
-        added_item: Final = {
+        added_item: Final = {  # mutable-ok: dynamic compaction item payload
             "id": item_id,
             "type": "compaction",
             "status": "in_progress",
-        }  # mutable-ok: dynamic compaction item payload
+        }
         added: Final = OutputItemAddedEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
             output_index=0,

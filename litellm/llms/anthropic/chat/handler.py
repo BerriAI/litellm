@@ -725,10 +725,8 @@ class ModelResponseIterator:
             if self.compaction_blocks:
                 open_block: Final = self.compaction_blocks[-1]
                 merged_content: Final = f"{open_block.get('content') or ''}{delta_content}"
-                self.compaction_blocks = [
-                    *self.compaction_blocks[:-1],
-                    {**open_block, "content": merged_content},
-                ]
+                folded_block: Final = {**open_block, "content": merged_content}  # mutable-ok: folded block
+                self.compaction_blocks = [*self.compaction_blocks[:-1], folded_block]  # mutable-ok: rebuilt list
                 provider_specific_fields["compaction_blocks"] = self.compaction_blocks
 
         return (

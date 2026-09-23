@@ -795,9 +795,7 @@ class LiteLLMCompletionResponsesConfig:
         nothing else. ``content`` is empty so the prompt factory adds no text block,
         leaving the signed compaction block as the sole content of the assistant turn."""
         message: Final = ChatCompletionResponseMessage(role="assistant", content="")
-        message["provider_specific_fields"] = {
-            "compaction_blocks": [block]
-        }  # mutable-ok: message provider_specific_fields contract
+        message["provider_specific_fields"] = {"compaction_blocks": [block]}  # mutable-ok: message psf contract
         return message
 
     @staticmethod
@@ -1473,8 +1471,7 @@ class LiteLLMCompletionResponsesConfig:
             if block is None:
                 return []  # mutable-ok: empty drop result
             if not replay_reasoning:
-                # Inspection callers (guardrails, DLP, token counting, rate limits) must
-                # see the summary as scannable content, not hidden in the opaque block.
+                # inspection callers (guardrails, DLP, token counting) must see the summary, not the opaque block
                 summary: Final = block.get("content")
                 if not isinstance(summary, str) or not summary:
                     return []  # mutable-ok: nothing scannable to surface

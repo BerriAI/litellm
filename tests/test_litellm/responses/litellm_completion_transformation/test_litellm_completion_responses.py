@@ -622,6 +622,31 @@ class TestLiteLLMCompletionResponsesConfig:
         )
         assert [m for m in messages if m.get("role") == "assistant"] == []
 
+    def test_non_list_compaction_blocks_yields_no_item(self):
+        """A malformed provider_specific_fields where compaction_blocks is not a list must
+        not raise or emit an item, it is simply ignored."""
+        chat_completion_response = ModelResponse(
+            id="r",
+            created=1,
+            model="claude-sonnet-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="c",
+                        role="assistant",
+                        provider_specific_fields={"compaction_blocks": "not-a-list"},
+                    ),
+                )
+            ],
+        )
+        response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="hi", responses_api_request={}, chat_completion_response=chat_completion_response
+        )
+        assert [i for i in response.output if i.type == "compaction"] == []
+
     def test_extract_skips_malformed_block_and_uses_latest_valid(self):
         """A non-dict entry in compaction_blocks is skipped, and the newest valid block
         still surfaces, so junk in the provider list never blocks a real compaction."""
