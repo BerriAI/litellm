@@ -183,7 +183,8 @@ def _forget_scenario(handle: ScenarioHandle) -> None:
     try:
         delete_scenario(handle)
     except httpx.HTTPStatusError as error:
-        assert error.response.status_code == 404, error
+        if error.response.status_code != 404:
+            raise error
 
 
 def _burst_body(alias: str, session_id: str, index: int) -> dict[str, JsonValue]:
