@@ -269,7 +269,6 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const explicitlySupportedClassifierEfforts = effortOptionsByModel[classifierModel];
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
-
     onChange(transitionClassifierType(value, classifierType));
   };
 

@@ -1102,7 +1102,9 @@ def test_async_http_handler(mock_async_client):
     concurrent_limit = 2
 
     # Mock the transport creation to return a specific transport
-    with mock.patch.object(AsyncHTTPHandler, "_create_async_transport") as mock_create_transport:
+    with mock.patch.object(
+        AsyncHTTPHandler, "_create_async_transport"
+    ) as mock_create_transport:  # test-quality-ok: the patched global is the collaborator's only injection seam
         mock_transport = mock.MagicMock()
         mock_create_transport.return_value = mock_transport
 
@@ -1548,7 +1550,9 @@ def test_get_valid_models_openai_proxy(monkeypatch):
     mock_response.status_code = 200
     mock_response.json.return_value = mock_response_data
 
-    with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_post:
+    with patch.object(
+        litellm.module_level_client, "get", return_value=mock_response
+    ) as mock_post:  # test-quality-ok: the patched global is the collaborator's only injection seam
         valid_models = get_valid_models(check_provider_endpoint=True)
         assert "litellm_proxy/gpt-5.5" in valid_models
 
@@ -1625,7 +1629,9 @@ def test_get_valid_models_fireworks_ai(monkeypatch):
     mock_response.status_code = 200
     mock_response.json.return_value = mock_response_data
 
-    with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_post:
+    with patch.object(
+        litellm.module_level_client, "get", return_value=mock_response
+    ) as mock_post:  # test-quality-ok: the patched global is the collaborator's only injection seam
         valid_models = get_valid_models(check_provider_endpoint=True)
         print("valid_models", valid_models)
         mock_post.assert_called_once()

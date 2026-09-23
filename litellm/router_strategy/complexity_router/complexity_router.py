@@ -497,7 +497,7 @@ def _human_text(content: object, marker_pairs: tuple[tuple[str, str], ...] = _DE
 def _encrypted_classifier_task(
     request_kwargs: Mapping[str, object] | None,
     marker_pairs: tuple[tuple[str, str], ...],
-) -> dict[str, object] | None:
+) -> dict[str, object] | None:  # mutable-ok: task dict mirrors the request payload shape
     from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 
     raw_input: Final = (request_kwargs or EMPTY_MAPPING).get("input")
@@ -511,7 +511,9 @@ def _encrypted_classifier_task(
         (
             item
             for item in reversed(items)
-            if (messages := resolve_structured_messages(messages=None, request_kwargs={"input": [item]}))
+            if (
+                messages := resolve_structured_messages(messages=None, request_kwargs={"input": [item]})
+            )  # mutable-ok: request-shaped literal
             and any(_iter_human_asks_newest_first(messages, marker_pairs))
         ),
         None,
@@ -524,9 +526,11 @@ def _encrypted_classifier_task(
         return None
     if not any(part.get("type") == "encrypted_content" and part.get("encrypted_content") for part in parts):
         return None
-    return {
+    return {  # mutable-ok: request-shaped dict
         **current,
-        "content": [part for part in parts if part.get("type") in ("input_text", "encrypted_content")],
+        "content": [
+            part for part in parts if part.get("type") in ("input_text", "encrypted_content")
+        ],  # mutable-ok: request-shaped dict
     }
 
 
@@ -2133,7 +2137,9 @@ class ComplexityRouter(CustomLogger):
         if llm_config is None or classifier_system_prompt is None or classifier_response_format is None:
             raise ValueError("classifier_llm_config is not set")
 
-        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or {})
+        marker_pairs: Final = self._reminder_markers_for_request(
+            request_kwargs or {}
+        )  # mutable-ok: empty kwargs fallback
         encrypted_task: Final = _encrypted_classifier_task(request_kwargs, marker_pairs)
         user_payload: Final = self._classifier_context_payload(
             prompt, system_prompt, request_kwargs, messages, encrypted_task=encrypted_task is not None

@@ -8,7 +8,7 @@ import asyncio
 import logging
 import sys
 from collections.abc import Mapping
-from typing import Dict, List
+from typing import Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

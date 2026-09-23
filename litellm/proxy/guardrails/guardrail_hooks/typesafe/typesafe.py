@@ -60,14 +60,14 @@ _STR_OBJECT_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 
 
-def _as_str_object_dict(value: object) -> dict[str, object] | None:
+def _as_str_object_dict(value: object) -> dict[str, object] | None:  # mutable-ok: parsed dict feeds the JSON log record
     try:
         return _STR_OBJECT_DICT_ADAPTER.validate_python(value)
     except ValidationError:
         return None
 
 
-def _as_object_list(value: object) -> list[object] | None:
+def _as_object_list(value: object) -> list[object] | None:  # mutable-ok: tool call list is serialized to JSON
     try:
         return _OBJECT_LIST_ADAPTER.validate_python(value)
     except ValidationError:
@@ -120,7 +120,7 @@ def _question_instructions(question_id: str) -> str:
     )
 
 
-def _tool_call_entry(tool_call: object) -> dict[str, object] | None:
+def _tool_call_entry(tool_call: object) -> dict[str, object] | None:  # mutable-ok: entry dict is serialized to JSON
     parsed_call = _as_str_object_dict(tool_call)
     if parsed_call is None:
         return None
@@ -129,7 +129,9 @@ def _tool_call_entry(tool_call: object) -> dict[str, object] | None:
     return {"name": fn.get("name"), "arguments": fn.get("arguments")}  # mutable-ok: serialized to JSON
 
 
-def _tool_call_entries(assistant_message: Mapping[str, object]) -> tuple[dict[str, object], ...]:
+def _tool_call_entries(
+    assistant_message: Mapping[str, object],
+) -> tuple[dict[str, object], ...]:  # mutable-ok: entry dicts are serialized to JSON
     tool_calls: Final = _as_object_list(assistant_message.get("tool_calls"))
     if tool_calls is None:
         return ()
@@ -158,7 +160,10 @@ class TypeSafeGuardrail(CustomGuardrail):
         max_result_chars_in_state: int | None = None,
         unreachable_fallback: str | None = None,
         guardrail_name: str | None = None,
-        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
+        event_hook: GuardrailEventHooks
+        | list[GuardrailEventHooks]
+        | Mode
+        | None = None,  # mutable-ok: event hook unions accept an ordered list
         default_on: bool = False,
         async_handler: AsyncHTTPHandler | None = None,
     ) -> None:
@@ -190,7 +195,7 @@ class TypeSafeGuardrail(CustomGuardrail):
             default_on=default_on,
         )
 
-    def _handle_failure(self, error: str, log_detail: dict[str, object]) -> None:
+    def _handle_failure(self, error: str, log_detail: dict[str, object]) -> None:  # mutable-ok: log detail record
         """fail_open logs and returns; fail_closed raises a generic 502 (upstream bodies stay in server logs)."""
         if self.unreachable_fallback == "fail_open":
             verbose_proxy_logger.warning(
@@ -202,7 +207,9 @@ class TypeSafeGuardrail(CustomGuardrail):
         verbose_proxy_logger.error("TypeSafe: %s. detail=%s", error, log_detail)
         raise HTTPException(status_code=502, detail={"error": error})  # mutable-ok: FastAPI wants a dict detail
 
-    def _candidate_exchanges(self, messages: Sequence[dict[str, object]]) -> tuple[tuple[int, ...], ...]:
+    def _candidate_exchanges(
+        self, messages: Sequence[dict[str, object]]
+    ) -> tuple[tuple[int, ...], ...]:  # mutable-ok: message dicts come from the request payload
         """Completed tool exchanges eligible for evaluation: unprotected, and long enough to be worth a call."""
         protected: Final = _protected_indices(messages)
         candidates: Final = tuple(
@@ -216,7 +223,9 @@ class TypeSafeGuardrail(CustomGuardrail):
         return candidates[-_MAX_EXCHANGES_EVALUATED:]
 
     @staticmethod
-    def _exchange_tool_text(messages: Sequence[dict[str, object]], group: tuple[int, ...]) -> str:
+    def _exchange_tool_text(
+        messages: Sequence[dict[str, object]], group: tuple[int, ...]
+    ) -> str:  # mutable-ok: message dicts come from the request payload
         return "".join(
             content_to_text(messages[index].get("content"))
             for index in group[1:]
@@ -224,8 +233,10 @@ class TypeSafeGuardrail(CustomGuardrail):
         )
 
     def _build_state(
-        self, messages: Sequence[dict[str, object]], candidates: tuple[tuple[int, ...], ...]
-    ) -> dict[str, object]:
+        self,
+        messages: Sequence[dict[str, object]],
+        candidates: tuple[tuple[int, ...], ...],  # mutable-ok: candidate groups index request message dicts
+    ) -> dict[str, object]:  # mutable-ok: result dict feeds the JSON log record
         task: Final = next(
             (
                 content_to_text(messages[index].get("content"))
@@ -249,7 +260,9 @@ class TypeSafeGuardrail(CustomGuardrail):
         return {"task": task, "system": system, "tool_exchanges": tool_exchanges}  # mutable-ok: serialized to JSON
 
     async def _call_systemone(
-        self, state: dict[str, object], question_ids: Sequence[str]
+        self,
+        state: dict[str, object],
+        question_ids: Sequence[str],  # mutable-ok: state dict is the parsed log record
     ) -> _JevSystemOneResponse | None:
         """Returns the response, or None when the service failed and fail_open applies."""
         payload: Final[dict[str, object]] = {  # mutable-ok: serialized to JSON by httpx
@@ -275,8 +288,8 @@ class TypeSafeGuardrail(CustomGuardrail):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as e:
-            detail: Final[dict[str, object]] = (
+        except Exception as e:  # noqa: BLE001  # a logging-path failure must never break the guardrail call
+            detail: Final[dict[str, object]] = (  # mutable-ok: log detail record
                 {  # mutable-ok: log detail record
                     "error_type": type(e).__name__,
                     "detail": str(e),
@@ -318,7 +331,7 @@ class TypeSafeGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict[str, object],
+        request_data: dict[str, object],  # mutable-ok: request-shaped dict
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:

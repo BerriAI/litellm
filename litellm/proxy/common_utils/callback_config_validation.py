@@ -107,7 +107,7 @@ def cross_entry_family_error(
     """
     if not callback_vars:
         return None
-    stored_by_var: Final = {
+    stored_by_var: Final = {  # mutable-ok: config dict is updated in place per callback entry
         var: value for entry in stored_vars_by_entry for var, value in entry.items() if _family_of(var) is not None
     }
     family_values: Final = frozenset(

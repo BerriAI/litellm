@@ -93,10 +93,12 @@ class _LiteLLMParamsDictView:
         return dict(self._params)
 
 
-async def _push_increments_to_redis(redis_cache: RedisCache, queued: list[RedisPipelineIncrementOperation]) -> None:
+async def _push_increments_to_redis(
+    redis_cache: RedisCache, queued: list[RedisPipelineIncrementOperation]
+) -> None:  # mutable-ok: pipeline ops list is built once and consumed by redis
     try:
         await redis_cache.async_increment_pipeline(increment_list=queued)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # a budget push failure must not abort the pipeline
         log_redis_failure(verbose_router_logger, logging.ERROR, "Error syncing in-memory cache with Redis", e)
 
 

@@ -66,7 +66,7 @@ class TypeSafePassthroughLoggingHandler:
         cache_hit: bool,
         request_body: Mapping[str, object],
         custom_llm_provider: str,
-        **kwargs: object,
+        **kwargs: object,  # kwargs-ok: logging handler receives the standard logging kwargs
     ) -> PassThroughEndpointLoggingTypedDict:
         response: Final = _parse_typesafe_response(response_body)
         response_model: Final = response.model

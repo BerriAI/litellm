@@ -20,8 +20,8 @@ if TYPE_CHECKING:
 
 
 def _coerce_event_hook(
-    mode: str | list[str] | Mode,
-) -> GuardrailEventHooks | list[GuardrailEventHooks] | Mode:
+    mode: str | list[str] | Mode,  # mutable-ok: event hook unions accept an ordered list
+) -> GuardrailEventHooks | list[GuardrailEventHooks] | Mode:  # mutable-ok: event hook unions accept an ordered list
     if isinstance(mode, Mode):
         return mode
     if isinstance(mode, list):

@@ -140,8 +140,7 @@ export interface StoredComplexityRouterConfig {
  */
 const asNumber = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
 const asBoolean = (v: unknown): boolean | undefined => (typeof v === "boolean" ? v : undefined);
-const asNonEmptyString = (v: unknown): string | undefined =>
-  typeof v === "string" && v.trim() !== "" ? v : undefined;
+const asNonEmptyString = (v: unknown): string | undefined => (typeof v === "string" && v.trim() !== "" ? v : undefined);
 
 export const hydrateComplexityRouterConfig = (
   parsedConfig: StoredComplexityRouterConfig,
@@ -173,9 +172,7 @@ export const hydrateComplexityRouterConfig = (
     classifier_context_window_size: asNumber(parsedConfig.classifier_context_window_size),
     classifier_context_budget_chars: asNumber(parsedConfig.classifier_context_budget_chars),
     classifier_context_per_turn_chars: asNumber(parsedConfig.classifier_context_per_turn_chars),
-    classifier_context_include_assistant_turns: asBoolean(
-      parsedConfig.classifier_context_include_assistant_turns,
-    ),
+    classifier_context_include_assistant_turns: asBoolean(parsedConfig.classifier_context_include_assistant_turns),
     classifier_fallback:
       parsedConfig.classifier_fallback === "default_model" || parsedConfig.classifier_fallback === "heuristic"
         ? parsedConfig.classifier_fallback
