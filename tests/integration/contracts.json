@@ -2043,6 +2043,9 @@
         ],
         "tests/integration/providers/test_bedrock_mantle_wire.py::test_chat_completions_bridge_signs_mantle_responses_request_with_deployment_aws_keys": [
             "providers.bedrock_mantle.chat_bridge_keeps_deployment_aws_credentials_for_sigv4"
+        ],
+        "tests/integration/providers/test_vertex_gemini_fragmented_stream_wire.py::test_vertex_gemini_stream_split_across_many_fragments_completes_without_stalling": [
+            "providers.vertex_gemini.fragmented_stream_json_is_parsed_once_and_stays_live"
         ]
     },
     "browser": {
