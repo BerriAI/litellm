@@ -8,6 +8,7 @@ from integration._support.client import Gateway, JsonValue, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
+from pydantic import TypeAdapter
 
 
 def _chat_reply(marker: str) -> dict[str, JsonValue]:
@@ -88,7 +89,8 @@ def test_configured_passthrough_spend_row_matches_native_route_tags_and_spend_lo
         created: Final = gateway.post(
             "/config/pass_through_endpoint", {"path": path, "target": wire.url + "/echo", "auth": True}
         )
-        endpoint_id: Final = object_value(created["endpoints"][0])["id"]  # pyright: ignore[reportIndexIssue]
+        endpoints: Final = TypeAdapter(list[JsonValue]).validate_python(created["endpoints"])
+        endpoint_id: Final = object_value(endpoints[0])["id"]
         scenario.cleanups.callback(
             lambda: gateway.request("DELETE", "/config/pass_through_endpoint", params={"endpoint_id": str(endpoint_id)})
         )
