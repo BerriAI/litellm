@@ -30,6 +30,9 @@
     ]
   },
   "tests": {
+    "tests/integration/authorization/test_key_guardrail_opt_out.py::test_non_admin_cannot_opt_key_out_of_default_on_guardrail": [
+      "mgmt.key.disable_global_guardrails.non_admin_denied_and_default_on_guardrail_still_runs"
+    ],
     "tests/integration/management/test_key_updates.py::test_update_preserves_independent_fields_and_serving": [
       "mgmt.key.update.preserves_independent_fields"
     ],
