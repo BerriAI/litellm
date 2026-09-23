@@ -726,6 +726,27 @@ def test_comprehension_ok_with_reason_suppresses_lit013(tmp_path):
     assert "LIT013" not in codes
 
 
+def test_comprehension_ok_on_any_spanned_line_suppresses_lit013(tmp_path):
+    src = (
+        "y = [\n"
+        "    x for a in xs\n"
+        "    for x in a\n"
+        "]  # comprehension-ok: cartesian product is the clearest form\n"
+    )
+    assert "LIT013" not in _codes(tmp_path, src)
+
+
+def test_comprehension_ok_after_the_closing_line_does_not_suppress(tmp_path):
+    src = (
+        "y = [\n"
+        "    x for a in xs\n"
+        "    for x in a\n"
+        "]\n"
+        "# comprehension-ok: cartesian product is the clearest form\n"
+    )
+    assert "LIT013" in _codes(tmp_path, src)
+
+
 def test_comprehension_ok_without_reason_is_lit005_and_does_not_suppress(tmp_path):
     codes = _codes(tmp_path, "y = [x for a in xs for x in a]  # comprehension-ok\n")
     assert "LIT005" in codes

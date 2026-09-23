@@ -106,7 +106,7 @@ LIT013  Comprehension with more than one `for` clause or more than one `if` clau
         split the comprehension into a helper generator, a named intermediate, or
         a plain loop instead. A comprehension nested inside another's element or
         iterable is its own node and is judged separately. Suppress with
-        `# comprehension-ok: <reason>`.
+        `# comprehension-ok: <reason>` on any line the comprehension spans.
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
@@ -1060,7 +1060,7 @@ def iter_comprehension_violations(path: Path, tree: ast.AST, comments: Comments)
         if_count = sum(len(g.ifs) for g in node.generators)
         if for_count <= 1 and if_count <= 1:
             continue
-        if node.lineno in comments.comprehension_ok_lines:
+        if not comments.comprehension_ok_lines.isdisjoint(range(node.lineno, (node.end_lineno or node.lineno) + 1)):
             continue
         yield Violation(
             path,
