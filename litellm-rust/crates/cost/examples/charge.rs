@@ -241,4 +241,21 @@ fn main() {
         anthropic_usage.token_usage().cache_read_tokens,
         anthropic_usage.token_usage().cache_write_tokens
     );
+    let interactions_usage = get_usage_object(&json!({
+        "usage": {
+            "total_input_tokens": 100,
+            "total_cached_tokens": 20,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 100}],
+            "total_output_tokens": 30,
+            "total_thought_tokens": 5
+        }
+    }))
+    .unwrap()
+    .unwrap();
+    println!(
+        "interactions_prompt={} cached={} completion={}",
+        interactions_usage.prompt_tokens,
+        interactions_usage.token_usage().cache_read_tokens,
+        interactions_usage.completion_tokens
+    );
 }

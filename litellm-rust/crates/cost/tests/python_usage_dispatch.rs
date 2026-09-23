@@ -1,4 +1,3 @@
-use litellm_cost::responses_usage::UsageError;
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -78,7 +77,10 @@ fn get_usage_object_preserves_chat_reasoning_and_provider_fields() {
 }
 
 #[rstest]
-fn get_usage_object_defers_unported_interactions_shape() {
+fn get_usage_object_maps_interactions_shape() {
     let response = json!({"usage": {"total_input_tokens": 100, "total_output_tokens": 20}});
-    assert_eq!(get_usage_object(&response), Err(UsageError::InvalidShape));
+    let usage = get_usage_object(&response).unwrap().unwrap();
+    assert_eq!(usage.prompt_tokens, 100);
+    assert_eq!(usage.completion_tokens, 20);
+    assert_eq!(usage.total_tokens, 120);
 }

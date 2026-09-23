@@ -41,6 +41,7 @@ pub struct CompletionTokenDetails {
     pub text_tokens: Option<u64>,
     pub image_tokens: Option<u64>,
     pub audio_tokens: Option<u64>,
+    pub video_tokens: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

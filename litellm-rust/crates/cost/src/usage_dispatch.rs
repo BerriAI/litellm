@@ -3,6 +3,9 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::anthropic_usage::{is_anthropic_usage_object, transform_anthropic_usage_to_chat_usage};
+use crate::interactions_usage::{
+    is_interactions_usage_object, transform_interactions_usage_object,
+};
 use crate::responses_usage::{
     ChatUsage, CompletionTokenDetails, PromptTokenDetails, UsageError, is_response_api_usage,
     transform_response_api_usage_to_chat_usage,
@@ -116,14 +119,10 @@ pub fn get_usage_object(response: &Value) -> Result<Option<ChatUsage>, UsageErro
     if is_response_api_usage(usage) {
         return Ok(Some(transform_response_api_usage_to_chat_usage(usage)?));
     }
-    if let Some(object) = usage.as_object() {
-        if !object.contains_key("prompt_tokens")
-            && !object.contains_key("input_tokens")
-            && (object.contains_key("total_input_tokens")
-                || object.contains_key("total_output_tokens"))
-        {
-            return Err(UsageError::InvalidShape);
-        }
+    if is_interactions_usage_object(usage) {
+        return Ok(Some(transform_interactions_usage_object(usage)?));
+    }
+    if usage.is_object() {
         return Ok(Some(chat_usage(usage)?));
     }
     Err(UsageError::InvalidShape)
