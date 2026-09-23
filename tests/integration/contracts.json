@@ -2073,6 +2073,9 @@
         ],
         "tests/integration/authorization/test_object_permission_lookup.py::test_chat_request_without_vector_stores_does_not_read_object_permission_table": [
             "authorization.vector_store.plain_request_skips_object_permission_lookup"
+        ],
+        "tests/integration/spend/test_session_total_spend.py::test_logs_ui_session_total_spend_sums_every_round_of_a_multi_round_session": [
+            "spend.logs_ui.multi_round_session_total_spend_sums_every_round"
         ]
     },
     "browser": {
