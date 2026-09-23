@@ -3,7 +3,7 @@
 The server is a stateless Streamable HTTP MCP server exposing the management
 tools built from the proxy's own OpenAPI spec in catalog.py. Admission runs
 LiteLLM ``user_api_key_auth`` once per HTTP request against an isolated
-request view, requires PROXY_ADMIN, and stashes the trusted request slices in
+request view and stashes the trusted request slices in
 a ContextVar that the dispatcher reads per tool call. Nothing is keyed by
 mcp-session-id: each request carries its own caller context.
 """
@@ -35,7 +35,10 @@ from litellm.proxy._experimental.mcp_server.management.dispatcher import (
     error_result,
     set_dispatch,
 )
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import (
+    _get_request_ip_address,  # pyright: ignore[reportPrivateUsage]  # preserve the same IP policy used by REST auth
+)
 
 MANAGEMENT_MCP_PATH: Final = "/litellm-management/mcp"
 
@@ -168,13 +171,10 @@ async def _authenticate_admission(request: Request) -> UserAPIKeyAuth:
         return {"type": "http.request", "body": b"", "more_body": False}  # mutable-ok: ASGI messages are dicts
 
     admission_request: Final = Request(scope, _empty_receive)
-    caller: Final = await user_api_key_auth(request=admission_request, api_key=_caller_api_key(request))
-    if caller.user_role != LitellmUserRoles.PROXY_ADMIN.value:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Management MCP endpoint requires a proxy admin key. Your role={caller.user_role}",
-        )
-    return caller
+    credential: Final = _caller_api_key(request)
+    if not credential:
+        raise HTTPException(status_code=401, detail="Management MCP requires a LiteLLM credential")
+    return await user_api_key_auth(request=admission_request, api_key=credential)
 
 
 async def handle_management_mcp_request(request: Request) -> Response:
@@ -182,21 +182,28 @@ async def handle_management_mcp_request(request: Request) -> Response:
     if active is None:
         return Response(status_code=404)
 
+    from litellm.proxy import proxy_server
+
+    origin: Final = request.headers.get("origin")
+    if origin is not None and (origin in ("", "null", "*") or origin not in proxy_server.origins):
+        return Response(status_code=403)
+
     await _authenticate_admission(request)
 
     credential_header: Final = "x-litellm-api-key" if request.headers.get("x-litellm-api-key") else "authorization"
+    client_ip: Final = _get_request_ip_address(
+        request, use_x_forwarded_for=proxy_server.general_settings.get("use_x_forwarded_for") is True
+    )
     caller_ctx: Final = ManagementRequestContext(
         credential_header=credential_header,
         credential_value=_caller_api_key(request),
-        client=request.scope.get("client"),
+        client=(client_ip, request.client.port if request.client else 0) if client_ip else None,
         root_path=str(request.scope.get("root_path") or ""),
         litellm_changed_by=request.headers.get("litellm-changed-by"),
         request_id=request.headers.get("x-request-id"),
     )
     token: Final = _request_context.set(caller_ctx)
     try:
-        from litellm.proxy import proxy_server
-
         stream_bridge: Final[_McpStreamBridge] = (
             cast(  # cast-ok: pins the helper's untyped signature to the Protocol the caller uses
                 _McpStreamBridge,

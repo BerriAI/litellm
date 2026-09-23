@@ -147,7 +147,7 @@
     "tool": "delete_team_callback_team__team_id__callback__callback_name__delete"
   },
   "DELETE /toolset/{toolset_name}/mcp": {
-    "tool": "toolset_mcp_route_toolset__toolset_name__mcp_delete"
+    "excluded": "MCP transport endpoint"
   },
   "DELETE /typesafe/{endpoint}": {
     "excluded": "tag:llm_passthrough"
@@ -189,13 +189,13 @@
     "tool": "clear_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_delete"
   },
   "DELETE /v1/mcp/sessions": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "delete_mcp_gateway_sessions_v1_mcp_sessions_delete"
   },
   "DELETE /v1/mcp/toolset/{toolset_id}": {
     "tool": "remove_mcp_toolset_v1_mcp_toolset__toolset_id__delete"
   },
   "DELETE /v1/memory/{key}": {
-    "tool": "delete_memory_v1_memory__key__delete"
+    "excluded": "excluded path prefix"
   },
   "DELETE /v1/responses/{response_id}": {
     "excluded": "data plane, public or ui route group"
@@ -243,7 +243,7 @@
     "excluded": "tag:llm_passthrough"
   },
   "DELETE /{mcp_server_name}/mcp": {
-    "tool": "dynamic_mcp_route__mcp_server_name__mcp_delete"
+    "excluded": "MCP transport endpoint"
   },
   "DELETE /{provider}/v1/files/{file_id}": {
     "excluded": "tag:files"
@@ -267,7 +267,7 @@
     "excluded": "tag:mcp_byok_oauth"
   },
   "GET /.well-known/oauth-authorization-server/mcp": {
-    "excluded": "tag:mcp_byok_oauth"
+    "excluded": "MCP transport endpoint"
   },
   "GET /.well-known/oauth-authorization-server/mcp/{mcp_server_name}": {
     "excluded": "tag:mcp_byok_oauth"
@@ -276,19 +276,19 @@
     "excluded": "tag:mcp_byok_oauth"
   },
   "GET /.well-known/oauth-authorization-server/{mcp_server_name}/mcp": {
-    "excluded": "tag:mcp_byok_oauth"
+    "excluded": "MCP transport endpoint"
   },
   "GET /.well-known/oauth-protected-resource": {
     "excluded": "tag:mcp_byok_oauth"
   },
   "GET /.well-known/oauth-protected-resource/mcp": {
-    "excluded": "tag:mcp_byok_oauth"
+    "excluded": "MCP transport endpoint"
   },
   "GET /.well-known/oauth-protected-resource/mcp/{mcp_server_name}": {
     "excluded": "tag:mcp_byok_oauth"
   },
   "GET /.well-known/oauth-protected-resource/{mcp_server_name}/mcp": {
-    "excluded": "tag:mcp_byok_oauth"
+    "excluded": "MCP transport endpoint"
   },
   "GET /.well-known/openid-configuration": {
     "excluded": "tag:mcp_discoverable"
@@ -522,7 +522,7 @@
     "excluded": "tag:fine-tuning"
   },
   "GET /gateway/daily/activity": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "get_gateway_daily_activity_gateway_daily_activity_get"
   },
   "GET /gemini/{endpoint}": {
     "excluded": "tag:llm_passthrough"
@@ -534,7 +534,7 @@
     "tool": "get_internal_user_settings_get_internal_user_settings_get"
   },
   "GET /get/latest_release_info": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "latest_release_info_get_latest_release_info_get"
   },
   "GET /get/mcp_semantic_filter_settings": {
     "tool": "get_mcp_semantic_filter_settings_get_mcp_semantic_filter_settings_get"
@@ -552,7 +552,7 @@
     "tool": "get_ui_theme_settings_get_ui_theme_settings_get"
   },
   "GET /get/user_banner": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "get_user_banner_get_user_banner_get"
   },
   "GET /get/websearch_interception_settings": {
     "tool": "get_websearch_interception_settings_get_websearch_interception_settings_get"
@@ -603,7 +603,7 @@
     "tool": "get_guardrail_info_guardrails__guardrail_id__info_get"
   },
   "GET /health": {
-    "excluded": "data plane, public or ui route group"
+    "excluded": "tag:health"
   },
   "GET /health/backlog": {
     "excluded": "tag:health"
@@ -633,7 +633,7 @@
     "excluded": "tag:health"
   },
   "GET /health/services": {
-    "excluded": "data plane, public or ui route group"
+    "excluded": "tag:health"
   },
   "GET /health/shared-status": {
     "excluded": "tag:health"
@@ -651,10 +651,10 @@
     "tool": "key_aliases_key_aliases_get"
   },
   "GET /key/info": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "info_key_fn_key_info_get"
   },
   "GET /key/list": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "list_keys_key_list_get"
   },
   "GET /key/spend/report": {
     "tool": "get_key_spend_report_key_spend_report_get"
@@ -693,13 +693,13 @@
     "tool": "model_deprecations_model_deprecations_get"
   },
   "GET /model/info": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "model_info_v1_model_info_get"
   },
   "GET /model_group/info": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "model_group_info_model_group_info_get"
   },
   "GET /models": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "model_list_models_get"
   },
   "GET /models/{model_id}": {
     "tool": "model_info_models__model_id__get"
@@ -732,7 +732,7 @@
     "tool": "info_organization_organization_info_get"
   },
   "GET /organization/list": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "list_organization_organization_list_get"
   },
   "GET /organization/spend/report": {
     "tool": "get_organization_spend_report_organization_spend_report_get"
@@ -801,7 +801,7 @@
     "excluded": "tag:public"
   },
   "GET /public/complexity_router/fuse_presets": {
-    "tool": "get_public_fuse_presets_public_complexity_router_fuse_presets_get"
+    "excluded": "excluded path prefix"
   },
   "GET /public/complexity_router/scorer_defaults": {
     "excluded": "tag:public"
@@ -948,7 +948,7 @@
     "tool": "get_weekly_active_users_tag_wau_get"
   },
   "GET /team/available": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "list_available_teams_team_available_get"
   },
   "GET /team/daily/activity": {
     "tool": "get_team_daily_activity_team_daily_activity_get"
@@ -957,13 +957,13 @@
     "tool": "get_team_daily_activity_aggregated_team_daily_activity_aggregated_get"
   },
   "GET /team/info": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "team_info_team_info_get"
   },
   "GET /team/list": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "list_team_team_list_get"
   },
   "GET /team/metadata_schema": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "get_team_metadata_schema_team_metadata_schema_get"
   },
   "GET /team/permissions_list": {
     "tool": "team_member_permissions_team_permissions_list_get"
@@ -993,7 +993,7 @@
     "excluded": "tag:llm_passthrough"
   },
   "GET /toolset/{toolset_name}/mcp": {
-    "tool": "toolset_mcp_route_toolset__toolset_name__mcp_get"
+    "excluded": "MCP transport endpoint"
   },
   "GET /typesafe/{endpoint}": {
     "excluded": "tag:llm_passthrough"
@@ -1008,7 +1008,7 @@
     "tool": "get_user_daily_activity_aggregated_user_daily_activity_aggregated_get"
   },
   "GET /user/info": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "user_info_user_info_get"
   },
   "GET /user/list": {
     "tool": "get_users_user_list_get"
@@ -1104,7 +1104,7 @@
     "tool": "get_mcp_registry_v1_mcp_registry_json_get"
   },
   "GET /v1/mcp/server": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "fetch_all_mcp_servers_v1_mcp_server_get"
   },
   "GET /v1/mcp/server/health": {
     "tool": "health_check_servers_v1_mcp_server_health_get"
@@ -1125,7 +1125,7 @@
     "tool": "get_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_get"
   },
   "GET /v1/mcp/sessions": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "get_mcp_gateway_sessions_v1_mcp_sessions_get"
   },
   "GET /v1/mcp/tools": {
     "excluded": "data plane, public or ui route group"
@@ -1143,19 +1143,19 @@
     "tool": "list_mcp_user_env_var_status_v1_mcp_user_env_vars_status_get"
   },
   "GET /v1/memory": {
-    "tool": "list_memory_v1_memory_get"
+    "excluded": "excluded path prefix"
   },
   "GET /v1/memory/{key}": {
-    "tool": "get_memory_v1_memory__key__get"
+    "excluded": "excluded path prefix"
   },
   "GET /v1/model/deprecations": {
     "tool": "model_deprecations_v1_model_deprecations_get"
   },
   "GET /v1/model/info": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "model_info_v1_v1_model_info_get"
   },
   "GET /v1/models": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "model_list_v1_models_get"
   },
   "GET /v1/models/{model_id}": {
     "tool": "model_info_v1_models__model_id__get"
@@ -1272,13 +1272,13 @@
     "tool": "list_guardrails_v2_v2_guardrails_list_get"
   },
   "GET /v2/model/info": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "model_info_v2_v2_model_info_get"
   },
   "GET /v2/team/list": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "list_team_v2_v2_team_list_get"
   },
   "GET /v2/user/info": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "user_info_v2_v2_user_info_get"
   },
   "GET /vantage/settings": {
     "tool": "get_vantage_settings_vantage_settings_get"
@@ -1332,7 +1332,7 @@
     "excluded": "tag:mcp_discoverable"
   },
   "GET /{mcp_server_name}/mcp": {
-    "tool": "dynamic_mcp_route__mcp_server_name__mcp_get"
+    "excluded": "MCP transport endpoint"
   },
   "GET /{provider}/v1/batches": {
     "excluded": "tag:batch"
@@ -1452,7 +1452,7 @@
     "tool": "patch_team_team__team_id__patch"
   },
   "PATCH /toolset/{toolset_name}/mcp": {
-    "excluded": "undeclared request body"
+    "excluded": "MCP transport endpoint"
   },
   "PATCH /typesafe/{endpoint}": {
     "excluded": "tag:llm_passthrough"
@@ -1506,7 +1506,7 @@
     "excluded": "tag:llm_passthrough"
   },
   "PATCH /{mcp_server_name}/mcp": {
-    "excluded": "undeclared request body"
+    "excluded": "MCP transport endpoint"
   },
   "POST /a2a/{agent_id}": {
     "excluded": "data plane, public or ui route group"
@@ -1812,7 +1812,7 @@
     "tool": "generate_key_fn_key_generate_post"
   },
   "POST /key/health": {
-    "excluded": "data plane, public or ui route group"
+    "excluded": "undeclared request body"
   },
   "POST /key/regenerate": {
     "tool": "regenerate_key_fn_key_regenerate_post"
@@ -2066,6 +2066,9 @@
   "POST /search_tools/test_connection": {
     "tool": "test_search_tool_connection_search_tools_test_connection_post"
   },
+  "POST /session/logout": {
+    "excluded": "undeclared request body"
+  },
   "POST /spend/calculate": {
     "tool": "calculate_spend_spend_calculate_post"
   },
@@ -2151,7 +2154,7 @@
     "excluded": "data plane, public or ui route group"
   },
   "POST /toolset/{toolset_name}/mcp": {
-    "excluded": "undeclared request body"
+    "excluded": "MCP transport endpoint"
   },
   "POST /transcribe": {
     "excluded": "data plane, public or ui route group"
@@ -2280,7 +2283,7 @@
     "tool": "make_mcp_servers_public_v1_mcp_make_public_post"
   },
   "POST /v1/mcp/server": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "add_mcp_server_v1_mcp_server_post"
   },
   "POST /v1/mcp/server/import": {
     "tool": "import_mcp_servers_v1_mcp_server_import_post"
@@ -2304,7 +2307,7 @@
     "tool": "add_mcp_toolset_v1_mcp_toolset_post"
   },
   "POST /v1/memory": {
-    "tool": "create_memory_v1_memory_post"
+    "excluded": "excluded path prefix"
   },
   "POST /v1/messages": {
     "excluded": "data plane, public or ui route group"
@@ -2499,7 +2502,7 @@
     "excluded": "tag:llm_passthrough"
   },
   "POST /{mcp_server_name}/mcp": {
-    "excluded": "undeclared request body"
+    "excluded": "MCP transport endpoint"
   },
   "POST /{mcp_server_name}/register": {
     "excluded": "tag:mcp_discoverable"
@@ -2613,7 +2616,7 @@
     "tool": "update_search_tool_search_tools__search_tool_id__put"
   },
   "PUT /toolset/{toolset_name}/mcp": {
-    "excluded": "undeclared request body"
+    "excluded": "MCP transport endpoint"
   },
   "PUT /typesafe/{endpoint}": {
     "excluded": "tag:llm_passthrough"
@@ -2625,7 +2628,7 @@
     "excluded": "excluded path prefix"
   },
   "PUT /v1/mcp/server": {
-    "excluded": "data plane, public or ui route group"
+    "tool": "edit_mcp_server_v1_mcp_server_put"
   },
   "PUT /v1/mcp/server/{server_id}/approve": {
     "excluded": "undeclared request body"
@@ -2637,7 +2640,7 @@
     "tool": "edit_mcp_toolset_v1_mcp_toolset_put"
   },
   "PUT /v1/memory/{key}": {
-    "tool": "upsert_memory_v1_memory__key__put"
+    "excluded": "excluded path prefix"
   },
   "PUT /v1/unified_access_group/{access_group_id}": {
     "tool": "update_access_group_v1_unified_access_group__access_group_id__put"
@@ -2658,6 +2661,6 @@
     "excluded": "tag:llm_passthrough"
   },
   "PUT /{mcp_server_name}/mcp": {
-    "excluded": "undeclared request body"
+    "excluded": "MCP transport endpoint"
   }
 }

@@ -19,6 +19,49 @@ from litellm.proxy._types import (
 from litellm.proxy.management_helpers.utils import add_new_member
 
 
+def test_management_redaction_preserves_context_and_does_not_mutate_input():
+    from pydantic import BaseModel
+
+    from litellm.proxy.management_helpers.utils import redact_management_kwargs
+    from litellm.proxy.utils import hash_token
+
+    class Payload(BaseModel):
+        key: str
+        password: str
+        key_alias: str
+
+    payload = Payload(key="sk-test-private", password="private-password", key_alias="visible-alias")
+    original = {
+        "data": payload,
+        "nested": [{"api_key": "provider-secret", "team_id": "team-1"}],
+        "keys": ["sk-test-other", "non-litellm-secret"],
+        "secret": None,
+        "count": 3,
+    }
+    result = redact_management_kwargs(original)
+    assert result == {
+        "data": {"key": hash_token(payload.key), "password": "***", "key_alias": "visible-alias"},
+        "nested": [{"api_key": "***", "team_id": "team-1"}],
+        "keys": [hash_token("sk-test-other"), "***"],
+        "secret": "***",
+        "count": 3,
+    }
+    assert original["data"] is payload
+    assert payload.password == "private-password"
+    assert original["nested"] == [{"api_key": "provider-secret", "team_id": "team-1"}]
+
+
+def test_management_redaction_bounds_recursive_payloads():
+    from litellm.proxy.management_helpers.utils import redact_management_kwargs
+
+    recursive = {"password": "private-password"}
+    recursive["nested"] = recursive
+    result = redact_management_kwargs({"data": recursive})
+    assert "private-password" not in json.dumps(result)
+    assert "***" in json.dumps(result)
+    assert recursive["password"] == "private-password"
+
+
 @pytest.mark.asyncio
 async def test_management_otel_span_redacts_mcp_global_env_var_secrets(monkeypatch):
     """A decrypted MCP global env var secret must never reach telemetry.

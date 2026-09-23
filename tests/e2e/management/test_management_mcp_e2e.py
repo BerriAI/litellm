@@ -4,7 +4,7 @@ streamable-http client in management_mcp_client.py.
 
 The catalog is generated from the proxy's own OpenAPI spec, so tools carry the
 real operation names and the {path, query, body} argument shape. Covers
-initialize/list, admin-only admission, allowed_routes gating, and one live
+initialize/list, existing-role admission, allowed_routes gating, and one live
 round trip per family (key, team, user, model, access group, budget) with REST
 read-back where the spec exposes no matching read tool.
 """
@@ -27,13 +27,14 @@ from management.management_mcp_client import (
 )
 from management_client import ManagementClient
 from models import (
-    KeyGenerateBody,
+    KeyDeleteBody,
     KeyInfoParams,
     KeyInfoResponse,
     KeyUpdateBody,
     LiteLLMParamsBody,
     TeamDeleteBody,
     UserNewBody,
+    UserRole,
 )
 from pydantic import BaseModel
 
@@ -77,9 +78,9 @@ class _BudgetDeleteBody(BaseModel):
     id: str
 
 
-def _create_admin_key(client: ManagementClient, resources: ResourceManager) -> tuple[str, str]:
-    """A distinct proxy-admin key minted by a dedicated proxy_admin user via
-    /user/new auto_create_key. Returns (user_id, key)."""
+def _create_user_key(
+    client: ManagementClient, resources: ResourceManager, role: UserRole = "proxy_admin"
+) -> tuple[str, str]:
     marker = unique_marker()
     created: Final = unwrap(
         client.proxy.transport.post(
@@ -87,7 +88,7 @@ def _create_admin_key(client: ManagementClient, resources: ResourceManager) -> t
             headers=client.proxy.management_headers(),
             json=UserNewBody(
                 user_email=f"e2e-mgmt-mcp-{marker}@example.com",
-                user_role="proxy_admin",
+                user_role=role,
                 auto_create_key=True,
             ),
             response_type=_UserNewResult,
@@ -380,13 +381,39 @@ class TestManagementMCPTools:
         deleted: Final = run(call_tool(admin, "delete_budget_budget_delete_post", {"body": {"id": budget_id}}))
         assert not deleted.is_error, deleted.text
 
-    def test_non_admin_key_denied_and_trailing_slash_and_no_auth(
+    def test_non_admin_permissions_and_trailing_slash_and_no_auth(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
-        non_admin: Final = client.proxy.generate_key(KeyGenerateBody(models=[], user_id=f"e2e-{unique_marker()}"))
-        resources.defer(lambda: client.proxy.delete_key(non_admin))
+        _, non_admin = _create_user_key(client, resources, role="internal_user")
         status: Final = initialize_status(management_mcp(key=non_admin))
-        assert status in (401, 403), f"non-admin initialize must be denied, got {status}"
+        assert status == 200, f"authenticated non-admin initialize must succeed, got {status}"
+
+        own_key: Final = run(
+            call_tool(management_mcp(key=non_admin), "info_key_fn_key_info_get", {"query": {"key": non_admin}})
+        )
+        assert not own_key.is_error, own_key.text
+        rest_own_key: Final = client.proxy.transport.get(
+            "/key/info",
+            headers=client.proxy.management_headers(caller_key=non_admin),
+            params=KeyInfoParams(key=non_admin),
+            response_type=KeyInfoResponse,
+        )
+        assert isinstance(rest_own_key, Success)
+
+        _, other_key = _create_user_key(client, resources, role="internal_user")
+        denied: Final = run(
+            call_tool(management_mcp(key=non_admin), "delete_key_fn_key_delete_post", {"body": {"keys": [other_key]}})
+        )
+        assert denied.is_error, "one user's key must not delete another user's key"
+        rest_denied: Final = client.proxy.transport.post(
+            "/key/delete",
+            headers=client.proxy.management_headers(caller_key=non_admin),
+            json=KeyDeleteBody(keys=[other_key]),
+            response_type=NoBody,
+        )
+        assert not isinstance(rest_denied, Success)
+        surviving: Final = _key_info(client, other_key)
+        assert isinstance(surviving, Success) and surviving.data.info.status != "deleted"
 
         names: Final = run(list_tool_names(management_mcp(path="/litellm-management/mcp/", key=client.master_key)))
         assert len(names) > 100
@@ -394,15 +421,27 @@ class TestManagementMCPTools:
         assert initialize_status(management_mcp()) == 401
 
     def test_allowed_routes_gating(self, client: ManagementClient, resources: ResourceManager) -> None:
-        _, mcp_only_key = _create_admin_key(client, resources)
+        _, mcp_only_key = _create_user_key(client, resources)
         _set_allowed_routes(client, mcp_only_key, ["mcp_routes"])
         status: Final = initialize_status(management_mcp(key=mcp_only_key))
         assert status == 403, f"mcp_routes-only key must be denied at admission, got {status}"
 
-        _, management_key = _create_admin_key(client, resources)
+        _, management_key = _create_user_key(client, resources)
         _set_allowed_routes(client, management_key, ["management_routes"])
         names: Final = run(list_tool_names(management_mcp(key=management_key)))
         assert len(names) > 100, f"management_routes key must list tools, got {names!r}"
+
+        _set_allowed_routes(client, management_key, ["management_mcp_routes", "/key/info"])
+        allowed: Final = run(
+            call_tool(
+                management_mcp(key=management_key), "info_key_fn_key_info_get", {"query": {"key": management_key}}
+            )
+        )
+        assert not allowed.is_error, allowed.text
+        denied: Final = run(
+            call_tool(management_mcp(key=management_key), "generate_key_fn_key_generate_post", {"body": {}})
+        )
+        assert denied.is_error, "MCP entrance permission must not grant target-route permission"
 
     def test_invalid_arguments_return_iserror_without_input_echo(self, client: ManagementClient) -> None:
         outcome: Final = run(

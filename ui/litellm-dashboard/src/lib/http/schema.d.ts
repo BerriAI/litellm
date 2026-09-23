@@ -27314,7 +27314,7 @@ export interface components {
             enable_claude_code_gateway?: boolean | null;
             /**
              * Enable Management Mcp
-             * @description If True, the proxy serves a built-in MCP endpoint at /litellm-management/mcp exposing virtual-key and access-group management tools. Disabled by default.
+             * @description If True, the proxy serves OpenAPI-generated management tools at /litellm-management/mcp using the caller's existing REST permissions. Disabled by default.
              */
             enable_management_mcp?: boolean | null;
             /**

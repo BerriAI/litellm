@@ -274,6 +274,9 @@ class RouteChecks:
             route=route,
         )
 
+        if route in LiteLLMRoutes.management_mcp_routes.value:
+            return
+
         if RouteChecks.is_auth_enforced_pass_through_route(
             route=route,
             method=RouteChecks._get_request_method(request=request),

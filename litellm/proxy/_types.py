@@ -2981,7 +2981,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     enable_management_mcp: bool | None = Field(
         None,
-        description="If True, the proxy serves a built-in MCP endpoint at /litellm-management/mcp exposing virtual-key and access-group management tools. Disabled by default.",
+        description="If True, the proxy serves OpenAPI-generated management tools at /litellm-management/mcp using the caller's existing REST permissions. Disabled by default.",
     )
     mcp_internal_ip_ranges: list[str] | None = Field(
         None,

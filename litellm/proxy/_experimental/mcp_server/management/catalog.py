@@ -28,10 +28,11 @@ if TYPE_CHECKING:
 
 _METHODS: Final = ("get", "post", "put", "patch", "delete")
 
-_EXCLUDED_ROUTE_GROUPS: Final = frozenset(LiteLLMRoutes.llm_api_routes.value).union(
-    LiteLLMRoutes.mcp_routes.value,
-    LiteLLMRoutes.public_routes.value,
-    LiteLLMRoutes.ui_routes.value,
+_EXCLUDED_ROUTE_GROUPS: Final = (
+    frozenset(LiteLLMRoutes.llm_api_routes.value)
+    .union(LiteLLMRoutes.mcp_routes.value, LiteLLMRoutes.ui_routes.value)
+    .difference(LiteLLMRoutes.management_routes.value, LiteLLMRoutes.info_routes.value)
+    .union(LiteLLMRoutes.public_routes.value)
 )
 
 _EXCLUDED_TAGS: Final = frozenset(
@@ -113,6 +114,9 @@ _EXCLUDED_PATH_PREFIXES: Final = (
     "/agents/",
     "/v1/agents/",
     "/a2a",
+    "/public/",
+    "/memory",
+    "/v1/memory",
 )
 
 _JSON_MEDIA_TYPE: Final = "application/json"
@@ -174,6 +178,8 @@ def _exclusion_reason(path: str, method: str, operation: Mapping[str, object]) -
         return "no operationId"
     if path in _EXCLUDED_ROUTE_GROUPS:
         return "data plane, public or ui route group"
+    if path.rstrip("/").endswith("/mcp"):
+        return "MCP transport endpoint"
     matching_tag: Final = next(
         iter(sorted(tag for tag in _json_seq(operation.get("tags")) if isinstance(tag, str) and tag in _EXCLUDED_TAGS)),
         None,
@@ -332,7 +338,7 @@ def _build_tool(
         input_schema=_OBJECT_ADAPTER.validate_python(schema),
         annotations=mcp_types.ToolAnnotations(
             read_only_hint=method == "get",
-            destructive_hint=method == "delete",
+            destructive_hint=method != "get",
             idempotent_hint=method in ("get", "put", "delete"),
         ),
     )

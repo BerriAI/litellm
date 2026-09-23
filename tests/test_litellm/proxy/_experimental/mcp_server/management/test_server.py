@@ -27,7 +27,11 @@ def _fixture_app() -> FastAPI:
 
     @app.get("/admin/keys", operation_id="list_admin_keys")
     async def list_admin_keys(request: FastAPIRequest):
-        return {"keys": [], "caller": request.headers.get("x-litellm-api-key") or request.headers.get("authorization")}
+        return {
+            "keys": [],
+            "caller": request.headers.get("x-litellm-api-key") or request.headers.get("authorization"),
+            "client_ip": request.client.host,
+        }
 
     return app
 
@@ -90,11 +94,21 @@ async def test_start_noop_when_flag_off_or_missing():
 
 
 @pytest.mark.asyncio
-async def test_admission_requires_admin_role(monkeypatch):
-    await mgmt_server.start_management_mcp_server({"enable_management_mcp": True}, _fixture_app())
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        LitellmUserRoles.PROXY_ADMIN,
+    ],
+)
+async def test_admission_preserves_authenticated_role(monkeypatch, role):
+    caller = UserAPIKeyAuth(user_role=role.value, api_key="sk-user")
 
     async def _auth(request, api_key, **kwargs):
-        return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER.value, api_key=api_key)
+        assert await request.body() == b""
+        return caller
 
     monkeypatch.setattr(auth_module, "user_api_key_auth", _auth)
     scope = {
@@ -110,10 +124,8 @@ async def test_admission_requires_admin_role(monkeypatch):
         "http_version": "1.1",
         "app": None,
     }
-    with pytest.raises(HTTPException) as exc_info:
-        await mgmt_server.handle_management_mcp_request(Request(scope))
-    assert exc_info.value.status_code == 403
-    await mgmt_server.shutdown_management_mcp_server()
+    authenticated = await mgmt_server._authenticate_admission(Request(scope))
+    assert authenticated is caller
 
 
 @pytest.mark.asyncio
@@ -177,10 +189,14 @@ async def test_allowed_routes_mcp_routes_denied_management_routes_admitted(monke
 
 
 @pytest.mark.asyncio
-async def test_in_process_mcp_client_end_to_end(monkeypatch):
+@pytest.mark.parametrize("use_forwarded", [True, False])
+async def test_in_process_mcp_client_end_to_end(monkeypatch, use_forwarded):
     """Drive the real Streamable HTTP transport behind admission control:
     initialize, list the catalog tools, call one, and prove two concurrent
     callers reusing one transport only ever see their own credential."""
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_x_forwarded_for": use_forwarded})
     await mgmt_server.start_management_mcp_server({"enable_management_mcp": True}, _fixture_app())
 
     async def _auth(request, api_key, **kwargs):
@@ -207,9 +223,11 @@ async def test_in_process_mcp_client_end_to_end(monkeypatch):
     )
     transport = httpx.ASGITransport(app=wrapped)
 
-    async def _call(api_key: str):
+    async def _call(api_key: str, client_ip: str):
         async with httpx.AsyncClient(
-            transport=transport, base_url="http://testserver", headers={"x-litellm-api-key": api_key}
+            transport=transport,
+            base_url="http://testserver",
+            headers={"x-litellm-api-key": api_key, "x-forwarded-for": client_ip},
         ) as http:
             async with streamable_http_client(
                 "http://testserver/litellm-management/mcp",
@@ -223,10 +241,60 @@ async def test_in_process_mcp_client_end_to_end(monkeypatch):
                     assert result.is_error is not True, result.content
                     return json.loads(result.content[0].text)
 
-    (res_a, res_b) = await asyncio.gather(_call("sk-admin-a"), _call("sk-admin-b"))
+    (res_a, res_b) = await asyncio.gather(_call("sk-admin-a", "203.0.113.1"), _call("sk-admin-b", "203.0.113.2"))
     assert res_a["caller"] == "sk-admin-a"
     assert res_b["caller"] == "sk-admin-b"
+    assert res_a["client_ip"] == ("203.0.113.1" if use_forwarded else "127.0.0.1")
+    assert res_b["client_ip"] == ("203.0.113.2" if use_forwarded else "127.0.0.1")
 
+    await mgmt_server.shutdown_management_mcp_server()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origin, status",
+    [
+        ("https://untrusted.example", 403),
+        ("null", 403),
+        ("https://allowed.example.attacker.example", 403),
+        ("https://allowed.example", 200),
+    ],
+)
+async def test_origin_requires_explicit_allowed_origin(monkeypatch, origin, status):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "origins", ["*", "https://allowed.example"])
+    await mgmt_server.start_management_mcp_server({"enable_management_mcp": True}, _fixture_app())
+
+    async def _auth(request, api_key, **kwargs):
+        return _admin_caller(api_key)
+
+    monkeypatch.setattr(auth_module, "user_api_key_auth", _auth)
+    app = Starlette(
+        routes=[Route("/litellm-management/mcp", mgmt_server.handle_management_mcp_request, methods=["POST"])]
+    )
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+        response = await client.post(
+            "/litellm-management/mcp",
+            headers={
+                "authorization": "Bearer sk-caller",
+                "origin": origin,
+                "accept": "application/json, text/event-stream",
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "1"},
+                },
+            },
+        )
+    assert response.status_code == status
+    if status == 200:
+        assert response.json()["result"]["serverInfo"]["name"] == "litellm-management"
     await mgmt_server.shutdown_management_mcp_server()
 
 
@@ -271,7 +339,7 @@ def test_disabled_flag_404_and_dynamic_alias_route_via_fastapi_app():
         assert client.post("/litellm-management/mcp", content=b"{}").status_code == 404
 
         mgmt_server._active_server = mgmt_server.ManagementMCPServer(build_catalog({}))
-        assert client.post("/litellm-management/mcp", content=b"{}").status_code == 403
+        assert client.post("/litellm-management/mcp", content=b"{}").status_code == 401
         assert client.post("/nonexistent-alias/mcp", content=b"{}").status_code == 404
     finally:
         mgmt_server._active_server = None

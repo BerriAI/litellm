@@ -9,7 +9,6 @@ nothing tool-supplied can become a header or touch the URL host.
 
 import asyncio
 import json
-import re
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -39,7 +38,6 @@ from litellm.proxy._lazy_features import LazyFeatureMiddleware
 
 _HANDLER_TIMEOUT_SECONDS: Final = 30.0
 _MAX_RESULT_BYTES: Final = 1024 * 1024
-_SK_PATTERN: Final = re.compile(r"sk-[A-Za-z0-9_-]+")
 _ARGUMENT_SECTIONS: Final = frozenset({"path", "query", "body"})
 _INTERNAL_BASE_URL: Final = "http://litellm-management"
 
@@ -161,10 +159,6 @@ def error_result(status: int, detail: object) -> mcp_types.CallToolResult:
     )
 
 
-def _redact_sk_substrings(text: str) -> str:
-    return _SK_PATTERN.sub("sk-***", text)
-
-
 def _validated_sections(
     tool: ManagementTool, arguments: Mapping[str, object]
 ) -> tuple[Mapping[str, object], Mapping[str, object], Mapping[str, object] | None] | mcp_types.CallToolResult:
@@ -282,13 +276,15 @@ async def _execute(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        verbose_proxy_logger.exception("management MCP tool %s failed: %s", tool.name, _redact_sk_substrings(str(exc)))
+        verbose_proxy_logger.error("management MCP tool %s failed (%s)", tool.name, type(exc).__name__)
         return error_result(500, "internal error")
 
+    if status >= 400:
+        if not raw:
+            return error_result(status, "REST endpoint returned an empty error response")
+        return _tool_result(raw.decode("utf-8", errors="replace"), None, is_error=True)
     if not raw:
         return _tool_result("{}", {}, is_error=False)  # mutable-ok: empty structured result
-    if status >= 400:
-        return _tool_result(raw.decode("utf-8", errors="replace"), None, is_error=True)
     try:
         decoded: Final[object] = cast(object, json.loads(raw))  # cast-ok: JSON parse result is untyped
     except (json.JSONDecodeError, UnicodeDecodeError):

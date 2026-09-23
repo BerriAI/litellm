@@ -17,6 +17,30 @@ from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
 from litellm.proxy.auth.route_checks import RouteChecks
 
 
+@pytest.mark.parametrize(
+    "role",
+    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
+)
+@pytest.mark.parametrize("path", ["/litellm-management/mcp", "/litellm-management/mcp/"])
+def test_management_mcp_admission_does_not_grant_management_permissions(role, path):
+    user = LiteLLM_UserTable(user_id="member", user_role=role.value)
+    token = UserAPIKeyAuth(user_id="member", user_role=role.value)
+    request = Request({"type": "http", "method": "POST", "path": path, "headers": [], "query_string": b""})
+    assert RouteChecks.should_call_route(path, token, request) is True
+    admitted = RouteChecks.non_proxy_admin_allowed_routes_check(user, role, path, request, token, {})
+    assert admitted is None
+    with pytest.raises(Exception, match=r"(Only proxy admin|403|not allowed|permission)"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(user, role, "/config/update", request, token, {})
+
+
+def test_management_mcp_restricted_key_requires_target_route_permission():
+    token = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, allowed_routes=["management_mcp_routes"])
+    assert RouteChecks.is_virtual_key_allowed_to_call_route("/litellm-management/mcp", token) is True
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route("/key/generate", token)
+    assert exc_info.value.status_code == 403
+
+
 def test_non_admin_config_update_route_rejected():
     """Test that non-admin users are rejected when trying to call /config/update"""
 

@@ -77,7 +77,7 @@ def test_json_tool_with_path_query_and_ref_chain_body():
     assert "Update a thing" in tool.mcp_tool.description
     assert "Longer description." in tool.mcp_tool.description
     assert tool.mcp_tool.annotations.read_only_hint is False
-    assert tool.mcp_tool.annotations.destructive_hint is False
+    assert tool.mcp_tool.annotations.destructive_hint is True
     assert tool.mcp_tool.annotations.idempotent_hint is False
 
 
@@ -169,3 +169,47 @@ def test_inventory_matches_checked_in_file():
         "management MCP inventory drifted from the live OpenAPI spec; "
         "regenerate it with: python -m litellm.proxy._experimental.mcp_server.management.inventory --write"
     )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/{mcp_server_name}/mcp",
+        "/toolset/{toolset_name}/mcp",
+        "/v1/memory",
+        "/v1/memory/{key}",
+        "/public/complexity_router/fuse_presets",
+    ],
+)
+@pytest.mark.parametrize("method", ["get", "post", "delete"])
+def test_transport_and_non_management_paths_excluded(path, method):
+    operation = _operation(requestBody={"content": {"application/json": {"schema": {"type": "object"}}}})
+    catalog = build_catalog(_spec({path: {method: operation}}))
+    assert not catalog.tools
+    assert f"{method.upper()} {path}" in catalog.exclusions
+
+
+@pytest.mark.parametrize("path", ["/key/delete", "/team/delete", "/model/delete", "/budget/delete"])
+def test_post_deletions_are_destructive(path):
+    operation = _operation(requestBody={"content": {"application/json": {"schema": {"type": "object"}}}})
+    tool = build_catalog(_spec({path: {"post": operation}})).tools["op"]
+    assert tool.mcp_tool.annotations.destructive_hint is True
+
+
+@pytest.mark.parametrize("path", ["/key/info", "/team/info", "/user/info", "/model/info", "/v1/mcp/server"])
+def test_management_reads_are_not_excluded_by_overlapping_route_groups(path):
+    catalog = build_catalog(_spec({path: {"get": _operation()}}))
+    assert catalog.tools["op"].path_template == path
+
+
+def test_inventory_command_writes_current_catalog(tmp_path, monkeypatch, capsys):
+    from litellm.proxy._experimental.mcp_server.management import inventory
+    from litellm.proxy.proxy_server import app
+
+    target = tmp_path / "inventory.json"
+    monkeypatch.setattr(inventory, "INVENTORY_PATH", target)
+    assert inventory.main([]) == 2
+    assert not target.exists()
+    assert inventory.main(["--write"]) == 0
+    assert json.loads(target.read_text()) == catalog_inventory(build_catalog(app.openapi()))
+    assert str(target) in capsys.readouterr().out

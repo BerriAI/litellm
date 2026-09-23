@@ -37,6 +37,18 @@ def _fixture_app() -> FastAPI:
     async def fail_route():
         raise HTTPException(status_code=418, detail={"reason": "teapot"})
 
+    @app.get("/admin/empty-error", operation_id="empty_error")
+    async def empty_error():
+        return Response(status_code=403)
+
+    @app.get("/admin/crash", operation_id="crash")
+    async def crash():
+        raise RuntimeError("credential sk-test-exception-secret and provider-secret-value")
+
+    @app.get("/admin/not-json", operation_id="not_json")
+    async def not_json():
+        return Response(content=b"not json", media_type="text/plain")
+
     @app.get("/admin/slow", operation_id="slow_route")
     async def slow_route():
         await asyncio.sleep(60)
@@ -261,3 +273,34 @@ async def test_cancellation_propagates():
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.asyncio
+async def test_empty_http_error_is_not_success():
+    result = await call_tool("empty_error", {}, _ctx())
+    assert result.is_error is True
+    assert json.loads(_text(result))["status"] == 403
+
+
+@pytest.mark.asyncio
+async def test_exception_credentials_are_not_logged(caplog):
+    result = await call_tool("crash", {}, _ctx())
+    assert result.is_error is True
+    assert "internal error" in _text(result)
+    assert "management MCP tool crash failed" in caplog.text
+    assert "sk-test-exception-secret" not in caplog.text
+    assert "provider-secret-value" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_non_json_success_is_tool_error():
+    result = await call_tool("not_json", {}, _ctx())
+    assert result.is_error is True
+    assert "returned a non-JSON response" in _text(result)
+
+
+@pytest.mark.asyncio
+async def test_non_object_body_rejected_without_dispatch():
+    result = await call_tool("make_item", {"body": ["not-an-object"]}, _ctx())
+    assert result.is_error is True
+    assert "must be an object" in _text(result)
