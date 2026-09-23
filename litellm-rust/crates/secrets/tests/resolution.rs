@@ -24,7 +24,7 @@ async fn native_reads_preserve_strings_and_report_conversion_errors(#[case] mana
     for raw in ["True", " FALSE ", "", "(True)", "{\"key\":1}"] {
         let state = if managed {
             SecretManagerState::new(
-                SecretManager::External(Arc::new(FixedManager(Ok(Some(Secret::String(
+                SecretManager::External(Arc::new(FixedManager::custom(Ok(Some(Secret::String(
                     SecretValue::new(raw),
                 )))))),
                 KeyManagementSettings::default(),
@@ -71,7 +71,7 @@ async fn native_defaults_apply_to_absence_but_never_hide_provider_failures() {
     for reply in [Ok(None), Err(())] {
         let resolver = SecretResolver::new(
             Arc::new(SecretManagerState::new(
-                SecretManager::External(Arc::new(FixedManager(reply.clone()))),
+                SecretManager::External(Arc::new(FixedManager::custom(reply.clone()))),
                 KeyManagementSettings::default(),
             )),
             Arc::new(|_: &str| None),
@@ -153,11 +153,23 @@ async fn defaults_never_replace_an_absent_secret() {
     );
 }
 
-struct FixedManager(Result<Option<Secret>, ()>);
+struct FixedManager {
+    reply: Result<Option<Secret>, ()>,
+    system: KeyManagementSystem,
+}
+
+impl FixedManager {
+    fn custom(reply: Result<Option<Secret>, ()>) -> Self {
+        Self {
+            reply,
+            system: KeyManagementSystem::Custom,
+        }
+    }
+}
 
 impl ExternalSecretManager for FixedManager {
     fn system(&self) -> KeyManagementSystem {
-        KeyManagementSystem::Custom
+        self.system
     }
 
     fn read_secret<'a>(
@@ -166,14 +178,14 @@ impl ExternalSecretManager for FixedManager {
         _settings: &'a KeyManagementSettings,
         _environment: &'a (dyn Lookup + Send + Sync),
     ) -> Pin<Box<dyn Future<Output = Result<Option<Secret>, Error>> + Send + 'a>> {
-        Box::pin(async move { self.0.clone().map_err(|()| Error::MissingCiphertext) })
+        Box::pin(async move { self.reply.clone().map_err(|()| Error::MissingCiphertext) })
     }
 }
 
 fn managed(reply: Result<Option<Secret>, ()>, environment: Option<&'static str>) -> SecretResolver {
     SecretResolver::new_python_compatible(
         Arc::new(SecretManagerState::new(
-            SecretManager::External(Arc::new(FixedManager(reply))),
+            SecretManager::External(Arc::new(FixedManager::custom(reply))),
             KeyManagementSettings::default(),
         )),
         Arc::new(move |_: &str| environment.map(str::to_owned)),
@@ -321,7 +333,7 @@ async fn excluded_hosted_keys_keep_the_python_manager_conversion_path(
 ) {
     let resolver = SecretResolver::new_python_compatible(
         Arc::new(SecretManagerState::new(
-            SecretManager::External(Arc::new(FixedManager(Err(())))),
+            SecretManager::External(Arc::new(FixedManager::custom(Err(())))),
             KeyManagementSettings {
                 hosted_keys: Some(vec!["OTHER".into()]),
                 ..Default::default()
@@ -337,5 +349,37 @@ async fn excluded_hosted_keys_keep_the_python_manager_conversion_path(
         } else {
             Secret::String(SecretValue::new(raw))
         })
+    );
+}
+
+#[rstest::rstest]
+#[case::missing(Ok(None), None)]
+#[case::empty(
+    Ok(Some(Secret::String(SecretValue::new("")))),
+    Some(Secret::String(SecretValue::new("")))
+)]
+#[case::failed(Err(()), Some(Secret::String(SecretValue::new("environment"))))]
+#[tokio::test]
+async fn azure_callback_absence_preserves_none_but_errors_fall_back(
+    #[case] reply: Result<Option<Secret>, ()>,
+    #[case] expected: Option<Secret>,
+) {
+    let resolver = SecretResolver::new_python_compatible(
+        Arc::new(SecretManagerState::new(
+            SecretManager::External(Arc::new(FixedManager {
+                reply,
+                system: KeyManagementSystem::AzureKeyVault,
+            })),
+            KeyManagementSettings::default(),
+        )),
+        Arc::new(|_: &str| Some("environment".into())),
+        OidcResolver::default(),
+    );
+    assert_eq!(
+        resolver
+            .get_secret("key", Some(Secret::String(SecretValue::new("default"))))
+            .await
+            .unwrap(),
+        expected
     );
 }

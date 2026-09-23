@@ -30,7 +30,12 @@ pub async fn get_secret_from_python_manager(
     match result {
         #[cfg(feature = "azure")]
         Err(Error::Azure(litellm_secrets_azure::Error::MissingValue)) => Ok(None),
-        Ok(None) if manager.system() == KeyManagementSystem::AzureKeyVault => Ok(None),
+        Ok(None)
+            if matches!(manager, SecretManager::External(_))
+                && manager.system() == KeyManagementSystem::AzureKeyVault =>
+        {
+            Ok(None)
+        }
         Ok(None) => Err(Error::ManagedSecretMissing),
         result => result,
     }
