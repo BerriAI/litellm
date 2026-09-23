@@ -108,6 +108,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
+    invalidate_cached_object_permissions,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
     validate_key_vector_stores_against_team,
@@ -118,9 +119,6 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
-from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
-    get_ui_settings_cached,
-)
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -487,8 +485,10 @@ async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
     if custom_key_value is None:
         return
 
-    ui_settings: Final = await get_ui_settings_cached()
-    if ui_settings.get("disable_custom_api_keys", False) is True:
+    from litellm.proxy.config_resolvers.settings_rules import coerce_bool
+    from litellm.proxy.proxy_server import general_settings
+
+    if coerce_bool(general_settings.get("disable_custom_api_keys", False)) is True:
         verbose_proxy_logger.warning("Custom API key rejected: disable_custom_api_keys is enabled")
         raise HTTPException(
             status_code=403,
@@ -2840,7 +2840,14 @@ async def _process_single_key_update(
         await prisma_client.update_data(token=key_request.key, data=_data),
     )
 
-    # Delete cache
+    # Permission row first: a key-object miss between the two evictions would re-cache stale grants
+    await invalidate_cached_object_permissions(
+        object_permission_ids=(
+            existing_key_row.object_permission_id,
+            non_default_values.get("object_permission_id"),
+        ),
+        user_api_key_cache=user_api_key_cache,
+    )
     await _delete_cache_key_object(
         hashed_token=_hash_token_if_needed(key_request.key),
         user_api_key_cache=user_api_key_cache,
@@ -3456,6 +3463,13 @@ async def update_key_fn(
 
         # Delete - key from cache, since it's been updated!
         # key updated - a new model could have been added to this key. it should not block requests after this is done
+        await invalidate_cached_object_permissions(
+            object_permission_ids=(
+                existing_key_row.object_permission_id,
+                non_default_values.get("object_permission_id"),
+            ),
+            user_api_key_cache=user_api_key_cache,
+        )
         await _delete_cache_key_object(
             hashed_token=_hash_token_if_needed(key),
             user_api_key_cache=user_api_key_cache,
@@ -5570,6 +5584,13 @@ async def _execute_virtual_key_regeneration(
     updated_token_dict["key"] = new_token
     updated_token_dict["token_id"] = updated_token_dict.pop("token")
 
+    await invalidate_cached_object_permissions(
+        object_permission_ids=(
+            key_in_db.object_permission_id,
+            non_default_values.get("object_permission_id"),
+        ),
+        user_api_key_cache=user_api_key_cache,
+    )
     if hashed_api_key or key:
         await _delete_cache_key_object(
             hashed_token=_hash_token_if_needed(key),
@@ -7591,25 +7612,47 @@ async def test_key_logging(
 
 
 _KEY_ALIAS_PATTERN: Final = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-/\.@]{0,253}[a-zA-Z0-9]$")
+_KEY_ALIAS_PATTERN_MESSAGE: Final = (
+    "Invalid key_alias format. Must be 2-255 characters, start/end with alphanumeric, and only contain a-zA-Z0-9_-/.@."
+)
+_KEY_ALIAS_MAX_LENGTH: Final = 255
+
+
+def parse_key_alias_pattern(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"Invalid regex set for litellm_settings.key_alias_pattern - value={value!r}: must be a string"
+        )
+    try:
+        re.compile(value)
+    except re.error as e:
+        raise ValueError(f"Invalid regex set for litellm_settings.key_alias_pattern - value={value}: {e}") from e
+    return value
+
+
+def _key_alias_rule() -> tuple[re.Pattern[str], str] | None:
+    if litellm.key_alias_pattern is not None:
+        return (
+            re.compile(litellm.key_alias_pattern),
+            f"Invalid key_alias format. Must be at most {_KEY_ALIAS_MAX_LENGTH} characters and match the configured"
+            f" key_alias_pattern: {litellm.key_alias_pattern}",
+        )
+    if litellm.enable_key_alias_format_validation:
+        return (_KEY_ALIAS_PATTERN, _KEY_ALIAS_PATTERN_MESSAGE)
+    return None
 
 
 def _validate_key_alias_format(key_alias: str | None) -> None:
     """
     Validate the format of the key_alias.
 
-    A baseline validation always runs, regardless of
-    ``litellm.enable_key_alias_format_validation``.
-
-    The remaining charset/length rules are gated behind
-    ``litellm.enable_key_alias_format_validation`` (default **False**). When disabled,
-    only the baseline validation above is performed, so existing workflows are not
-    broken.
-
-    Rules (when enabled):
-    - None is OK (no alias).
-    - Otherwise must be 2–255 chars
-    - start/end with alphanumeric
-    - only allow a-zA-Z0-9_-/.@
+    Path traversal and control characters are always rejected. The alias then has to
+    stay within ``_KEY_ALIAS_MAX_LENGTH`` and fully match ``litellm.key_alias_pattern``
+    when one is configured, else the built-in pattern when
+    ``litellm.enable_key_alias_format_validation`` is on, else nothing more is checked
+    so existing workflows are not broken.
     """
     if key_alias is None:
         return
@@ -7624,12 +7667,14 @@ def _validate_key_alias_format(key_alias: str | None) -> None:
             code=400,
         )
 
-    if not litellm.enable_key_alias_format_validation:
+    rule: Final = _key_alias_rule()
+    if rule is None:
         return
 
-    if not _KEY_ALIAS_PATTERN.match(key_alias):
+    pattern, message = rule
+    if len(key_alias) > _KEY_ALIAS_MAX_LENGTH or pattern.fullmatch(key_alias) is None:
         raise ProxyException(
-            message="Invalid key_alias format. Must be 2-255 characters, start/end with alphanumeric, and only contain a-zA-Z0-9_-/.@.",
+            message=message,
             type=ProxyErrorTypes.bad_request_error,
             param="key_alias",
             code=400,

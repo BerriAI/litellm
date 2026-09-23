@@ -24,10 +24,7 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     }
 )
 
-# Keys `completion()` forwards from its own kwargs into `get_litellm_params`,
-# which are otherwise invisible to it because that call site passes explicit
-# named arguments rather than `**kwargs`.
-FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS
+PROVIDER_AFFINITY_HEADER_KWARG_KEY: Final = "provider_affinity_header"
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -63,6 +60,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "itpm",
             "otpm",
             "use_xai_oauth",
+            PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
@@ -132,6 +130,7 @@ def get_litellm_params(
     api_version: str | None = None,
     max_retries: int | None = None,
     litellm_request_debug: bool | None = None,
+    stream_chunk_size: int | None = None,
     **kwargs,
 ) -> dict:
     _litellm_metadata_dict: Final = litellm_metadata if isinstance(litellm_metadata, dict) else None
@@ -194,6 +193,7 @@ def get_litellm_params(
         "max_retries": max_retries,
         "use_litellm_proxy": use_litellm_proxy,
         "litellm_request_debug": litellm_request_debug,
+        "stream_chunk_size": stream_chunk_size,
     }
 
     # Sparse extraction: only add kwargs keys that are actually present

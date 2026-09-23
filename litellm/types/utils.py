@@ -3256,6 +3256,7 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_budget_entity_id: str | None
     error_budget_limit: float | None
     error_budget_spend: float | None
+    normalized_error: ReadOnly[str | None]
 
 
 class GuardrailMode(TypedDict, total=False):
@@ -4042,6 +4043,7 @@ all_litellm_params = (
         "no-log",
         "base_model",
         "stream_timeout",
+        "stream_chunk_size",
         "supports_system_message",
         "region_name",
         "allowed_model_region",
@@ -4073,6 +4075,7 @@ all_litellm_params = (
         "litellm_credential_name",
         "allowed_openai_params",
         "litellm_session_id",
+        "provider_affinity_header",
         "use_litellm_proxy",
         "use_chat_completions_api",
         "rust",

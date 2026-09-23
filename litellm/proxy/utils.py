@@ -52,6 +52,7 @@ from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
+    PROXY_REJECTED_BEFORE_ROUTING_KEY,
     REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT,
     SPEND_LOG_QUEUE_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
@@ -977,6 +978,94 @@ def _failure_usage_to_lift(
 
 
 _EMPTY_LIFT: Final = MappingProxyType({})
+
+
+def _stamp_deployment_attribution(
+    litellm_params: dict[str, object], model_group: str | None, team_id: str | None, dispatched: bool
+) -> Mapping[str, object]:
+    """Stamp provider and logging-metadata attribution onto ``litellm_params`` and return it.
+    ``litellm_params["model_info"]`` stays unset: the router's cooldown and per-deployment rpm
+    callbacks key off it and must not count a proxy-side reject against the deployment. A failure
+    after the provider handoff keeps the metadata the router stamped; a request that never reached a
+    provider is flagged ``PROXY_REJECTED_BEFORE_ROUTING_KEY`` (deployment metrics key off it) whatever
+    its metadata says, since ``metadata.model_info`` can be caller supplied."""
+    attribution: Final = _deployment_attribution_for_model_group(model_group, team_id)
+    if "custom_llm_provider" in attribution:
+        litellm_params["custom_llm_provider"] = attribution["custom_llm_provider"]
+    if dispatched:
+        return attribution
+    litellm_params[PROXY_REJECTED_BEFORE_ROUTING_KEY] = True
+    if "model_info" not in attribution:
+        return attribution
+    if litellm_params.get("metadata") is None:
+        litellm_params["metadata"] = {}  # mutable-ok: legacy logging payload is populated in place
+    metadata: Final = litellm_params["metadata"]
+    if not isinstance(metadata, dict):
+        return attribution
+    metadata.setdefault("model_info", attribution["model_info"])
+    metadata.setdefault("deployment", attribution["deployment"])
+    if isinstance(model_group, str):
+        metadata.setdefault("model_group", model_group)
+    return attribution
+
+
+def _deployment_attribution_for_model_group(model_group: object, team_id: str | None) -> Mapping[str, object]:
+    """Provider fields the router would have stamped had it reached a deployment:
+    ``custom_llm_provider`` when every deployment in the group resolves to the same
+    provider, plus ``model_info`` and ``deployment`` when the group has exactly one.
+    ``team_id`` picks the key's team deployments over a global group of the same public name."""
+    if not isinstance(model_group, str):
+        return _EMPTY_LIFT
+
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return _EMPTY_LIFT
+    deployments: Final = llm_router.get_model_list(model_name=model_group, team_id=team_id)
+    if not deployments:
+        return _EMPTY_LIFT
+
+    def _provider_for_deployment(deployment: Mapping[str, object]) -> str | None:
+        litellm_params: Final = cast(  # cast-ok: router deployment parameters are mapping-shaped
+            Mapping[str, object], deployment["litellm_params"]
+        )
+        try:
+            provider: Final = litellm.get_llm_provider(
+                model=cast(str, litellm_params["model"]),  # cast-ok: router deployment model is a string
+                custom_llm_provider=cast(  # cast-ok: router deployment provider is optional
+                    str | None, litellm_params.get("custom_llm_provider")
+                ),
+            )[1]
+            return cast(str | None, provider)  # cast-ok: provider resolver returns an optional provider string
+        except Exception:  # noqa: BLE001  # get_llm_provider raises for unmapped models
+            return None
+
+    providers: Final = frozenset(_provider_for_deployment(deployment) for deployment in deployments)
+    shared_provider: Final = next(iter(providers)) if len(providers) == 1 else None
+    single_deployment: Final = deployments[0] if len(deployments) == 1 else None
+    single_deployment_params: Final = (
+        cast(  # cast-ok: router deployment parameters are mapping-shaped
+            Mapping[str, object], single_deployment["litellm_params"]
+        )
+        if single_deployment is not None
+        else None
+    )
+    return MappingProxyType(
+        {
+            # mutable-ok: frozen immediately by the outer MappingProxyType
+            **({"custom_llm_provider": shared_provider} if shared_provider is not None else {}),
+            **(
+                {  # mutable-ok: frozen immediately by the outer MappingProxyType
+                    "model_info": dict(  # mutable-ok: preserve the router's mutable model-info payload
+                        single_deployment.get("model_info") or {}
+                    ),
+                    "deployment": single_deployment_params["model"],
+                }
+                if single_deployment is not None and single_deployment_params is not None
+                else {}  # mutable-ok: frozen immediately by the outer MappingProxyType
+            ),
+        }
+    )
 
 
 def _call_type_for_route(route: str | None) -> str | None:
@@ -2217,6 +2306,7 @@ class ProxyLogging:
         data: None,
         call_type: CallTypesLiteral,
         guardrails_only: bool = False,
+        skip_guardrails: bool = False,
     ) -> None:
         pass
 
@@ -2227,6 +2317,7 @@ class ProxyLogging:
         data: dict,
         call_type: CallTypesLiteral,
         guardrails_only: bool = False,
+        skip_guardrails: bool = False,
     ) -> dict:
         pass
 
@@ -2236,6 +2327,7 @@ class ProxyLogging:
         data: dict | None,
         call_type: CallTypesLiteral,
         guardrails_only: bool = False,
+        skip_guardrails: bool = False,
     ) -> dict | None:
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
@@ -2250,6 +2342,9 @@ class ProxyLogging:
         Use it to scan a payload that is not itself a request, such as one record of a batch file.
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
+
+        if guardrails_only and skip_guardrails:
+            raise ValueError("guardrails_only and skip_guardrails are mutually exclusive")
 
         if not guardrails_only:
             self._init_response_taking_too_long_task(data=data)
@@ -2298,16 +2393,19 @@ class ProxyLogging:
 
         try:
             # Execute guardrail pipelines before the normal callback loop
-            data, _ = await self._maybe_execute_pipelines(  # rebind-ok: pipeline edits feed the callback loop below
-                data=data,
-                user_api_key_dict=user_api_key_dict,
-                call_type=call_type,
-                event_hook="pre_call",
-                raw_request_snapshot=raw_request_snapshot,
-            )
+            if not skip_guardrails:
+                data, _ = await self._maybe_execute_pipelines(  # rebind-ok: pipeline edits feed the callback loop below
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                    event_hook="pre_call",
+                    raw_request_snapshot=raw_request_snapshot,
+                )
 
             # Get pipeline-managed guardrails to skip in normal loop
-            pipeline_managed: Final = pipeline_managed_guardrail_names(data, "pre_call")
+            pipeline_managed: Final[frozenset[str]] = (
+                frozenset() if skip_guardrails else pipeline_managed_guardrail_names(data, "pre_call")
+            )
 
             caps: Final = ProxyLogging._callback_capabilities()
             # Skip the per-request callback walk entirely when nothing in
@@ -2316,7 +2414,7 @@ class ProxyLogging:
             # ``time.time()`` x2 per registered callback for the common
             # "callbacks=[]" case on small / dev deployments.
             if (
-                not caps.has_guardrail
+                (skip_guardrails or not caps.has_guardrail)
                 and not caps.has_content_enforcer
                 and (guardrails_only or not caps.has_pre_call_override)
             ):
@@ -2324,12 +2422,16 @@ class ProxyLogging:
                     self._process_guardrail_metadata(data)
                 return data
 
-            parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = tuple(
-                cb
-                for cb in caps.resolved_callbacks
-                if isinstance(cb, CustomGuardrail)
-                and getattr(cb, "run_in_parallel", False)
-                and not (cb.guardrail_name and cb.guardrail_name in pipeline_managed)
+            parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = (
+                ()
+                if skip_guardrails
+                else tuple(
+                    cb
+                    for cb in caps.resolved_callbacks
+                    if isinstance(cb, CustomGuardrail)
+                    and getattr(cb, "run_in_parallel", False)
+                    and not (cb.guardrail_name and cb.guardrail_name in pipeline_managed)
+                )
             )
 
             deferred_route_exc: SensitiveDataRouteException | None = None
@@ -2337,6 +2439,9 @@ class ProxyLogging:
                 start_time = time.time()
                 try:
                     if isinstance(_callback, CustomGuardrail) and data is not None:
+                        if skip_guardrails:
+                            continue
+
                         # Skip guardrails managed by a pipeline
                         if _callback.guardrail_name and _callback.guardrail_name in pipeline_managed:
                             continue
@@ -3227,11 +3332,25 @@ class ProxyLogging:
                 elif k not in ("model", "user", "litellm_logging_obj"):
                     _optional_params[k] = v
 
+            attribution: Final = _stamp_deployment_attribution(
+                _litellm_params,
+                request_data.get("model"),
+                user_api_key_dict.team_id,
+                dispatched=litellm_logging_obj.model_call_details.get("first_api_call_start_time") is not None,
+            )
+
             litellm_logging_obj.update_environment_variables(
                 model=request_data.get("model", ""),
                 user=request_data.get("user", ""),
                 optional_params=_optional_params,
                 litellm_params=_litellm_params,
+                **(
+                    {  # mutable-ok: frozen immediately by keyword expansion
+                        "custom_llm_provider": attribution["custom_llm_provider"]
+                    }
+                    if "custom_llm_provider" in attribution
+                    else {}  # mutable-ok: frozen immediately by keyword expansion
+                ),
             )
 
             input: list | str | dict = ""

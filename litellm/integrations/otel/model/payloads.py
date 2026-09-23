@@ -407,6 +407,7 @@ class LLMCallSpanData:
     call_type: str | None = None
     request_route: str | None = None
     trace: TraceControls = field(default_factory=TraceControls)
+    session_id: str | None = None
     embedding_output: EmbeddingOutput | None = None
 
     @classmethod
@@ -417,6 +418,7 @@ class LLMCallSpanData:
         time_to_first_chunk_seconds: float | None = None,
         request_route: str | None = None,
         trace: TraceControls | None = None,
+        session_id: str | None = None,
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
         # The single parse of the request's metadata — the request-vs-provider
@@ -463,6 +465,7 @@ class LLMCallSpanData:
             call_type=call_type or None,
             request_route=request_route or context.identity.request_route,
             trace=trace or TraceControls(),
+            session_id=session_id or None,
             embedding_output=embedding_output if capture_content else None,
         )
 
@@ -776,9 +779,15 @@ def _joined_choice(parts: tuple[str, ...]) -> tuple[_Choice, ...]:
     return (_text_choice("\n\n".join(parts)),) if parts else ()
 
 
+def _text_completion_choice(choice: Mapping[str, object], text: str) -> Mapping[str, object]:
+    synthesized: Final = _text_choice(text, as_str(choice.get("finish_reason")))
+    merged: Final = (*choice.items(), *synthesized.items())
+    return {k: v for k, v in merged if k != "text"}  # mutable-ok: mappers json.dumps and isinstance(dict) it
+
+
 def _completion_choices(response: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     return tuple(
-        _text_choice(text, as_str(choice.get("finish_reason")))
+        _text_completion_choice(choice, text)
         if "message" not in choice and isinstance(text := choice.get("text"), str)
         else choice
         for choice in _dicts(response.get("choices"))

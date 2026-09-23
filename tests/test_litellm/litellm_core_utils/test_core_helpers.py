@@ -322,6 +322,28 @@ class TestRedactNestedMatchAndRegexKeys:
         assert redact_nested_match_and_regex_keys(None) is None
         assert redact_nested_match_and_regex_keys("plain") == "plain"
 
+    def test_redacts_custom_keys_without_changing_default_keys(self):
+        payload = {
+            "keyword": "secret-keyword",
+            "snippet": "secret-snippet",
+            "match": "secret-match",
+            "regex": "secret-regex",
+            "nested": [{"keyword": "nested-keyword", "match": "nested-match"}],
+        }
+
+        custom_keys = redact_nested_match_and_regex_keys(payload, keys=("keyword", "snippet"))
+        default_keys = redact_nested_match_and_regex_keys(payload)
+
+        assert custom_keys["keyword"] == "[REDACTED]"
+        assert custom_keys["snippet"] == "[REDACTED]"
+        assert custom_keys["nested"][0]["keyword"] == "[REDACTED]"
+        assert custom_keys["match"] == "secret-match"
+        assert custom_keys["regex"] == "secret-regex"
+        assert default_keys["match"] == "[REDACTED]"
+        assert default_keys["regex"] == "[REDACTED]"
+        assert default_keys["keyword"] == "secret-keyword"
+        assert default_keys["snippet"] == "secret-snippet"
+
 
 @pytest.mark.parametrize(
     "value, expected",

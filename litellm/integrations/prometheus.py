@@ -18,7 +18,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK
+from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK, PROXY_REJECTED_BEFORE_ROUTING_KEY
 from litellm.exceptions import (
     validate_rate_limit_category,
     validate_rate_limit_type,
@@ -214,17 +214,22 @@ def _get_proxy_llm_router() -> Router | None:
     return llm_router
 
 
-def _bounded_requested_model_label(requested_model: str | None, router_originated: bool = False) -> str | None:
+def _bounded_requested_model_label(requested_model: object, router_originated: bool = False) -> str | None:
     """
     Bound ``requested_model`` label cardinality: names the router recognizes
     (model names, deployment ids, aliases, routing groups, team public model
     names) or matches via a global or team wildcard/pattern route keep their
     own label value; any other client-supplied string collapses into the
-    single ``other`` bucket. With no proxy router to vouch for the string,
-    client-supplied values collapse to ``other`` while ``router_originated``
-    values (emitted by an SDK ``Router``'s own deployment failure and
-    fallback events, where the proxy router never exists) pass through.
+    single ``other`` bucket, as does any non-string request ``model`` value.
+    With no proxy router to vouch for the string, client-supplied values
+    collapse to ``other`` while ``router_originated`` values (emitted by an
+    SDK ``Router``'s own deployment failure and fallback events, where the
+    proxy router never exists) pass through.
     """
+    if requested_model is None:
+        return None
+    if not isinstance(requested_model, str):
+        return UNRECOGNIZED_REQUESTED_MODEL_LABEL
     if not requested_model:
         return requested_model
     llm_router: Final = _get_proxy_llm_router()
@@ -2832,7 +2837,7 @@ class PrometheusLogger(CustomLogger):
 
             # On LiteLLM-side rejects (no deployment picked), route request_kwargs["model"]
             # into requested_model and leave deployment-scoped labels empty.
-            deployment_selected: Final = bool(model_id)
+            deployment_selected: Final = bool(model_id) and not _litellm_params.get(PROXY_REJECTED_BEFORE_ROUTING_KEY)
             if deployment_selected:
                 label_litellm_model_name = litellm_model_name
                 label_model_id = model_id

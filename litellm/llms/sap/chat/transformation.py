@@ -358,13 +358,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 )
             )
 
-        config_payload: Final[dict[str, Any]] = {
+        config_payload: Final[dict[str, object]] = {
             "modules": modules if len(modules) > 1 else modules[0],
         }
         if stream_config:
             config_payload["stream"] = stream_config
 
-        request_body: Final[dict[str, Any]] = {"config": config_payload}
+        request_body: Final[dict[str, object]] = {"config": config_payload}
         if placeholder_values is not None:
             request_body["placeholder_values"] = placeholder_values
 

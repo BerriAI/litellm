@@ -2857,7 +2857,7 @@ class BaseLLMHTTPHandler:
                 id(shared_session) if shared_session else None,
             )
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=custom_llm_provider,
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
                 shared_session=shared_session,
             )
@@ -2881,7 +2881,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        data = responses_api_provider_config.transform_responses_api_request(
+        data = await responses_api_provider_config.async_transform_responses_api_request(
             model=model,
             input=input,
             response_api_optional_request_params=response_api_optional_request_params,
@@ -9061,6 +9061,7 @@ class BaseLLMHTTPHandler:
                 raw_response=response,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                client=sync_httpx_client,
             )
 
         except Exception as e:
@@ -9150,6 +9151,7 @@ class BaseLLMHTTPHandler:
                 raw_response=response,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                client=async_httpx_client,
             )
 
         except Exception as e:

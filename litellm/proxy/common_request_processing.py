@@ -26,7 +26,7 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
 
 import litellm
@@ -56,6 +56,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     independent_snapshot,
     is_expected_client_error,
+    redact_nested_match_and_regex_keys,
 )
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -1401,6 +1402,42 @@ def _override_openai_response_model(
         )
 
 
+_METADATA_BUCKET_KEYS: Final = ("metadata", "litellm_metadata")
+_RESPONSE_REDACTED_KEYS: Final = ("keyword", "snippet", "match", "regex")
+
+
+def _request_metadata_buckets(request_data: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(bucket for key in _METADATA_BUCKET_KEYS if isinstance(bucket := request_data.get(key), Mapping))
+
+
+def include_guardrail_response_requested(request_data: Mapping[str, object]) -> bool:
+    return any(bucket.get("include_guardrail_response") is True for bucket in _request_metadata_buckets(request_data))
+
+
+def attach_guardrail_information(response: object, request_data: Mapping[str, object]) -> object:
+    recorded: Final[Sequence[object]] = next(
+        (
+            entries
+            for bucket in _request_metadata_buckets(request_data)
+            if isinstance(
+                entries := bucket.get("standard_logging_guardrail_information"),
+                list,
+            )
+        ),
+        (),
+    )
+    guardrail_information: Final = [  # mutable-ok: response list contract
+        redact_nested_match_and_regex_keys(entry, keys=_RESPONSE_REDACTED_KEYS)
+        for entry in recorded
+        if isinstance(entry, dict)
+    ]
+    if isinstance(response, dict):
+        return response | MappingProxyType({"guardrail_information": guardrail_information})
+    if isinstance(response, BaseModel) and response.model_config.get("extra") == "allow":
+        return response.model_copy(update=MappingProxyType({"guardrail_information": guardrail_information}))
+    return response
+
+
 class CostBreakdownHeaderValues(NamedTuple):
     original_cost: float | None = None
     discount_amount: float | None = None
@@ -1962,6 +1999,7 @@ class ProxyBaseLLMRequestProcessing:
         model: str | None = None,
         llm_router: Router | None = None,
         rate_limited_model: str | None = None,
+        skip_guardrails: bool = False,
     ) -> tuple[dict, LiteLLMLoggingObj]:
         start_time: Final = datetime.now()  # start before calling guardrail hooks
 
@@ -2150,6 +2188,7 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict,
             data=self.data,
             call_type=route_type,
+            skip_guardrails=skip_guardrails,
         )
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
@@ -2897,6 +2936,11 @@ class ProxyBaseLLMRequestProcessing:
 
         if isinstance(response, dict):
             response.pop("_hidden_params", None)
+
+        if include_guardrail_response_requested(self.data):
+            response = attach_guardrail_information(  # rebind-ok: response tail rebinds the copied response
+                response=response, request_data=self.data
+            )
 
         # Call response headers hook for non-streaming success
         callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
