@@ -55199,6 +55199,54 @@
         "supports_response_schema": false,
         "supports_web_search": false
     },
+    "gemini/gemini-3.8-flash-tts": {
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_batches": 6.25e-08,
+        "cache_read_input_token_cost_flex": 2.5e-08,
+        "cache_read_input_token_cost_priority": 2.25e-07,
+        "input_cost_per_token": 5e-07,
+        "input_cost_per_token_batches": 2.5e-07,
+        "input_cost_per_token_flex": 2.5e-07,
+        "input_cost_per_token_priority": 9e-07,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "audio_speech",
+        "output_cost_per_audio_token": 9e-06,
+        "output_cost_per_audio_token_batches": 4.5e-06,
+        "output_cost_per_audio_token_flex": 4.5e-06,
+        "output_cost_per_audio_token_priority": 1.62e-05,
+        "output_cost_per_token": 9e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "gemini/gemini-3.8-flash-lite-tts": {
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_batches": 6.25e-08,
+        "cache_read_input_token_cost_flex": 2.5e-08,
+        "cache_read_input_token_cost_priority": 2.25e-07,
+        "input_cost_per_token": 5e-07,
+        "input_cost_per_token_batches": 2.5e-07,
+        "input_cost_per_token_flex": 2.5e-07,
+        "input_cost_per_token_priority": 9e-07,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "audio_speech",
+        "output_cost_per_audio_token": 6e-06,
+        "output_cost_per_audio_token_batches": 3e-06,
+        "output_cost_per_audio_token_flex": 3e-06,
+        "output_cost_per_audio_token_priority": 1.08e-05,
+        "output_cost_per_token": 6e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
     "gemini-2.5-flash-preview-tts": {
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
