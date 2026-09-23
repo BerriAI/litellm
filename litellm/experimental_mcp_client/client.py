@@ -1220,31 +1220,30 @@ class PersistentMCPSession:
                 if future.done():
                     continue
                 self._active = future
-                try:
-                    result: Final = await operation(session)
-                except Exception as e:
-                    if not future.done():
-                        future.set_exception(e)
-                    if isinstance(e, (ValueError, httpx2.HTTPError, OSError, MCPError)):
-                        return
-                else:
-                    if not future.done():
-                        future.set_result(result)
+                (outcome,) = await asyncio.gather(operation(session), return_exceptions=True)
+                if not future.done():
+                    if isinstance(outcome, BaseException):
+                        future.set_exception(outcome)
+                    else:
+                        future.set_result(outcome)
+                if isinstance(outcome, (ValueError, httpx2.HTTPError, OSError, MCPError)):
+                    return
                 self._active = None
 
         try:
-            await self._client.run_with_session(drain, quiet_on_error=True)
-        except Exception as e:
-            if not self._ready.done():
-                self._ready.set_exception(e)
-        finally:
-            self._fail_waiters()
+            (ended,) = await asyncio.gather(
+                self._client.run_with_session(drain, quiet_on_error=True), return_exceptions=True
+            )
+        except asyncio.CancelledError:
+            self._fail_waiters(None)
+            raise
+        self._fail_waiters(ended if isinstance(ended, BaseException) else None)
 
-    def _fail_waiters(self) -> None:
+    def _fail_waiters(self, cause: BaseException | None) -> None:
         pending: Final = (self._ready, self._active, *(future for _, future in self._drained()))
         for future in pending:
             if future is not None and not future.done():
-                future.set_exception(RuntimeError("upstream MCP session closed"))
+                future.set_exception(RuntimeError("upstream MCP session closed") if cause is None else cause)
 
     def _drained(self) -> tuple[_PendingOperation, ...]:
         return tuple(self._queue.get_nowait() for _ in range(self._queue.qsize()))
