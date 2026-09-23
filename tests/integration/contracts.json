@@ -1,9 +1,9 @@
 {
     "groups": {
         "management": [
-            "management",
             "authorization",
-            "configuration"
+            "configuration",
+            "management"
         ],
         "accounting": [
             "pricing",
@@ -18,9 +18,9 @@
             "streaming"
         ],
         "extensions": [
+            "compatibility",
             "mcp",
-            "observability",
-            "compatibility"
+            "observability"
         ],
         "sdk": [
             "sdk"
@@ -55,8 +55,8 @@
             "mgmt.key.update.false_zero_and_empty_values_affect_serving"
         ],
         "tests/integration/management/test_partial_update_sequences.py::test_project_omission_clear_and_invalid_update_have_distinct_effects": [
-            "mgmt.key.update.project_clear_preserves_scope",
-            "mgmt.key.update.invalid_batch_is_atomic"
+            "mgmt.key.update.invalid_batch_is_atomic",
+            "mgmt.key.update.project_clear_preserves_scope"
         ],
         "tests/integration/authorization/test_warmed_policy.py::test_generated_policy_changes_reach_both_warmed_workers": [
             "mgmt.key.update.two_workers_enforce_warmed_policy"
@@ -144,8 +144,8 @@
             "other.streaming.cancellation.closes_actual_provider_connection"
         ],
         "tests/integration/routing/test_observed_routing.py::test_retry_counts_and_public_errors_match_actual_provider_attempts": [
-            "other.routing.retries.several_attempts_reach_success_without_hidden_retries",
-            "other.routing.errors.nonretryable_and_exhausted_failures_remain_errors"
+            "other.routing.errors.nonretryable_and_exhausted_failures_remain_errors",
+            "other.routing.retries.several_attempts_reach_success_without_hidden_retries"
         ],
         "tests/integration/routing/test_observed_routing.py::test_loaded_fallback_selects_expected_deployment_and_keeps_response_identity": [
             "other.routing.fallback.loaded_configuration_selects_only_permitted_target"
@@ -251,8 +251,8 @@
             "other.mcp.lifecycle.generated_save_reload_preserves_effective_headers"
         ],
         "tests/integration/observability/test_callback_delivery.py::test_concurrent_success_and_failure_join_callbacks_and_rows_without_credentials": [
-            "other.observability.callbacks.credentials_stay_out_of_event_bodies",
-            "other.observability.callbacks.concurrent_results_join_complete_events_and_rows"
+            "other.observability.callbacks.concurrent_results_join_complete_events_and_rows",
+            "other.observability.callbacks.credentials_stay_out_of_event_bodies"
         ],
         "tests/integration/observability/test_otel_text_completion_choices.py::test_otel_weave_output_keeps_text_completion_provider_fields_beside_the_synthesized_message": [
             "other.observability.otel.text_completion_choices_keep_provider_fields"
@@ -2085,6 +2085,83 @@
         ],
         "tests/integration/management/test_guardrail_usage_config_guardrail.py::test_config_yaml_guardrail_is_served_by_usage_detail_and_overview": [
             "mgmt.guardrails.usage.config_yaml_guardrail_has_detail_and_overview_row"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_chat_completion_sdk_body_litellm_session_id_lands_as_conversation_id": [
+            "other.observability.otel.conversation_id_from_body_session_id_chat_sdk"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_chat_stream_async_sdk_x_litellm_session_id_header_lands_as_conversation_id": [
+            "other.observability.otel.conversation_id_from_header_chat_stream_async_sdk"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_messages_sdk_x_litellm_session_id_header_lands_as_conversation_id": [
+            "other.observability.otel.conversation_id_from_header_messages_sdk"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_messages_stream_async_sdk_langfuse_session_id_header_lands_as_conversation_id": [
+            "other.observability.otel.conversation_id_from_langfuse_header_messages_stream_async_sdk"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_responses_sdk_x_litellm_session_id_header_lands_as_conversation_id": [
+            "other.observability.otel.conversation_id_from_header_responses_sdk"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_responses_stream_raw_metadata_session_id_lands_as_conversation_id": [
+            "other.observability.otel.conversation_id_from_metadata_responses_stream_raw"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_chat_raw_metadata_session_id_lands_as_conversation_id": [
+            "other.observability.otel.conversation_id_from_metadata_chat_raw"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_integer_and_list_litellm_session_id_match_the_spend_row_or_are_dropped_together": [
+            "other.observability.otel.conversation_id_non_string_session_ids_match_spend_row"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_empty_string_litellm_session_id_leaves_the_span_without_a_conversation_id": [
+            "other.observability.otel.conversation_id_empty_string_session_id_is_omitted"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_five_kilobyte_session_header_round_trips_to_the_span_and_the_spend_row": [
+            "other.observability.otel.conversation_id_five_kilobyte_header_round_trips"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_duplicate_session_header_lands_once_and_unchanged": [
+            "other.observability.otel.conversation_id_duplicate_header_lands_once"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_unauthenticated_request_with_session_header_is_rejected_and_leaves_no_span": [
+            "other.observability.otel.conversation_id_unauthenticated_request_leaves_no_span"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_sink_rejecting_with_403_drops_those_spans_and_later_spans_still_land": [
+            "other.observability.otel.conversation_id_survives_sink_rejection"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_request_without_any_session_input_has_no_conversation_id": [
+            "other.observability.otel.conversation_id_absent_without_caller_session"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_generate_policy_minted_session_id_reaches_the_spend_row_but_not_the_span": [
+            "other.observability.otel.conversation_id_ignores_generated_session_id"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_generate_policy_keeps_the_langfuse_session_header_as_conversation_id": [
+            "other.observability.otel.conversation_id_langfuse_header_wins_over_generated"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_header_body_and_metadata_session_ids_resolve_to_the_same_id_as_the_spend_row": [
+            "other.observability.otel.conversation_id_header_precedence_matches_spend_row"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_three_identical_requests_produce_one_span_each_with_the_same_conversation_id": [
+            "other.observability.otel.conversation_id_repeated_requests_log_once_each"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_metadata_trace_id_alone_fills_the_spend_row_but_not_the_span": [
+            "other.observability.otel.conversation_id_ignores_trace_id_backfill"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_sink_outage_during_a_mixed_burst_lands_every_response_exactly_once_after_recovery": [
+            "other.observability.otel.conversation_id_sink_outage_recovers_exactly_once"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_slow_sink_during_a_burst_lands_every_response_exactly_once": [
+            "other.observability.otel.conversation_id_slow_sink_no_duplicates"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_killing_one_of_two_workers_mid_burst_keeps_serving_and_never_duplicates_a_span": [
+            "other.observability.otel.conversation_id_survives_worker_kill"
+        ],
+        "tests/integration/observability/test_otel_conversation_id.py::test_terminating_the_proxy_right_after_a_burst_flushes_every_span_before_exit": [
+            "other.observability.otel.conversation_id_flushes_on_shutdown"
+        ],
+        "tests/integration/management/test_user_updates_wedged_coordination_redis.py::test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged": [
+            "mgmt.user.update.budget_change_returns_promptly_with_wedged_coordination_redis",
+            "mgmt.user.bulk_update.budget_change_returns_promptly_with_wedged_coordination_redis",
+            "mgmt.customer.update.budget_change_returns_promptly_with_wedged_coordination_redis",
+            "mgmt.key.reset_spend.returns_promptly_with_wedged_coordination_redis",
+            "mgmt.auth_cache_invalidation.publish_parked_by_short_redis_wedge_lands_after_recovery",
+            "mgmt.auth_cache_invalidation.burst_with_worker_kill_keeps_serving_while_redis_wedged"
         ]
     },
     "browser": {
