@@ -119,4 +119,7 @@ spec:
       {{- end }}
   ttlSecondsAfterFinished: {{ .Values.migrationJob.ttlSecondsAfterFinished }}
   backoffLimit: {{ .Values.migrationJob.backoffLimit }}
+  {{- with .Values.migrationJob.activeDeadlineSeconds }}
+  activeDeadlineSeconds: {{ . }}
+  {{- end }}
 {{- end }}

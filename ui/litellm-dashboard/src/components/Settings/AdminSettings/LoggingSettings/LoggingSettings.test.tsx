@@ -4,9 +4,9 @@ import {
   useProxyConfig,
 } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
 import { useStoreRequestInSpendLogs } from "@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../../tests/test-utils";
@@ -23,12 +23,6 @@ vi.mock("@/app/(dashboard)/hooks/proxyConfig/useProxyConfig", async () => {
     useDeleteProxyConfigField: vi.fn(),
   };
 });
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
 vi.mock("@/components/shared/errorUtils", () => ({
   parseErrorMessage: vi.fn(),
 }));
@@ -36,7 +30,7 @@ vi.mock("@/components/shared/errorUtils", () => ({
 const mockUseStoreRequestInSpendLogs = vi.mocked(useStoreRequestInSpendLogs);
 const mockUseProxyConfig = vi.mocked(useProxyConfig);
 const mockUseDeleteProxyConfigField = vi.mocked(useDeleteProxyConfigField);
-const mockNotificationsManager = vi.mocked(NotificationsManager);
+const mockToast = vi.mocked(toast);
 const mockParseErrorMessage = vi.mocked(parseErrorMessage);
 
 describe("LoggingSettings", () => {
@@ -330,7 +324,7 @@ describe("LoggingSettings", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.success).toHaveBeenCalledWith("Spend logs settings updated successfully");
+      expect(mockToast.success).toHaveBeenCalledWith("Spend logs settings updated successfully");
     });
   });
 
@@ -351,11 +345,9 @@ describe("LoggingSettings", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith(
-        "Failed to save spend logs settings: Backend error",
-      );
+      expect(mockToast.fromError).toHaveBeenCalledWith("Failed to save spend logs settings: Backend error");
     });
-    expect(mockNotificationsManager.fromBackend).toHaveBeenCalledTimes(1);
+    expect(mockToast.fromError).toHaveBeenCalledTimes(1);
   });
 
   it("should show loading state on save button when update pending", () => {
@@ -368,7 +360,7 @@ describe("LoggingSettings", () => {
 
     const saveButton = screen.getByRole("button", { name: /Saving/i });
     expect(saveButton).toBeInTheDocument();
-    expect(saveButton.className).toContain("ant-btn-loading");
+    expect(within(saveButton).getByRole("img", { name: "loading" })).toBeInTheDocument();
   });
 
   it("should show loading state on save button when delete pending", () => {
@@ -381,7 +373,7 @@ describe("LoggingSettings", () => {
 
     const saveButton = screen.getByRole("button", { name: /Saving/i });
     expect(saveButton).toBeInTheDocument();
-    expect(saveButton.className).toContain("ant-btn-loading");
+    expect(within(saveButton).getByRole("img", { name: "loading" })).toBeInTheDocument();
   });
 
   it("should render form with initial values from config data", () => {
@@ -508,8 +500,7 @@ describe("LoggingSettings", () => {
     expect(screen.queryByPlaceholderText("e.g., 7d, 30d")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save Settings" })).not.toBeInTheDocument();
 
-    const skeletons = document.querySelectorAll(".ant-skeleton");
-    expect(skeletons.length).toBeGreaterThan(0);
+    expect(document.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0);
   });
 
   it("should report an error and not claim success when clearing a field fails", async () => {
@@ -530,11 +521,11 @@ describe("LoggingSettings", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.fromBackend).toHaveBeenCalled();
+      expect(mockToast.fromError).toHaveBeenCalled();
     });
     // the old value is still in force server side, so an unqualified success
     // notification would tell the admin the opposite of what happened
-    expect(mockNotificationsManager.success).not.toHaveBeenCalled();
+    expect(mockToast.success).not.toHaveBeenCalled();
   });
 
   it("should clear fields one at a time, never concurrently", async () => {
@@ -565,7 +556,7 @@ describe("LoggingSettings", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.success).toHaveBeenCalled();
+      expect(mockToast.success).toHaveBeenCalled();
     });
     // /config/field/delete rewrites the whole general_settings object, so two of
     // them in flight at once means the later write restores what the earlier cleared
@@ -622,11 +613,11 @@ describe("LoggingSettings", () => {
     await user.click(screen.getByRole("button", { name: "Save Settings" }));
 
     await waitFor(() => {
-      expect(mockNotificationsManager.success).toHaveBeenCalled();
+      expect(mockToast.success).toHaveBeenCalled();
     });
     expect(mockDeleteField).not.toHaveBeenCalled();
     expect(mockMutate).toHaveBeenCalledWith({ store_prompts_in_spend_logs: true }, expect.any(Object));
-    expect(mockNotificationsManager.fromBackend).not.toHaveBeenCalled();
+    expect(mockToast.fromError).not.toHaveBeenCalled();
   });
 
   it("should still clear a field that does have a stored value", async () => {
@@ -647,8 +638,88 @@ describe("LoggingSettings", () => {
     await user.click(screen.getByRole("button", { name: "Save Settings" }));
 
     await waitFor(() => {
-      expect(mockNotificationsManager.success).toHaveBeenCalled();
+      expect(mockToast.success).toHaveBeenCalled();
     });
     expect(clearedFieldNames()).toContain("maximum_spend_logs_cleanup_run_budget");
+  });
+  describe("numeric coercion parity", () => {
+    it("should round a fractional batch size to a whole number, in the input and in the payload", async () => {
+      const user = userEvent.setup();
+      mockMutate.mockImplementation((_params, options) => {
+        options?.onSuccess?.();
+      });
+
+      renderWithProviders(<LoggingSettings />);
+
+      const batchSize = screen.getByPlaceholderText("e.g., 1000");
+      await user.type(batchSize, "2000.7");
+      await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+      await waitFor(() => {
+        expect(mockMutate).toHaveBeenCalled();
+      });
+      expect(batchSize).toHaveDisplayValue("2001");
+      expect(mockMutate.mock.calls[0][0]).toEqual({
+        store_prompts_in_spend_logs: false,
+        maximum_spend_logs_cleanup_batch_size: 2001,
+      });
+      expect(typeof mockMutate.mock.calls[0][0].maximum_spend_logs_cleanup_batch_size).toBe("number");
+    });
+
+    it("should raise a below-minimum batch size to one rather than sending it", async () => {
+      const user = userEvent.setup();
+      mockMutate.mockImplementation((_params, options) => {
+        options?.onSuccess?.();
+      });
+
+      renderWithProviders(<LoggingSettings />);
+
+      const batchSize = screen.getByPlaceholderText("e.g., 1000");
+      await user.type(batchSize, "0");
+      await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+      await waitFor(() => {
+        expect(mockMutate).toHaveBeenCalled();
+      });
+      expect(batchSize).toHaveDisplayValue("1");
+      expect(mockMutate.mock.calls[0][0].maximum_spend_logs_cleanup_batch_size).toBe(1);
+    });
+
+    it("should send a trimmable duration exactly as typed, without coercion", async () => {
+      const user = userEvent.setup();
+      mockMutate.mockImplementation((_params, options) => {
+        options?.onSuccess?.();
+      });
+
+      renderWithProviders(<LoggingSettings />);
+
+      await user.type(screen.getByPlaceholderText("e.g., 7d, 30d"), "30d");
+      await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+      await waitFor(() => {
+        expect(mockMutate).toHaveBeenCalled();
+      });
+      expect(mockMutate.mock.calls[0][0]).toEqual({
+        store_prompts_in_spend_logs: false,
+        maximum_spend_logs_retention_period: "30d",
+      });
+    });
+
+    it("should keep a whitespace-only duration out of the payload", async () => {
+      const user = userEvent.setup();
+      mockMutate.mockImplementation((_params, options) => {
+        options?.onSuccess?.();
+      });
+
+      renderWithProviders(<LoggingSettings />);
+
+      await user.type(screen.getByPlaceholderText("e.g., 7d, 30d"), "   ");
+      await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+      await waitFor(() => {
+        expect(mockMutate).toHaveBeenCalled();
+      });
+      expect(mockMutate.mock.calls[0][0]).toEqual({ store_prompts_in_spend_logs: false });
+    });
   });
 });

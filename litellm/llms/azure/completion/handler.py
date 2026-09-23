@@ -1,6 +1,7 @@
 from collections.abc import Callable
-from typing import Any, Final
+from typing import Final
 
+import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -191,9 +192,9 @@ class AzureTextCompletion(BaseAzureLLM):
         model: str,
         api_base: str,
         data: dict,
-        timeout: Any,
+        timeout: float | httpx.Timeout | None,
         model_response: ModelResponse,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         max_retries: int,
         azure_ad_token: str | None = None,
         client=None,  # this is the AsyncAzureOpenAI
@@ -253,7 +254,7 @@ class AzureTextCompletion(BaseAzureLLM):
         api_version: str,
         data: dict,
         model: str,
-        timeout: Any,
+        timeout: float | httpx.Timeout | None,
         azure_ad_token: str | None = None,
         client=None,
         litellm_params: dict = {},
@@ -306,7 +307,7 @@ class AzureTextCompletion(BaseAzureLLM):
         api_version: str,
         data: dict,
         model: str,
-        timeout: Any,
+        timeout: float | httpx.Timeout | None,
         azure_ad_token: str | None = None,
         client=None,
         litellm_params: dict = {},

@@ -47,6 +47,7 @@ _EXPECTED_CONFIG_SYNCED_TABLE_NAMES = frozenset(
         "litellm_proxymodeltable",
         "litellm_searchtoolstable",
         "litellm_ssoconfig",
+        "litellm_uisettings",
     }
 )
 
@@ -702,6 +703,33 @@ async def test_model_repository_write_publishes_via_live_coordination_cache() ->
     assert json.loads(message) == {"object_type": "litellm_proxymodeltable"}
 
 
+async def test_ui_settings_write_publishes_via_live_coordination_cache() -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import _set_redis_usage_cache
+    from litellm.repositories.table_repositories import UISettingsRepository
+
+    client = _RecordingRedisClient()
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_uisettings.upsert = AsyncMock(return_value={"id": "ui_settings"})
+    table = UISettingsRepository(prisma_client).table
+    assert isinstance(table, _PublishOnWriteActions)
+
+    previous_cache = proxy_server.redis_usage_cache
+    _set_redis_usage_cache(_FakeRedisCache(client))
+    try:
+        await table.upsert(
+            where={"id": "ui_settings"},
+            data={"create": {"id": "ui_settings"}, "update": {"ui_settings": "{}"}},
+        )
+    finally:
+        _set_redis_usage_cache(previous_cache)
+
+    assert len(client.published) == 1
+    channel, message = client.published[0]
+    assert channel == CONFIG_SYNC_CHANNEL
+    assert json.loads(message) == {"object_type": "litellm_uisettings"}
+
+
 async def _publish_calls_for_invalidated_param(param_name: str) -> List[Tuple[str, str]]:
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import _set_redis_usage_cache
@@ -824,7 +852,7 @@ class _StopFailingSubscriber(ConfigSyncSubscriber):
         raise RuntimeError("stop failed")
 
 
-async def test_proxy_config_subscriber_resyncs_deployments_and_credentials() -> None:
+async def test_proxy_config_subscriber_resyncs_deployments_only() -> None:
     from litellm.proxy.proxy_server import ProxyConfig
 
     cache = _FakeRedisCache(_ScriptedPubSubRedisClient([_QueuePubSub()]))
@@ -852,10 +880,7 @@ async def test_proxy_config_subscriber_resyncs_deployments_and_credentials() -> 
         await callback()
     await config.stop_config_sync_subscriber()
 
-    assert calls == [
-        ("add_deployment", prisma_client, proxy_logging_obj),
-        ("get_credentials", prisma_client, None),
-    ]
+    assert calls == [("add_deployment", prisma_client, proxy_logging_obj)]
     assert config.config_sync_subscriber is None
     assert subscriber._task is None
 

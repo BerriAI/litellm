@@ -1,8 +1,9 @@
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping, Sequence
 from json import JSONDecodeError
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, cast
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -17,7 +18,8 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.llms.openai import ChatCompletionToolCallChunk
+from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -50,7 +52,30 @@ _METADATA_ALLOWLIST: Final = (
     "org_id",
 )
 
-_FallbackMode = Literal["fail_closed", "fail_open"]
+_FallbackMode: TypeAlias = Literal["fail_closed", "fail_open"]
+_MetadataValue: TypeAlias = str | int | float | Sequence[str | int | float]
+_ToolCalls: TypeAlias = list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall]
+
+
+class _AnalyzePayload(TypedDict):
+    """Request body posted to the Vigil Guard analyze endpoint."""
+
+    text: ReadOnly[str]
+    source: ReadOnly[str]
+    mode: ReadOnly[str]
+    metadata: ReadOnly[Mapping[str, _MetadataValue]]
+
+
+class _AnalysisView(TypedDict):
+    """Typed read of the analyze endpoint's decoded JSON body."""
+
+    analysis: ReadOnly[Mapping[str, object]]
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+    supported_event_hooks: ReadOnly[list[GuardrailEventHooks]]
 
 
 class _AsyncPostHandler(Protocol):
@@ -59,7 +84,7 @@ class _AsyncPostHandler(Protocol):
         *,
         url: str,
         headers: dict[str, str],
-        json: dict[str, Any],
+        json: _AnalyzePayload,
         timeout: httpx.Timeout,
     ) -> Awaitable[httpx.Response]: ...
 
@@ -76,7 +101,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         unreachable_fallback: str | None = None,
         timeout: float | None = None,
         async_handler: _AsyncPostHandler | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         resolved_base: Final = api_base or get_secret_str("VIGIL_GUARD_URL")
         if not resolved_base:
@@ -105,9 +130,12 @@ class VigilGuardGuardrail(CustomGuardrail):
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
 
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        forwarded: Final[_CustomGuardrailOptions] = {
+            "supported_event_hooks": list(self.get_supported_event_hooks()),
+            **kwargs,
+        }
 
-        super().__init__(**kwargs)
+        super().__init__(**forwarded)
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
@@ -188,6 +216,7 @@ class VigilGuardGuardrail(CustomGuardrail):
                     guardrail_name=self.guardrail_name,
                     message=self._build_block_reason(analysis),
                     should_wrap_with_default_message=False,
+                    blocked_content=True,
                 )
 
             if decision == "SANITIZED":
@@ -228,6 +257,7 @@ class VigilGuardGuardrail(CustomGuardrail):
                     guardrail_name=self.guardrail_name,
                     message=self._build_block_reason(analysis),
                     should_wrap_with_default_message=False,
+                    blocked_content=True,
                 )
 
             if decision == "SANITIZED":
@@ -244,8 +274,8 @@ class VigilGuardGuardrail(CustomGuardrail):
         exc: Exception,
         inputs: GenericGuardrailAPIInputs,
         source: str,
-        final_texts: list[Any],
-        final_tool_calls: Any,
+        final_texts: list[str],
+        final_tool_calls: _ToolCalls | None,
     ) -> GenericGuardrailAPIInputs:
         if self.unreachable_fallback == "fail_open":
             verbose_proxy_logger.error(
@@ -271,7 +301,7 @@ class VigilGuardGuardrail(CustomGuardrail):
     @staticmethod
     def _build_output(
         inputs: GenericGuardrailAPIInputs,
-        final_texts: list[Any],
+        final_texts: list[str],
         final_tool_calls: Any,
     ) -> GenericGuardrailAPIInputs:
         # When nothing was changed, return the input shape verbatim so the guardrail
@@ -292,7 +322,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         return guardrailed
 
     @staticmethod
-    def _tool_call_arguments(tool_calls: Any) -> list[tuple[int, str]]:
+    def _tool_call_arguments(tool_calls: Sequence[object] | None) -> list[tuple[int, str]]:
         pairs: Final[list[tuple[int, str]]] = []
         if isinstance(tool_calls, list):
             for index, tool_call in enumerate(tool_calls):
@@ -312,8 +342,8 @@ class VigilGuardGuardrail(CustomGuardrail):
         updated[index] = tool_call
         return updated
 
-    async def _analyze(self, text: str, source: str, metadata: dict[str, Any]) -> dict[str, Any]:
-        payload: Final = {
+    async def _analyze(self, text: str, source: str, metadata: Mapping[str, _MetadataValue]) -> Mapping[str, object]:
+        payload: Final[_AnalyzePayload] = {
             "text": text,
             "source": source,
             "mode": "full",
@@ -325,9 +355,12 @@ class VigilGuardGuardrail(CustomGuardrail):
             "Content-Type": "application/json",
         }
         response: Final = await self._post_with_retry(endpoint, headers, payload)
-        return response.json()
+        decoded: Final[_AnalysisView] = {"analysis": response.json()}
+        return decoded["analysis"]
 
-    async def _post_with_retry(self, endpoint: str, headers: dict[str, str], payload: dict[str, Any]) -> httpx.Response:
+    async def _post_with_retry(
+        self, endpoint: str, headers: dict[str, str], payload: _AnalyzePayload
+    ) -> httpx.Response:
         for attempt in range(2):
             try:
                 response = await self.async_handler.post(
@@ -364,7 +397,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def _build_block_reason(analysis: dict[str, Any]) -> str:
+    def _build_block_reason(analysis: Mapping[str, object]) -> str:
         for key in ("blockMessage", "decisionReason"):
             value = analysis.get(key)
             if isinstance(value, str) and value.strip():
@@ -377,14 +410,16 @@ class VigilGuardGuardrail(CustomGuardrail):
         return "Blocked by policy"
 
     @staticmethod
-    def _resolve_sanitized_text(original: str, analysis: dict[str, Any]) -> str:
+    def _resolve_sanitized_text(original: str, analysis: Mapping[str, object]) -> str:
         for key in ("sanitizedText", "outputText"):
             value = analysis.get(key)
             if isinstance(value, str):
                 return value
         return original
 
-    def _collect_metadata(self, request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]) -> dict[str, Any]:
+    def _collect_metadata(
+        self, request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]
+    ) -> Mapping[str, _MetadataValue]:
         sources: Final[list[dict]] = []
         if isinstance(request_data, dict):
             sources.append(request_data)
@@ -393,7 +428,7 @@ class VigilGuardGuardrail(CustomGuardrail):
                 if isinstance(nested, dict):
                     sources.append(nested)
 
-        collected: Final[dict[str, Any]] = {}
+        collected: Final[dict[str, _MetadataValue]] = {}
         for field in _METADATA_ALLOWLIST:
             for source in sources:
                 if field in source and source[field] is not None:
@@ -409,7 +444,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         return collected
 
     @staticmethod
-    def _clamp_metadata_value(value: Any) -> Any:
+    def _clamp_metadata_value(value: object) -> _MetadataValue | None:
         if isinstance(value, bool):
             return None
         if isinstance(value, str):
@@ -417,7 +452,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         if isinstance(value, (int, float)):
             return value
         if isinstance(value, list):
-            clamped: Final[list[Any]] = []
+            clamped: Final[list[str | int | float]] = []
             for item in value[:_METADATA_ARRAY_MAX_ITEMS]:
                 if isinstance(item, bool):
                     continue

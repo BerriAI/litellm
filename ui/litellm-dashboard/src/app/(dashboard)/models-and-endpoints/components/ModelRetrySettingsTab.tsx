@@ -34,6 +34,9 @@ const retryPolicyMap: Record<string, string> = {
   "RateLimitError (429)": "RateLimitErrorRetries",
   "ContentPolicyViolationError (400)": "ContentPolicyViolationErrorRetries",
   "InternalServerError (500)": "InternalServerErrorRetries",
+  "ServiceUnavailableError (503)": "ServiceUnavailableErrorRetries",
+  "NotFoundError (404)": "NotFoundErrorRetries",
+  "All other errors": "DefaultRetries",
 };
 
 const isValidRetryCount = (value: number) => Number.isFinite(value) && Number.isInteger(value) && value >= 0;
@@ -51,6 +54,10 @@ const ModelRetrySettingsTab = ({
   isSaving = false,
 }: ModelRetrySettingsTabProps) => {
   const isGlobalScope = selectedModelGroup === "global";
+  const scopeItems = [
+    { value: "global", label: "Global Default" },
+    ...availableModelGroups.map((group) => ({ value: group, label: group })),
+  ];
 
   const setGlobalValue = (retryPolicyKey: string, value: number | null) => {
     if (value == null) return;
@@ -82,6 +89,7 @@ const ModelRetrySettingsTab = ({
         <Label htmlFor="retry-policy-scope">Retry Policy Scope:</Label>
         <div className="w-48">
           <Select
+            items={scopeItems}
             value={isGlobalScope ? "global" : selectedModelGroup || availableModelGroups[0]}
             onValueChange={(value) => setSelectedModelGroup(value)}
           >
@@ -89,10 +97,9 @@ const ModelRetrySettingsTab = ({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="global">Global Default</SelectItem>
-              {availableModelGroups.map((group) => (
-                <SelectItem key={group} value={group}>
-                  {group}
+              {scopeItems.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
                 </SelectItem>
               ))}
             </SelectContent>

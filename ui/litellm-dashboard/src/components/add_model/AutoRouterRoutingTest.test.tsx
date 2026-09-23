@@ -1,9 +1,13 @@
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
 import { testAutoRouterRouting } from "../networking";
 import { ComplexityRouterConfigPayload } from "./build_complexity_router_config";
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
+  async () => await import("../../../tests/mocks/complexityScorerDefaults"),
+);
 
 vi.mock("../networking", () => ({
   testAutoRouterRouting: vi.fn(),
@@ -11,7 +15,8 @@ vi.mock("../networking", () => ({
 
 const CONFIG = {
   tiers: { SIMPLE: ["cheap"], MEDIUM: ["mid"], COMPLEX: ["strong"], REASONING: ["o3"] },
-  classifier_type: "heuristic",
+  classifier_type: "heuristic_v2",
+  heuristic_v2_success_threshold: 0,
 } as unknown as ComplexityRouterConfigPayload;
 
 const Harness = () => (
@@ -58,12 +63,30 @@ describe("AutoRouterRoutingTest", () => {
     expect(screen.getByTestId("auto-router-routing-test-send")).toBeDisabled();
   });
 
+  it("blocks previewing an invalid success threshold instead of sending NaN as null", () => {
+    renderWithProviders(
+      <AutoRouterRoutingTest
+        accessToken="token"
+        config={{ ...CONFIG, heuristic_v2_success_threshold: Number.NaN }}
+        defaultModel="mid"
+        routerName="my-router"
+        teamId={undefined}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("auto-router-routing-test-prompt"), { target: { value: "hello" } });
+    expect(screen.getByTestId("auto-router-routing-test-send")).toBeDisabled();
+    expect(screen.getByText("Success threshold must be a number between 0 and 1")).toBeVisible();
+    expect(testAutoRouterRouting).not.toHaveBeenCalled();
+  });
+
   it("routes the typed prompt through the config being edited and shows where it landed", async () => {
     const user = userEvent.setup();
     vi.mocked(testAutoRouterRouting).mockResolvedValue(successResponse);
     renderWithProviders(<Harness />);
 
-    await user.type(screen.getByTestId("auto-router-routing-test-prompt"), "think step by step");
+    fireEvent.change(screen.getByTestId("auto-router-routing-test-prompt"), {
+      target: { value: "think step by step" },
+    });
     await user.click(screen.getByTestId("auto-router-routing-test-send"));
 
     expect(testAutoRouterRouting).toHaveBeenCalledWith("token", expectedRequest);
@@ -80,7 +103,7 @@ describe("AutoRouterRoutingTest", () => {
     });
     renderWithProviders(<Harness />);
 
-    await user.type(screen.getByTestId("auto-router-routing-test-prompt"), "hello");
+    fireEvent.change(screen.getByTestId("auto-router-routing-test-prompt"), { target: { value: "hello" } });
     await user.click(screen.getByTestId("auto-router-routing-test-send"));
 
     expect(await screen.findByTestId("auto-router-routing-test-unconfigured")).toBeInTheDocument();
@@ -91,7 +114,7 @@ describe("AutoRouterRoutingTest", () => {
     vi.mocked(testAutoRouterRouting).mockResolvedValue({ status: "error", error: "no tier has a model" });
     renderWithProviders(<Harness />);
 
-    await user.type(screen.getByTestId("auto-router-routing-test-prompt"), "hello");
+    fireEvent.change(screen.getByTestId("auto-router-routing-test-prompt"), { target: { value: "hello" } });
     await user.click(screen.getByTestId("auto-router-routing-test-send"));
 
     expect(await screen.findByText("no tier has a model")).toBeInTheDocument();

@@ -46,11 +46,13 @@ def _to_oauth_token(payload: Mapping[str, object]) -> OAuthToken | None:
         return None
     refresh_token: Final = payload.get("refresh_token")
     expires_at: Final = payload.get("expires_at")
+    binding_proof: Final = payload.get("identity_binding_proof")
     return OAuthToken(
         access_token=access_token,
         expires_at=_iso_to_epoch(expires_at) if isinstance(expires_at, str) else None,
         refresh_token=refresh_token if isinstance(refresh_token, str) else None,
         scopes=_to_scopes(payload.get("scopes")),
+        identity_binding_proof=binding_proof if isinstance(binding_proof, str) else None,
     )
 
 

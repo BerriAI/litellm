@@ -9,7 +9,7 @@ The actual message transformation reuses OpenAIGPTConfig since Gemma uses OpenAI
 """
 
 from collections.abc import Callable
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
@@ -22,6 +22,11 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+    from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 
 
 class VertexGemmaConfig(OpenAIGPTConfig):
@@ -51,7 +56,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         self,
         model_response: ModelResponse,
         stream: bool,
-    ) -> ModelResponse | Any:
+    ) -> "ModelResponse | MockResponseIterator":
         """
         Helper method to return fake stream iterator if streaming is requested.
 
@@ -133,7 +138,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         client: HTTPHandler | httpx.Client | None,
         api_base: str,
         headers: dict[str, str],  # mutable-ok: forwarded to post(headers: dict | None)
-        request_data: dict[str, Any],  # mutable-ok: forwarded to post(json: dict | ...)
+        request_data: dict[str, object],  # mutable-ok: forwarded to post(json: dict | ...)
         timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         if isinstance(client, HTTPHandler):
@@ -168,7 +173,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         client: AsyncHTTPHandler | httpx.AsyncClient | None,
         api_base: str,
         headers: dict[str, str],  # mutable-ok: forwarded to post(headers: dict | None)
-        request_data: dict[str, Any],  # mutable-ok: forwarded to post(json: dict | ...)
+        request_data: dict[str, object],  # mutable-ok: forwarded to post(json: dict | ...)
         timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -210,7 +215,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         acompletion: bool,
         litellm_params: dict,
@@ -265,12 +270,12 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         api_key: str,
         model_response: ModelResponse,
         print_verbose: Callable,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         litellm_params: dict,
         client: HTTPHandler | httpx.Client | None = None,
         timeout: float | httpx.Timeout | None = None,
-        encoding: Any = None,
+        encoding: "Tokenizer | None" = None,
     ):
         """Synchronous completion request"""
         from litellm.utils import convert_to_model_response_object
@@ -355,12 +360,12 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         api_key: str,
         model_response: ModelResponse,
         print_verbose: Callable,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         litellm_params: dict,
         client: AsyncHTTPHandler | httpx.AsyncClient | None = None,
         timeout: float | httpx.Timeout | None = None,
-        encoding: Any = None,
+        encoding: "Tokenizer | None" = None,
     ):
         """Asynchronous completion request"""
         from litellm.utils import convert_to_model_response_object

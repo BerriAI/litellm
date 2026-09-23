@@ -41,7 +41,7 @@ test.describe("Edit LLM credential", () => {
     await row.getByTestId(`credential-actions-${credentialName}`).click();
     await page.getByTestId("credential-action-edit").click();
 
-    const modal = page.locator(".ant-modal-content").filter({ hasText: "Edit Credential" });
+    const modal = page.getByRole("dialog", { name: "Edit Credential" });
     await expect(modal).toBeVisible({ timeout: 10_000 });
 
     const apiKeyField = modal.locator("#api_key");

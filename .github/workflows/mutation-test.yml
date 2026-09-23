@@ -53,6 +53,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-uv-
 
+      - name: Cache the Rust build
+        uses: ./.github/actions/cache-cargo-build
+
       - name: Install dependencies
         run: |
           .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml
@@ -84,11 +87,20 @@ jobs:
         run: |
           uv pip uninstall pytest-retry || true
 
+      # Ends before the job's own deadline so a run that outlasts the budget is
+      # still followed by the report and upload steps. mutmut saves after every
+      # mutant result, to mutants/<source path>.meta, so an interrupted run
+      # still scores the mutants it finished and export-cicd-stats can read
+      # them; a cancelled job skips those steps and publishes nothing at all.
       - name: Run mutmut
+        timeout-minutes: 300
         env:
           # Make the mutants/ sandbox win over site-packages on sys.path so the
           # trampolined files are imported instead of the installed copy.
           PYTHONPATH: ${{ github.workspace }}/mutants
+          # Without this mutmut finds no covered lines and generates 0 mutants.
+          # See the file itself for why.
+          COVERAGE_RCFILE: ${{ github.workspace }}/.github/mutmut-coverage.rc
         run: |
           set -o pipefail
           mkdir -p mutants
@@ -127,6 +139,7 @@ jobs:
             mutmut-run.log
             mutants/mutmut-stats.json
             mutants/mutmut-cicd-stats.json
+            mutants/**/*.meta
             mutants/litellm/proxy/management_endpoints/**/*.py
           if-no-files-found: warn
           retention-days: 14

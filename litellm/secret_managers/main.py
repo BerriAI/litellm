@@ -365,6 +365,22 @@ def get_secret(
             raise e
 
 
+def secret_manager_would_be_consulted(secret_name: str) -> bool:
+    """
+    Returns True if a `get_secret` read for `secret_name` would actually reach the hosted manager.
+
+    Mirrors the gating `get_secret` applies below: the manager has to be up and readable, and
+    `hosted_keys`, when set, is an allowlist of the names it is consulted for. Callers use this to
+    tell "the manager does not have this key" apart from "the manager was never asked".
+    """
+    if not _should_read_secret_from_secret_manager():
+        return False
+    key_management_settings: Final = litellm._key_management_settings
+    if key_management_settings is None or key_management_settings.hosted_keys is None:
+        return True
+    return secret_name.removeprefix("os.environ/") in key_management_settings.hosted_keys
+
+
 def _should_read_secret_from_secret_manager() -> bool:
     """
     Returns True if the secret manager should be used to read the secret, False otherwise
@@ -373,11 +389,7 @@ def _should_read_secret_from_secret_manager() -> bool:
     - If the `_key_management_settings` access mode is "read_only" or "read_and_write", return True
     - Otherwise, return False
     """
-    if litellm.secret_manager_client is not None:
-        if litellm._key_management_settings is not None:
-            if (
-                litellm._key_management_settings.access_mode == "read_only"
-                or litellm._key_management_settings.access_mode == "read_and_write"
-            ):
-                return True
-    return False
+    key_management_settings: Final = litellm._key_management_settings
+    if litellm.secret_manager_client is None or key_management_settings is None:
+        return False
+    return key_management_settings.access_mode in ("read_only", "read_and_write")

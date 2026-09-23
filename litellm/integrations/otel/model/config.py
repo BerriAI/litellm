@@ -12,6 +12,7 @@ from litellm.integrations.otel.model.baggage import (
     DEFAULT_BAGGAGE_METADATA_KEYS,
     DEFAULT_BAGGAGE_TEAM_METADATA_KEYS,
 )
+from litellm.types.utils import OtelSpanScope
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
 OTEL_V2_ENV: Final = "LITELLM_OTEL_V2"
@@ -39,6 +40,7 @@ class ExporterOwner(str, Enum):
     WEAVE_OTEL = "weave_otel"
     LEVO = "levo"
     AGENTOPS = "agentops"
+    NEWRELIC = "newrelic"
 
 
 class _OTelV2Flag(BaseSettings):
@@ -68,9 +70,17 @@ class ExporterSpec(BaseModel):
 
     kind: str = Field(
         default="console",
-        description="console | in_memory | otlp_http | otlp_grpc | <factory kind>",
+        description="console | in_memory | otlp_http | http/json | otlp_grpc | <factory kind>",
     )
     endpoint: str | None = None
+    traces_endpoint: str | None = Field(
+        default=None,
+        description=(
+            "Complete OTLP/HTTP trace URL, used verbatim. Set this when the "
+            "collector serves traces on a path other than ``/v1/traces``; "
+            "``endpoint`` is a base URL the signal path is appended to."
+        ),
+    )
     headers: str | None = None
     owner: ExporterOwner | None = Field(
         default=None,
@@ -97,6 +107,15 @@ class ExporterSpec(BaseModel):
             "auto (Simple for console/in_memory, Batch otherwise)."
         ),
     )
+    requires_headers: bool = Field(
+        default=False,
+        description=(
+            "Skip this exporter when no headers are resolved. For destinations "
+            "that reject unauthenticated exports (e.g. New Relic), a spec kept "
+            "only as the per-request credential-stamping target would otherwise "
+            "export keyless traffic and produce a 4xx for every span batch."
+        ),
+    )
 
 
 class OpenTelemetryV2Config(BaseSettings):
@@ -116,6 +135,14 @@ class OpenTelemetryV2Config(BaseSettings):
     endpoint: str | None = Field(
         default=None,
         validation_alias=AliasChoices("OTEL_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"),
+    )
+    traces_endpoint: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OTEL_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"),
+        description=(
+            "Complete OTLP/HTTP trace URL for the single-destination shorthand, "
+            "used verbatim instead of ``endpoint`` + ``/v1/traces``."
+        ),
     )
     headers: str | None = Field(
         default=None,
@@ -137,6 +164,15 @@ class OpenTelemetryV2Config(BaseSettings):
         validation_alias=AliasChoices("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"),
     )
     legacy_compat: bool = Field(default=True, validation_alias=AliasChoices("LITELLM_OTEL_LEGACY_COMPAT"))
+    langfuse_span_scope: OtelSpanScope = Field(
+        default="full",
+        validation_alias=AliasChoices("langfuse_span_scope", "LITELLM_OTEL_LANGFUSE_SPAN_SCOPE"),
+        description=(
+            "``llm_only`` keeps just the model-call spans on the operator's own Langfuse "
+            "exporter (the spec whose owner is ``langfuse_otel``). Other exporters and "
+            "key/team destinations are not affected."
+        ),
+    )
 
     # ----- explicit multi-destination / vocabulary configuration ------------ #
 
@@ -184,7 +220,10 @@ class OpenTelemetryV2Config(BaseSettings):
         validation_alias=AliasChoices("baggage_metadata_keys", "LITELLM_OTEL_BAGGAGE_METADATA_KEYS"),
         description=(
             "Metadata sub-keys promoted under the ``litellm.metadata.*`` "
-            "namespace. Configure via the ``LITELLM_OTEL_BAGGAGE_METADATA_KEYS`` "
+            "namespace. A dotted path such as ``requester_metadata.trace_id`` "
+            "reads the caller's nested ``metadata.trace_id`` and is promoted as "
+            "``litellm.metadata.trace_id``; other dotted keys keep their full path. "
+            "Configure via the ``LITELLM_OTEL_BAGGAGE_METADATA_KEYS`` "
             "env var (comma-separated) or "
             "``callback_settings.otel.baggage_metadata_keys`` in config.yaml."
         ),
@@ -216,6 +255,13 @@ class OpenTelemetryV2Config(BaseSettings):
             return value.lower()
         return value
 
+    @field_validator("langfuse_span_scope", mode="before")
+    @classmethod
+    def _normalize_langfuse_span_scope(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
     @field_validator(
         "baggage_promoted_keys",
         "baggage_metadata_keys",
@@ -240,17 +286,22 @@ class OpenTelemetryV2Config(BaseSettings):
     @model_validator(mode="after")
     def _normalize(self) -> "OpenTelemetryV2Config":
         # An endpoint with the default exporter kind implies OTLP/HTTP.
-        if self.endpoint and self.exporter == "console":
+        if (self.endpoint or self.traces_endpoint) and self.exporter == "console":
             self.exporter = "otlp_http"
         # When no explicit destinations are given, fold the single-destination
-        # shorthand into one spec so the provider always has a destination.
+        # shorthand into one spec so the provider always has a destination. A spec
+        # with no fields set is how the presets tell "nothing configured" from an
+        # operator who asked for the console by name.
         if not self.exporters:
             self.exporters = [
                 ExporterSpec(
                     kind=self.exporter,
                     endpoint=self.endpoint,
+                    traces_endpoint=self.traces_endpoint,
                     headers=self.headers,
                 )
+                if not self.model_fields_set.isdisjoint(("exporter", "endpoint", "headers"))
+                else ExporterSpec()
             ]
         # Ensure ``genai`` is always present and first.
         names = list(self.mapper_names)

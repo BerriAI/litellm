@@ -2,13 +2,10 @@
 OpenAI RAG ingestion tests.
 """
 
-import os
-import sys
 from typing import Any, Dict, Optional
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm.types.rag import RAGIngestOptions, OpenAIVectorStoreOptions

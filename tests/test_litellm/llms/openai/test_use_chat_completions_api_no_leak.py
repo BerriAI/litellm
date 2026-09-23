@@ -7,11 +7,8 @@ proxy config, it must never be forwarded to the upstream provider's request
 body. OpenAI/Anthropic reject unknown body params with HTTP 400.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.types.utils import all_litellm_params

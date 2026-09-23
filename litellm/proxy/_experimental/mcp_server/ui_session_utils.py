@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Final
 
 from fastapi import HTTPException
@@ -91,7 +92,7 @@ async def admitted_user_context(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKey
     )
 
     try:
-        admitted: Final = await MCPRequestHandler._reload_admitted_user(user_id)
+        admitted: Final = await MCPRequestHandler.reload_admitted_user(user_id)
     except HTTPException as e:
         verbose_logger.warning("MCP dashboard session: admitted-subject reload failed for %s: %s", user_id, e.detail)
         return None
@@ -137,3 +138,15 @@ async def build_effective_auth_contexts(
     if admitted_context is None:
         return team_contexts
     return [*team_contexts, admitted_context]
+
+
+async def can_access_mcp_server(
+    user_api_key_auth: UserAPIKeyAuth,
+    server_id: str,
+    allowed_servers: Callable[[UserAPIKeyAuth], Awaitable[list[str]]],
+) -> bool:
+    """Resolve server access through the same credential contexts as MCP management."""
+    for context in await build_effective_auth_contexts(user_api_key_auth):
+        if server_id in await allowed_servers(context):
+            return True
+    return False

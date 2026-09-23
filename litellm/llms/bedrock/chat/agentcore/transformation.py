@@ -6,13 +6,14 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgen
 
 import json
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import quote
 
 import httpx
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -30,6 +31,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     Choices,
     Delta,
+    LlmProviders,
     Message,
     ModelResponse,
     ModelResponseStream,
@@ -39,6 +41,7 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -97,7 +100,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         if aws_bedrock_runtime_endpoint:
             base_url = aws_bedrock_runtime_endpoint
         else:
-            base_url = f"https://bedrock-agentcore.{region}.amazonaws.com"
+            base_url = f"https://bedrock-agentcore.{region}.{get_aws_dns_suffix(region)}"
 
         # Based on boto3 client.invoke_agent_runtime, the path is:
         # /runtimes/{URL-ENCODED-ARN}/invocations?qualifier=<value>
@@ -664,7 +667,12 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         )
 
         if response.status_code != 200:
-            raise BedrockError(status_code=response.status_code, message=str(response.read()))
+            raise BedrockError(
+                status_code=response.status_code,
+                message=str(response.read()),
+                headers=response.headers,
+                response=response,
+            )
 
         # LOGGING
         logging_obj.post_call(
@@ -687,6 +695,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 raise BedrockError(
                     status_code=response.status_code,
                     message=f"AgentCore: Failed to read/parse JSON response body: {e}",
+                    headers=response.headers,
                 )
             parsed: Final = self._parse_json_response(response_json)
 
@@ -863,7 +872,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(llm_provider=cast(Any, "bedrock"), params={})
+            client = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK, params={})
 
         verbose_logger.debug("Making async streaming request to: %s", api_base)
 
@@ -877,7 +886,12 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         )
 
         if response.status_code != 200:
-            raise BedrockError(status_code=response.status_code, message=str(await response.aread()))
+            raise BedrockError(
+                status_code=response.status_code,
+                message=str(await response.aread()),
+                headers=response.headers,
+                response=response,
+            )
 
         # LOGGING
         logging_obj.post_call(
@@ -900,6 +914,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 raise BedrockError(
                     status_code=response.status_code,
                     message=f"AgentCore: Failed to read/parse JSON response body: {e}",
+                    headers=response.headers,
                 )
             parsed: Final = self._parse_json_response(response_json)
 
@@ -974,7 +989,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -1028,6 +1043,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             raise BedrockError(
                 message=f"Error processing response: {e}",
                 status_code=raw_response.status_code,
+                headers=raw_response.headers,
             )
 
     def validate_environment(
@@ -1043,7 +1059,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         return headers
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
-        return BedrockError(status_code=status_code, message=error_message)
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def should_fake_stream(
         self,

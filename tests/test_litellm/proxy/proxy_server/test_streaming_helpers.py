@@ -15,12 +15,22 @@ Pins covered:
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import AsyncIterator
+from typing import Final, Literal
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from fastapi import HTTPException, Response
+from fastapi.responses import StreamingResponse
+from openai import APIError as OpenAIAPIError
+from pydantic import BaseModel
 
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+import litellm
 import litellm.proxy.proxy_server as ps
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.proxy_server import (
     _apply_streaming_chunk_hooks,
@@ -36,6 +46,12 @@ from litellm.proxy.proxy_server import (
     async_data_generator,
     data_generator,
     select_data_generator,
+)
+from litellm.types.llms.openai import (
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseFailedEvent,
+    ResponsesAPIResponse,
 )
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
 
@@ -865,6 +881,145 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
 
     # First entry is the successful "partial" chunk (bytes), last is the error.
     assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
+
+
+_UPSTREAM_BODY: Final = {
+    "code": "cyber_policy",
+    "message": "Upstream rejected request: flagged for possible cybersecurity risk",
+    "type": None,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "terminal,upstream_error,expected_code",
+    [
+        ("completed", None, None),
+        ("serialization_failure", None, "server_error"),
+        ("failure_after_completed", None, None),
+        pytest.param(
+            "upstream_failure",
+            litellm.AuthenticationError(
+                message="Upstream rejected request", llm_provider="openai", model="gpt-6-astra"
+            ),
+            "authentication_error", id="authentication_error",
+        ),
+        pytest.param(
+            "upstream_failure",
+            OpenAIAPIError(
+                message="Upstream rejected request",
+                request=httpx.Request("POST", "https://streaming.example/v1/responses"),
+                body={"code": {"reason": "overloaded"}, "type": {"unexpected": "object"}},
+            ),
+            "server_error", id="structured_provider_error_fields",
+        ),
+        pytest.param(
+            "upstream_failure",
+            litellm.InternalServerError(
+                message="Upstream rejected request", llm_provider="openai", model="gpt-6-astra", body=_UPSTREAM_BODY
+            ),
+            "cyber_policy", id="upstream_body_code_and_message",
+        ),
+        *(
+            pytest.param(
+                "upstream_failure", HTTPException(status_code=status, detail="Upstream rejected request"),
+                code, id=f"http_{status}",
+            )
+            for status, code in (
+                (400, "invalid_request_error"), (403, "permission_error"), (404, "not_found_error"),
+                (408, "request_timeout"), (422, "invalid_request_error"), (500, "server_error"), (503, "server_error"),
+            )
+        ),
+    ],
+)
+async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_terminal(
+    terminal: Literal["completed", "serialization_failure", "failure_after_completed", "upstream_failure"],
+    upstream_error: HTTPException | OpenAIAPIError | None,
+    expected_code: str | None,
+) -> None:
+    class ToolDelta(BaseModel):
+        type: Literal["response.function_call_arguments.delta"]
+        sequence_number: int
+        item_id: str
+        output_index: int
+        delta: str
+
+    class UnserializableTerminal(BaseModel):
+        type: Literal["response.completed"]
+        sequence_number: int
+        response: ResponsesAPIResponse
+        invalid: object
+
+    response: Final = ResponsesAPIResponse(id="resp_visible", created_at=1, model="gpt-6-astra", output=[])
+    created: Final = ResponseCreatedEvent.model_validate(
+        {"type": "response.created", "sequence_number": 0, "response": response}
+    )
+    completed: Final = ResponseCompletedEvent.model_validate(
+        {"type": "response.completed", "sequence_number": 2, "response": response}
+    )
+    tool_delta: Final = ToolDelta(
+        type="response.function_call_arguments.delta", sequence_number=1, item_id="fc_stream_error",
+        output_index=0, delta='{"path":"partial',
+    )
+    original_status: Final = (
+        upstream_error.status_code if isinstance(upstream_error, (HTTPException, litellm.AuthenticationError)) else None
+    )
+
+    async def upstream() -> AsyncIterator[BaseModel]:
+        yield created
+        yield tool_delta
+        if upstream_error is not None:
+            raise upstream_error
+        yield (
+            UnserializableTerminal(type="response.completed", sequence_number=2, response=response, invalid=object())
+            if terminal == "serialization_failure" else completed
+        )
+        if terminal == "failure_after_completed":
+            raise litellm.APIError(
+                status_code=500, message="Stream close failed", llm_provider="openai", model="gpt-6-astra"
+            )
+
+    frames: Final = [
+        frame
+        async for frame in select_data_generator(
+            response=upstream(),
+            user_api_key_dict=_user_auth(),
+            request_data={},
+            responses_stream_errors=True,
+        )
+    ]
+    decoded: Final = tuple(frame.decode() if isinstance(frame, bytes) else frame for frame in frames)
+    event_frames: Final = tuple(frame for frame in decoded if frame != "data: [DONE]\n\n")
+    payloads: Final = tuple(
+        json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: ")))
+        for frame in event_frames
+    )
+
+    assert decoded[-1] == "data: [DONE]\n\n"
+    assert len(decoded) == len(event_frames) + 1
+    assert payloads[0]["response"]["id"] == "resp_visible"
+    assert payloads[1] == tool_delta.model_dump()
+    assert len(payloads) == 3
+    if terminal in ("serialization_failure", "upstream_failure"):
+        failure: Final = ResponseFailedEvent.model_validate(payloads[-1])
+        assert event_frames[-1].startswith("event: response.failed\n")
+        assert failure.response.id == "resp_visible"
+        assert failure.response.status == "failed"
+        assert failure.response.error is not None
+        assert failure.response.error["code"] == expected_code
+        if upstream_error is None:
+            assert "serialize" in failure.response.error["message"].lower()
+        else:
+            assert "Upstream rejected request" in failure.response.error["message"]
+            if isinstance(upstream_error, litellm.InternalServerError):
+                assert failure.response.error["message"] == _UPSTREAM_BODY["message"]
+            if isinstance(upstream_error, (HTTPException, litellm.AuthenticationError)):
+                assert upstream_error.status_code == original_status
+        assert payloads[-1]["sequence_number"] > payloads[1]["sequence_number"]
+    else:
+        assert payloads[-1]["type"] == "response.completed"
+        assert payloads[-1]["sequence_number"] == 2
+        assert "error" not in payloads[-1]
 
 
 # ---------------------------------------------------------------------------
@@ -1702,3 +1857,204 @@ async def test_async_data_generator_resolves_deployment_once_per_steady_stream(m
     assert router.get_deployment.call_count == 1
     assert router.get_model_list.call_count == 1
     assert out[-1] == "data: [DONE]\n\n"
+
+
+# ---------------------------------------------------------------------------
+# run_thread: SSE keepalives during the time-to-first-token
+# ---------------------------------------------------------------------------
+
+
+class _SlowAssistantsStream(_FakeAssistantsStream):
+    """The assistants run only contacts the upstream when the stream is entered,
+    and `create_response` buffers that first chunk, so the whole
+    time-to-first-token is spent before a byte can be written."""
+
+    def __init__(self, chunks, delay):
+        super().__init__(chunks)
+        self._delay = delay
+
+    async def __aenter__(self):
+        await asyncio.sleep(self._delay)
+        return self
+
+
+async def _run_thread_streaming(monkeypatch, interval, delay=0.3, fails_with=None):
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", interval)
+
+    router = MagicMock()
+    router.get_model_list.return_value = []
+    if fails_with is None:
+        router.arun_thread = AsyncMock(return_value=_SlowAssistantsStream([_simple_chunk(content="hi")], delay))
+    else:
+
+        async def _fails_after_the_first_ping(**kwargs):
+            await asyncio.sleep(delay)
+            raise fails_with
+
+        router.arun_thread = _fails_after_the_first_ping
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    async def _passthrough_hook(*, user_api_key_dict, response, data, **kwargs):
+        return response
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_hook", _passthrough_hook)
+
+    async def _add_data(data, **kwargs):
+        return data
+
+    monkeypatch.setattr(ps, "add_litellm_data_to_request", _add_data)
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b'{"assistant_id": "asst_1", "stream": true}')
+    request.is_disconnected = AsyncMock(return_value=False)
+
+    return await ps.run_thread(
+        request=request,
+        thread_id="thr_1",
+        fastapi_response=Response(),
+        user_api_key_dict=_user_auth(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_thread_pings_while_the_assistants_run_is_still_silent(monkeypatch):
+    """Regression for LIT-5737. A streaming assistants run wrote zero bytes for the
+    whole time-to-first-token, so an idle-timeout hop drops a healthy connection."""
+    response = await _run_thread_streaming(monkeypatch, interval=0.05)
+
+    assert isinstance(response, StreamingResponse)
+    assert response.headers["x-accel-buffering"] == "no"
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert chunks[0] == b": ping\n\n"
+    assert chunks.count(b": ping\n\n") >= 3
+    assert chunks[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_run_thread_audits_a_failure_that_arrives_after_the_first_ping(monkeypatch):
+    """Once a ping is on the wire the run can no longer raise, so the handler's own
+    `except` never runs. The failure still has to reach post_call_failure_hook or it
+    goes unaudited, and it has to reach the client as an SSE frame."""
+    audited = []
+
+    async def _record_failure(*, user_api_key_dict, original_exception, request_data, **kwargs):
+        audited.append(original_exception)
+        return None
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _record_failure)
+
+    boom = RuntimeError("upstream died after the wire was already open")
+    response = await _run_thread_streaming(monkeypatch, interval=0.05, fails_with=boom)
+
+    assert isinstance(response, StreamingResponse)
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert chunks[0] == b": ping\n\n"
+    # The hook is the only thing that still sees the real exception; the client
+    # gets the sanitized frame, under the 200 the ping already committed.
+    assert audited == [boom]
+    assert b"upstream died after the wire was already open" not in chunks[-2]
+    assert json.loads(chunks[-2].removeprefix(b"data: "))["error"]["code"] == "500"
+    assert chunks[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_run_thread_stream_is_untouched_while_keepalives_are_unconfigured(monkeypatch):
+    """Off until an operator sets an interval, so the default run is unchanged."""
+    response = await _run_thread_streaming(monkeypatch, interval=None, delay=0.15)
+
+    assert isinstance(response, StreamingResponse)
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert not any(chunk.startswith(": ping") for chunk in chunks)
+    assert chunks[-1] == "data: [DONE]\n\n"
+
+
+# ---------------------------------------------------------------------------
+# async_queue_request: SSE keepalives during the time-to-first-token
+# ---------------------------------------------------------------------------
+
+
+async def _queue_streaming(monkeypatch, interval, delay=0.3, fails_with=None):
+    _patch_logging_flags(monkeypatch)
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", interval)
+
+    router = MagicMock()
+    router.get_model_list.return_value = []
+
+    async def _schedule_after_the_scheduler_queue_drains(**kwargs):
+        await asyncio.sleep(delay)
+        if fails_with is not None:
+            raise fails_with
+        return _async_iter([_simple_chunk(content="queued reply")])
+
+    router.schedule_acompletion = _schedule_after_the_scheduler_queue_drains
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    request = MagicMock()
+    request.url = "http://testserver/queue/chat/completions"
+    request.method = "POST"
+    request.headers = {}
+    request.json = AsyncMock(
+        return_value={
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "priority": 0,
+            "stream": True,
+        }
+    )
+    request.is_disconnected = AsyncMock(return_value=False)
+
+    return await ps.async_queue_request(
+        request=request,
+        fastapi_response=Response(),
+        user_api_key_dict=_user_auth(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_queue_request_pings_while_the_scheduler_is_still_waiting(monkeypatch):
+    response = await _queue_streaming(monkeypatch, interval=0.05)
+
+    assert isinstance(response, StreamingResponse)
+    assert response.headers["x-accel-buffering"] == "no"
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert chunks[0] == b": ping\n\n"
+    assert chunks.count(b": ping\n\n") >= 3
+    assert b'"content":"queued reply"' in chunks[-2]
+    assert chunks[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_queue_request_audits_a_failure_that_arrives_after_the_first_ping(monkeypatch):
+    audited = []
+
+    async def _record_failure(*, user_api_key_dict, original_exception, request_data, **kwargs):
+        audited.append(original_exception)
+        return None
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _record_failure)
+
+    boom = RuntimeError("scheduler died after the wire was already open")
+    response = await _queue_streaming(monkeypatch, interval=0.05, fails_with=boom)
+
+    assert isinstance(response, StreamingResponse)
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert chunks[0] == b": ping\n\n"
+    assert audited == [boom]
+    assert json.loads(chunks[-2].removeprefix(b"data: "))["error"]["code"] == "500"
+    assert chunks[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_queue_request_stream_is_untouched_while_keepalives_are_unconfigured(monkeypatch):
+    response = await _queue_streaming(monkeypatch, interval=None, delay=0.15)
+
+    assert isinstance(response, StreamingResponse)
+    chunks = [chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator]
+
+    assert not any(chunk.startswith(b": ping") for chunk in chunks)
+    assert chunks[-1] == b"data: [DONE]\n\n"

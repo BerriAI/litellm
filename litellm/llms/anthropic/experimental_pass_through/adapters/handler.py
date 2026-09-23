@@ -21,10 +21,13 @@ from litellm.llms.anthropic.experimental_pass_through.context_management import 
 )
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
+    litellm_logging_obj_from_kwargs,
+    local_model_name,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
+from litellm.types.llms.openai import OpenAIWebSearchOptions
 from litellm.types.utils import ModelResponse
 from litellm.utils import get_model_info
 
@@ -33,7 +36,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 # Anthropic-only keys already mapped by the translator; strip on extra_kwargs re-merge.
-ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset({"output_config"})
+ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset({"output_config", "safeguards"})
 
 _AnthropicMessages: TypeAlias = "list[dict[str, object]]"
 _AnthropicSystem: TypeAlias = "str | list[dict[str, object]] | None"
@@ -358,9 +361,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         except Exception:
             pass
 
-        if isinstance(model, str) and model and not model.startswith("responses/"):
-            # Prefix model with "responses/" to route to OpenAI Responses API
-            completion_kwargs["model"] = f"responses/{model}"
+        if isinstance(model, str) and model and "responses/" not in model:
+            local_model: Final = model.removeprefix(f"{custom_llm_provider}/")
+            completion_kwargs["model"] = f"{custom_llm_provider}/responses/{local_model}"
 
         auto_summary: Final = is_reasoning_auto_summary_enabled()
 
@@ -380,6 +383,49 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     updated_reasoning_effort: Final = dict(reasoning_effort)
                     updated_reasoning_effort["summary"] = effective_summary
                     completion_kwargs["reasoning_effort"] = updated_reasoning_effort
+
+    @staticmethod
+    def _plain_effort_for_chat_target(
+        completion_kwargs: _CompletionKwargs,
+        *,
+        thinking: Mapping[str, object] | None,
+    ) -> str | None:
+        reasoning_effort: Final = completion_kwargs.get("reasoning_effort")
+        if not thinking or not isinstance(reasoning_effort, dict) or "summary" not in reasoning_effort:
+            return None
+        effort: Final = reasoning_effort.get("effort")
+        model: Final = completion_kwargs.get("model")
+        if not isinstance(effort, str) or not isinstance(model, str) or not model:
+            return None
+        custom_llm_provider: Final = completion_kwargs.get("custom_llm_provider")
+        api_base: Final = completion_kwargs.get("api_base")
+        api_key: Final = completion_kwargs.get("api_key")
+        try:
+            local_model, resolved_provider, _, resolved_api_base = litellm.utils.get_llm_provider(
+                model=model,
+                custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+                api_base=api_base if isinstance(api_base, str) else None,
+                api_key=api_key if isinstance(api_key, str) else None,
+            )
+        except Exception:
+            return None
+        if resolved_provider == "litellm_proxy":
+            return None
+        from litellm.main import responses_api_bridge_check
+
+        web_search_options: Final = completion_kwargs.get("web_search_options")
+        tools: Final = completion_kwargs.get("tools")
+        model_info, _ = responses_api_bridge_check(
+            model=local_model,
+            custom_llm_provider=resolved_provider,
+            web_search_options=(
+                cast(OpenAIWebSearchOptions, web_search_options) if isinstance(web_search_options, dict) else None
+            ),
+            tools=cast("list[dict[str, object]]", tools) if isinstance(tools, list) else None,
+            reasoning_effort=reasoning_effort,
+            api_base=resolved_api_base,
+        )
+        return None if model_info.get("mode") == "responses" else effort
 
     @staticmethod
     def _normalize_reasoning_effort(
@@ -484,10 +530,14 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if "output_config" in extra_kwargs:
             request_data["output_config"] = extra_kwargs["output_config"]
 
+        custom_llm_provider: Final = extra_kwargs.get("custom_llm_provider")
         (
             openai_request,
             tool_name_mapping,
-        ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(request_data)
+        ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
+            request_data,
+            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+        )
 
         if openai_request is None:
             raise ValueError("Failed to translate request to OpenAI format")
@@ -526,6 +576,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             if key not in excluded_keys and key not in completion_kwargs and value is not None:
                 completion_kwargs[key] = value
 
+        explicit_prompt_cache_key: Final = extra_kwargs.get("prompt_cache_key")
+        if explicit_prompt_cache_key is not None:
+            completion_kwargs["prompt_cache_key"] = explicit_prompt_cache_key
+
         # Normalize reasoning_effort based on model capabilities
         # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
         # Must run BEFORE _route_openai_thinking, which prepends "responses/"
@@ -536,6 +590,13 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             completion_kwargs,
             thinking=thinking,
         )
+
+        plain_effort: Final = LiteLLMMessagesToCompletionTransformationHandler._plain_effort_for_chat_target(
+            completion_kwargs,
+            thinking=thinking,
+        )
+        if plain_effort is not None:
+            completion_kwargs["reasoning_effort"] = plain_effort
 
         return completion_kwargs, tool_name_mapping
 
@@ -608,10 +669,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
-                model=model,
+                model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=True,
+                litellm_logging_obj=litellm_logging_obj_from_kwargs(kwargs),
             )
             if transformed_stream is not None:
                 return transformed_stream
@@ -742,10 +804,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
-                model=model,
+                model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=False,
+                litellm_logging_obj=litellm_logging_obj_from_kwargs(kwargs),
             )
             if transformed_stream is not None:
                 return transformed_stream

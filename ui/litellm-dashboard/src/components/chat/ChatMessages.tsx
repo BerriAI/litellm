@@ -4,11 +4,16 @@ import { Wrench, Copy, Check, Pencil } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
+import { Bubble, BubbleContent } from "@/components/ui/Bubble";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import React, { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import ReasoningContent from "@/components/chat_ui/ReasoningContent";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
 import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
@@ -49,15 +54,10 @@ function MarkdownCodeRenderer({
   children,
   ...props
 }: React.ComponentPropsWithoutRef<"code"> & { node?: unknown }) {
+  const syntaxTheme = useSyntaxTheme(coy);
   const match = /language-(\w+)/.exec(className || "");
   return match ? (
-    <SyntaxHighlighter
-      style={coy as Record<string, React.CSSProperties>}
-      language={match[1]}
-      PreTag="div"
-      className="rounded-md my-2"
-      {...(props as Record<string, unknown>)}
-    >
+    <SyntaxHighlighter {...props} style={syntaxTheme} language={match[1]} PreTag="div" className="rounded-md my-2">
       {String(children).replace(/\n$/, "")}
     </SyntaxHighlighter>
   ) : (
@@ -66,6 +66,25 @@ function MarkdownCodeRenderer({
     </code>
   );
 }
+
+const markdownComponents: Components = {
+  code: MarkdownCodeRenderer,
+  pre: ({ node, ...props }) => <pre className="max-w-full overflow-x-auto" {...props} />,
+  p: ({ node, ...props }) => <p className="my-3 first:mt-0 last:mb-0" {...props} />,
+  ul: ({ node, ...props }) => <ul className="my-3 list-disc space-y-1 pl-5" {...props} />,
+  ol: ({ node, ...props }) => <ol className="my-3 list-decimal space-y-1 pl-5" {...props} />,
+  table: ({ node, ...props }) => <Table {...props} />,
+  thead: ({ node, ...props }) => <TableHeader {...props} />,
+  tbody: ({ node, ...props }) => <TableBody {...props} />,
+  tr: ({ node, ...props }) => <TableRow {...props} />,
+  th: ({ node, ...props }) => <TableHead {...props} />,
+  td: ({ node, ...props }) => <TableCell {...props} />,
+};
+
+const markdownWithoutImages: Components = {
+  ...markdownComponents,
+  img: ({ alt }) => <span>{alt || "Image omitted"}</span>,
+};
 
 interface UserBubbleProps {
   message: ChatMessage;
@@ -78,6 +97,7 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(message.content);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const showEditAction = hovered && !isStreaming && Boolean(onEdit);
 
   useEffect(() => {
     if (editing && textareaRef.current) {
@@ -116,8 +136,9 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
     return (
       <div className="flex flex-col items-end">
         <div className="w-[72%] bg-background border-2 border-primary rounded-xl overflow-hidden shadow-[0_0_0_3px_rgba(var(--primary)/0.1)]">
-          <textarea
+          <Textarea
             ref={textareaRef}
+            aria-label="Edit message"
             value={editValue}
             onChange={(e) => setEditValue(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -149,8 +170,8 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <div className="flex items-end gap-1.5 max-w-[72%]">
-        {hovered && !isStreaming && onEdit && (
+      <div className="flex min-w-0 max-w-[80%] items-end gap-1.5">
+        {showEditAction && (
           <TooltipProvider delay={300}>
             <Tooltip>
               <TooltipTrigger
@@ -158,6 +179,7 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
                   <Button
                     variant="ghost"
                     size="icon-xs"
+                    aria-label="Edit message"
                     onClick={() => {
                       setEditValue(message.content);
                       setEditing(true);
@@ -174,9 +196,9 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
             </Tooltip>
           </TooltipProvider>
         )}
-        <div className="bg-muted rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words text-foreground">
-          {message.content}
-        </div>
+        <Bubble variant="muted" align="end" className="max-w-full">
+          <BubbleContent className="whitespace-pre-wrap">{message.content}</BubbleContent>
+        </Bubble>
       </div>
       <span className="text-[11px] text-muted-foreground mt-1">{formatTimestamp(message.timestamp)}</span>
     </div>
@@ -185,13 +207,21 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
 
 interface AssistantBubbleProps {
   message: ChatMessage;
+  allowImages: boolean;
   isLastMessage: boolean;
   isStreaming: boolean;
   isTypingIndicator: boolean;
   mcpEvents?: ChatMessage["mcpEvents"];
 }
 
-function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicator, mcpEvents }: AssistantBubbleProps) {
+function AssistantBubble({
+  message,
+  allowImages,
+  isLastMessage,
+  isStreaming,
+  isTypingIndicator,
+  mcpEvents,
+}: AssistantBubbleProps) {
   const [reasoningKey, setReasoningKey] = useState(0);
   const prevStreamingRef = useRef<boolean>(isStreaming);
 
@@ -223,7 +253,7 @@ function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicato
   }
 
   return (
-    <div className="flex flex-col items-start max-w-[80%]">
+    <Bubble variant="ghost" className="w-full items-start">
       {showReasoning &&
         (showReasoningPlaceholder ? (
           <ThinkingPlaceholder />
@@ -231,17 +261,15 @@ function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicato
           <ReasoningContent key={reasoningKey} reasoningContent={message.reasoningContent!} />
         ))}
 
-      <div className="text-sm leading-[1.7] text-foreground break-words">
+      <BubbleContent className="w-full text-foreground">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
-          components={{
-            code: MarkdownCodeRenderer as React.ComponentType<React.ComponentPropsWithoutRef<"code">>,
-          }}
+          components={allowImages ? markdownComponents : markdownWithoutImages}
         >
           {mainContent}
         </ReactMarkdown>
         {stoppedSuffix && <span className="text-muted-foreground italic"> [stopped]</span>}
-      </div>
+      </BubbleContent>
 
       <CopyButton text={mainContent} />
       {mcpEvents && mcpEvents.length > 0 && (
@@ -255,7 +283,7 @@ function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicato
         totalLatency={message.totalLatency}
         usage={message.usage}
       />
-    </div>
+    </Bubble>
   );
 }
 
@@ -281,8 +309,9 @@ function CopyButton({ text }: { text: string }) {
               <Button
                 variant="ghost"
                 size="icon-xs"
+                aria-label={copied ? "Copied message" : "Copy message"}
                 onClick={handleCopy}
-                className={copied ? "text-emerald-600" : "text-muted-foreground hover:text-foreground"}
+                className={copied ? "text-success" : "text-muted-foreground hover:text-foreground"}
               >
                 {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
               </Button>
@@ -390,35 +419,53 @@ interface Props {
   onEditMessage?: (messageId: string, newContent: string) => void;
 }
 
-const ChatMessages: React.FC<Props> = ({ messages, isStreaming, onEditMessage }) => {
-  const lastIndex = messages.length - 1;
-  const lastMsg = messages[lastIndex] ?? null;
-  const isTypingIndicator = isStreaming && lastMsg !== null && lastMsg.role === "assistant" && lastMsg.content === "";
+interface ChatMessageContentProps {
+  message: ChatMessage;
+  allowImages?: boolean;
+  isStreaming?: boolean;
+  isLastMessage?: boolean;
+  onEditMessage?: (messageId: string, newContent: string) => void;
+}
+
+export function ChatMessageContent({
+  message,
+  allowImages = true,
+  isStreaming = false,
+  isLastMessage = true,
+  onEditMessage,
+}: ChatMessageContentProps) {
+  if (message.role === "user") {
+    return <UserBubble message={message} onEdit={onEditMessage} isStreaming={isStreaming} />;
+  }
+
+  if (message.role === "tool") {
+    return <ToolCard message={message} />;
+  }
 
   return (
+    <AssistantBubble
+      message={message}
+      allowImages={allowImages}
+      isLastMessage={isLastMessage}
+      isStreaming={isStreaming}
+      isTypingIndicator={isLastMessage && isStreaming && message.content === ""}
+      mcpEvents={message.mcpEvents}
+    />
+  );
+}
+
+const ChatMessages: React.FC<Props> = ({ messages, isStreaming, onEditMessage }) => {
+  return (
     <div className="flex flex-col gap-4">
-      {messages.map((msg, idx) => {
-        const isLastMessage = idx === lastIndex;
-
-        if (msg.role === "user") {
-          return <UserBubble key={msg.id} message={msg} onEdit={onEditMessage} isStreaming={isStreaming} />;
-        }
-
-        if (msg.role === "tool") {
-          return <ToolCard key={msg.id} message={msg} />;
-        }
-
-        return (
-          <AssistantBubble
-            key={msg.id}
-            message={msg}
-            isLastMessage={isLastMessage}
-            isStreaming={isStreaming}
-            isTypingIndicator={isLastMessage && isTypingIndicator}
-            mcpEvents={msg.mcpEvents}
-          />
-        );
-      })}
+      {messages.map((message, index) => (
+        <ChatMessageContent
+          key={message.id}
+          message={message}
+          isLastMessage={index === messages.length - 1}
+          isStreaming={isStreaming}
+          onEditMessage={onEditMessage}
+        />
+      ))}
     </div>
   );
 };

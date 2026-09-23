@@ -11,15 +11,12 @@ seam stayed untouched, so a guard that raises after the provider call would stil
 """
 
 import base64
-import os
-import sys
 from contextlib import ExitStack
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from fastapi import Response
 

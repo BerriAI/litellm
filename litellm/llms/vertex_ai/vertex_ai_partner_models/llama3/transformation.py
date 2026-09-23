@@ -1,6 +1,6 @@
 import types
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -19,6 +19,9 @@ from litellm.types.utils import (
 )
 
 from ...common_utils import VertexAIError
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class VertexAILlama3Config(OpenAIGPTConfig):
@@ -92,7 +95,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "VertexAILlama3StreamingHandler":
         return VertexAILlama3StreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -109,7 +112,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { UnifiedSelector } from "./UnifiedSelector";
@@ -90,7 +90,7 @@ describe("UnifiedSelector", () => {
 
     const combobox = screen.getByRole("combobox");
     await user.click(combobox);
-    await user.type(combobox, "One");
+    fireEvent.change(combobox, { target: { value: "One" } });
 
     await waitFor(() => {
       expect(screen.getAllByText("Option One").length).toBeGreaterThan(0);

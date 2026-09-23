@@ -113,6 +113,16 @@ def test_is_pure_asgi_not_base_http_middleware():
         ("/cohere/v2/chat", (BillableCategory.LLM, "/cohere")),
         # Passthrough inference bills under its provider prefix
         ("/anthropic/v1/messages", (BillableCategory.LLM, "/anthropic")),
+        # Bare AWS-SDK-shaped route carries the operation in X-Amz-Target and writes SpendLogs
+        ("/comprehendmedical", (BillableCategory.LLM, "/comprehendmedical")),
+        ("/comprehendmedical/DetectEntitiesV2", (BillableCategory.LLM, "/comprehendmedical")),
+        (
+            "/azure_speech/speech/recognition/conversation/cognitiveservices/v1",
+            (BillableCategory.LLM, "/azure_speech"),
+        ),
+        ("/azure_speech/speechtotext/v3.2/transcriptions", (BillableCategory.LLM, "/azure_speech")),
+        ("/transcribe", (BillableCategory.LLM, "/transcribe")),
+        ("/transcribe/StartTranscriptionJob", (BillableCategory.LLM, "/transcribe")),
         ("/mcp", (BillableCategory.MCP, "/mcp")),
         ("/mcp/", (BillableCategory.MCP, "/mcp")),
         ("/mcp/tools/list", (BillableCategory.MCP, "/mcp")),

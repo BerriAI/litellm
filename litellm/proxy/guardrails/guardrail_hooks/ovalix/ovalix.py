@@ -10,6 +10,7 @@ import os
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -25,11 +26,18 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
 BLOCKED_BY_OVALIX_FALLBACK_MESSAGE: Final = "This message was blocked by Ovalix"
 BLOCKED_ACTION_TYPE: Final = "block"
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+    supported_event_hooks: ReadOnly[list[GuardrailEventHooks]]
 
 
 class OvalixGuardrailMissingSecrets(Exception):
@@ -54,6 +62,7 @@ class OvalixGuardrailBlockedException(GuardrailRaisedException):
             guardrail_name=guardrail_name,
             message=message,
             should_wrap_with_default_message=should_wrap_with_default_message,
+            blocked_content=True,
         )
 
 
@@ -78,7 +87,7 @@ class OvalixGuardrail(CustomGuardrail):
         application_id: str | None = None,
         pre_checkpoint_id: str | None = None,
         post_checkpoint_id: str | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ):
         self._tracker_api_base = tracker_api_base or os.environ.get("OVALIX_TRACKER_API_BASE")
         self._tracker_api_key = tracker_api_key or os.environ.get("OVALIX_TRACKER_API_KEY")
@@ -86,10 +95,9 @@ class OvalixGuardrail(CustomGuardrail):
         self._pre_checkpoint_id = pre_checkpoint_id or os.environ.get("OVALIX_PRE_CHECKPOINT_ID")
         self._post_checkpoint_id = post_checkpoint_id or os.environ.get("OVALIX_POST_CHECKPOINT_ID")
 
-        if "supported_event_hooks" not in kwargs:
-            kwargs["supported_event_hooks"] = []
+        supported_event_hooks: Final = kwargs.get("supported_event_hooks", [])
 
-        self._validate_config(kwargs["supported_event_hooks"])
+        self._validate_config(supported_event_hooks)
 
         self._tracker_headers = httpx.Headers(
             {
@@ -101,7 +109,8 @@ class OvalixGuardrail(CustomGuardrail):
 
         self._async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
-        super().__init__(**kwargs)
+        forwarded: Final[_CustomGuardrailOptions] = {**kwargs, "supported_event_hooks": supported_event_hooks}
+        super().__init__(**forwarded)
         verbose_proxy_logger.debug(
             "Ovalix Guardrail initialized: tracker=%s, application_id=%s, pre_checkpoint_id=%s, post_checkpoint_id=%s",
             self._tracker_api_base,
@@ -195,7 +204,7 @@ class OvalixGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: Any | None = None,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
         """
         Apply Ovalix guardrail to the given inputs (request or response text).

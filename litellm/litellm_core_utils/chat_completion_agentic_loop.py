@@ -1,12 +1,23 @@
 # this is a patch to allow for agentic loops covering llm_http_handler.py and openai sdk based calling flows for the .completion() api
 
 import json
+from collections.abc import Mapping
+from itertools import chain
+from types import MappingProxyType
 from typing import Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
+from litellm.litellm_core_utils.agentic_loop_settings import (
+    DEFAULT_MAX_AGENTIC_LOOPS,
+    validated_max_agentic_loops,
+)
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
+    HEADROOM_CONVERTED_STREAM_KEY,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
@@ -46,13 +57,22 @@ def _post_hook_overridden(callback: CustomLogger) -> bool:
     return getattr(func, "__func__", func) is not getattr(base, "__func__", base)
 
 
+def _converted_stream_requested(kwargs: Mapping[str, object]) -> bool:
+    return bool(
+        kwargs.get("_code_interpreter_interception_converted_stream") or kwargs.get(HEADROOM_CONVERTED_STREAM_KEY)
+    )
+
+
 def _coerce_int(value: object, default: int) -> int:
     return int(value) if isinstance(value, (int, str)) else default
 
 
 def _agentic_loop_settings(kwargs: dict[str, object]) -> tuple[int, int, list[str]]:
     depth: Final = _coerce_int(kwargs.get("_agentic_loop_depth"), 0)
-    max_loops: Final = max(_coerce_int(kwargs.get("max_agentic_loops"), 3), 1)
+    configured: Final = validated_max_agentic_loops(
+        kwargs.get("max_agentic_loops"), field="litellm_params.max_agentic_loops"
+    )
+    max_loops: Final = DEFAULT_MAX_AGENTIC_LOOPS if configured is None else configured
     raw_fingerprints: Final = kwargs.get("_agentic_loop_fingerprints")
     fingerprints: Final = [str(fp) for fp in raw_fingerprints] if isinstance(raw_fingerprints, list) else []
     return depth, max_loops, fingerprints
@@ -80,25 +100,45 @@ def _check_agentic_loop_safety(
     return fingerprint
 
 
-def _wrap_response_as_fake_stream(response: object) -> object:
-    if getattr(response, "object", None) == "chat.completion.chunk":
+def _wrap_response_as_fake_stream(
+    response: object,
+    *,
+    model: str,
+    custom_llm_provider: str,
+    logging_obj: object,
+) -> object:
+    if isinstance(response, CustomStreamWrapper):
         return response
-    if not hasattr(response, "choices"):
+    if not isinstance(response, ModelResponse) or not isinstance(logging_obj, LiteLLMLoggingObject):
         return response
-    from litellm.llms.base_llm.base_model_iterator import (
-        convert_model_response_to_streaming,
+
+    return CustomStreamWrapper(
+        completion_stream=MockResponseIterator(model_response=response),
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        logging_obj=logging_obj,
     )
 
-    return convert_model_response_to_streaming(cast(ModelResponse, response))
 
-
-def _add_agentic_loop_metadata(kwargs_for_followup: dict[str, object]) -> None:
-    metadata = kwargs_for_followup.get("litellm_metadata")
-    metadata = dict(metadata) if isinstance(metadata, dict) else {}
-    for key, value in kwargs_for_followup.items():
-        if key.startswith("_agentic_loop") or key == "max_agentic_loops" or is_interception_internal_key(key):
-            metadata[key] = value
-    kwargs_for_followup["litellm_metadata"] = metadata
+def _with_agentic_loop_metadata(kwargs_for_followup: Mapping[str, object]) -> Mapping[str, object]:
+    metadata: Final = kwargs_for_followup.get("litellm_metadata")
+    return MappingProxyType(
+        {
+            **kwargs_for_followup,
+            "litellm_metadata": dict(  # mutable-ok: the follow-up call's logging and proxy hooks write into litellm_metadata in place
+                chain(
+                    metadata.items() if isinstance(metadata, dict) else (),
+                    (
+                        (key, value)
+                        for key, value in kwargs_for_followup.items()
+                        if key.startswith("_agentic_loop")
+                        or key == "max_agentic_loops"
+                        or is_interception_internal_key(key)
+                    ),
+                )
+            ),
+        }
+    )
 
 
 def _filter_followup_kwargs(source: dict[str, object]) -> dict[str, object]:
@@ -140,14 +180,17 @@ async def _execute_chat_completion_agentic_plan(
     if "tool_choice" not in patch.optional_params:
         optional_params_for_followup.pop("tool_choice", None)
 
-    kwargs_for_followup: Final = _filter_followup_kwargs(kwargs)
-    kwargs_for_followup.update(
-        {k: v for k, v in _filter_followup_kwargs(patch.kwargs).items() if k not in optional_params_for_followup}
+    kwargs_for_followup: Final = _with_agentic_loop_metadata(
+        build_agentic_followup_kwargs(
+            request_kwargs=_filter_followup_kwargs(kwargs),
+            patch_kwargs=_filter_followup_kwargs(patch.kwargs),
+            request_params=frozenset((*optional_params_for_followup, "model", "messages")),
+            depth=depth,
+            max_loops=max_loops,
+            fingerprints=fingerprints,
+            fingerprint=fingerprint,
+        )
     )
-    kwargs_for_followup["_agentic_loop_depth"] = depth + 1
-    kwargs_for_followup["max_agentic_loops"] = max_loops
-    kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
-    _add_agentic_loop_metadata(kwargs_for_followup)
 
     try:
         response_followup = await litellm.acompletion(
@@ -170,8 +213,13 @@ async def _execute_chat_completion_agentic_plan(
                     model,
                     str(e),
                 )
-        if kwargs.get("_code_interpreter_interception_converted_stream") and not depth:
-            return _wrap_response_as_fake_stream(response_followup)
+        if _converted_stream_requested(kwargs) and not depth:
+            return _wrap_response_as_fake_stream(
+                response_followup,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+            )
         return response_followup
     finally:
         try:
@@ -295,9 +343,14 @@ async def maybe_run_chat_completion_agentic_loop(
                 str(e),
             )
 
-    if kwargs.get("_code_interpreter_interception_converted_stream") and not depth and hasattr(response, "choices"):
+    if _converted_stream_requested(kwargs) and not depth:
         return cast(
             "ModelResponse | CustomStreamWrapper",
-            _wrap_response_as_fake_stream(response),
+            _wrap_response_as_fake_stream(
+                response,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+            ),
         )
     return None

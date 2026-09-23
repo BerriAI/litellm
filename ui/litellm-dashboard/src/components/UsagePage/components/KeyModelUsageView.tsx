@@ -31,15 +31,13 @@ const columns: ColumnDef<TopModelData>[] = [
     header: "Successful",
     accessorKey: "successful_requests",
     meta: { numeric: true },
-    cell: ({ row }) => (
-      <span className="text-green-600">{row.original.successful_requests?.toLocaleString() || 0}</span>
-    ),
+    cell: ({ row }) => <span className="text-success">{row.original.successful_requests?.toLocaleString() || 0}</span>,
   },
   {
     header: "Failed",
     accessorKey: "failed_requests",
     meta: { numeric: true },
-    cell: ({ row }) => <span className="text-red-600">{row.original.failed_requests?.toLocaleString() || 0}</span>,
+    cell: ({ row }) => <span className="text-destructive">{row.original.failed_requests?.toLocaleString() || 0}</span>,
   },
   {
     header: "Tokens",
@@ -64,13 +62,13 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
           <div className="flex space-x-2">
             <button
               onClick={() => setViewMode("table")}
-              className={`px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
+              className={`px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
             >
               Table
             </button>
             <button
               onClick={() => setViewMode("chart")}
-              className={`px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
+              className={`px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
             >
               Chart
             </button>

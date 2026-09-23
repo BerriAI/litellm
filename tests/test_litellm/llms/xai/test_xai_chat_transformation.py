@@ -1,14 +1,13 @@
-import os
-import sys
+from unittest.mock import Mock
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
-
-import pytest
+import httpx
 
 import litellm
-from litellm.llms.xai.chat.transformation import XAIChatConfig
+from litellm.llms.xai.chat.transformation import (
+    XAIChatCompletionStreamingHandler,
+    XAIChatConfig,
+)
+from litellm.llms.xai.cost_calculator import cost_per_token
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     ModelResponse,
@@ -26,11 +25,7 @@ class TestXAIReasoningTokenFolding:
         total_tokens: int,
         reasoning_tokens: int = 0,
     ) -> ModelResponse:
-        details = (
-            CompletionTokensDetailsWrapper(reasoning_tokens=reasoning_tokens)
-            if reasoning_tokens
-            else None
-        )
+        details = CompletionTokensDetailsWrapper(reasoning_tokens=reasoning_tokens) if reasoning_tokens else None
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -95,6 +90,16 @@ class TestXAIReasoningTokenFolding:
         assert response.usage.total_tokens == 999
 
 
+def test_max_completion_tokens_is_accepted_and_mapped_to_max_tokens() -> None:
+    optional_params = litellm.get_optional_params(
+        model="grok-4.20",
+        custom_llm_provider="xai",
+        max_completion_tokens=64,
+    )
+    assert optional_params["max_tokens"] == 64, optional_params
+    assert "max_completion_tokens" not in optional_params, optional_params
+
+
 class TestXAIParallelToolCalls:
     """Test suite for XAI parallel tool calls functionality."""
 
@@ -122,6 +127,24 @@ class TestXAIParallelToolCalls:
         assert result.get("parallel_tool_calls") is True
         assert len(result["messages"]) == 1
         assert result["messages"][0]["role"] == "user"
+
+
+class TestXAIChatWebSearchOptions:
+    """XAI answers /chat/completions requests carrying web_search_options with a 410 (Live Search retired)"""
+
+    def test_transform_request_drops_web_search_options(self):
+        config = XAIChatConfig()
+
+        result = config.transform_request(
+            model="xai/grok-4.6",
+            messages=[{"role": "user", "content": "newest litellm version?"}],
+            optional_params={"web_search_options": {"search_context_size": "medium"}, "temperature": 0.5},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "web_search_options" not in result
+        assert result["temperature"] == 0.5
 
 
 class TestXAIUsageNormalization:
@@ -176,27 +199,113 @@ class TestXAIChatWebSearchBilling:
     def test_enhance_noop_without_details(self):
         response = self._response_with_usage()
 
-        XAIChatConfig()._enhance_usage_with_xai_web_search_fields(
-            response, {"usage": {"prompt_tokens": 100}}
-        )
+        XAIChatConfig()._enhance_usage_with_xai_web_search_fields(response, {"usage": {"prompt_tokens": 100}})
 
         assert response.usage.prompt_tokens_details is None
         assert getattr(response.usage, "server_side_tool_usage_details", None) is None
 
-    def test_completion_cost_bills_chat_web_search_calls(self):
-        billed = self._response_with_usage()
-        XAIChatConfig()._enhance_usage_with_xai_web_search_fields(
-            billed,
-            {"usage": {"server_side_tool_usage_details": self._TOOL_DETAILS}},
+
+class TestXAIReportedCost:
+    """xAI reports what it charged; the transformation moves it to where litellm bills from.
+
+    ``cost`` is the field litellm already carries a provider stated cost in, so restating
+    ``cost_in_usd_ticks`` there is what lets ``llms/xai/cost_calculator.py`` bill the
+    reported figure. At 10^10 ticks to the dollar, 37756000 ticks is $0.0037756.
+    """
+
+    @staticmethod
+    def _transformed_usage(usage: dict) -> Usage:
+        raw_response = httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-xai",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "grok-4-latest",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "hi"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": usage,
+            },
         )
 
-        with_search = litellm.completion_cost(
-            completion_response=billed, model="xai/grok-4", custom_llm_provider="xai"
+        response = XAIChatConfig().transform_response(
+            model="grok-4-latest",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=Mock(),
+            request_data={},
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
         )
-        without_search = litellm.completion_cost(
-            completion_response=self._response_with_usage(),
-            model="xai/grok-4",
-            custom_llm_provider="xai",
+        return response.usage
+
+    def test_reported_cost_reaches_the_cost_calculator(self):
+        usage = self._transformed_usage(
+            {
+                "prompt_tokens": 100,
+                "completion_tokens": 200,
+                "total_tokens": 300,
+                "cost_in_usd_ticks": 37756000,
+            }
         )
 
-        assert with_search - without_search == pytest.approx(3 * 5.0 / 1000.0)
+        assert usage.cost == 0.0037756
+        assert cost_per_token(model="grok-4-latest", usage=usage) == (0.0, 0.0037756)
+
+    def test_usage_without_a_reported_cost_is_left_alone(self):
+        usage = self._transformed_usage({"prompt_tokens": 100, "completion_tokens": 200, "total_tokens": 300})
+
+        assert getattr(usage, "cost", None) is None
+
+    def test_negative_reported_cost_is_not_carried(self):
+        """A caller who can set api_base must not be able to report negative spend."""
+        usage = self._transformed_usage(
+            {
+                "prompt_tokens": 100,
+                "completion_tokens": 200,
+                "total_tokens": 300,
+                "cost_in_usd_ticks": -37756000,
+            }
+        )
+
+        assert getattr(usage, "cost", None) is None
+
+    def test_streamed_reported_cost_survives_chunk_aggregation(self):
+        """Streamed spend only matches if the conversion happens on the chunk.
+
+        Chunk aggregation rebuilds usage from the fields it models plus ``cost``, so a
+        chunk still carrying only ``cost_in_usd_ticks`` loses the reported amount.
+        """
+        handler = XAIChatCompletionStreamingHandler(streaming_response=iter([]), sync_stream=True)
+
+        parsed = handler.chunk_parser(
+            {
+                "id": "chatcmpl-xai",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "grok-4-latest",
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 200,
+                    "total_tokens": 300,
+                    "cost_in_usd_ticks": 37756000,
+                },
+            }
+        )
+
+        assert parsed.usage.cost == 0.0037756
+
+        assembled = litellm.stream_chunk_builder(chunks=[parsed])
+        assert assembled.usage.cost == 0.0037756
+        assert cost_per_token(model="grok-4-latest", usage=assembled.usage) == (
+            0.0,
+            0.0037756,
+        )

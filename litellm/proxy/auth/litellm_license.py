@@ -16,6 +16,11 @@ if TYPE_CHECKING:
     from litellm.proxy._types import EnterpriseLicenseData
 
 
+AUTO_ROUTER_LICENSE_FEATURE: Final = "auto_router"
+LICENSE_ALL_FEATURES: Final = "*"
+AUTO_ROUTER_LICENSE_REMEDY: Final = "A LiteLLM license with the 'auto_router' feature lifts the limit."
+
+
 class LicenseCheck:
     """
     - Check if license in env
@@ -149,6 +154,24 @@ class LicenseCheck:
             return False
         return team_count > _max_teams_in_license
 
+    def grants_feature(self, feature: str) -> bool:
+        if self.airgapped_license_data is None:
+            return False
+        allowed_features: Final = self.airgapped_license_data.get("allowed_features")
+        granted: Final = allowed_features if isinstance(allowed_features, list) else (allowed_features,)
+        return feature in granted or LICENSE_ALL_FEATURES in granted
+
+    def auto_router_capability_limit(self) -> int | None:
+        """
+        How many auto-routers may claim each gated classifier or customization capability:
+        unlimited (None) only when the signed license lists the auto_router feature or the
+        "*" wildcard that grants every feature, otherwise one per capability. A license verified
+        through the API carries no feature list, so it does not lift the limit either.
+        """
+        if self.grants_feature(AUTO_ROUTER_LICENSE_FEATURE):
+            return None
+        return 1
+
     def verify_license_without_api_request(self, public_key, license_key):
         try:
             from cryptography.hazmat.primitives import hashes
@@ -179,19 +202,21 @@ class LicenseCheck:
             # Decode and parse the data
             license_data: Final = json.loads(message.decode())
 
-            self.airgapped_license_data = EnterpriseLicenseData(**license_data)
-
             # debug information provided in license data
             verbose_proxy_logger.debug("License data: %s", license_data)
 
             # Check expiration date
             expiration_date: Final = datetime.strptime(license_data["expiration_date"], "%Y-%m-%d")
             if expiration_date < datetime.now():
+                self.airgapped_license_data = None
                 return False, "License has expired"
+
+            self.airgapped_license_data = EnterpriseLicenseData(**license_data)
 
             return True
 
         except Exception as e:
+            self.airgapped_license_data = None
             verbose_proxy_logger.debug(
                 "litellm.proxy.auth.litellm_license.py::verify_license_without_api_request - Unable to verify License locally. - %s",
                 e,

@@ -10,6 +10,7 @@ from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
 )
@@ -197,7 +198,11 @@ class LangfuseOtelLogger(OpenTelemetry):
                         )
                     elif item_type == "function_call":
                         arguments_str = getattr(item, "arguments", "{}")
-                        arguments_obj = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
+                        arguments_obj = (
+                            safe_json_loads(arguments_str, default={})
+                            if isinstance(arguments_str, str)
+                            else arguments_str
+                        )
                         langfuse_tool_call = {
                             "id": getattr(item, "id", ""),
                             "name": getattr(item, "name", ""),
@@ -226,7 +231,10 @@ class LangfuseOtelLogger(OpenTelemetry):
         from litellm.integrations.arize._utils import safe_set_attribute
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        langfuse_environment: Final = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
+        dynamic_params: Final = kwargs.get("standard_callback_dynamic_params")
+        langfuse_environment: Final = (
+            dynamic_params.get("langfuse_environment") if dynamic_params else None
+        ) or os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
         if langfuse_environment:
             safe_set_attribute(
                 span,

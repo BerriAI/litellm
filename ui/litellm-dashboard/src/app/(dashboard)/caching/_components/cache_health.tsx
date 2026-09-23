@@ -164,16 +164,16 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="summary" className="p-4">
+        <TabsContent value="summary" className="p-4" keepMounted>
           <div>
             <div className="mb-6 flex items-center">
               {response?.status === "healthy" ? (
-                <CheckCircle2 className="mr-2 size-5 text-green-600" />
+                <CheckCircle2 className="mr-2 size-5 text-success" />
               ) : (
                 <XCircle className="mr-2 size-5 text-destructive" />
               )}
               <p
-                className={`text-sm font-medium ${response?.status === "healthy" ? "text-green-600" : "text-destructive"}`}
+                className={`text-sm font-medium ${response?.status === "healthy" ? "text-success" : "text-destructive"}`}
               >
                 Cache Status: {response?.status || "unhealthy"}
               </p>
@@ -228,7 +228,7 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
           </div>
         </TabsContent>
 
-        <TabsContent value="raw" className="p-4">
+        <TabsContent value="raw" className="p-4" keepMounted>
           <div className="rounded-md bg-muted p-4 font-mono text-sm">
             <pre className="whitespace-pre-wrap wrap-break-word overflow-auto max-h-[500px]">
               {(() => {

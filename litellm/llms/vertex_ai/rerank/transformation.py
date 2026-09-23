@@ -4,7 +4,10 @@ Translates from Cohere's `/v1/rerank` input format to Vertex AI Discovery Engine
 Why separate file? Make it easy to see how transformation works
 """
 
-from typing import Any, Final
+import math
+import uuid
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
 
@@ -30,6 +33,8 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
 
     Reference: https://cloud.google.com/generative-ai-app-builder/docs/ranking#rank_or_rerank_a_set_of_records_according_to_a_query
     """
+
+    MAX_RECORDS_PER_SEARCH_UNIT = 100
 
     def __init__(self) -> None:
         super().__init__()
@@ -74,14 +79,15 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         """
         Validate and set up authentication for Vertex AI Discovery Engine API
         """
         # Get credentials and project info from optional_params (which contains vertex_credentials, etc.)
-        litellm_params: Final = optional_params.copy() if optional_params else {}
-        vertex_credentials: Final = self.safe_get_vertex_ai_credentials(litellm_params)
-        vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params)
+        vertex_params: Final = optional_params.copy() if optional_params else {}
+        vertex_credentials: Final = self.safe_get_vertex_ai_credentials(vertex_params)
+        vertex_project: Final = self.safe_get_vertex_ai_project(vertex_params)
 
         # Get access token using the base class method
         access_token, project_id = self._ensure_access_token(
@@ -206,10 +212,11 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
                 RerankResponseResult(index=result["index"], relevance_score=result["relevance_score"])
             )
 
-        # Create meta object
-        meta: Final = RerankResponseMeta(billed_units=RerankBilledUnits(search_units=len(records)))
+        input_record_count: Final = len(request_data.get("records", ()))
+        search_units: Final = math.ceil(input_record_count / self.MAX_RECORDS_PER_SEARCH_UNIT)
+        meta: Final = RerankResponseMeta(billed_units=RerankBilledUnits(search_units=search_units))
 
-        return RerankResponse(id=f"vertex_ai_rerank_{model}", results=rerank_results, meta=meta)
+        return RerankResponse(id=f"vertex_ai_rerank_{uuid.uuid4()}", results=rerank_results, meta=meta)
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return [
@@ -225,7 +232,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,

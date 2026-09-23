@@ -12,6 +12,7 @@ from litellm.integrations.datadog.datadog_handler import (
     get_datadog_hostname,
     get_datadog_pod_name,
     get_datadog_service,
+    normalize_datadog_tag_value,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
@@ -97,7 +98,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
         )
 
         if team_tag:
-            tags.append(f"team:{team_tag}")
+            tags.append(f"team:{normalize_datadog_tag_value(team_tag)}")
 
         return tags
 

@@ -1,14 +1,9 @@
 import asyncio
 import json
-import os
-import sys
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.constants import MAX_SIZE_IN_MEMORY_QUEUE
 from litellm.proxy._types import (
@@ -212,7 +207,10 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
         "compression_saved_tokens": 0,
         "compression_savings_spend": 0,
         "prompt_caching_savings_spend": 0,
+        "gateway_injected_caching_savings_spend": 0,
         "autorouter_savings_spend": 0,
+        "total_response_time_ms": 0,
+        "timed_requests": 0,
     }
 
     updates = [{test_key: test_transaction1}, {test_key: test_transaction2}]
@@ -263,7 +261,10 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
         "compression_saved_tokens": 0,
         "compression_savings_spend": 0,
         "prompt_caching_savings_spend": 0,
+        "gateway_injected_caching_savings_spend": 0,
         "autorouter_savings_spend": 0,
+        "total_response_time_ms": 0,
+        "timed_requests": 0,
     }
 
     # Add updates to queue
@@ -553,7 +554,7 @@ async def test_every_optional_daily_metric_aggregates(daily_spend_update_queue):
     numeric_fields = [
         name for name, annotation in BaseDailySpendTransaction.__annotations__.items() if _numeric(annotation)
     ]
-    assert "autorouter_savings_spend" in numeric_fields
+    assert {"autorouter_savings_spend", "total_response_time_ms", "timed_requests"} <= set(numeric_fields)
     increments = {field: index + 1 for index, field in enumerate(numeric_fields)}
 
     await daily_spend_update_queue.add_update({test_key: dict(increments)})
@@ -582,8 +583,12 @@ async def test_optional_metric_missing_from_an_older_payload_still_aggregates(
     }
 
     await daily_spend_update_queue.add_update({test_key: dict(base)})
-    await daily_spend_update_queue.add_update({test_key: {**base, "autorouter_savings_spend": 0.25}})
+    await daily_spend_update_queue.add_update(
+        {test_key: {**base, "autorouter_savings_spend": 0.25, "total_response_time_ms": 900, "timed_requests": 1}}
+    )
     await daily_spend_update_queue.aggregate_queue_updates()
     updates = await daily_spend_update_queue.flush_all_updates_from_in_memory_queue()
 
     assert updates[0][test_key]["autorouter_savings_spend"] == pytest.approx(0.25)
+    assert updates[0][test_key]["total_response_time_ms"] == 900
+    assert updates[0][test_key]["timed_requests"] == 1
