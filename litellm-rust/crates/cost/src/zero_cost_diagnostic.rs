@@ -1,6 +1,9 @@
 use serde_json::Value;
 
+use crate::catalog::ModelInfoCatalog;
+use crate::model_selection::ModelSelectionRequest;
 use crate::responses_usage::ChatUsage;
+use crate::usage_dispatch::get_usage_object;
 
 pub const ZERO_COST_COUNTER_NAME: &str = "litellm_zero_cost_requests_total";
 
@@ -26,6 +29,111 @@ pub struct ZeroCostDiagnostic {
     pub reason: ZeroCostReason,
     pub pricing_model: String,
     pub missing_pricing_keys: Vec<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ZeroCostFindingRequest<'a> {
+    pub model_selection: ModelSelectionRequest<'a>,
+    pub logging_details: Option<&'a Value>,
+    pub metadata: Option<&'a Value>,
+    pub call_type: Option<&'a str>,
+    pub response_cost: Option<f64>,
+    pub calculation_failed: bool,
+    pub cache_hit: bool,
+}
+
+pub fn is_unbilled_non_inference_call(
+    call_type: Option<&str>,
+    metadata: Option<&Value>,
+    response: &Value,
+) -> bool {
+    if !matches!(
+        call_type,
+        Some(
+            "get_responses"
+                | "aget_responses"
+                | "delete_responses"
+                | "adelete_responses"
+                | "cancel_responses"
+                | "acancel_responses"
+                | "list_input_items"
+                | "alist_input_items"
+                | "vector_store_create"
+                | "avector_store_create"
+                | "vector_store_retrieve"
+                | "avector_store_retrieve"
+                | "vector_store_list"
+                | "avector_store_list"
+                | "vector_store_update"
+                | "avector_store_update"
+                | "vector_store_delete"
+                | "avector_store_delete"
+                | "vector_store_file_create"
+                | "avector_store_file_create"
+                | "vector_store_file_list"
+                | "avector_store_file_list"
+                | "vector_store_file_retrieve"
+                | "avector_store_file_retrieve"
+                | "vector_store_file_content"
+                | "avector_store_file_content"
+                | "vector_store_file_update"
+                | "avector_store_file_update"
+                | "vector_store_file_delete"
+                | "avector_store_file_delete"
+        )
+    ) || response.get("background") == Some(&Value::Bool(true))
+    {
+        return false;
+    }
+    metadata
+        .and_then(|metadata| metadata.get("internal_call_origin"))
+        .and_then(Value::as_str)
+        != Some("background_response_cost_poll")
+}
+
+pub fn zero_cost_finding(
+    catalog: &ModelInfoCatalog,
+    request: ZeroCostFindingRequest<'_>,
+) -> Option<(ZeroCostDiagnostic, String)> {
+    if request.cache_hit || (request.response_cost.is_none() && !request.calculation_failed) {
+        return None;
+    }
+    if request.response_cost.is_some_and(|cost| cost != 0.0) {
+        return None;
+    }
+    let response = request.model_selection.response?;
+    if is_unbilled_non_inference_call(request.call_type, request.metadata, response) {
+        return None;
+    }
+    let usage = get_usage_object(response).ok().flatten()?;
+    let (pricing_model, pricing_entry) =
+        catalog.pricing_entry_for_cost_calc(request.model_selection, request.logging_details)?;
+    let diagnostic = diagnose_zero_cost(
+        &usage,
+        pricing_model,
+        pricing_entry,
+        request.calculation_failed,
+    )?;
+    let model = request
+        .model_selection
+        .model
+        .or_else(|| response.get("model").and_then(Value::as_str))?;
+    let provider = catalog.get_provider_for_cost_calc(
+        Some(model),
+        request.model_selection.provider,
+        request.model_selection.known_providers,
+    );
+    let warning = zero_cost_warning(
+        &diagnostic,
+        request
+            .metadata
+            .and_then(|metadata| metadata.get("model_group"))
+            .and_then(Value::as_str),
+        model,
+        provider.as_deref(),
+        &usage,
+    );
+    Some((diagnostic, warning))
 }
 
 pub fn used_pricing_keys(usage: &ChatUsage) -> Vec<&'static str> {
