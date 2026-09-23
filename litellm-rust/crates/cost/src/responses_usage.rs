@@ -49,7 +49,7 @@ pub struct CompletionTokenDetails {
     pub video_tokens: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ChatUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,

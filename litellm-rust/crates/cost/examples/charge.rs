@@ -521,6 +521,10 @@ fn main() {
             json!({"input_cost_per_second": 0.02}),
         ),
         (
+            "openai/realtime".to_owned(),
+            json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003}),
+        ),
+        (
             "openai/cache_savings_model".to_owned(),
             json!({"input_cost_per_token": 2e-6, "output_cost_per_token": 4e-6, "cache_read_input_token_cost": 0.5e-6}),
         ),
@@ -782,4 +786,22 @@ fn main() {
         "requested",
     );
     println!("realtime_transcription_cost={transcription_cost:.3}");
+    let realtime_events = [
+        json!({"type": "session.created", "session": {"model": "realtime"}}),
+        json!({"type": "response.done", "response": {"usage": {"input_tokens": 100, "output_tokens": 20}}}),
+    ];
+    let realtime_usage =
+        litellm_cost::realtime_cost::collect_and_combine_usage_from_realtime_stream_results(
+            &realtime_events,
+        )
+        .unwrap();
+    let realtime_cost = model_info_catalog.handle_realtime_stream_cost_calculation(
+        &realtime_events,
+        &realtime_usage,
+        "openai",
+        "requested",
+        None,
+        at,
+    );
+    println!("realtime_stream_cost={realtime_cost:.3}");
 }

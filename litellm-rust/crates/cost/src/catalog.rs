@@ -225,6 +225,58 @@ impl ModelInfoCatalog {
             .sum()
     }
 
+    pub fn handle_realtime_stream_cost_calculation(
+        &self,
+        results: &[Value],
+        combined_usage: &ChatUsage,
+        provider: &str,
+        requested_model: &str,
+        data_residency: Option<&str>,
+        at: Timestamp,
+    ) -> f64 {
+        let models = results
+            .iter()
+            .filter(|event| event.get("type").and_then(Value::as_str) == Some("session.created"))
+            .filter_map(|event| event.pointer("/session/model").and_then(Value::as_str))
+            .chain(std::iter::once(requested_model));
+        let token_cost = models
+            .filter_map(|model| {
+                let key = self.select_model_key(model, Some(provider), None)?;
+                let cost = calculate_generic_cost_from_model_info_with_region(
+                    combined_usage,
+                    &self.entries[key],
+                    None,
+                    false,
+                    data_residency,
+                    None,
+                    at,
+                );
+                let declares_pricing = [
+                    self.entries.get(model),
+                    self.entries.get(&format!("{provider}/{model}")),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|entry| {
+                    entry.as_object().is_some_and(|fields| {
+                        fields
+                            .iter()
+                            .any(|(field, value)| field.contains("cost_per") && !value.is_null())
+                    })
+                });
+                (cost.0 + cost.1 > 0.0 || declares_pricing).then_some(cost)
+            })
+            .next()
+            .unwrap_or((0.0, 0.0));
+        token_cost.0
+            + token_cost.1
+            + self.handle_realtime_transcription_cost_calculation(
+                results,
+                provider,
+                requested_model,
+            )
+    }
+
     pub fn cost_per_token(
         &self,
         request: ModelCostRequest<'_>,

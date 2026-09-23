@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
+use jiff::Timestamp;
 use litellm_cost::catalog::ModelInfoCatalog;
 use litellm_cost::realtime_cost::{
-    get_transcription_model_name_from_results, transcription_usage_cost,
+    collect_and_combine_usage_from_realtime_stream_results,
+    collect_and_combine_usage_from_responses_ws_results, get_transcription_model_name_from_results,
+    partition_results_by_service_tier, transcription_usage_cost,
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -75,4 +78,118 @@ fn handle_realtime_transcription_cost_calculation_uses_session_model_and_complet
         catalog.handle_realtime_transcription_cost_calculation(&events[..1], "openai", "requested"),
         0.0
     );
+}
+
+#[rstest]
+fn collect_realtime_usage_sums_billable_events_without_doubling_cache_writes() {
+    let events = [
+        json!({"type": "response.done", "response": {"usage": {"input_tokens": 100, "output_tokens": 10, "input_token_details": {"cached_tokens": 20, "cache_write_tokens": 5, "cached_tokens_details": {"audio_tokens": 12}}, "output_token_details": {"audio_tokens": 4}}}}),
+        json!({"type": "response.delta", "response": {"usage": {"input_tokens": 1000, "output_tokens": 1000}}}),
+        json!({"type": "response.done", "response": {"usage": {"input_tokens": 60, "output_tokens": 6, "input_token_details": {"cached_tokens": 10, "cache_write_tokens": 3, "cached_tokens_details": {"audio_tokens": 8}}, "output_token_details": {"audio_tokens": 2}}}}),
+    ];
+    let usage = collect_and_combine_usage_from_realtime_stream_results(&events).unwrap();
+    let prompt = usage.prompt_tokens_details.unwrap();
+    assert_eq!(
+        (
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens
+        ),
+        (160, 16, 176)
+    );
+    assert_eq!(
+        (
+            prompt.cached_tokens,
+            prompt.cache_write_tokens,
+            prompt.cache_creation_tokens
+        ),
+        (30, Some(8), Some(8))
+    );
+    assert_eq!(prompt.cached_tokens_details.unwrap().audio_tokens, Some(20));
+    assert_eq!(
+        usage.completion_tokens_details.unwrap().audio_tokens,
+        Some(6)
+    );
+}
+
+#[rstest]
+fn responses_ws_usage_filters_and_partitions_billable_events_by_service_tier() {
+    let events = [
+        json!({"type": "response.completed", "response": {"service_tier": "default", "usage": {"input_tokens": 100, "output_tokens": 40}}}),
+        json!({"type": "response.failed", "response": {"service_tier": "priority", "usage": {"input_tokens": 1000, "output_tokens": 1000}}}),
+        json!({"type": "response.incomplete", "response": {"service_tier": "priority", "usage": {"input_tokens": 60, "output_tokens": 10}}}),
+        json!({"type": "response.completed", "response": {"service_tier": "priority", "usage": null}}),
+        json!({"type": "response.completed", "response": {"service_tier": "default", "usage": {"input_tokens": 20, "output_tokens": 5}}}),
+    ];
+    let usage = collect_and_combine_usage_from_responses_ws_results(&events).unwrap();
+    assert_eq!((usage.prompt_tokens, usage.completion_tokens), (180, 55));
+    let groups = partition_results_by_service_tier(&events);
+    assert_eq!(
+        groups
+            .iter()
+            .map(|(tier, group)| (*tier, group.len()))
+            .collect::<Vec<_>>(),
+        vec![(Some("default"), 2), (Some("priority"), 1)]
+    );
+}
+
+#[rstest]
+#[case(json!({}), 100.0 * 0.002 + 20.0 * 0.003)]
+#[case(json!({"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}), 0.0)]
+fn handle_realtime_stream_cost_calculation_falls_through_only_for_priceless_session_models(
+    #[case] session_info: Value,
+    #[case] expected: f64,
+) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        ("openai/session".to_owned(), session_info),
+        (
+            "openai/requested".to_owned(),
+            json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003}),
+        ),
+    ]));
+    let events = [
+        json!({"type": "session.created", "session": {"model": "session"}}),
+        json!({"type": "response.done", "response": {"usage": {"input_tokens": 100, "output_tokens": 20}}}),
+    ];
+    let usage = collect_and_combine_usage_from_realtime_stream_results(&events).unwrap();
+    let at: Timestamp = "2026-09-22T12:00:00Z".parse().unwrap();
+    let actual = catalog.handle_realtime_stream_cost_calculation(
+        &events,
+        &usage,
+        "openai",
+        "requested",
+        None,
+        at,
+    );
+    assert!((actual - expected).abs() < 1e-12);
+}
+
+#[rstest]
+fn handle_realtime_stream_cost_calculation_adds_transcription_events() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        (
+            "openai/session".to_owned(),
+            json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003}),
+        ),
+        (
+            "openai/asr".to_owned(),
+            json!({"input_cost_per_second": 0.02}),
+        ),
+    ]));
+    let events = [
+        json!({"type": "session.created", "session": {"model": "session", "audio": {"input": {"transcription": {"model": "asr"}}}}}),
+        json!({"type": "response.done", "response": {"usage": {"input_tokens": 100, "output_tokens": 20}}}),
+        json!({"type": "conversation.item.input_audio_transcription.completed", "usage": {"type": "duration", "seconds": 2.0}}),
+    ];
+    let usage = collect_and_combine_usage_from_realtime_stream_results(&events).unwrap();
+    let at: Timestamp = "2026-09-22T12:00:00Z".parse().unwrap();
+    let actual = catalog.handle_realtime_stream_cost_calculation(
+        &events,
+        &usage,
+        "openai",
+        "requested",
+        None,
+        at,
+    );
+    assert!((actual - (100.0 * 0.002 + 20.0 * 0.003 + 2.0 * 0.02)).abs() < 1e-12);
 }
