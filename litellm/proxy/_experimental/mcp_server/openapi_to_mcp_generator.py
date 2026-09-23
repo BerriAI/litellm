@@ -170,8 +170,10 @@ async def load_openapi_spec_async(filepath: str) -> dict[str, Any]:
         r.raise_for_status()
         return r.json()
 
-    # fallback: local file
-    # Local filesystem path
+    return await asyncio.to_thread(_read_local_openapi_spec, filepath)
+
+
+def _read_local_openapi_spec(filepath: str) -> dict[str, Any]:
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
     with open(filepath, "r", encoding="utf-8") as f:
