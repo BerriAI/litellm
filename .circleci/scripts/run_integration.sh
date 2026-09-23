@@ -111,6 +111,9 @@ upstream_pid=$!
 if [ "$suite" = cost ]; then
   export INTEGRATION_WORKERS=8
 fi
+if [ "$suite" = mcp ]; then
+  export INTEGRATION_WORKERS=4
+fi
 start_proxy() {
   local port="$1"
   local log_name="$2"
@@ -146,7 +149,7 @@ proxy_pid="$launched_pid"
 curl --noproxy '*' -sSf -X POST "$INTEGRATION_PROXY_URL/config/update" \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'Content-Type: application/json' \
   -d '{"router_settings": {"num_retries": 0}}' > "$results/seed-router-settings.json"
-if [ "$suite" = management ]; then
+if [ "$suite" = management ] || [ "$suite" = mcp ]; then
   export INTEGRATION_PEER_URL=http://127.0.0.1:4001
   start_proxy 4001 peer.log
   peer_pid="$launched_pid"
