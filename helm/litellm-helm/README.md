@@ -156,7 +156,7 @@ data:
 type: Opaque
 ```
 
-#### Examples for `environmentSecrets` and `environemntConfigMaps`
+#### Examples for `environmentSecrets` and `environmentConfigMaps`
 
 ```yaml
 # Use config map for not-secret configuration data
