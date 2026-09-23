@@ -32,7 +32,11 @@ _EXCLUDED_ROUTE_GROUPS: Final = (
     frozenset(LiteLLMRoutes.llm_api_routes.value)
     .union(LiteLLMRoutes.mcp_routes.value, LiteLLMRoutes.ui_routes.value)
     .difference(LiteLLMRoutes.management_routes.value, LiteLLMRoutes.info_routes.value)
-    .union(LiteLLMRoutes.public_routes.value, LiteLLMRoutes.apply_guardrail_routes.value, ("/apply_guardrail",))
+    .union(
+        LiteLLMRoutes.public_routes.value,
+        LiteLLMRoutes.apply_guardrail_routes.value,
+        ("/apply_guardrail", "/usage/ai/chat"),
+    )
 )
 
 _EXCLUDED_TAGS: Final = frozenset(

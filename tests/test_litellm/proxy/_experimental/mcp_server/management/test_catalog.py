@@ -233,6 +233,7 @@ def test_inventory_command_writes_current_catalog(tmp_path, monkeypatch, capsys)
         "/policy/templates/enrich/stream",
         "/v1/evals",
         "/v1/evals/eval-id/runs/run-id",
+        "/usage/ai/chat",
     ],
 )
 def test_data_plane_execution_is_excluded_from_management(path):

@@ -2169,7 +2169,7 @@
     "excluded": "non-JSON request body"
   },
   "POST /usage/ai/chat": {
-    "tool": "usage_ai_chat_usage_ai_chat_post"
+    "excluded": "data plane, public or ui route group"
   },
   "POST /user/bulk_update": {
     "tool": "bulk_user_update_user_bulk_update_post"
