@@ -15,9 +15,10 @@ reliability behavior.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Final
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from proxy_client import ProxyClient
 from e2e_config import CHEAP_OPENAI_MODEL, PROXY_BASE_URL, unique_marker
@@ -365,6 +366,26 @@ def open_chat_stream(
 def model_id_of(resp: StreamingResponse) -> str | None:
     """The deployment the proxy served this response from, as it reports it."""
     return resp.headers.get("x-litellm-model-id")
+
+
+class _AzurePromptFilterResult(BaseModel):
+    content_filter_results: Mapping[str, object] | None = None
+
+
+class _AzureAnnotatedChatBody(BaseModel):
+    prompt_filter_results: Sequence[_AzurePromptFilterResult] | None = None
+
+
+def azure_prompt_filter_skipped(resp: StreamingResponse) -> bool:
+    """True when Azure's 200 recorded no prompt-filter verdict (every `content_filter_results`
+    empty), so the prompt has to be sent again."""
+    try:
+        annotated: Final = _AzureAnnotatedChatBody.model_validate_json(resp.body)
+    except ValidationError:
+        return False
+    if not annotated.prompt_filter_results:
+        return False
+    return all(not entry.content_filter_results for entry in annotated.prompt_filter_results)
 
 
 def _parsed(resp: StreamingResponse) -> ChatResponse | None:
