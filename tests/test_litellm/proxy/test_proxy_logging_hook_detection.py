@@ -348,6 +348,60 @@ async def test_post_call_stream_guardrail_keeps_own_iterator_on_chat_completions
 
 
 @pytest.mark.asyncio
+async def test_post_call_stream_records_masked_text_for_deferred_logging(monkeypatch):
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    monkeypatch.setattr(litellm, "callbacks", [_content_filter_guardrail("MASK")])
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    logging_obj = _streaming_logging_obj()
+
+    async def fake_stream():
+        yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="the zebra runs"))])
+        yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")])
+
+    delivered_text = ""
+    async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+        response=fake_stream(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/chat/completions"),
+        request_data={"model": "gpt-4o-mini", "metadata": {}, "litellm_logging_obj": logging_obj},
+    ):
+        for choice in chunk.choices:
+            delivered_text += choice.delta.content or ""
+
+    assert "zebra" not in delivered_text
+    assert logging_obj.model_call_details[SERVED_OUTPUT_TEXTS_KEY] == (delivered_text,)
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_records_the_served_text_when_the_client_disconnects(monkeypatch):
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    monkeypatch.setattr(litellm, "callbacks", [_content_filter_guardrail("MASK")])
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    logging_obj = _streaming_logging_obj()
+
+    async def fake_stream():
+        yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="the zebra runs"))])
+        yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=" far"))])
+
+    stream = proxy_logging.async_post_call_streaming_iterator_hook(
+        response=fake_stream(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/chat/completions"),
+        request_data={"model": "gpt-4o-mini", "metadata": {}, "litellm_logging_obj": logging_obj},
+    )
+    first = await stream.__anext__()
+    await stream.aclose()
+
+    delivered_text = "".join(choice.delta.content or "" for choice in first.choices)
+    assert "zebra" not in delivered_text
+    assert logging_obj.model_call_details[SERVED_OUTPUT_TEXTS_KEY] == (delivered_text,)
+
+
+@pytest.mark.asyncio
 async def test_unified_guardrail_iterator_accepts_explicit_guardrail():
     """
     The dispatch passes each guardrail explicitly instead of through a shared
@@ -487,6 +541,68 @@ async def test_post_call_stream_masking_guardrail_keeps_own_iterator_on_anthropi
 
     assert own_hook_streams == ["claude-sonnet-5"]
     assert delivered == chunks
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_presidio_output_masking_masks_anthropic_messages_stream(monkeypatch):
+    """Regression: the presidio output-masking callback built by initialize_presidio
+    was rerouted onto the unified scan-only path on /v1/messages, so a card number
+    the analyzer flagged still streamed to the caller unmasked."""
+    import json
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
+    from litellm.types.guardrails import SupportedGuardrailIntegrations
+
+    handler = InMemoryGuardrailHandler()
+    result = handler.initialize_guardrail(
+        guardrail={
+            "guardrail_name": "presidio-card-mask",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+                "mode": ["pre_call", "post_call"],
+                "default_on": True,
+                "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+                "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+                "pii_entities_config": {"CREDIT_CARD": "MASK"},
+                "mock_redacted_text": {"text": "<CREDIT_CARD>", "items": []},
+            },
+        }
+    )
+    guardrail_id = result["guardrail_id"]
+    callbacks = [
+        handler.guardrail_id_to_custom_guardrail[guardrail_id],
+        *handler.guardrail_id_to_sibling_callbacks[guardrail_id],
+    ]
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+
+    chunks = _anthropic_stream_chunks(["4111", " 1111 1111 1111"])
+
+    async def fake_stream():
+        for chunk in chunks:
+            yield chunk
+
+    delivered = []
+    async for chunk in ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+        response=fake_stream(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
+        request_data={
+            "model": "claude-sonnet-5",
+            "litellm_logging_obj": _streaming_logging_obj(),
+            "metadata": {},
+        },
+    ):
+        delivered.append(chunk)
+
+    wire = b"".join(delivered).decode()
+    text_deltas = [
+        json.loads(line[6:])["delta"]["text"]
+        for line in wire.split("\n")
+        if line.startswith("data: ") and json.loads(line[6:]).get("delta", {}).get("type") == "text_delta"
+    ]
+    assert "4111" not in wire, wire
+    assert "".join(text_deltas) == "<CREDIT_CARD>", wire
+    assert wire.count("event: message_stop") == 1, wire
 
 
 class _AppliesGuardrail(CustomGuardrail):
