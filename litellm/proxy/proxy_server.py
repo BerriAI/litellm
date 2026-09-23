@@ -12150,23 +12150,9 @@ async def audio_speech(
         upstream_content_type: Final = (
             response.response.headers.get("content-type") if isinstance(response, HttpxBinaryResponseContent) else None
         )
-        resolved_media_type: Final = resolve_speech_media_type(
+        media_type: Final = extra_media_type or resolve_speech_media_type(
             upstream_content_type=upstream_content_type,
             response_format=requested_format_str,
-        )
-        request_model: Final = data.get("model", "")
-        media_type: Final = (
-            extra_media_type
-            if extra_media_type is not None
-            else (
-                "audio/wav"
-                if (
-                    requested_format_str is None
-                    and isinstance(request_model, str)
-                    and litellm.utils.is_gemini_tts_model(request_model)
-                )
-                else resolved_media_type
-            )
         )
 
         return StreamingResponse(
