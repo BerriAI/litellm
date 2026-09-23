@@ -2631,6 +2631,36 @@ async def test_apply_to_output_streaming_gemini_first_frame_split_across_transpo
 
 
 @pytest.mark.asyncio
+async def test_apply_to_output_streaming_unterminated_first_frame_is_released_once_it_exceeds_the_cap():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    piece = b"data: " + b"x" * 1023 + b"\n"
+    pieces_to_cap = -(-(64 * 1024) // len(piece))
+    released_at: list[int] = []
+
+    async def mock_stream():
+        for index in range(pieces_to_cap * 4):
+            if collected:
+                released_at.append(index)
+            yield piece
+
+    collected: list[object] = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert released_at, "nothing reached the caller before the upstream finished"
+    assert released_at[0] == pieces_to_cap, released_at[:3]
+    assert b"".join(collected) == piece * (pieces_to_cap * 4)
+
+
+@pytest.mark.asyncio
 async def test_apply_to_output_streaming_anthropic_sse_bytes_fail_closed_when_presidio_is_unreachable():
     """
     The raw SSE stream is fully drained before masking, so a Presidio outage

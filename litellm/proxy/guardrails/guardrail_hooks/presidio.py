@@ -94,9 +94,12 @@ def _json_escaped_len(text: str) -> int:
     return len(json.dumps(text).encode("utf-8")) - 2  # strip the surrounding quotes
 
 
+_MAX_FIRST_SSE_FRAME_BYTES: Final = 64 * 1024
+
+
 def _holds_complete_sse_frame(raw: bytes) -> bool:
-    """Whether ``raw`` contains at least one SSE event terminated by a blank line."""
-    return b"\n\n" in raw or b"\r\n\r\n" in raw
+    """Whether ``raw`` holds one blank-line terminated SSE event, or is too large to keep joining."""
+    return b"\n\n" in raw or b"\r\n\r\n" in raw or len(raw) >= _MAX_FIRST_SSE_FRAME_BYTES
 
 
 async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGenerator[object, None]:
