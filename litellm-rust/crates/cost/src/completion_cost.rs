@@ -10,6 +10,10 @@ fn number(value: &Value) -> Option<f64> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CompletionCost {
+    pub input: f64,
+    pub output: f64,
+    pub built_in_tools: f64,
+    pub additional: f64,
     pub original: f64,
     pub discounted: f64,
     pub total: f64,
@@ -62,12 +66,17 @@ pub fn completion_cost(
     discount_config: &Value,
     margin_config: &Value,
 ) -> CompletionCost {
-    let original = prompt + output + built_in_tools + additional_costs.iter().sum::<f64>();
+    let additional = additional_costs.iter().sum::<f64>();
+    let original = prompt + output + built_in_tools + additional;
     let (discounted, discount_percent, discount_amount) =
         apply_cost_discount(original, provider, discount_config);
     let (total, margin_percent, margin_fixed_amount, margin_total_amount) =
         apply_cost_margin(discounted, provider, margin_config);
     CompletionCost {
+        input: prompt,
+        output,
+        built_in_tools,
+        additional,
         original,
         discounted,
         total,

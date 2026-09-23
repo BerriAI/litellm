@@ -1173,6 +1173,10 @@ fn responses_websocket_prices_each_tier_and_applies_fixed_margin_per_tier() {
     )
     .unwrap();
     assert!((result.cost.original - 0.69).abs() < 1e-12);
+    assert!((result.cost.input - 0.5).abs() < 1e-12);
+    assert!((result.cost.output - 0.19).abs() < 1e-12);
+    assert_eq!(result.cost.built_in_tools, 0.0);
+    assert_eq!(result.cost.additional, 0.0);
     assert!((result.cost.total - 0.821).abs() < 1e-12);
     assert!((result.cost.margin_fixed_amount - 0.2).abs() < 1e-12);
     assert_eq!(result.cost.discount_percent, 0.1);

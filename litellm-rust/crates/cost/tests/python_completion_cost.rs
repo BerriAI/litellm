@@ -24,6 +24,19 @@ fn completion_cost_applies_discount_before_provider_margin() {
         &json!({"provider": 0.1}),
         &json!({"provider": {"percentage": 0.2, "fixed_amount": 0.1}, "global": 0.5}),
     );
+    assert_eq!(
+        (
+            actual.input,
+            actual.output,
+            actual.built_in_tools,
+            actual.additional
+        ),
+        (1.0, 2.0, 0.5, 0.25)
+    );
+    assert_eq!(
+        actual.original,
+        actual.input + actual.output + actual.built_in_tools + actual.additional
+    );
     assert_eq!(actual.original, 3.75);
     assert_eq!(actual.discounted, 3.375);
     assert_eq!(actual.discount_percent, 0.1);
@@ -105,6 +118,9 @@ fn model_info_catalog_completion_and_response_cost_use_selected_metadata() {
         margin_config: &margin,
     };
     let calculated = catalog.completion_cost(completion).unwrap();
+    assert_eq!(calculated.built_in_tools, 0.01);
+    assert_eq!(calculated.additional, 0.02);
+    assert!((calculated.input + calculated.output - 0.0004).abs() < 1e-12);
     assert!((calculated.original - 0.0304).abs() < 1e-12);
     assert!((calculated.total - 0.033832).abs() < 1e-12);
     assert_eq!(

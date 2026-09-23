@@ -494,6 +494,10 @@ fn price_realtime_response(
 
 fn add_completion_costs(first: CompletionCost, second: CompletionCost) -> CompletionCost {
     CompletionCost {
+        input: first.input + second.input,
+        output: first.output + second.output,
+        built_in_tools: first.built_in_tools + second.built_in_tools,
+        additional: first.additional + second.additional,
         original: first.original + second.original,
         discounted: first.discounted + second.discounted,
         total: first.total + second.total,
