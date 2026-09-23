@@ -83,7 +83,7 @@ if TYPE_CHECKING:
 
 _RowT = TypeVar(
     "_RowT", bound=ManagedResourceRow
-)  # rebind-ok: TypeVar declarations must stay bare assignments for pyright
+)
 
 # ---------------------------------------------------------------------------
 # Field map
@@ -1000,7 +1000,7 @@ async def _build_list_where_with_cursor(
     before_id: Final[str | None] = params.get("before")
     where: PrismaWhere = dict(
         owner_filter
-    )  # rebind-ok: narrowed with the cursor boundary when a valid cursor row exists
+    )
     fetch_order: SortOrder = "desc"  # rebind-ok: flipped to asc when paging backwards from a before cursor
 
     cursor_id: Final = after_id or before_id

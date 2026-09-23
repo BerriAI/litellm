@@ -5263,7 +5263,7 @@ class ProxyConfig:
         with open(f"{user_config_file_path}", "w") as config_file:
             yaml.dump(
                 dict(new_config), config_file, default_flow_style=False
-            )  # mutable-ok: YAML must serialize a plain dict
+            )
 
     async def _save_changed_config_section(
         self,
@@ -10137,7 +10137,7 @@ class ProxyStartupEvent:
                         str(identity): str(fingerprint)
                         for identity, fingerprint in (decoded.items() if isinstance(decoded, Mapping) else ())
                     }
-                )  # mutable-ok: MappingProxyType owns the completed immutable baseline
+                )
             snapshot: Final = snapshot_tuning_baselines(deployments)
             try:
                 await config_table.create(
@@ -10163,7 +10163,7 @@ class ProxyStartupEvent:
                             competing_decoded.items() if isinstance(competing_decoded, Mapping) else ()
                         )
                     }
-                )  # mutable-ok: MappingProxyType owns the completed immutable baseline
+                )
         except Exception as e:  # noqa: BLE001  # enforcement is skipped for this boot; refusing every tuned router on a DB blip is the one outcome the gate forbids
             verbose_proxy_logger.warning("Heuristic-v1 tuning baseline unavailable, gate not enforced this boot: %s", e)
             return None
@@ -10199,7 +10199,7 @@ class ProxyStartupEvent:
         proxy_logging_obj: ProxyLogging,
     ) -> ProxyWorkerHeartbeat:
         """Initializes scheduled background jobs"""
-        global heuristic_v1_tuning_baselines, store_model_in_db, scheduler, scheduler_executor  # rebind-ok: startup publishes the one read-only baseline snapshot
+        global heuristic_v1_tuning_baselines, store_model_in_db, scheduler, scheduler_executor
 
         # MEMORY LEAK FIX: Configure scheduler with optimized settings
         # Memray analysis showed APScheduler's normalize() and _apply_jitter() causing

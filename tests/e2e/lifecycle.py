@@ -56,7 +56,7 @@ class ResourceManager:
     strict_cleanup: bool = False
     _cleanups: List[Callable[[], object]] = field(
         default_factory=list
-    )  # mutable-ok: append-only teardown registry
+    )
 
     def init(self) -> None:
         """No global setup needed today; present for lifecycle symmetry."""

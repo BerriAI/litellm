@@ -81,7 +81,7 @@ async def _fetch_interaction(context: BackgroundInteractionPollContext) -> Inter
         api_base=context.api_base,
         **{
             "no-log": True
-        },  # mutable-ok: "no-log" is not a valid identifier, so it can only be passed through a mapping
+        },
     )
 
 

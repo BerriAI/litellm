@@ -40,7 +40,7 @@ def _tools_of_item(item: object) -> tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]:
     return tuple(
         cast(
             "ALL_RESPONSES_API_TOOL_PARAMS", tool
-        )  # cast-ok: nested tools carry the same raw tool JSON as top-level tools
+        )
         for tool in parsed.tools
     )
 

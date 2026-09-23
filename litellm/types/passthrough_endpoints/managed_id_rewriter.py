@@ -57,7 +57,7 @@ class ManagedObjectRow(ManagedResourceRow, Protocol):
 
 RowT = TypeVar(
     "RowT", bound=ManagedResourceRow
-)  # rebind-ok: TypeVar declarations must stay bare assignments for pyright
+)
 
 
 class ManagedTable(Protocol[RowT]):

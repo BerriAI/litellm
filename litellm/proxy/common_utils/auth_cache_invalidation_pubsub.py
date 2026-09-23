@@ -184,17 +184,17 @@ class AuthCacheInvalidationSubscriber:
         backoff_seconds = _BACKOFF_INITIAL_SECONDS  # rebind-ok: exponential backoff accumulator across reconnects
         while True:
             try:
-                client = _pubsub_capable_client(self._redis_cache)  # rebind-ok: re-resolved on every reconnect
+                client = _pubsub_capable_client(self._redis_cache)
                 if client is None:
                     verbose_proxy_logger.warning(
                         "auth cache invalidation subscriber disabled: cluster redis client has no pub/sub support; "
                         "cross-worker eviction falls back to the local cache TTL"
                     )
                     return
-                pubsub = client.pubsub()  # rebind-ok: fresh pubsub per reconnect
+                pubsub = client.pubsub()
                 try:
                     await pubsub.subscribe(auth_cache_invalidation_channel(self._redis_cache))
-                    backoff_seconds = _BACKOFF_INITIAL_SECONDS  # rebind-ok: reset after successful subscribe
+                    backoff_seconds = _BACKOFF_INITIAL_SECONDS
                     await self._consume(pubsub)
                 finally:
                     await self._close_pubsub(pubsub)
@@ -207,7 +207,7 @@ class AuthCacheInvalidationSubscriber:
                     backoff_seconds,
                 )
                 await asyncio.sleep(backoff_seconds)
-                backoff_seconds = min(backoff_seconds * 2, _BACKOFF_MAX_SECONDS)  # rebind-ok: backoff accumulator
+                backoff_seconds = min(backoff_seconds * 2, _BACKOFF_MAX_SECONDS)
 
     async def _consume(self, pubsub: _ConfigSyncPubSub) -> None:
         while True:

@@ -116,7 +116,7 @@ class BatchFileUsage(BaseModel):
     # tokens -- see `_create_project_io_descriptors_for_models`.
     per_model_usage: dict[str, dict[str, int]] = Field(
         default_factory=dict
-    )  # mutable-ok: accumulated incrementally per row while parsing the batch file
+    )
 
 
 class _PROXY_BatchRateLimiter(CustomLogger):
@@ -465,7 +465,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         body: Final[Mapping[str, object]] = (
             MappingProxyType(_BATCH_BODY_ADAPTER.validate_python(raw_body))
             if isinstance(raw_body, Mapping)
-            else MappingProxyType({})  # mutable-ok: immediately frozen empty fallback
+            else MappingProxyType({})
         )
         # `max_tokens`/`max_completion_tokens` cap chat completions; `/v1/responses`
         # rows cap output with `max_output_tokens` instead -- omitting it here

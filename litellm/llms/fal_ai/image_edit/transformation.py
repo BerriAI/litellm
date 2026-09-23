@@ -84,7 +84,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class contract returns a list
         return list(SUPPORTED_OPENAI_PARAMS)  # mutable-ok: base class contract returns a list
 
-    def map_openai_params(  # mutable-ok: base class contract returns a dict
+    def map_openai_params(
         self,
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
@@ -148,7 +148,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         provider_params: Final[Mapping[str, object]] = MappingProxyType(
             {
                 key: value for key, value in image_edit_optional_request_params.items() if key != "mask"
-            }  # mutable-ok: frozen by MappingProxyType
+            }
         )
         request_body: Final[dict[str, object]] = {  # mutable-ok: base class contract returns a dict
             "prompt": prompt,

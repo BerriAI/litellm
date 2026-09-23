@@ -232,10 +232,10 @@ async def invalidate_baseline_cache(logging_obj: Logging, reason: str, *, comple
     if context is not None:
         logging_obj.baseline_cache_context = replace(
             context, invalidated=reason
-        )  # rebind-ok: request-owned retry marker
+        )
         logging_obj.baseline_observation = context.capture.model_copy(
             update=MappingProxyType(
-                {  # rebind-ok: capture uncertainty for failure logging
+                {
                     "observation": context.capture.observation.model_copy(
                         update=MappingProxyType(
                             {

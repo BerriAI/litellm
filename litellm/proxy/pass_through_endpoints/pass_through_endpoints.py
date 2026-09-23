@@ -821,7 +821,7 @@ def _resolve_team_callback_wiring(
         if callback_settings_obj and callback_settings_obj.callback_vars:
             for (
                 item
-            ) in callback_settings_obj.callback_vars.items():  # rebind-ok: dict.items iteration for env-ref validation
+            ) in callback_settings_obj.callback_vars.items():
                 validate_no_callback_env_reference(item[0], item[1], source="key/team callback metadata")
     except Exception:  # noqa: BLE001 - a broken logging config must never fail the passthrough request
         verbose_proxy_logger.exception(

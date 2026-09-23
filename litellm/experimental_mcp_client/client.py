@@ -764,7 +764,7 @@ class MCPClient:
                 follow_redirects=True,
                 event_hooks=MappingProxyType(
                     {"response": [capture_upstream_error_response], "request": [guard] if guard else []}
-                ),  # mutable-ok: httpx types require lists of hooks
+                ),
             )
 
         return factory
@@ -921,7 +921,7 @@ class MCPClient:
         with anyio.fail_after(max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)):
             for page_index in range(MCP_TOOL_LISTING_MAX_PAGES):
                 try:
-                    page = await fetch_page(  # rebind-ok: each SDK page replaces the previous one
+                    page = await fetch_page(
                         None if cursor is None else PaginatedRequestParams(cursor=cursor)
                     )
                 except MCPError as error:

@@ -97,7 +97,7 @@ def logged_relay_shape(
         return None
     logging_obj.call_type = (
         shape.call_type.value
-    )  # rebind-ok: routes cost calculation to the relayed shape's pricing path
+    )
     return parsed
 
 

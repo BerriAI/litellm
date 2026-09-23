@@ -219,7 +219,7 @@ def _split_tags(tags: Sequence[str]) -> tuple[tuple[str, ...], list[str], tuple[
     required: Final = tuple(tag[1:] for tag in tags if tag.startswith("&") and len(tag) > 1)
     positive: Final = [
         t for t in tags if not t.startswith("!") and not t.startswith("&")
-    ]  # mutable-ok: feeds _match_deployment's existing list[str]-typed request_tags param
+    ]
     excluded: Final = tuple(tag[1:] for tag in tags if tag.startswith("!") and len(tag) > 1)
     return required, positive, excluded
 

@@ -259,7 +259,7 @@ async def test_call_with_db_reconnect_retry_honors_narrowed_retry_safe_types():
     attempts = 0
 
     async def _factory():
-        nonlocal attempts  # rebind-ok: attempt counter for a two-call helper
+        nonlocal attempts
         attempts += 1
         raise httpx.ReadError("ambiguous")
 
@@ -283,7 +283,7 @@ async def test_call_with_db_reconnect_retry_default_covers_every_transport_error
     attempts = 0
 
     async def _factory():
-        nonlocal attempts  # rebind-ok: attempt counter for a two-call helper
+        nonlocal attempts
         attempts += 1
         if attempts == 1:
             raise ClientNotConnectedError()

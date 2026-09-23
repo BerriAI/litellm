@@ -137,7 +137,7 @@ def add_otel_trace_id_to_request(
         return
     data["litellm_trace_id"] = trace_id  # rebind-ok: data is an out-param
     if isinstance(metadata, dict):
-        metadata["trace_id"] = trace_id  # rebind-ok: metadata is the request's own out-param dict
+        metadata["trace_id"] = trace_id
 
 
 def _session_id_from_baggage(baggage: str) -> str | None:
@@ -3128,7 +3128,7 @@ async def move_guardrails_to_metadata(
     if "include_guardrail_response" in data:
         data[_metadata_variable_name][
             "include_guardrail_response"
-        ] = (  # rebind-ok: pre-call hooks mutate the shared request dict in place
+        ] = (
             data.pop("include_guardrail_response") is True
         )
 

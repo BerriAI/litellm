@@ -223,12 +223,12 @@ def test_plugin_that_swallows_unreachable_fallback_into_kwargs_is_rejected() -> 
     class Swallowing:
         def __init__(
             self, *, fail_mode: str = "fail_closed", **kwargs: object
-        ) -> None: ...  # kwargs-ok: models plugin 0.2.4
+        ) -> None: ...
 
     class Binding:
         def __init__(
             self, *, unreachable_fallback: str | None = None, **kwargs: object
-        ) -> None: ...  # kwargs-ok: plugin 0.2.5
+        ) -> None: ...
 
     assert not binds_unreachable_fallback(Swallowing)
     assert binds_unreachable_fallback(Binding)

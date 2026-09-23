@@ -170,7 +170,7 @@ def _log_background_task_failure(task: asyncio.Task[object], *, task_name: str) 
 
 
 _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
-    {  # mutable-ok: immediately frozen by MappingProxyType
+    {
         "server_error": 500,
         "rate_limit_exceeded": 429,
         "insufficient_quota": 429,
@@ -1633,7 +1633,7 @@ def _extract_frame_quota_estimate_inputs(msg_obj: Mapping[str, object]) -> tuple
     params: Final[Mapping[str, object]] = (
         nested
         if _is_json_object(nested) and nested
-        else MappingProxyType(  # mutable-ok: immediately frozen filtered frame
+        else MappingProxyType(
             {k: v for k, v in msg_obj.items() if k != "type"}
         )
     )
@@ -2297,7 +2297,7 @@ class ResponsesWebSocketStreaming:
         except RateLimitError as e:
             try:
                 await self.websocket.send_text(
-                    json.dumps(  # mutable-ok: WebSocket wire payload requires JSON objects
+                    json.dumps(
                         {  # mutable-ok: WebSocket wire payload requires JSON objects
                             "type": "error",
                             "error": {  # mutable-ok: nested WebSocket error object
@@ -2744,7 +2744,7 @@ class ManagedResponsesWebSocketHandler:
         every chunk.  Returns the completed event dict, or ``None``.
         """
         completed_event: _MutableJsonObject | None = (
-            None  # rebind-ok: captures the completed event once the stream yields it
+            None
         )
         stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
         async for chunk in stream_response:

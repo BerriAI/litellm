@@ -57,10 +57,10 @@ class OperationContext:
     ) -> tuple[
         UserAPIKeyAuth | None,
         str | None,
-        list[str] | None,  # mutable-ok: detached legacy server-list payload
-        dict[str, dict[str, str]] | None,  # mutable-ok: legacy auth dispatch requires concrete dict headers
-        dict[str, str] | None,  # mutable-ok: detached legacy header payload
-        dict[str, str] | None,  # mutable-ok: detached legacy header payload
+        list[str] | None,
+        dict[str, dict[str, str]] | None,
+        dict[str, str] | None,
+        dict[str, str] | None,
         str | None,
     ]:
         return (
@@ -69,12 +69,12 @@ class OperationContext:
             list(self.mcp_servers) if self.mcp_servers is not None else None,  # mutable-ok: legacy policy list input
             {
                 key: dict(value) for key, value in self.mcp_server_auth_headers.items()
-            }  # mutable-ok: legacy auth dispatch checks concrete dict headers
+            }
             if self.mcp_server_auth_headers is not None
             else None,
             dict(self.oauth2_headers)
             if self.oauth2_headers is not None
-            else None,  # mutable-ok: legacy OAuth header input
+            else None,
             dict(self.raw_headers) if self.raw_headers is not None else None,  # mutable-ok: legacy request header input
             self.client_ip,
         )

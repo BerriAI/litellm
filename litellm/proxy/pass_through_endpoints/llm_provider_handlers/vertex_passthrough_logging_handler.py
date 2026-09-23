@@ -449,7 +449,7 @@ class VertexPassthroughLoggingHandler:
 
         standard_pass_through_response_object: Final[
             StandardPassThroughResponseObject
-        ] = {  # mutable-ok: callback contract requires a concrete response dictionary
+        ] = {
             "response": json_response,
         }
         return {  # mutable-ok: passthrough logging contract requires a concrete result dictionary

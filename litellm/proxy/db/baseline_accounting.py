@@ -491,7 +491,7 @@ class BaselineAccountingStore:
             tuple(await db.query_raw(_READ_PAGE, scope, after_revision, cursor, _PAGE_TIMESTAMPS, withdraw_from))
         ):
             yield page
-            cursor = page[-1].started_at  # rebind-ok: keyset pagination advances after each complete timestamp group
+            cursor = page[-1].started_at
 
     async def _withdraw(self, db: SupportsRawQueries, scope: str, started_at: float) -> None:
         async for page in self._pages(db, scope, 0, withdraw_from=started_at):
@@ -625,7 +625,7 @@ async def flush_baseline_accounting(client: PrismaClient) -> None:
         batch: Final = tuple(client.baseline_accounting_transactions[:32])
         client.baseline_accounting_transactions = client.baseline_accounting_transactions[
             32:
-        ]  # rebind-ok: drain under lock
+        ]
         more_queued: Final = bool(client.baseline_accounting_transactions)
     try:
         remaining: Final = await asyncio.wait_for(_flush_records(store, batch), timeout=5)

@@ -2996,7 +2996,7 @@ async def _update_team_members_list(
     # extend() consumes the generator as it appends, so a member already added by this
     # same call is seen by the next _member_already_in_team check - the batch dedupes
     # against itself exactly as the append-one-at-a-time loop this replaced did.
-    complete_team_data.members_with_roles.extend(  # rebind-ok: this helper's contract is to grow the caller's roster in place
+    complete_team_data.members_with_roles.extend(
         m for m in resolved_members if not _member_already_in_team(m, complete_team_data)
     )
 
@@ -4139,7 +4139,7 @@ async def reset_team_member_budget_fn(
     budget_link: Final = (
         {
             "connect": {"budget_id": team_default_budget_id}
-        }  # mutable-ok: prisma client requires a plain dict data= argument
+        }
         if team_default_budget_id is not None
         else {"disconnect": True}  # mutable-ok: same prisma data= argument
     )

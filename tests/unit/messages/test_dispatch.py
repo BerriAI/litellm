@@ -218,7 +218,7 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
 
     def python(
         *call_args: object, **call_kwargs: object
-    ) -> AnthropicMessagesResponse:  # kwargs-ok: records invalid call
+    ) -> AnthropicMessagesResponse:
         captured.append((call_args, call_kwargs))
         return expected
 

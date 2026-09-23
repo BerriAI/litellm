@@ -242,10 +242,10 @@ def _queue_budget_linked_resets(
     for budget_id, cap in cascade.rollover_caps.items():
         writes.queue_spend_zero(
             where={"budget_id": budget_id, **extra, "spend": {"gt": 0, "lte": cap}}
-        )  # mutable-ok: prisma where filter must be a dict
+        )
         writes.queue_spend_decrement(
             where={"budget_id": budget_id, **extra, "spend": {"gt": cap}}, amount=cap
-        )  # mutable-ok: prisma where filter must be a dict
+        )
     plain_ids: Final = tuple(bid for bid in cascade.budget_ids if bid not in cascade.rollover_caps)
     if plain_ids:
         writes.queue_spend_zero(where=_budget_link_where(plain_ids, extra))
@@ -269,14 +269,14 @@ def _queue_enduser_resets(writes: LinkedSpendResetWrites, cascade: "_BudgetCasca
     if cap is None:
         writes.queue_spend_zero(
             where={"budget_id": None, **_SPENT_ROWS_WHERE}
-        )  # mutable-ok: prisma where filter must be a dict
+        )
         return
     writes.queue_spend_zero(
         where={"budget_id": None, "spend": {"gt": 0, "lte": cap}}
-    )  # mutable-ok: prisma where filter must be a dict
+    )
     writes.queue_spend_decrement(
         where={"budget_id": None, "spend": {"gt": cap}}, amount=cap
-    )  # mutable-ok: prisma where filter must be a dict
+    )
 
 
 @dataclass(frozen=True, slots=True)

@@ -798,7 +798,7 @@ async def get_cyberark_config(
 
     db_record: Final = await _config_overrides_table(prisma_client).find_unique(
         where={"config_type": "cyberark"}
-    )  # mutable-ok: prisma where clause
+    )
 
     if db_record is not None and db_record.config_value is not None:
         config_data: Final = _parse_config_value(db_record.config_value)
@@ -862,7 +862,7 @@ async def delete_cyberark_config(
     try:
         await _config_overrides_table(prisma_client).delete(
             where={"config_type": "cyberark"}
-        )  # mutable-ok: prisma where clause
+        )
         deleted = True  # rebind-ok: set true once the DB row is removed
     except RecordNotFoundError:
         verbose_proxy_logger.debug("No existing CyberArk config record to delete")

@@ -61,7 +61,7 @@ def logged_responses_stream(all_chunks: Sequence[str], logging_obj: Logging) -> 
         return None
     logging_obj.call_type = (
         RESPONSES_RELAY_SHAPE.call_type.value
-    )  # rebind-ok: routes cost calculation to the relayed shape's pricing path
+    )
     return terminal_event
 
 

@@ -45,7 +45,7 @@ async def arerank(
     Async: Reranks a list of documents based on their relevance to the query
     """
     _custom_llm_provider: str | None = (
-        None  # rebind-ok: set by the declared-provider guard or the get_llm_provider unpack; read in the except
+        None
     )
     try:
         loop: Final = asyncio.get_event_loop()

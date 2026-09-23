@@ -430,7 +430,7 @@ def llm_passthrough_route(
 
     litellm_logging_obj: Final = cast(
         LiteLLMLoggingObj, kwargs.get("litellm_logging_obj")
-    )  # cast-ok: logging obj is constructed upstream; tests inject mocks
+    )
 
     model, custom_llm_provider, api_key, api_base = get_llm_provider(
         model=model,
@@ -518,7 +518,7 @@ def llm_passthrough_route(
 
     _request_data: dict | None = (
         data if isinstance(data, dict) else (json if isinstance(json, dict) else None)
-    )  # rebind-ok: conditional
+    )
     headers, signed_json_body = provider_config.sign_request(
         headers=headers,
         litellm_params=litellm_params_dict,
@@ -546,7 +546,7 @@ def llm_passthrough_route(
     ## IS STREAMING REQUEST
     _streaming_request_data: dict = (
         data if isinstance(data, dict) else (json if isinstance(json, dict) else {})
-    )  # rebind-ok: conditional
+    )
     is_streaming_request: Final = provider_config.is_streaming_request(
         endpoint=endpoint,
         request_data=_streaming_request_data,

@@ -368,7 +368,7 @@ class NewRelicMetricsLogger(CustomBatchLogger):
         try:
             status = (
                 await self.async_send_compressed_data(payload)
-            ).status_code  # rebind-ok: reassigned from the raised HTTPStatusError below
+            ).status_code
         except HTTPStatusError as e:
             status = e.response.status_code
         except Exception as e:  # noqa: BLE001  # transport/network failure re-queues the batch

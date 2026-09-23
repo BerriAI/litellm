@@ -1356,7 +1356,7 @@ class Message(SafeAttributeModel, OpenAIObject):
     role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: (
         list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
-    )  # mutable-ok: public pydantic response field; only the union member is new
+    )
     function_call: FunctionCall | None
     audio: ChatCompletionAudioResponse | None = None
     images: list[ImageURLListItem] | None = None
@@ -1481,7 +1481,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
         function_call: FunctionCall | None
         tool_calls: (
             list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] | None
-        )  # mutable-ok: public pydantic response field; only the union member is new
+        )
         audio: ChatCompletionAudioResponse | None
         images: list[ImageURLListItem] | None
         annotations: list[ChatCompletionAnnotation] | None

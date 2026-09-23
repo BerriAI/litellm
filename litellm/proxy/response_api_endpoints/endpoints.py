@@ -99,7 +99,7 @@ def _normalize_tool_dialect(
     normalized_tools: Final = (
         [
             _convert_tool_envelope(tool, to_chat=to_chat) for tool in tools
-        ]  # mutable-ok: body's tools stays a plain JSON list
+        ]
         if isinstance(tools, list)
         else tools
     )

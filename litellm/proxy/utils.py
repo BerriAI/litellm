@@ -604,13 +604,13 @@ def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple
 
 def _merge_pipeline_metadata_bucket(
     data: dict, bucket_key: str, modified_bucket_value: object
-) -> None:  # mutable-ok: request payload dict, written in place
+) -> None:
     if not isinstance(modified_bucket_value, dict):
         return
     modified_bucket: Final = cast("dict[str, object]", modified_bucket_value)  # cast-ok: metadata buckets are str-keyed
     surviving_writes: Final = {
         key: value for key, value in modified_bucket.items() if key != "guardrails"
-    }  # mutable-ok: merged into the live request metadata bucket in place
+    }
     existing_bucket: Final = data.get(bucket_key)
     if isinstance(existing_bucket, dict):
         cast("dict[str, object]", existing_bucket).update(surviving_writes)  # cast-ok: metadata buckets are str-keyed
@@ -620,7 +620,7 @@ def _merge_pipeline_metadata_bucket(
 
 def _merge_pipeline_metadata_writes(
     data: dict, modified_data: Mapping[str, object]
-) -> None:  # mutable-ok: request payload dict, written in place
+) -> None:
     """
     Copy metadata-bucket writes from a pipeline's working copy back onto the request.
 
@@ -1052,7 +1052,6 @@ def _deployment_attribution_for_model_group(model_group: object, team_id: str | 
     )
     return MappingProxyType(
         {
-            # mutable-ok: frozen immediately by the outer MappingProxyType
             **({"custom_llm_provider": shared_provider} if shared_provider is not None else {}),
             **(
                 {  # mutable-ok: frozen immediately by the outer MappingProxyType
@@ -1976,7 +1975,7 @@ class ProxyLogging:
         """
         scans_raw_request: Final = callback.scan_raw_request
         should_use_raw_snapshot: Final = scans_raw_request and raw_request_snapshot is not None
-        input_data: Final = (  # mutable-ok: same request-payload shape as data
+        input_data: Final = (
             independent_snapshot(raw_request_snapshot) if should_use_raw_snapshot else data
         )
         # _process_guardrail_callback always calls mark_pre_call_hook_ran on a
@@ -2171,7 +2170,7 @@ class ProxyLogging:
 
             step_input: dict = (
                 {**data, "response": current_response} if current_response is not None else data
-            )  # mutable-ok: same request-payload shape as data
+            )
 
             result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
                 steps=pipeline.steps,

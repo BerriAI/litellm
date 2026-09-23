@@ -1928,7 +1928,7 @@ def client(original_function):
         kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
         _is_litellm_internal_call: Final = is_internal_call.get()
         _deployment_call_end_time: datetime.datetime | None = (
-            None  # rebind-ok: set once, from inside the except below, only if the model call itself fails
+            None
         )
 
         try:
@@ -2745,7 +2745,7 @@ def _supports_factory(model: str, custom_llm_provider: str | None, key: str) -> 
         if declared is not None:
             model = model.removeprefix(
                 f"{declared}/"
-            )  # rebind-ok: mirrors get_llm_provider's split without its OAuth flow
+            )
             custom_llm_provider = declared  # rebind-ok: same
         else:
             model, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -2848,7 +2848,7 @@ def is_explicitly_disabled_factory(model: str, custom_llm_provider: str | None, 
         if declared is not None:
             model = model.removeprefix(
                 f"{declared}/"
-            )  # rebind-ok: mirrors get_llm_provider's split without its OAuth flow
+            )
             custom_llm_provider = declared  # rebind-ok: same
         else:
             model, custom_llm_provider, _, _ = litellm.get_llm_provider(
