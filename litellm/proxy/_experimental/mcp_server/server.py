@@ -111,6 +111,13 @@ _MCP_DESTINATIONS_SCOPE_KEY: Final = "litellm_otel_request_destinations"
 _MCP_PROTOCOL_VERSION_HEADER: Final = b"mcp-protocol-version"
 
 
+def reject_disallowed_mcp_origin(request: StarletteRequest) -> None:
+    from litellm.proxy.proxy_server import origins  # noqa: PLC0415  # proxy imports this module during startup
+
+    if "*" not in origins and any(origin not in origins for origin in request.headers.getlist("origin")):
+        raise HTTPException(status_code=403, detail="Invalid Origin header")
+
+
 def unsupported_protocol_version(scope: Scope) -> str | None:
     """Return the unsupported ``MCP-Protocol-Version`` header value, if any.
 
@@ -1931,6 +1938,7 @@ if MCP_AVAILABLE:
     async def handle_streamable_http_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through StreamableHTTP."""
         try:
+            reject_disallowed_mcp_origin(StarletteRequest(scope))
             bad_version: Final = unsupported_protocol_version(scope)
             if bad_version is not None:
                 supported: Final = ", ".join(sorted(HANDSHAKE_PROTOCOL_VERSIONS))
@@ -2275,6 +2283,7 @@ if MCP_AVAILABLE:
     async def handle_sse_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through SSE."""
         try:
+            reject_disallowed_mcp_origin(StarletteRequest(scope))
             bad_version: Final = unsupported_protocol_version(scope)
             if bad_version is not None:
                 supported: Final = ", ".join(sorted(HANDSHAKE_PROTOCOL_VERSIONS))
