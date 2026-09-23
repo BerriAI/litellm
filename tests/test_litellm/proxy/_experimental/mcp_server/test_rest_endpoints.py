@@ -2539,15 +2539,21 @@ class TestCallToolRestAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("per_user_oauth", "expected"),
+        ("auth_type", "per_user_oauth", "expected"),
         [
-            (None, {"Authorization": "Bearer user-subject-token"}),
-            ({"Authorization": "Bearer per-user-oauth-token"}, {"Authorization": "Bearer per-user-oauth-token"}),
+            ("oauth_delegate", None, {"Authorization": "Bearer user-subject-token"}),
+            (
+                "oauth_delegate",
+                {"Authorization": "Bearer per-user-oauth-token"},
+                {"Authorization": "Bearer per-user-oauth-token"},
+            ),
+            ("oauth2", None, None),
         ],
     )
-    async def test_forwards_callers_bearer_as_oauth2_headers(self, monkeypatch, per_user_oauth, expected):
-        """A distinct caller Authorization rides oauth2_headers to execute_mcp_tool, as the
-        protocol routes already do, with a per-user OAuth token still taking precedence."""
+    async def test_forwards_callers_bearer_as_oauth2_headers(self, monkeypatch, auth_type, per_user_oauth, expected):
+        """A distinct caller Authorization rides oauth2_headers to execute_mcp_tool only for
+        client-forwarded-token servers, with a per-user OAuth token still taking precedence.
+        A gateway-managed oauth2 server never sees the caller's bearer."""
 
         async def fake_get_allowed_mcp_servers(*args, **kwargs):
             return ["server-1"]
@@ -2560,9 +2566,9 @@ class TestCallToolRestAPI:
             allowed_tools = None
             mcp_info = {"server_name": "stub"}
             available_on_public_internet = True
-            auth_type = "oauth_delegate"
 
         stub_server = StubServer()
+        stub_server.auth_type = auth_type
 
         async def fake_add_litellm_data_to_request(**kwargs):
             return kwargs.get("data", {})
@@ -2916,7 +2922,9 @@ class TestCallToolRestAPI:
 
     @pytest.mark.parametrize("raise_site", ["pre_call_hook", "execute_mcp_tool"])
     @pytest.mark.parametrize("custom_code", [False, True])
-    async def test_guardrail_block_runs_failure_logging_before_http_translation(self, monkeypatch, raise_site, custom_code):
+    async def test_guardrail_block_runs_failure_logging_before_http_translation(
+        self, monkeypatch, raise_site, custom_code
+    ):
         """A pre_mcp_call guardrail block, whether raised by the pre-call hook or from inside
         execute_mcp_tool, must reach proxy_logging_obj.post_call_failure_hook (the only path that
         writes the failure spend-log row) with the logging object's failure payload already built,
@@ -3009,7 +3017,9 @@ class TestCallToolRestAPI:
         assert exc_info.value.status_code == 400
         if custom_code:
             assert exc_info.value.detail == {
-                "error": "guardrail_violation", "message": "Content blocked", "guardrail_name": "block-all"
+                "error": "guardrail_violation",
+                "message": "Content blocked",
+                "guardrail_name": "block-all",
             }
         else:
             assert exc_info.value is guardrail_error
@@ -3187,7 +3197,10 @@ class TestCallToolRestAPI:
 @pytest.mark.parametrize("selected", [False, True])
 @pytest.mark.parametrize("action", ["block", "modify"])
 async def test_request_selected_tool_specific_guardrail_applies_to_virtual_execution(
-    monkeypatch: pytest.MonkeyPatch, virtual: bool, selected: bool, action: str,
+    monkeypatch: pytest.MonkeyPatch,
+    virtual: bool,
+    selected: bool,
+    action: str,
 ) -> None:
     import litellm
     from litellm.caching.caching import DualCache
@@ -3198,16 +3211,23 @@ async def test_request_selected_tool_specific_guardrail_applies_to_virtual_execu
     from litellm.proxy.utils import ProxyLogging
 
     guardrail: Final = CustomCodeGuardrail(
-        guardrail_name="block-resolved-tool", event_hook="pre_mcp_call", default_on=False,
-        custom_code='def apply_guardrail(inputs, request_data, input_type):\n'
+        guardrail_name="block-resolved-tool",
+        event_hook="pre_mcp_call",
+        default_on=False,
+        custom_code="def apply_guardrail(inputs, request_data, input_type):\n"
         '    if inputs.get("tools", [{}])[0].get("function", {}).get("name") == "execute":\n'
         f'        return {{"action": "{action}", "reason": "resolved tool blocked", "texts": ["redacted"]}}\n'
-        '    return allow()\n',
+        "    return allow()\n",
     )
     manager: Final = mcp_server_manager.MCPServerManager()
     managed_server: Final = MCPServer(
-        server_id="observer", name="observer", server_name="observer", transport="http",
-        url="https://observer.example/mcp", spec_path="observer.json", auth_type="none",
+        server_id="observer",
+        name="observer",
+        server_name="observer",
+        transport="http",
+        url="https://observer.example/mcp",
+        spec_path="observer.json",
+        auth_type="none",
     )
     manager.registry = {"observer": managed_server}
     manager.tool_name_to_mcp_server_name_mapping = {"observer-execute": "observer"}
@@ -3230,18 +3250,23 @@ async def test_request_selected_tool_specific_guardrail_applies_to_virtual_execu
     monkeypatch.setattr(proxy_server, "proxy_config", {})
     monkeypatch.setattr(proxy_server, "general_settings", {})
     caller: Final = UserAPIKeyAuth(
-        api_key="hashed-key", request_route="/mcp-rest/tools/call",
+        api_key="hashed-key",
+        request_route="/mcp-rest/tools/call",
         object_permission=LiteLLM_ObjectPermissionTable(
-            object_permission_id="virtual-test", mcp_servers=["observer"], mcp_tool_search_enabled=True,
+            object_permission_id="virtual-test",
+            mcp_servers=["observer"],
+            mcp_tool_search_enabled=True,
         ),
     )
     request: Final = _build_request(
-        path="/mcp-rest/tools/call", method="POST",
+        path="/mcp-rest/tools/call",
+        method="POST",
         json_body={
             "name": "mcp_tool_call" if virtual else "observer-execute",
             "server_id": "observer",
             "arguments": {"tool_name": "observer-execute", "arguments": {"q": "confidential"}}
-            if virtual else {"q": "confidential"},
+            if virtual
+            else {"q": "confidential"},
             "guardrails": ["block-resolved-tool"] if selected else [],
         },
     )

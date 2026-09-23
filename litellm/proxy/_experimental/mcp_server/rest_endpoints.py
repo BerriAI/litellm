@@ -83,6 +83,8 @@ _MCP_GUARDRAIL_REJECTIONS: Final = (
     HTTPException,
 )
 
+_CLIENT_FORWARDED_TOKEN_AUTH_TYPES: Final = frozenset((MCPAuth.true_passthrough, MCPAuth.oauth_delegate))
+
 
 def _connection_error_message(exc: BaseException, url: str | None, timeout_seconds: float) -> str:
     reference: Final = uuid4().hex
@@ -1166,7 +1168,6 @@ if MCP_AVAILABLE:
                 if mcp_server_auth_headers:
                     data["mcp_server_auth_headers"] = mcp_server_auth_headers
                 data["raw_headers"] = raw_headers_from_request
-                caller_oauth2_headers: Final = MCPRequestHandler._get_oauth2_headers_from_headers(request.headers)
 
                 # Extract user_api_key_auth from metadata and add to top level
                 # call_mcp_tool expects user_api_key_auth as a top-level parameter
@@ -1187,6 +1188,11 @@ if MCP_AVAILABLE:
                 )
                 if target_server is not None:
                     user_oauth_extra_headers = await _get_user_oauth_extra_headers(target_server, user_api_key_dict)
+                caller_oauth2_headers: Final = (
+                    MCPRequestHandler._get_oauth2_headers_from_headers(request.headers)
+                    if target_server is not None and target_server.auth_type in _CLIENT_FORWARDED_TOKEN_AUTH_TYPES
+                    else None
+                )
 
                 # Call execute_mcp_tool directly (permission checks already done)
                 _tool_start_time: Final = datetime.now()
@@ -1198,7 +1204,7 @@ if MCP_AVAILABLE:
                     user_api_key_auth=data.get("user_api_key_auth"),
                     mcp_auth_header=data.get("mcp_auth_header"),
                     mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
-                    oauth2_headers=user_oauth_extra_headers or caller_oauth2_headers or None,
+                    oauth2_headers=user_oauth_extra_headers or caller_oauth2_headers,
                     raw_headers=data.get("raw_headers"),
                     client_ip=IPAddressUtils.get_mcp_client_ip(request),
                     litellm_logging_obj=data.get("litellm_logging_obj"),
