@@ -163,7 +163,7 @@ def _stream_reply(provider: str) -> Reply:
             )
 
 
-def _request_parameters(provider: str, wire_url: str) -> dict:
+def _request_parameters(provider: str, wire_url: str) -> dict[str, object]:
     common: Final = {"messages": [{"role": "user", "content": "synthetic chunk control"}]}
     match provider:
         case "openai":
@@ -226,13 +226,20 @@ def _expected_target(provider: str, streaming: bool) -> str:
             return "/invoke-with-response-stream" if streaming else "/invoke"
 
 
-def _custom_key(body: dict, provider: str) -> object:
+def _at(value: object, *path: str) -> object:
+    if not path:
+        return value
+    assert isinstance(value, Mapping)
+    return _at(value[path[0]], *path[1:])
+
+
+def _custom_key(body: Mapping[str, object], provider: str) -> object:
     match provider:
         case "anthropic":
-            return body["extra_body"]["custom_provider_key"]
+            return _at(body, "extra_body", "custom_provider_key")
         case "converse":
-            return body["additionalModelRequestFields"]["extra_body"]["custom_provider_key"]
-    return body["custom_provider_key"]
+            return _at(body, "additionalModelRequestFields", "extra_body", "custom_provider_key")
+    return _at(body, "custom_provider_key")
 
 
 def _peer(provider: str) -> Callable[[Request], Reply]:
