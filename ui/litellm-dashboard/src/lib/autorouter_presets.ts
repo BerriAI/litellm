@@ -280,10 +280,11 @@ export const buildPresetPrefill = (
       tier_model_params: resolveParamKeys(hydrateTierModelParams(config.tiers, config.tier_model_configs)),
       tier_labels: hydrateTierLabels(config.tier_labels),
       classifier_type: config.classifier_type,
-      classifier_llm_config: config.classifier_llm_config && {
-        ...config.classifier_llm_config,
-        model: resolve(config.classifier_llm_config.model),
-      },
+      jev_classifier_config: config.classifier_type === "jev" ? config.jev_classifier_config : undefined,
+      classifier_llm_config:
+        config.classifier_type !== "jev" && config.classifier_llm_config
+          ? { ...config.classifier_llm_config, model: resolve(config.classifier_llm_config.model) }
+          : undefined,
       classifier_context_window_size: config.classifier_context_window_size,
       classifier_context_budget_chars: config.classifier_context_budget_chars,
       classifier_context_per_turn_chars: config.classifier_context_per_turn_chars,

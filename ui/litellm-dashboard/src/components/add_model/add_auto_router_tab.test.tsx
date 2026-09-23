@@ -1,6 +1,6 @@
 import { renderWithProviders, screen, waitFor, within, fireEvent, testQueryClient } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AddAutoRouterTab from "./add_auto_router_tab";
 import { toast } from "@/lib/toast";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
@@ -14,6 +14,40 @@ vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
 );
+
+  it("preserves a JEV preset's per-turn bound in the create request", async () => {
+    vi.clearAllMocks();
+    testQueryClient.clear();
+    vi.mocked(handleAddAutoRouterSubmit).mockReset();
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    vi.mocked(useAutoRouterPresets).mockReturnValue({
+      ...LOADED_PRESETS_QUERY,
+      data: [
+        {
+          ...ANTHROPIC_PRESET,
+          key: "bounded_jev",
+          label: "Bounded JEV",
+          complexity_router_config: {
+            ...ANTHROPIC_PRESET.complexity_router_config,
+            classifier_type: "jev",
+            jev_classifier_config: { model: "jev-test", timeout_ms: 3000 },
+            classifier_context_per_turn_chars: 450,
+          },
+        },
+      ],
+    });
+    renderWithProviders(<Harness />);
+    await waitForPresetEnabled("Bounded JEV");
+    await selectTemplate("Bounded JEV");
+    fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "bounded-router" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config).toMatchObject({
+      classifier_type: "jev",
+      classifier_context_per_turn_chars: 450,
+    });
+  });
 
 const ANTHROPIC_PRESET = getPresetByKey("anthropic_family")!;
 const ANTHROPIC_TIERS = ANTHROPIC_PRESET.complexity_router_config.tiers;

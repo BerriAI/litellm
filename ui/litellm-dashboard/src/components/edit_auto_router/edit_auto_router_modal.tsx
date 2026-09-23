@@ -794,3 +794,16 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 };
 
 export default EditAutoRouterModal;
+
+import { usesClassifierContext } from "../add_model/classifier_types";
+import { defaultJevClassifierConfig, jevClassifierConfigSchema } from "../add_model/jev_classifier_config";
+        : undefined,
+    classifier_context_per_turn_chars:
+      typeof parsedConfig.classifier_context_per_turn_chars === "number"
+        ? parsedConfig.classifier_context_per_turn_chars
+  "jev_classifier_config",
+    if (key === "classifier_context_per_turn_chars") {
+      return !usesClassifierContext(effectiveClassifierType(value)) || Object.prototype.hasOwnProperty.call(value, key);
+    }
+    jevClassifierConfig: value.jev_classifier_config,
+    classifierContextPerTurnChars: value.classifier_context_per_turn_chars,

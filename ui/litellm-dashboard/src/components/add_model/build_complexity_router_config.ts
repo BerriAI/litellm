@@ -1,5 +1,10 @@
 import { KeywordTierRule } from "./KeywordTierRules";
 import {
+  type JevClassifierConfig,
+  jevClassifierConfigSchema,
+  normalizeJevClassifierConfig,
+} from "./jev_classifier_config";
+import {
   type CustomTierSet,
   type TierRow,
   CUSTOM_TIER_OMITTED_KEYS,
@@ -34,6 +39,7 @@ import {
   effectiveTierLabel,
   heuristicScoringRoleFor,
   usesLlmClassifier,
+  usesClassifierContext,
 } from "./ComplexityRouterConfig";
 
 /**
@@ -164,6 +170,7 @@ export interface ComplexityRouterConfigPayload {
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  jev_classifier_config?: unknown;
   classifier_context_window_size?: number;
   classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
@@ -497,3 +504,20 @@ export const buildComplexityRouterConfig = ({
     ...customTierWireFields(customTierSet, classifierLlmConfig, planModeMinTier, classificationPrompt),
   };
 };
+
+  classifier_context_per_turn_chars?: unknown;
+  jevClassifierConfig?: JevClassifierConfig;
+  classifierContextPerTurnChars?: number;
+  jev_classifier_config?: JevClassifierConfig;
+  if (effectiveClassifierType(config) === "jev") {
+    const parsed = jevClassifierConfigSchema.safeParse(config.jev_classifier_config ?? {});
+    return parsed.success ? null : "Enter a JEV model, a positive whole-number timeout and a positive cooldown";
+  }
+  classifierType?: ClassifierType;
+    classifierContextPerTurnChars,
+    | "classifierContextPerTurnChars"
+  jevClassifierConfig,
+  classifierContextPerTurnChars,
+    classifierContextPerTurnChars,
+    ...(effectiveType === "jev" && { jev_classifier_config: normalizeJevClassifierConfig(jevClassifierConfig) }),
+    classifierType: effectiveType,

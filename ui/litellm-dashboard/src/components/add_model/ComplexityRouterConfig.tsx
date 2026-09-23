@@ -895,3 +895,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
 };
 
 export default ComplexityRouterConfig;
+
+import type { JevClassifierConfig } from "./jev_classifier_config";
+import { type ClassifierType } from "./classifier_types";
+export { type ClassifierType, usesLlmClassifier, usesClassifierContext } from "./classifier_types";
+  jev_classifier_config?: JevClassifierConfig;
