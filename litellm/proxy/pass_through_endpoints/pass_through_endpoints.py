@@ -3523,7 +3523,7 @@ async def _filter_endpoints_by_team_allowed_routes(
             for endpoint in pass_through_endpoints
             if endpoint.path
             in cast(  # cast-ok: guarded above; team metadata stores this key as a list of route paths
-                "Sequence[str]", team_metadata.get("allowed_passthrough_routes")
+                Sequence[str], team_metadata.get("allowed_passthrough_routes")
             )
         ]
 
