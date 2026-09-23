@@ -759,9 +759,25 @@ def is_gemini_tts_model(model: str, custom_llm_provider: str | None = None) -> b
         )
 
     provider_entry: Final = runtime_model_info.get("provider_specific_entry")
-    return runtime_model_info.get("litellm_provider") in ("gemini", "vertex_ai-language-models") and (
+    if runtime_model_info.get("litellm_provider") in ("gemini", "vertex_ai-language-models") and (
         runtime_model_info.get("mode") == "audio_speech"
         or (isinstance(provider_entry, dict) and provider_entry.get("gemini_tts") == 1)
+    ):
+        return True
+    if runtime_model_info.get("litellm_provider") != "vertex_ai" or runtime_model_info.get("mode") != "audio_speech":
+        return False
+    bundled_model_name: Final = model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
+    vertex_model_info: Final = _get_bundled_model_cost_map().get(bundled_model_name)
+    return (
+        vertex_model_info is not None
+        and vertex_model_info.get("litellm_provider") == "vertex_ai-language-models"
+        and (
+            vertex_model_info.get("mode") == "audio_speech"
+            or (
+                isinstance(vertex_model_info.get("provider_specific_entry"), dict)
+                and vertex_model_info["provider_specific_entry"].get("gemini_tts") == 1
+            )
+        )
     )
 
 
