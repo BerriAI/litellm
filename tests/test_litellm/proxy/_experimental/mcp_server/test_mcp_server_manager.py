@@ -15597,3 +15597,46 @@ async def test_catalog_reload_applies_revision_so_next_operation_skips_read(monk
     assert (await manager.catalog.list())["catalog-server"].name == "initial"
     read_rows.assert_awaited_once()
     assert read_revision.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_catalog_waiter_that_observed_newer_revision_refreshes(monkeypatch):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    waiter_saw_new_revision = asyncio.Event()
+    current_revision = [5]
+    reads = [0]
+
+    async def read_rows(**_kwargs):
+        reads[0] += 1
+        if not entered.is_set():
+            entered.set()
+            await release.wait()
+            return [_catalog_row()]
+        if reads[0] == 2:
+            return [_catalog_row()]
+        return [
+            _catalog_row(),
+            _catalog_row("added").model_copy(update={"server_id": "added-server"}),
+        ]
+
+    async def read_current_revision(**_kwargs):
+        if current_revision[0] == 6:
+            waiter_saw_new_revision.set()
+        return _revision_row(current_revision[0])
+
+    read_rows_mock = AsyncMock(side_effect=read_rows)
+    read_revision = AsyncMock(side_effect=read_current_revision)
+    _catalog_database(monkeypatch, read_rows_mock, read_revision)
+    manager = MCPServerManager()
+    first = asyncio.create_task(manager.catalog.list())
+    await entered.wait()
+    middle = asyncio.create_task(manager.catalog.list())
+    await asyncio.sleep(0)
+    current_revision[0] = 6
+    last = asyncio.create_task(manager.catalog.list())
+    await waiter_saw_new_revision.wait()
+    release.set()
+    _, _, servers = await asyncio.gather(first, middle, last)
+    assert "added-server" in servers
+    assert reads[0] == 3

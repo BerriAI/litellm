@@ -125,7 +125,7 @@ class TargetCatalog:
         self._arrival_ticket += 1
         arrival: Final = self._arrival_ticket
         async with self._refresh_lock:
-            if arrival > self._completed_ticket:
+            if arrival > self._completed_ticket or revision != self._applied_revision:
                 try:
                     await self._publish_refresh(revision, reuse_unchanged=True)
                 except Exception as exc:
