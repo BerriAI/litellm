@@ -23,12 +23,12 @@ from litellm.proxy.auth.auth_checks import (
     log_db_metrics,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import (
     DBSpendUpdateWriter,
     debitable_model_access_groups,
     get_llm_router,
 )
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.spend_event import (
     ObjectMapping,
@@ -475,7 +475,7 @@ class _ProxyDBLogger(CustomLogger):
 
     @staticmethod
     async def _enrich_failure_metadata_unless_db_stalled(metadata: dict, original_exception: Exception) -> dict:
-        if PrismaDBExceptionHandler.is_database_connection_error(original_exception):
+        if isinstance(original_exception, DBLookupDeadlineExceeded):
             return metadata
         return await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)
 

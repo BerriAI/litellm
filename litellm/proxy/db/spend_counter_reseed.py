@@ -134,10 +134,9 @@ class SpendCounterReseed:
         if SpendCounterReseed._is_key_or_team_window_counter(counter_key):
             return None
         try:
-            async with db_lookup_gate.current():
-                row: Final = await bounded_db_lookup(
-                    SpendCounterReseed._counter_row(prisma_client, counter_key), name="spend_counter"
-                )
+            row: Final = await bounded_db_lookup(
+                SpendCounterReseed._counter_row(prisma_client, counter_key), name="spend_counter"
+            )
         except Exception:
             verbose_proxy_logger.exception("SpendCounterReseed.from_db: failed for %s", counter_key)
             return None
@@ -147,34 +146,35 @@ class SpendCounterReseed:
 
     @staticmethod
     async def _counter_row(prisma_client: "PrismaClient", counter_key: str) -> object | None:
-        if counter_key.startswith("spend:key:"):
-            token: Final = counter_key[len("spend:key:") :]
-            return await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": token})
-        if counter_key.startswith("spend:team_member:"):
-            suffix: Final = counter_key[len("spend:team_member:") :]
-            if ":" not in suffix:
-                return None
-            user_id, team_id = suffix.rsplit(":", 1)
-            return await TeamMembershipRepository(prisma_client).table.find_unique(
-                where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
-            )
-        if counter_key.startswith("spend:team:"):
-            return await TeamRepository(prisma_client).table.find_unique(
-                where={"team_id": counter_key[len("spend:team:") :]}
-            )
-        if counter_key.startswith("spend:user:"):
-            return await UserRepository(prisma_client).table.find_unique(
-                where={"user_id": counter_key[len("spend:user:") :]}
-            )
-        if counter_key.startswith("spend:org:"):
-            return await OrganizationRepository(prisma_client).table.find_unique(
-                where={"organization_id": counter_key[len("spend:org:") :]}
-            )
-        if counter_key.startswith("spend:project:"):
-            return await ProjectRepository(prisma_client).table.find_unique(
-                where={"project_id": counter_key[len("spend:project:") :]}
-            )
-        return None
+        async with db_lookup_gate.current():
+            if counter_key.startswith("spend:key:"):
+                token: Final = counter_key[len("spend:key:") :]
+                return await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": token})
+            if counter_key.startswith("spend:team_member:"):
+                suffix: Final = counter_key[len("spend:team_member:") :]
+                if ":" not in suffix:
+                    return None
+                user_id, team_id = suffix.rsplit(":", 1)
+                return await TeamMembershipRepository(prisma_client).table.find_unique(
+                    where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
+                )
+            if counter_key.startswith("spend:team:"):
+                return await TeamRepository(prisma_client).table.find_unique(
+                    where={"team_id": counter_key[len("spend:team:") :]}
+                )
+            if counter_key.startswith("spend:user:"):
+                return await UserRepository(prisma_client).table.find_unique(
+                    where={"user_id": counter_key[len("spend:user:") :]}
+                )
+            if counter_key.startswith("spend:org:"):
+                return await OrganizationRepository(prisma_client).table.find_unique(
+                    where={"organization_id": counter_key[len("spend:org:") :]}
+                )
+            if counter_key.startswith("spend:project:"):
+                return await ProjectRepository(prisma_client).table.find_unique(
+                    where={"project_id": counter_key[len("spend:project:") :]}
+                )
+            return None
 
     @staticmethod
     async def end_user_from_db(prisma_client: Optional["PrismaClient"], counter_key: str) -> float | None:
