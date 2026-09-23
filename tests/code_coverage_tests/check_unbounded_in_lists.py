@@ -14,9 +14,10 @@ Two shapes are reported, across litellm/ and enterprise/:
   prisma   a dict literal with an `"in"` / `"not_in"` key whose value has no fixed
            size, such as `{"user_id": {"in": user_ids}}`. A list, tuple or set written
            out in full has the length it shows, so `["a", "b"]` and `[user_id]` pass,
-           while a name, a call, a comprehension or a starred display does not. An
-           ALL_CAPS name, bare or wrapped in list/tuple/sorted/frozenset/set, is read
-           as a module constant and passes too.
+           while a name, a call, a comprehension or a starred display does not. A name
+           bound once at module level to such a value passes too, bare or wrapped in
+           list/tuple/sorted/frozenset/set; an imported name does not, whatever its
+           casing, since its size is not visible from here.
   raw-sql  a string literal whose `IN (` is followed by a value spliced in at
            runtime: an f-string `IN ({placeholders})`, a `{}` or `%s` slot for
            `.format` / `%`, or a literal that closes right after `IN (` so something
@@ -54,6 +55,7 @@ import sys
 import tokenize
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from functools import reduce
 from pathlib import Path
 from typing import Final
 
@@ -105,7 +107,7 @@ class Markers:
 
 def read_markers(source: str) -> Markers:
     try:
-        tokens = tuple(tokenize.generate_tokens(io.StringIO(source).readline))
+        tokens: Final = tuple(tokenize.generate_tokens(io.StringIO(source).readline))
     except (tokenize.TokenError, SyntaxError):
         return Markers({})
     return Markers(
@@ -122,33 +124,55 @@ def read_markers(source: str) -> Markers:
     )
 
 
-def _is_constant_name(node: ast.expr) -> bool:
-    return isinstance(node, ast.Name) and node.id.isupper()
-
-
-def has_fixed_size(value: ast.expr) -> bool:
+def has_fixed_size(value: ast.expr, constants: frozenset[str]) -> bool:
     """Whether the value's length is visible in the source rather than decided at runtime."""
     match value:
         case ast.List(elts=elts) | ast.Tuple(elts=elts) | ast.Set(elts=elts):
             return not any(isinstance(elt, ast.Starred) for elt in elts)
         case ast.Constant():
             return True
-        case ast.Name():
-            return _is_constant_name(value)
+        case ast.Name(id=name):
+            return name in constants
         case ast.Call(func=ast.Name(id=wrapper), args=[argument], keywords=[]) if wrapper in CONSTANT_WRAPPERS:
-            return has_fixed_size(argument)
+            return has_fixed_size(argument, constants)
         case _:
             return False
 
 
-def prisma_findings(path: Path, tree: ast.AST) -> Iterator[Finding]:
+def _module_binding(stmt: ast.stmt) -> tuple[tuple[str, ast.expr], ...]:
+    match stmt:
+        case ast.Assign(targets=[ast.Name(id=name)], value=value):
+            return ((name, value),)
+        case ast.AnnAssign(target=ast.Name(id=name), value=ast.expr() as value):
+            return ((name, value),)
+        case _:
+            return ()
+
+
+def module_constants(tree: ast.Module) -> frozenset[str]:
+    """Module-level names bound exactly once to a value of fixed size, in binding order
+    so one constant may be built from another. Casing plays no part: an ALL_CAPS name
+    that is imported or filled at runtime is as unbounded as any other."""
+    bound: Final = tuple(binding for stmt in tree.body for binding in _module_binding(stmt))
+    names: Final = tuple(name for name, _ in bound)
+    rebound: Final = frozenset(name for name in names if names.count(name) > 1)
+
+    def fold(constants: frozenset[str], binding: tuple[str, ast.expr]) -> frozenset[str]:
+        name, value = binding
+        return constants | {name} if name not in rebound and has_fixed_size(value, constants) else constants
+
+    return reduce(fold, bound, frozenset())
+
+
+def prisma_findings(path: Path, tree: ast.Module) -> Iterator[Finding]:
+    constants: Final = module_constants(tree)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Dict):
             continue
         for key, value in zip(node.keys, node.values):
             if not (isinstance(key, ast.Constant) and key.value in MEMBERSHIP_KEYS):
                 continue
-            if has_fixed_size(value):
+            if has_fixed_size(value, constants):
                 continue
             yield Finding(
                 path,
@@ -169,12 +193,12 @@ def _literal_body(lines: tuple[bytes, ...], node: ast.expr) -> str | None:
     if end_line is None or end_col is None:
         return None
     first: Final = node.lineno - 1
-    if first == end_line - 1:
-        segment = lines[first][node.col_offset : end_col]
-    else:
-        segment = b"".join(
-            (lines[first][node.col_offset :], *lines[first + 1 : end_line - 1], lines[end_line - 1][:end_col])
-        )
+    last: Final = end_line - 1
+    segment: Final = (
+        lines[first][node.col_offset : end_col]
+        if first == last
+        else b"".join((lines[first][node.col_offset :], *lines[first + 1 : last], lines[last][:end_col]))
+    )
     return CLOSING_QUOTES.sub("", segment.decode("utf-8", errors="replace"))
 
 
@@ -228,8 +252,8 @@ def marker_findings(path: Path, markers: Markers) -> Iterator[Finding]:
 
 def check_file(path: Path) -> tuple[Finding, ...]:
     try:
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(path))
+        source: Final = path.read_text(encoding="utf-8")
+        tree: Final = ast.parse(source, filename=str(path))
     except (OSError, UnicodeDecodeError, SyntaxError) as exc:
         return (Finding(path, getattr(exc, "lineno", None) or 0, "unreadable", str(exc)),)
     markers: Final = read_markers(source)

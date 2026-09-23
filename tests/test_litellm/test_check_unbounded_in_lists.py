@@ -62,12 +62,31 @@ class TestPrismaFilters:
         assert _kinds(tmp_path, 'where = {"user_id": {"in": [user_id]}}\n') == ()
         assert _kinds(tmp_path, 'where = {"user_id": {"in": (owner, editor)}}\n') == ()
 
-    def test_a_module_constant_passes(self, tmp_path):
-        assert _kinds(tmp_path, 'where = {"auth_type": {"in": ANCHORED_AUTH_TYPES}}\n') == ()
-        assert _kinds(tmp_path, 'where = {"auth_type": {"in": list(ANCHORED_AUTH_TYPES)}}\n') == ()
-        assert _kinds(tmp_path, 'where = {"auth_type": {"in": sorted(_TERMINAL_STATES)}}\n') == ()
+    def test_a_module_constant_bound_to_a_display_passes(self, tmp_path):
+        constant = 'ANCHORED: Final = frozenset({"oauth2", "api_key"})\n'
+        assert _kinds(tmp_path, constant + 'where = {"auth_type": {"in": ANCHORED}}\n') == ()
+        assert _kinds(tmp_path, constant + 'where = {"auth_type": {"in": list(ANCHORED)}}\n') == ()
+        assert _kinds(tmp_path, constant + 'where = {"auth_type": {"in": sorted(ANCHORED)}}\n') == ()
 
-    def test_a_lowercase_name_wrapped_in_a_constructor_is_still_flagged(self, tmp_path):
+    def test_a_module_constant_built_from_another_passes(self, tmp_path):
+        source = 'FIRST = ("a", "b")\nSECOND: Final = tuple(FIRST)\nwhere = {"x": {"in": SECOND}}\n'
+        assert _kinds(tmp_path, source) == ()
+
+    def test_casing_does_not_make_a_constant(self, tmp_path):
+        assert _kinds(tmp_path, 'where = {"auth_type": {"in": ANCHORED_AUTH_TYPES}}\n') == ("prisma",)
+        assert _kinds(tmp_path, 'USER_IDS = load_ids()\nwhere = {"user_id": {"in": USER_IDS}}\n') == ("prisma",)
+        assert _kinds(tmp_path, 'from x import STATES\nwhere = {"s": {"in": list(STATES)}}\n') == ("prisma",)
+        assert _kinds(tmp_path, 'terminal = ("done", "failed")\nwhere = {"s": {"in": terminal}}\n') == ()
+
+    def test_a_module_name_bound_twice_is_not_a_constant(self, tmp_path):
+        source = 'IDS = ("a",)\nIDS = load_ids()\nwhere = {"user_id": {"in": IDS}}\n'
+        assert _kinds(tmp_path, source) == ("prisma",)
+
+    def test_a_local_binding_is_not_a_constant(self, tmp_path):
+        source = 'def f():\n    ids = ("a", "b")\n    return {"user_id": {"in": ids}}\n'
+        assert _kinds(tmp_path, source) == ("prisma",)
+
+    def test_a_name_wrapped_in_a_constructor_is_still_flagged(self, tmp_path):
         assert _kinds(tmp_path, 'where = {"token": {"in": tuple(frozenset(tokens))}}\n') == ("prisma",)
 
     def test_a_scalar_value_passes(self, tmp_path):
