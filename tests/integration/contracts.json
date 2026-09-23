@@ -1909,6 +1909,9 @@
     "tests/integration/providers/test_bedrock_claude_thinking_wire.py::test_prefixed_opus_4_8_reasoning_effort_reaches_bedrock_as_adaptive_thinking_not_budget_tokens": [
       "other.provider_wire.bedrock.prefixed_opus_4_8_reasoning_effort_sends_adaptive_thinking"
     ],
+    "tests/integration/providers/test_bedrock_converse_client_metadata_wire.py::test_client_metadata_is_dropped_from_converse_body_while_anthropic_beta_is_kept": [
+      "providers.bedrock_converse.client_metadata_is_not_forwarded_in_additional_model_request_fields"
+    ],
     "tests/integration/providers/test_bedrock_converse_config_blocks_wire.py::test_guardrail_and_performance_config_are_not_duplicated_inside_inference_config": [
       "other.provider_wire.bedrock.converse_config_blocks_sent_once_at_top_level"
     ],
