@@ -55,6 +55,10 @@ def _results_params(after: str | None, limit: int | None) -> dict[str, object]: 
     return dict(_PageParams(limit=limit or XAI_RESULTS_PAGE_SIZE, pagination_token=after))  # mutable-ok: httpx params
 
 
+def _flatten(pages: list[XAIBatchResultsPage]) -> tuple[XAIBatchResult, ...]:
+    return tuple(result for page in pages for result in page.results)
+
+
 def _jsonl_response(url: str, results: tuple[XAIBatchResult, ...]) -> HttpxBinaryResponseContent:
     return HttpxBinaryResponseContent(
         response=httpx.Response(
@@ -180,25 +184,25 @@ class XAIBatchesHandler:
             async def _aresults() -> HttpxBinaryResponseContent:
                 client: Final = self._async(timeout)
 
-                async def _pages(after: str | None) -> tuple[XAIBatchResult, ...]:
+                async def _page(after: str | None) -> XAIBatchResultsPage:
                     response: Final = await client.get(
                         url, params=_results_params(after, None), headers=headers, timeout=timeout
                     )
-                    page: Final = XAIBatchResultsPage.model_validate(_raise_for_status(response).json())
-                    if page.pagination_token is None or not page.results:
-                        return page.results
-                    return page.results + await _pages(page.pagination_token)
+                    return XAIBatchResultsPage.model_validate(_raise_for_status(response).json())
 
-                return _jsonl_response(url, await _pages(None))
+                pages = [await _page(None)]  # mutable-ok: page walk terminates on the cursor, not on a fixed count
+                while pages[-1].pagination_token is not None and pages[-1].results:
+                    pages.append(await _page(pages[-1].pagination_token))
+                return _jsonl_response(url, _flatten(pages))
 
             return _aresults()
         client: Final = self._sync(timeout)
 
-        def _pages(after: str | None) -> tuple[XAIBatchResult, ...]:
+        def _page(after: str | None) -> XAIBatchResultsPage:
             response: Final = client.get(url, params=_results_params(after, None), headers=headers, timeout=timeout)
-            page: Final = XAIBatchResultsPage.model_validate(_raise_for_status(response).json())
-            if page.pagination_token is None or not page.results:
-                return page.results
-            return page.results + _pages(page.pagination_token)
+            return XAIBatchResultsPage.model_validate(_raise_for_status(response).json())
 
-        return _jsonl_response(url, _pages(None))
+        pages = [_page(None)]  # mutable-ok: page walk terminates on the cursor, not on a fixed count
+        while pages[-1].pagination_token is not None and pages[-1].results:
+            pages.append(_page(pages[-1].pagination_token))
+        return _jsonl_response(url, _flatten(pages))
