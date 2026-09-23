@@ -72,7 +72,6 @@ if TYPE_CHECKING:
 
 
 def _image_part_ref(content_item: Mapping[str, object], scan_attachments: bool) -> str | None:
-    """The url or provider file id an ``image_url`` part carries."""
     image_url: Final = content_item.get("image_url")
     if isinstance(image_url, str):
         return image_url or None
