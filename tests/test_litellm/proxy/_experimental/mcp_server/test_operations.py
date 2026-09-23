@@ -386,11 +386,12 @@ class TestChallengeMissingTokenExchangeSubject:
     before the best-effort listing swallows the upstream 401 and tool resolution turns it into a 500."""
 
     @staticmethod
-    def _challenge(server, allowed, *, user=None, oauth2_headers=None, raw_headers=None):
+    def _challenge(server, allowed, *, user=None, oauth2_headers=None, raw_headers=None, requested_server=None):
         from litellm.proxy._experimental.mcp_server.operations import _challenge_missing_token_exchange_subject
 
         return _challenge_missing_token_exchange_subject(
             server=server,
+            requested_server=requested_server,
             allowed_mcp_servers=allowed,
             user_api_key_auth=user,
             oauth2_headers=oauth2_headers,
@@ -456,6 +457,19 @@ class TestChallengeMissingTokenExchangeSubject:
         other = _server("te-visible", MCPAuth.oauth2_token_exchange)
         assert self._challenge(server, [other], user=UserAPIKeyAuth(api_key="sk-admission")) is None
         assert self._challenge(None, [other], user=UserAPIKeyAuth(api_key="sk-admission")) is None
+
+    def test_prefix_owner_differing_from_server_id_is_not_challenged(self):
+        """An explicit server_id that disagrees with the tool prefix keeps the existing mismatch answer."""
+        from fastapi import HTTPException
+        from litellm.types.mcp import MCPAuth
+
+        prefix_owner = _server("te-prefix", MCPAuth.oauth2_token_exchange)
+        requested = _server("te-requested", MCPAuth.oauth2_token_exchange)
+        user = UserAPIKeyAuth(api_key="sk-admission")
+        allowed = [prefix_owner, requested]
+        assert self._challenge(prefix_owner, allowed, user=user, requested_server=requested) is None
+        with pytest.raises(HTTPException):
+            self._challenge(prefix_owner, allowed, user=user, requested_server=prefix_owner)
 
     @pytest.mark.parametrize(
         "auth_type",

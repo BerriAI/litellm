@@ -1723,6 +1723,7 @@ async def _check_byok_credential(
 
 def _challenge_missing_token_exchange_subject(
     server: MCPServer | None,
+    requested_server: MCPServer | None,
     allowed_mcp_servers: list[MCPServer],
     user_api_key_auth: UserAPIKeyAuth | None,
     oauth2_headers: dict[str, str] | None,
@@ -1736,6 +1737,8 @@ def _challenge_missing_token_exchange_subject(
     learns nothing about the catalog.
     """
     if server is None or server.auth_type != MCPAuth.oauth2_token_exchange:
+        return
+    if requested_server is not None and requested_server.server_id != server.server_id:
         return
     if all(allowed.server_id != server.server_id for allowed in allowed_mcp_servers):
         return
@@ -1896,6 +1899,7 @@ async def _execute_mcp_tool(
     )
     _challenge_missing_token_exchange_subject(
         server=first_call_target,
+        requested_server=requested_server,
         allowed_mcp_servers=allowed_mcp_servers,
         user_api_key_auth=user_api_key_auth,
         oauth2_headers=oauth2_headers,
