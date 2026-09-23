@@ -253,7 +253,6 @@ class Provider:
         )
         response: Final = self.scenario_store.get(scenario_id)
         if response is None:
-            print(f"upstream scripted 404: {request.method} {request.url.path}", flush=True)
             return JSONResponse({"error": "Unknown scenario"}, status_code=404)
         if isinstance(response, RoutedResponse):
             route_key: Final = f"{request.method} /{'/'.join(segments[1:])}"

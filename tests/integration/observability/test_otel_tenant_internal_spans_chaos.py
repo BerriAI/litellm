@@ -1,36 +1,48 @@
 from __future__ import annotations
 
-import json
 import os
 import signal
 import threading
 import uuid
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlparse
 
 import httpx
 import pytest
+from integration._support.client import Gateway, eventually, gateway_from_environment
+from integration._support.otlp_sink import Span, SpanSinks, configure_sink, recorded_spans, sink_pid, span_class
+from integration._support.process import owned_proxy
 from pydantic import JsonValue
 
-from integration._support.client import Gateway, eventually
-from integration._support.otlp_sink import configure_sink, recorded_spans, sink_pid, span_class, spans_for_trace
-
-SINK_OPERATOR: Final = os.environ.get("OTEL_AUDIT_OPERATOR_SINK", "http://127.0.0.1:8191")
-SINK_TENANT: Final = os.environ.get("OTEL_AUDIT_TENANT_SINK", "http://127.0.0.1:8192")
+AuditConfigWriter = Callable[[Path, Mapping[str, JsonValue]], Path]
 INTERNAL_SPANS_VAR: Final = "otel_internal_spans"
-LANGFUSE_VARS: Final[dict[str, str]] = {
-    "langfuse_public_key": "pk-lf-audit",
-    "langfuse_secret_key": "sk-lf-audit",
-    "langfuse_host": SINK_TENANT,
-}
+
+
+@pytest.fixture(scope="module")
+def gateway(
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("otel-audit-chaos-proxy")
+    with gateway_from_environment() as base:
+        with owned_proxy(
+            base,
+            directory,
+            {"LITELLM_OTEL_V2": "1", "ARIZE_HTTP_ENDPOINT": audit_sinks.arize},
+            config=otel_audit_config(directory, {}),
+            num_workers=2,
+        ) as candidate:
+            yield candidate
 
 
 def _nonce() -> str:
     return f"otelchaos-{uuid.uuid4().hex}"
 
 
-def _classes(spans: tuple[dict[str, JsonValue], ...]) -> dict[str, int]:
+def _classes(spans: tuple[Span, ...]) -> dict[str, int]:
     return {name: sum(1 for span in spans if span_class(span) == name) for name in ("root", "tenant", "internal")}
 
 
@@ -70,13 +82,13 @@ def _send_burst(gateway: Gateway, key: str, model: str, count: int) -> list[http
     return responses
 
 
-def _wait_trace_count(sink_url: str, call_ids: list[str | None], seconds: float) -> tuple[dict[str, JsonValue], ...]:
+def _wait_trace_count(sink_url: str, call_ids: list[str | None], seconds: float) -> tuple[Span, ...]:
     wanted: Final = {call_id for call_id in call_ids if call_id}
 
-    def gathered() -> tuple[dict[str, JsonValue], ...] | None:
+    def gathered() -> tuple[Span, ...] | None:
         _, spans = recorded_spans(sink_url)
         covered: Final = {
-            (span["attributes"] or {}).get("litellm.call_id") for span in spans  # type: ignore[union-attr]
+            span["attributes"].get("litellm.call_id") for span in spans
         }
         return spans if wanted <= covered else None
 
@@ -86,13 +98,13 @@ def _wait_trace_count(sink_url: str, call_ids: list[str | None], seconds: float)
 
 
 @pytest.mark.covers("other.observability.otel.tenant_internal_spans.c1_frozen_sink_delivers_after_resume")
-def test_frozen_tenant_sink_receives_every_span_after_resume(gateway: Gateway) -> None:
-    pid: Final = sink_pid(SINK_TENANT)
+def test_frozen_tenant_sink_receives_every_span_after_resume(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
+    pid: Final = sink_pid(audit_sinks.tenant)
     with gateway.scenario() as scenario:
         model: Final = scenario.model(model="openai/audit-chat", api_base=f"{gateway.upstream_url}/v1")
         team_id: Final = scenario.team()
         callback: Final = gateway.request(
-            "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"}}
+            "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": {**langfuse_vars, INTERNAL_SPANS_VAR: "exclude"}}
         )
         assert callback.status_code == 200, callback.text
         key: Final = scenario.key(team_id=team_id)
@@ -103,66 +115,54 @@ def test_frozen_tenant_sink_receives_every_span_after_resume(gateway: Gateway) -
             os.kill(pid, signal.SIGCONT)
         assert all(response.status_code == 200 for response in responses), [r.status_code for r in responses]
         call_ids: Final = [response.headers.get("x-litellm-call-id") for response in responses]
-        spans: Final = _wait_trace_count(SINK_TENANT, call_ids, seconds=120)
+        spans: Final = _wait_trace_count(audit_sinks.tenant, call_ids, seconds=120)
         for call_id in call_ids:
             group: Final = tuple(
-                span for span in spans if (span["attributes"] or {}).get("litellm.call_id") == call_id  # type: ignore[union-attr]
+                span for span in spans if span["attributes"].get("litellm.call_id") == call_id
             )
             assert group, f"call {call_id} never reached the tenant sink"
-            model_spans: Final = tuple(span for span in group if "gen_ai.operation.name" in (span["attributes"] or {}))  # type: ignore[union-attr]
+            model_spans: Final = tuple(span for span in group if "gen_ai.operation.name" in span["attributes"])
             assert len(model_spans) == 1, f"call {call_id} exported {len(model_spans)} times"
             assert _classes(group)["internal"] == 0, f"internal spans leaked for {call_id}"
 
 
 @pytest.mark.covers("other.observability.otel.tenant_internal_spans.c3_slow_sink_no_duplicates")
-def test_slow_tenant_sink_exports_each_span_once(gateway: Gateway) -> None:
-    configure_sink(SINK_TENANT, delay_seconds=2.0)
+def test_slow_tenant_sink_exports_each_span_once(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
+    configure_sink(audit_sinks.tenant, delay_seconds=2.0)
     try:
         with gateway.scenario() as scenario:
             model: Final = scenario.model(model="openai/audit-chat", api_base=f"{gateway.upstream_url}/v1")
             team_id: Final = scenario.team()
             callback: Final = gateway.request(
-                "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"}}
+                "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": {**langfuse_vars, INTERNAL_SPANS_VAR: "exclude"}}
             )
             assert callback.status_code == 200, callback.text
             key: Final = scenario.key(team_id=team_id)
             responses: Final = _send_burst(gateway, key, model, 20)
             assert all(response.status_code == 200 for response in responses), [r.status_code for r in responses]
             call_ids: Final = [response.headers.get("x-litellm-call-id") for response in responses]
-            spans: Final = _wait_trace_count(SINK_TENANT, call_ids, seconds=120)
+            spans: Final = _wait_trace_count(audit_sinks.tenant, call_ids, seconds=120)
             for call_id in call_ids:
                 group: Final = tuple(
-                    span for span in spans if (span["attributes"] or {}).get("litellm.call_id") == call_id  # type: ignore[union-attr]
+                    span for span in spans if span["attributes"].get("litellm.call_id") == call_id
                 )
                 assert group, f"call {call_id} never reached the slow sink"
                 span_ids: Final = [span["span_id"] for span in group]
                 assert len(span_ids) == len(set(span_ids)), f"duplicate spans for {call_id}"
     finally:
-        configure_sink(SINK_TENANT, delay_seconds=0.0)
+        configure_sink(audit_sinks.tenant, delay_seconds=0.0)
 
 
 @pytest.mark.covers("other.observability.otel.tenant_internal_spans.c4_proxy_restart_keeps_serving")
-def test_proxy_restart_mid_burst_keeps_serving(gateway: Gateway, tmp_path: Path) -> None:
-    import yaml
-
-    from integration._support.otlp_sink import spans_for_trace as _trace
-    from integration._support.process import owned_proxy
-
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["litellm_settings"] = {
-        **config.get("litellm_settings", {}),
-        "callbacks": ["otel"],
-        "provider_url_destination_allowed_hosts": [urlparse(SINK_TENANT).netloc],
-    }
-    config["callback_settings"] = {"otel": {"exporter": "http/json", "endpoint": SINK_OPERATOR, "use_simple_processor": True}}
-    path: Final = tmp_path / "audit-restart.yaml"
-    path.write_text(yaml.safe_dump(config))
-    with owned_proxy(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=path, num_workers=2) as candidate:
+def test_proxy_restart_mid_burst_keeps_serving(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue], otel_audit_config: AuditConfigWriter, tmp_path: Path) -> None:
+    path: Final = otel_audit_config(tmp_path, {})
+    overrides: Final = {"LITELLM_OTEL_V2": "1", "ARIZE_HTTP_ENDPOINT": audit_sinks.arize}
+    with owned_proxy(gateway, tmp_path, overrides, config=path, num_workers=2) as candidate:
         with candidate.scenario() as scenario:
             model: Final = scenario.model(model="openai/audit-chat", api_base=f"{candidate.upstream_url}/v1")
             team_id: Final = scenario.team()
             callback: Final = candidate.request(
-                "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": LANGFUSE_VARS}
+                "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": langfuse_vars}
             )
             assert callback.status_code == 200, callback.text
             key: Final = scenario.key(team_id=team_id)
@@ -173,19 +173,19 @@ def test_proxy_restart_mid_burst_keeps_serving(gateway: Gateway, tmp_path: Path)
             first_call_id: Final = first.headers.get("x-litellm-call-id")
 
             def first_landed() -> bool:
-                _, spans = recorded_spans(SINK_TENANT)
-                return any((span["attributes"] or {}).get("litellm.call_id") == first_call_id for span in spans)  # type: ignore[union-attr]
+                _, spans = recorded_spans(audit_sinks.tenant)
+                return any(span["attributes"].get("litellm.call_id") == first_call_id for span in spans)
 
             assert eventually(first_landed, bool, seconds=40), "pre-restart trace never reached the tenant sink"
-    with owned_proxy(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=path, num_workers=2) as candidate:
+    with owned_proxy(gateway, tmp_path, overrides, config=path, num_workers=2) as candidate:
         with candidate.scenario() as scenario:
-            model = scenario.model(model="openai/audit-chat", api_base=f"{candidate.upstream_url}/v1")
-            team_id = scenario.team()
-            callback = candidate.request(
-                "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": LANGFUSE_VARS}
+            model: Final = scenario.model(model="openai/audit-chat", api_base=f"{candidate.upstream_url}/v1")
+            team_id: Final = scenario.team()
+            callback: Final = candidate.request(
+                "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": langfuse_vars}
             )
             assert callback.status_code == 200, callback.text
-            key = scenario.key(team_id=team_id)
+            key: Final = scenario.key(team_id=team_id)
             response: Final = candidate.request(
                 "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": _nonce()}]}, key=key
             )
@@ -193,14 +193,14 @@ def test_proxy_restart_mid_burst_keeps_serving(gateway: Gateway, tmp_path: Path)
             call_id: Final = response.headers.get("x-litellm-call-id")
 
         def landed() -> bool:
-            _, spans = recorded_spans(SINK_OPERATOR)
-            return any((span["attributes"] or {}).get("litellm.call_id") == call_id for span in spans)  # type: ignore[union-attr]
+            _, spans = recorded_spans(audit_sinks.operator)
+            return any(span["attributes"].get("litellm.call_id") == call_id for span in spans)
 
         assert eventually(landed, bool, seconds=40), "post-restart trace never reached the operator sink"
 
 
 @pytest.mark.covers("other.observability.otel.tenant_internal_spans.c5_worker_kill_survivor_serves")
-def test_killing_one_worker_leaves_serving(gateway: Gateway) -> None:
+def test_killing_one_worker_leaves_serving(gateway: Gateway, langfuse_vars: dict[str, JsonValue]) -> None:
     import psutil
 
     port: Final = int(urlparse(str(gateway.client.base_url)).port or 0)
@@ -218,7 +218,7 @@ def test_killing_one_worker_leaves_serving(gateway: Gateway) -> None:
         model: Final = scenario.model(model="openai/audit-chat", api_base=f"{gateway.upstream_url}/v1")
         team_id: Final = scenario.team()
         callback: Final = gateway.request(
-            "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": LANGFUSE_VARS}
+            "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": langfuse_vars}
         )
         assert callback.status_code == 200, callback.text
         key: Final = scenario.key(team_id=team_id)

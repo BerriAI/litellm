@@ -10,52 +10,89 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
+import socket
+import subprocess
+import sys
 import threading
 import time
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Final
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import JsonValue
+import psutil
+from pydantic import JsonValue, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 INTERNAL_MARKERS: Final = ("gen_ai.operation.name", "mcp.method.name", "litellm.guardrail_name")
 
 
-def _proto_spans(body: bytes) -> list[dict[str, JsonValue]]:
-    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+class Span(TypedDict):
+    trace_id: ReadOnly[str]
+    span_id: ReadOnly[str]
+    parent_span_id: ReadOnly[str]
+    kind: ReadOnly[int]
+    name: ReadOnly[str]
+    attributes: ReadOnly[Mapping[str, JsonValue]]
+    resource: ReadOnly[Mapping[str, JsonValue]]
 
-    def scalar(value: object) -> JsonValue:
-        which: Final = value.WhichOneof("value")  # type: ignore[attr-defined]  # protobuf AnyValue
-        if which is None:
-            return None
-        raw: Final = getattr(value, which)
-        if which == "array_value":
-            return [scalar(item) for item in raw.values]
-        if which == "kvlist_value":
-            return {pair.key: scalar(pair.value) for pair in raw.values}
-        return raw
+
+class _SpanListing(TypedDict):
+    next: ReadOnly[int]
+    spans: ReadOnly[list[Span]]
+
+
+_SPAN_LISTING: Final = TypeAdapter(_SpanListing)
+
+
+def _proto_spans(body: bytes) -> list[Span]:
+    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+    from opentelemetry.proto.common.v1.common_pb2 import AnyValue
+
+    def scalar(value: AnyValue) -> JsonValue:
+        match value.WhichOneof("value"):
+            case "string_value":
+                return value.string_value
+            case "bool_value":
+                return value.bool_value
+            case "int_value":
+                return int(value.int_value)
+            case "double_value":
+                return value.double_value
+            case "bytes_value":
+                return value.bytes_value.decode("utf-8", errors="replace")
+            case "array_value":
+                return [scalar(item) for item in value.array_value.values]
+            case "kvlist_value":
+                return {pair.key: scalar(pair.value) for pair in value.kvlist_value.values}
+            case _:
+                return None
 
     request: Final = ExportTraceServiceRequest()
     request.ParseFromString(body)
     return [
-        {
-            "trace_id": span.trace_id.hex(),
-            "span_id": span.span_id.hex(),
-            "parent_span_id": span.parent_span_id.hex(),
-            "kind": span.kind,
-            "name": span.name,
-            "attributes": {attribute.key: scalar(attribute.value) for attribute in span.attributes},
-            "resource": {attribute.key: scalar(attribute.value) for attribute in resource.resource.attributes},
-        }
+        Span(
+            trace_id=span.trace_id.hex(),
+            span_id=span.span_id.hex(),
+            parent_span_id=span.parent_span_id.hex(),
+            kind=span.kind,
+            name=span.name,
+            attributes={attribute.key: scalar(attribute.value) for attribute in span.attributes},
+            resource={attribute.key: scalar(attribute.value) for attribute in resource.resource.attributes},
+        )
         for resource in request.resource_spans
         for scope in resource.scope_spans
         for span in scope.spans
     ]
 
 
-def _json_spans(body: bytes) -> list[dict[str, JsonValue]]:
+def _json_spans(body: bytes) -> list[Span]:
     payload: Final = json.loads(body)
 
     def scalar(value: object) -> JsonValue:
@@ -71,54 +108,51 @@ def _json_spans(body: bytes) -> list[dict[str, JsonValue]]:
         return None
 
     return [
-        {
-            "trace_id": span.get("traceId", ""),
-            "span_id": span.get("spanId", ""),
-            "parent_span_id": span.get("parentSpanId", ""),
-            "kind": span.get("kind", 0),
-            "name": span.get("name", ""),
-            "attributes": {attribute["key"]: scalar(attribute.get("value")) for attribute in span.get("attributes", [])},
-            "resource": {
+        Span(
+            trace_id=str(span.get("traceId", "")),
+            span_id=str(span.get("spanId", "")),
+            parent_span_id=str(span.get("parentSpanId", "")),
+            kind=int(span.get("kind", 0)),
+            name=str(span.get("name", "")),
+            attributes={attribute["key"]: scalar(attribute.get("value")) for attribute in span.get("attributes", [])},
+            resource={
                 attribute["key"]: scalar(attribute.get("value"))
                 for attribute in resource.get("resource", {}).get("attributes", [])
             },
-        }
+        )
         for resource in payload.get("resourceSpans", [])
         for scope in resource.get("scopeSpans", [])
         for span in scope.get("spans", [])
     ]
 
 
-def decode_spans(body: bytes, content_type: str) -> list[dict[str, JsonValue]]:
+def decode_spans(body: bytes, content_type: str) -> list[Span]:
     if "protobuf" in content_type:
         return _proto_spans(body)
     return _json_spans(body)
 
 
-def span_class(span: dict[str, JsonValue]) -> str:
+def span_class(span: Span) -> str:
     if span["kind"] == 2:
         return "root"
-    attributes: Final = span.get("attributes") or {}
-    if any(marker in attributes for marker in INTERNAL_MARKERS):  # type: ignore[operator]  # attributes is a dict
+    if any(marker in span["attributes"] for marker in INTERNAL_MARKERS):
         return "tenant"
     return "internal"
 
 
-def spans_for_trace(spans: tuple[dict[str, JsonValue], ...], trace_id: str) -> tuple[dict[str, JsonValue], ...]:
+def spans_for_trace(spans: tuple[Span, ...], trace_id: str) -> tuple[Span, ...]:
     return tuple(span for span in spans if span["trace_id"] == trace_id)
 
 
 @dataclass(slots=True)
 class _State:
-    spans: list[dict[str, JsonValue]] = None  # type: ignore[assignment]  # initialized in __post_init__
-    requests: list[dict[str, JsonValue]] = None  # type: ignore[assignment]
+    spans: list[Span] = field(default_factory=list)
+    requests: list[dict[str, JsonValue]] = field(default_factory=list)
     status: int = 200
     delay_seconds: float = 0.0
-    pause: threading.Event = threading.Event()
+    pause: threading.Event = field(default_factory=threading.Event)
 
     def __post_init__(self) -> None:
-        self.spans = []
-        self.requests = []
         self.pause.set()
 
 
@@ -157,8 +191,6 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"next": len(self.state.spans), "spans": self.state.spans[since:]})
             return
         if parsed.path == "/__pid":
-            import os
-
             self._send_json({"pid": os.getpid()})
             return
         if parsed.path == "/__requests":
@@ -193,11 +225,11 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
-def recorded_spans(url: str, since: int = 0) -> tuple[int, tuple[dict[str, JsonValue], ...]]:
+def recorded_spans(url: str, since: int = 0) -> tuple[int, tuple[Span, ...]]:
     response: Final = httpx.get(f"{url}/__spans", params={"since": since}, trust_env=False, timeout=15)
     response.raise_for_status()
-    payload: Final = response.json()
-    return int(payload["next"]), tuple(payload["spans"])
+    listing: Final = _SPAN_LISTING.validate_python(response.json())
+    return listing["next"], tuple(listing["spans"])
 
 
 def configure_sink(url: str, **fields: JsonValue) -> None:
@@ -210,6 +242,66 @@ def reset_sink(url: str) -> None:
 
 def sink_pid(url: str) -> int:
     return int(httpx.get(f"{url}/__pid", trust_env=False, timeout=15).json()["pid"])
+
+
+@dataclass(frozen=True, slots=True)
+class SpanSinks:
+    operator: str
+    tenant: str
+    arize: str
+
+
+def _free_port() -> int:
+    with socket.socket() as reserve:
+        reserve.bind(("127.0.0.1", 0))
+        return int(reserve.getsockname()[1])
+
+
+def _pid_reachable(url: str) -> bool:
+    try:
+        return httpx.get(f"{url}/__pid", trust_env=False, timeout=2).status_code == 200
+    except httpx.TransportError:
+        return False
+
+
+@contextmanager
+def owned_sinks(directory: Path) -> Iterator[SpanSinks]:
+    from integration._support.process import group_members, signal_group, stop_root_process
+
+    directory.mkdir(parents=True, exist_ok=True)
+    ports: Final = tuple(_free_port() for _ in range(3))
+    root: Final = Path(__file__).resolve().parents[3]
+    with ExitStack() as stack:
+        processes: Final = tuple(
+            subprocess.Popen(
+                [sys.executable, "-m", "integration._support.otlp_sink", "--port", str(port)],
+                cwd=root,
+                stdout=stack.enter_context((directory / f"otlp-sink-{port}.log").open("w")),
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            for port in ports
+        )
+        try:
+            urls: Final = tuple(f"http://127.0.0.1:{port}" for port in ports)
+            deadline: Final = time.monotonic() + 30
+            while True:
+                alive: Final = all(process.poll() is None for process in processes)
+                assert alive, "OTLP sink exited before readiness"
+                if all(_pid_reachable(url) for url in urls):
+                    break
+                assert time.monotonic() < deadline, "OTLP sink readiness deadline exceeded"
+                time.sleep(0.05)
+            yield SpanSinks(operator=urls[0], tenant=urls[1], arize=urls[2])
+        finally:
+            for process in processes:
+                stopped: Final = stop_root_process(process)
+                residual: Final = group_members(process.pid)
+                if residual:
+                    signal_group(process.pid, signal.SIGKILL)
+                    psutil.wait_procs(residual, timeout=5)
+                survivors: Final = group_members(process.pid)
+                assert not survivors and stopped, "OTLP sink required forced cleanup"
 
 
 def main() -> None:
