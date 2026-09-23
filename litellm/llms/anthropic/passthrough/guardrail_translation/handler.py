@@ -24,19 +24,14 @@ def _is_messages_endpoint(endpoint: str) -> bool:
     return any(normalized.endswith(suffix) for suffix in _MESSAGES_SUFFIXES)
 
 
-def _parse_sse_blocks(body_bytes: bytes) -> list[bytes]:
+def _parse_sse_blocks(body_bytes: bytes) -> tuple[bytes, ...]:
     """Split an SSE body into event blocks (including trailing separators)."""
     if not body_bytes:
-        return []
+        return ()
     # Keep separators so we can rebuild the stream byte-for-byte aside from rewrites.
-    parts = body_bytes.split(b"\n\n")
-    blocks: list[bytes] = []
-    for i, part in enumerate(parts):
-        if i < len(parts) - 1:
-            blocks.append(part + b"\n\n")
-        elif part:
-            blocks.append(part)
-    return blocks
+    parts: Final = body_bytes.split(b"\n\n")
+    last: Final = len(parts) - 1
+    return tuple(part + b"\n\n" if i < last else part for i, part in enumerate(parts) if i < last or part)
 
 
 def _event_payload(block: bytes) -> tuple[str | None, dict[str, Any] | None]:
@@ -60,6 +55,31 @@ def _event_payload(block: bytes) -> tuple[str | None, dict[str, Any] | None]:
     if not isinstance(payload, dict):
         return event_type, None
     return event_type, payload
+
+
+def _text_delta(block: bytes) -> str | None:
+    """The text of a content_block_delta/text_delta event, or None for any other block."""
+    event_type, payload = _event_payload(block)
+    if event_type != "content_block_delta" or not payload:
+        return None
+    delta = payload.get("delta")
+    if not isinstance(delta, dict) or delta.get("type") != "text_delta":
+        return None
+    text = delta.get("text")
+    return text if isinstance(text, str) else None
+
+
+def _with_text(block: bytes, new_text: str) -> bytes:
+    """Rebuild a content_block_delta block carrying ``new_text``; other blocks pass through."""
+    event_type, payload = _event_payload(block)
+    if event_type != "content_block_delta" or not payload:
+        return block
+    delta = payload.get("delta")
+    if not isinstance(delta, dict):
+        return block
+    # ``payload`` was just parsed from ``block`` and is not shared, so editing it is local.
+    delta["text"] = new_text
+    return f"event: content_block_delta\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n".encode()
 
 
 class AnthropicPassthroughGuardrailHandler(BaseTranslation):
@@ -91,27 +111,14 @@ class AnthropicPassthroughGuardrailHandler(BaseTranslation):
         first, then redistribute the de-anonymized text across the original
         frames (full rewrite on the first text_delta, empty on the rest).
         """
-        blocks = _parse_sse_blocks(body_bytes)
-        text_block_indices: list[int] = []
-        texts: list[str] = []
-
-        for idx, block in enumerate(blocks):
-            event_type, payload = _event_payload(block)
-            if event_type != "content_block_delta" or not payload:
-                continue
-            delta = payload.get("delta")
-            if not isinstance(delta, dict) or delta.get("type") != "text_delta":
-                continue
-            text = delta.get("text")
-            if not isinstance(text, str):
-                continue
-            text_block_indices.append(idx)
-            texts.append(text)
-
-        if not texts:
+        blocks: Final = _parse_sse_blocks(body_bytes)
+        deltas: Final = tuple(
+            (idx, text) for idx, text in ((i, _text_delta(block)) for i, block in enumerate(blocks)) if text is not None
+        )
+        if not deltas:
             return body_bytes
 
-        combined = "".join(texts)
+        combined: Final = "".join(text for _, text in deltas)
         synthetic_response: Final[dict] = {
             "type": "message",
             "role": "assistant",
@@ -119,7 +126,7 @@ class AnthropicPassthroughGuardrailHandler(BaseTranslation):
             "stop_reason": "end_turn",
         }
 
-        processed = await proxy_logging_obj.post_call_success_hook(
+        processed: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
             response=synthetic_response,
@@ -133,31 +140,20 @@ class AnthropicPassthroughGuardrailHandler(BaseTranslation):
             return body_bytes
 
         try:
-            content = processed["content"]
-            de_anonymized = content[0]["text"]
-            if not isinstance(de_anonymized, str):
-                return body_bytes
+            de_anonymized: Final = processed["content"][0]["text"]
         except (KeyError, IndexError, TypeError):
+            return body_bytes
+        if not isinstance(de_anonymized, str):
             return body_bytes
 
         # Put the full rewrite on the first text_delta; blank the rest so
         # split placeholders cannot survive across frames.
-        replacements = [de_anonymized] + [""] * (len(text_block_indices) - 1)
-        out: list[bytes] = list(blocks)
-        for block_idx, new_text in zip(text_block_indices, replacements):
-            event_type, payload = _event_payload(out[block_idx])
-            if event_type != "content_block_delta" or not payload:
-                continue
-            delta = payload.get("delta")
-            if not isinstance(delta, dict):
-                continue
-            delta["text"] = new_text
-            payload["delta"] = delta
-            # Rebuild a minimal SSE block; preserve event name.
-            new_block = (f"event: content_block_delta\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n").encode()
-            out[block_idx] = new_block
-
-        return b"".join(out)
+        delta_indices: Final = frozenset(idx for idx, _ in deltas)
+        first_idx: Final = deltas[0][0]
+        return b"".join(
+            _with_text(block, de_anonymized if idx == first_idx else "") if idx in delta_indices else block
+            for idx, block in enumerate(blocks)
+        )
 
     async def process_input_messages(
         self,
