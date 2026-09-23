@@ -3200,7 +3200,7 @@ def test_normalize_datetime_for_sorting():
 
 
 @pytest.mark.asyncio
-async def test_add_proxy_budget_to_db_only_creates_user_no_keys(monkeypatch):
+async def test_add_proxy_budget_to_db_only_creates_user_no_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     Test that _add_proxy_budget_to_db only creates a user and no keys are added.
 
@@ -3258,7 +3258,7 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_add_proxy_budget_to_db_backfills_budget_reset_at(monkeypatch):
+async def test_add_proxy_budget_to_db_backfills_budget_reset_at(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     Test that _upsert_proxy_budget_with_reset_at_backfill issues a conditional
     update_many with `WHERE budget_reset_at IS NULL` to backfill the column on
