@@ -6,6 +6,8 @@ from typing import Final
 
 from typing_extensions import assert_never
 
+from litellm.secret_managers.main import str_to_bool
+
 FIPS_MODE_ENV_VAR: Final = "LITELLM_FIPS_MODE"
 SSL_VERIFY_ENV_VAR: Final = "SSL_VERIFY"
 SSL_VERIFY_SETTING: Final = "litellm_settings.ssl_verify"
@@ -146,6 +148,6 @@ def _is_off(value: object) -> bool:
         case bool():
             return value is False
         case str():
-            return value.strip().lower() in _FALSE_VALUES - {""}
+            return str_to_bool(value) is False
         case _:
             return False

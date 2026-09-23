@@ -140,6 +140,13 @@ def launched_proxy(
             assert root_stopped and not remaining, "Owned proxy required forced cleanup"
 
 
+def _is_ready(client: httpx.Client) -> bool:
+    try:
+        return client.get("/health/readiness", timeout=2).status_code == 200
+    except httpx.TransportError:
+        return False
+
+
 def refused_boot_log(
     gateway: Gateway,
     directory: Path,
@@ -152,11 +159,9 @@ def refused_boot_log(
         with httpx.Client(base_url=f"http://127.0.0.1:{launched.port}", timeout=15, trust_env=False) as client:
             deadline: Final = time.monotonic() + 70
             while launched.process.poll() is None:
-                try:
-                    ready: Final = client.get("/health/readiness", timeout=2).status_code == 200
-                except httpx.TransportError:
-                    ready = False
-                assert not ready, f"Proxy became ready instead of refusing to boot:\n{launched.log.read_text()}"
+                assert not _is_ready(client), (
+                    f"Proxy became ready instead of refusing to boot:\n{launched.log.read_text()}"
+                )
                 assert time.monotonic() < deadline, "Proxy neither exited nor became ready within the deadline"
                 time.sleep(0.1)
         assert launched.process.returncode != 0, (

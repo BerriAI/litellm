@@ -85,10 +85,10 @@ def test_on_with_a_non_enforcing_provider_is_refused_and_names_the_fix():
     "ssl_env, ssl_setting, sources",
     [
         ("false", True, ("SSL_VERIFY",)),
-        ("0", True, ("SSL_VERIFY",)),
+        (" FALSE ", True, ("SSL_VERIFY",)),
         (None, False, ("litellm_settings.ssl_verify",)),
         (None, "False", ("litellm_settings.ssl_verify",)),
-        ("no", False, ("SSL_VERIFY", "litellm_settings.ssl_verify")),
+        ("false", False, ("SSL_VERIFY", "litellm_settings.ssl_verify")),
     ],
 )
 def test_disabled_tls_verification_is_refused_naming_every_source(ssl_env, ssl_setting, sources):
@@ -99,7 +99,7 @@ def test_disabled_tls_verification_is_refused_naming_every_source(ssl_env, ssl_s
     assert "TLS certificate verification is disabled by " + " and ".join(sources) in str(refused.value)
 
 
-@pytest.mark.parametrize("ssl_setting", [True, "true", "/etc/ssl/certs/ca.pem", None, ""])
+@pytest.mark.parametrize("ssl_setting", [True, "true", "/etc/ssl/certs/ca.pem", None, "", "0", "no"])
 def test_verified_or_custom_bundle_tls_settings_are_not_treated_as_disabled(ssl_setting):
     assert _verdict("true", enforcing=True, ssl_setting=ssl_setting) == FipsModeOn()
 
