@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use litellm_cost::catalog::{CatalogCallError, CostCall, ModelCostRequest, ModelInfoCatalog};
+use litellm_cost::ocr_cost::OcrCostError;
 use litellm_cost::responses_usage::ChatUsage;
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
@@ -230,5 +231,226 @@ fn retrieval_and_search_calls_use_their_reported_units() {
             CostCall::Rerank { billed_units: None },
         ),
         Err(CatalogCallError::MissingProvider)
+    );
+}
+
+#[rstest]
+fn ocr_call_layers_deployment_and_published_rates_with_credit_priority() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "mistral/ocr".to_owned(),
+        json!({
+            "ocr_cost_per_credit": 0.25,
+            "ocr_cost_per_page": 0.004,
+            "annotation_cost_per_page": 0.01
+        }),
+    )]));
+    let usage = usage();
+    let deployment = json!({"ocr_cost_per_page": 0.05});
+    let credit_response = json!({"usage_info": {
+        "credits": 4.0,
+        "pages_processed": 3,
+        "pages_processed_annotation": 2
+    }});
+    assert_eq!(
+        catalog
+            .cost_per_token_for_call(
+                request("ocr", Some("mistral"), &usage),
+                CostCall::Ocr {
+                    response: &credit_response,
+                    deployment_info: Some(&deployment),
+                },
+            )
+            .unwrap(),
+        (1.0, 0.0)
+    );
+    let page_response = json!({"usage_info": {
+        "pages_processed": 3,
+        "pages_processed_annotation": 2
+    }});
+    let (prompt, completion) = catalog
+        .cost_per_token_for_call(
+            request("ocr", Some("mistral"), &usage),
+            CostCall::Ocr {
+                response: &page_response,
+                deployment_info: Some(&deployment),
+            },
+        )
+        .unwrap();
+    assert!((prompt - 0.17).abs() < 1e-12);
+    assert_eq!(completion, 0.0);
+}
+
+#[rstest]
+fn ocr_call_distinguishes_missing_pages_from_unpriced_usage() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "mistral/priced".to_owned(),
+        json!({"ocr_cost_per_page": 0.004}),
+    )]));
+    let usage = usage();
+    let missing_pages = json!({"usage_info": {}});
+    assert_eq!(
+        catalog.cost_per_token_for_call(
+            request("priced", Some("mistral"), &usage),
+            CostCall::Ocr {
+                response: &missing_pages,
+                deployment_info: None,
+            },
+        ),
+        Err(CatalogCallError::Ocr(OcrCostError::MissingPages))
+    );
+    assert_eq!(
+        catalog
+            .cost_per_token_for_call(
+                request("unpriced", Some("mistral"), &usage),
+                CostCall::Ocr {
+                    response: &missing_pages,
+                    deployment_info: None,
+                },
+            )
+            .unwrap(),
+        (0.0, 0.0)
+    );
+    assert_eq!(
+        catalog.cost_per_token_for_call(
+            request("priced", Some("mistral"), &usage),
+            CostCall::Ocr {
+                response: &json!({}),
+                deployment_info: None,
+            },
+        ),
+        Err(CatalogCallError::Ocr(OcrCostError::MissingUsage))
+    );
+}
+
+#[rstest]
+fn batch_call_selects_independent_thresholds_modalities_and_region() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/batch".to_owned(),
+        json!({
+            "input_cost_per_token_batches": 1e-6,
+            "input_cost_per_token_above_100_tokens_batches": 2e-6,
+            "output_cost_per_token_batches": 3e-6,
+            "cache_read_input_token_cost_batches": 0.2e-6,
+            "cache_read_input_token_cost_above_100_tokens_batches": 0.4e-6,
+            "input_cost_per_audio_token_batches": 5e-6,
+            "regional_processing_uplift_multiplier_eu": 1.1
+        }),
+    )]));
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 120,
+        "completion_tokens": 30,
+        "prompt_tokens_details": {"cached_tokens": 20, "audio_tokens": 10}
+    }}))
+    .unwrap()
+    .unwrap();
+    let (prompt, completion) = catalog
+        .cost_per_token_for_call(
+            ModelCostRequest {
+                data_residency: Some("eu"),
+                ..request("batch", Some("openai"), &usage)
+            },
+            CostCall::Batch {
+                deployment_info: None,
+            },
+        )
+        .unwrap();
+    assert!((prompt - (90.0 * 2e-6 + 10.0 * 5e-6 + 20.0 * 0.4e-6) * 1.1).abs() < 1e-12);
+    assert!((completion - 30.0 * 3e-6 * 1.1).abs() < 1e-12);
+}
+
+#[rstest]
+fn batch_call_falls_back_from_unpriced_deployment_and_uses_inclusive_xai_tier() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "xai/batch".to_owned(),
+        json!({
+            "input_cost_per_token_batches": 1e-6,
+            "input_cost_per_token_above_100_tokens_batches": 2e-6,
+            "output_cost_per_token_batches": 3e-6
+        }),
+    )]));
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 100,
+        "completion_tokens": 20
+    }}))
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        catalog
+            .cost_per_token_for_call(
+                request("batch", Some("xai"), &usage),
+                CostCall::Batch {
+                    deployment_info: Some(&json!({"id": "deployment"})),
+                },
+            )
+            .unwrap(),
+        (100.0 * 2e-6, 20.0 * 3e-6)
+    );
+    assert_eq!(
+        catalog
+            .cost_per_token_for_call(
+                request("unknown", Some("xai"), &usage),
+                CostCall::Batch {
+                    deployment_info: None,
+                },
+            )
+            .unwrap(),
+        (0.0, 0.0)
+    );
+}
+
+#[rstest]
+fn batch_call_parses_k_threshold_and_numeric_string_rate() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/batch".to_owned(),
+        json!({
+            "input_cost_per_token_batches": 1e-6,
+            "input_cost_per_token_above_100k_tokens_batches": "2e-6",
+            "output_cost_per_token_batches": 3e-6
+        }),
+    )]));
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 100_001,
+        "completion_tokens": 2
+    }}))
+    .unwrap()
+    .unwrap();
+    let (prompt, completion) = catalog
+        .cost_per_token_for_call(
+            request("batch", Some("openai"), &usage),
+            CostCall::Batch {
+                deployment_info: None,
+            },
+        )
+        .unwrap();
+    assert!((prompt - 100_001.0 * 2e-6).abs() < 1e-12);
+    assert!((completion - 2.0 * 3e-6).abs() < 1e-12);
+}
+
+#[rstest]
+fn batch_call_invalid_highest_tier_falls_back_to_flat_rate() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/batch".to_owned(),
+        json!({
+            "input_cost_per_token_batches": 1e-6,
+            "input_cost_per_token_above_100_tokens_batches": 2e-6,
+            "input_cost_per_token_above_200_tokens_batches": "invalid"
+        }),
+    )]));
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 201,
+        "completion_tokens": 0
+    }}))
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        catalog
+            .cost_per_token_for_call(
+                request("batch", Some("openai"), &usage),
+                CostCall::Batch {
+                    deployment_info: None,
+                },
+            )
+            .unwrap(),
+        (201.0 * 1e-6, 0.0)
     );
 }

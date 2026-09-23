@@ -12,6 +12,7 @@ use crate::azure_ai_image_cost::{
     AzureAiImageRequest, cost_calculator as azure_ai_image_cost_calculator,
 };
 use crate::azure_cost::output_per_second_cost;
+use crate::batch::{BatchError, batch_cost_from_model_info};
 use crate::bedrock_image_cost::cost_calculator as bedrock_image_cost_calculator;
 use crate::billed_token_rates::{
     BilledRatesRequest, BilledTokenRates, TokenTypeCostBreakdown,
@@ -38,6 +39,7 @@ use crate::image_response_cost::{
     vertex_image_generation_cost,
 };
 use crate::non_token::{Error as NonTokenError, ImageRates, ImageUsage, calculate_image};
+use crate::ocr_cost::{OcrCostError, ocr_cost};
 use crate::openai_image_cost::cost_calculator as openai_image_cost_calculator;
 use crate::per_second::per_second_pricing_cost;
 use crate::perplexity_cost::cost_per_token as perplexity_cost_per_token;
@@ -117,6 +119,13 @@ pub enum CostCall<'a> {
         number_of_queries: Option<u64>,
         optional_params: &'a Value,
     },
+    Ocr {
+        response: &'a Value,
+        deployment_info: Option<&'a Value>,
+    },
+    Batch {
+        deployment_info: Option<&'a Value>,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -190,6 +199,8 @@ pub enum CatalogSpeechError {
 pub enum CatalogCallError {
     Catalog(CatalogError),
     Speech(CatalogSpeechError),
+    Ocr(OcrCostError),
+    Batch(BatchError),
     MissingProvider,
 }
 
@@ -233,6 +244,18 @@ impl From<CatalogError> for CatalogCallError {
 impl From<CatalogSpeechError> for CatalogCallError {
     fn from(value: CatalogSpeechError) -> Self {
         Self::Speech(value)
+    }
+}
+
+impl From<OcrCostError> for CatalogCallError {
+    fn from(value: OcrCostError) -> Self {
+        Self::Ocr(value)
+    }
+}
+
+impl From<BatchError> for CatalogCallError {
+    fn from(value: BatchError) -> Self {
+        Self::Batch(value)
     }
 }
 
@@ -420,6 +443,45 @@ impl ModelInfoCatalog {
                 number_of_queries.filter(|count| *count > 0).unwrap_or(1),
                 optional_params,
             )?),
+            CostCall::Ocr {
+                response,
+                deployment_info,
+            } => {
+                let published = self
+                    .select_model_key(request.model, request.provider, request.region)
+                    .and_then(|key| self.entries.get(key));
+                Ok(ocr_cost(response, deployment_info, published)?)
+            }
+            CostCall::Batch { deployment_info } => {
+                let published = self
+                    .select_model_key(request.model, request.provider, request.region)
+                    .and_then(|key| self.entries.get(key));
+                let has_deployment_rates = deployment_info.is_some_and(|info| {
+                    [
+                        "input_cost_per_token_batches",
+                        "input_cost_per_token",
+                        "output_cost_per_token_batches",
+                        "output_cost_per_token",
+                    ]
+                    .into_iter()
+                    .any(|key| info.get(key).is_some_and(|value| !value.is_null()))
+                });
+                let info = if has_deployment_rates {
+                    deployment_info
+                } else {
+                    published.or(deployment_info)
+                };
+                let Some(info) = info else {
+                    return Ok((0.0, 0.0));
+                };
+                let cost = batch_cost_from_model_info(
+                    info,
+                    request.usage,
+                    request.provider,
+                    request.data_residency,
+                )?;
+                Ok((cost.prompt, cost.completion))
+            }
         }
     }
 

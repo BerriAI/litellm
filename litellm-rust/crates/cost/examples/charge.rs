@@ -895,6 +895,41 @@ fn main() {
         )
         .unwrap();
     println!("routed_search_cost={:.3}", routed_search_cost.0);
+    let standalone_request = ModelCostRequest {
+        model: "unmapped",
+        provider: Some("openai"),
+        region: None,
+        usage: &off_peak_usage,
+        service_tier: None,
+        data_residency: None,
+        vertex_location: None,
+        at,
+        response_time_ms: None,
+    };
+    let routed_ocr = model_info_catalog
+        .cost_per_token_for_call(
+            standalone_request,
+            CostCall::Ocr {
+                response: &json!({"usage_info": {"pages_processed": 2}}),
+                deployment_info: Some(&json!({"ocr_cost_per_page": 0.01})),
+            },
+        )
+        .unwrap();
+    let routed_batch = model_info_catalog
+        .cost_per_token_for_call(
+            standalone_request,
+            CostCall::Batch {
+                deployment_info: Some(&json!({
+                    "input_cost_per_token_batches": 1e-6,
+                    "output_cost_per_token_batches": 2e-6
+                })),
+            },
+        )
+        .unwrap();
+    println!(
+        "routed_ocr={:.3} routed_batch_input={:.4} routed_batch_output={:.4}",
+        routed_ocr.0, routed_batch.0, routed_batch.1
+    );
     let parallel_search_cost = model_info_catalog
         .search_provider_cost_per_query(
             "ignored",

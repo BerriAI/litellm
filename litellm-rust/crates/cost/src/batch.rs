@@ -1,3 +1,8 @@
+use serde_json::Value;
+
+use crate::generic_usage::parse_prompt_tokens_details;
+use crate::regional_uplift::get_regional_uplift_multiplier;
+use crate::responses_usage::ChatUsage;
 use crate::{Rate, ThresholdPolicy};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -204,4 +209,120 @@ pub fn batch_cost_calculator(
         return Err(BatchError::NonFiniteCost);
     }
     Ok(result)
+}
+
+fn model_rate(model_info: &Value, key: &str) -> Rate {
+    let Some(value) = model_info.get(key) else {
+        return Rate::Missing;
+    };
+    match value {
+        Value::Number(value) => value.as_f64().map_or(Rate::Missing, Rate::Value),
+        Value::String(value) => value.parse::<f64>().map_or(Rate::Missing, Rate::Value),
+        _ => Rate::Missing,
+    }
+}
+
+fn threshold(value: &str) -> Option<u64> {
+    let (digits, multiplier) = value
+        .strip_suffix('k')
+        .map_or((value, 1), |digits| (digits, 1000));
+    if digits.is_empty() || !digits.bytes().all(|digit| digit.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<u64>().ok()?.checked_mul(multiplier)
+}
+
+fn selected_model_rate(
+    model_info: &Value,
+    prefix: &str,
+    prompt_tokens: u64,
+    policy: ThresholdPolicy,
+) -> Rate {
+    let flat = model_rate(model_info, &format!("{prefix}_batches"));
+    model_info
+        .as_object()
+        .into_iter()
+        .flat_map(|entry| entry.iter())
+        .filter_map(|(key, value)| {
+            let suffix = key
+                .strip_prefix(&format!("{prefix}_above_"))?
+                .strip_suffix("_tokens_batches")?;
+            let threshold = threshold(suffix)?;
+            let crossed = prompt_tokens > threshold
+                || (policy == ThresholdPolicy::Inclusive && prompt_tokens == threshold);
+            (crossed && !value.is_null()).then_some((threshold, key.as_str()))
+        })
+        .max_by_key(|(threshold, _)| *threshold)
+        .map_or(flat, |(_, key)| match model_rate(model_info, key) {
+            Rate::Value(rate) => Rate::Value(rate),
+            Rate::Missing | Rate::Null => flat,
+        })
+}
+
+pub fn batch_cost_from_model_info(
+    model_info: &Value,
+    usage: &ChatUsage,
+    provider: Option<&str>,
+    data_residency: Option<&str>,
+) -> Result<BatchCost, BatchError> {
+    let policy = if provider == Some("xai") {
+        ThresholdPolicy::Inclusive
+    } else {
+        ThresholdPolicy::Exclusive
+    };
+    let details = parse_prompt_tokens_details(usage);
+    let pricing = BatchPricing {
+        batch: BatchCostRates {
+            input: selected_model_rate(
+                model_info,
+                "input_cost_per_token",
+                usage.prompt_tokens,
+                policy,
+            ),
+            output: selected_model_rate(
+                model_info,
+                "output_cost_per_token",
+                usage.prompt_tokens,
+                policy,
+            ),
+            cache_read: selected_model_rate(
+                model_info,
+                "cache_read_input_token_cost",
+                usage.prompt_tokens,
+                policy,
+            ),
+            cache_creation: selected_model_rate(
+                model_info,
+                "cache_creation_input_token_cost",
+                usage.prompt_tokens,
+                policy,
+            ),
+        },
+        regular: BatchCostRates {
+            input: model_rate(model_info, "input_cost_per_token"),
+            output: model_rate(model_info, "output_cost_per_token"),
+            cache_read: model_rate(model_info, "cache_read_input_token_cost"),
+            cache_creation: model_rate(model_info, "cache_creation_input_token_cost"),
+        },
+        modalities: ModalityRates {
+            audio: model_rate(model_info, "input_cost_per_audio_token_batches"),
+            image: model_rate(model_info, "input_cost_per_image_token_batches"),
+            video: model_rate(model_info, "input_cost_per_video_token_batches"),
+        },
+        tiers: &[],
+        threshold_policy: policy,
+        regional_uplift: get_regional_uplift_multiplier(model_info, data_residency),
+    };
+    batch_cost_calculator(
+        &pricing,
+        BatchUsage {
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+            cache_read_tokens: details.cache_hit_tokens,
+            cache_creation_tokens: details.cache_creation_tokens,
+            audio_tokens: details.audio_tokens,
+            image_tokens: details.image_tokens,
+            video_tokens: details.video_tokens,
+        },
+    )
 }

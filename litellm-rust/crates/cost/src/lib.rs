@@ -25,6 +25,7 @@ pub mod image_cost_router;
 pub mod image_response_cost;
 pub mod interactions_usage;
 pub mod non_token;
+pub mod ocr_cost;
 pub mod off_peak;
 pub mod openai_cost;
 pub mod openai_image_cost;
