@@ -57306,10 +57306,10 @@
     },
     "gemini/gemini-robotics-er-2-streaming-preview": {
         "input_cost_per_audio_token": 2e-06,
-        "input_cost_per_token": 2e-06,
+        "input_cost_per_token": 1e-06,
         "litellm_provider": "gemini",
         "mode": "chat",
-        "output_cost_per_token": 1e-05,
+        "output_cost_per_token": 5e-06,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.014,
             "search_context_size_low": 0.014,
