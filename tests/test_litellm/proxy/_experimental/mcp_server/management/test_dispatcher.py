@@ -7,8 +7,8 @@ from fastapi.responses import Response
 
 from litellm.proxy._experimental.mcp_server.management.catalog import build_catalog
 from litellm.proxy._experimental.mcp_server.management.dispatcher import (
-    ManagementRequestContext,
     Dispatch,
+    ManagementRequestContext,
     build_management_asgi_app,
     call_tool,
     set_dispatch,
@@ -17,9 +17,11 @@ from litellm.proxy._experimental.mcp_server.management.dispatcher import (
 
 def _fixture_app() -> FastAPI:
     app = FastAPI()
+    app.state.get_item_hits = 0
 
     @app.get("/admin/items/{item_id}", operation_id="get_item")
     async def get_item(item_id: str, q: int = 0):
+        app.state.get_item_hits += 1
         return {"item_id": item_id, "q": q}
 
     @app.post("/admin/items", operation_id="make_item")
@@ -71,7 +73,7 @@ def _fixture_app() -> FastAPI:
 def _dispatch_fixture():
     app = _fixture_app()
     set_dispatch(Dispatch(catalog=build_catalog(app.openapi()), internal_app=build_management_asgi_app(app)))
-    yield
+    yield app
     set_dispatch(None)
 
 
@@ -123,6 +125,14 @@ async def test_path_traversal_rejected():
         result = await call_tool("get_item", {"path": {"item_id": bad}}, _ctx())
         assert result.is_error is True, bad
         assert "400" in _text(result)
+
+
+@pytest.mark.asyncio
+async def test_missing_path_param_is_400_and_handler_not_hit(_dispatch_fixture):
+    result = await call_tool("get_item", {"path": {}}, _ctx())
+    assert result.is_error is True
+    assert "missing path parameter 'item_id' for tool 'get_item'" in _text(result)
+    assert _dispatch_fixture.state.get_item_hits == 0
 
 
 @pytest.mark.asyncio

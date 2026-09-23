@@ -167,6 +167,9 @@ def _validated_sections(
 
 
 def _target_url(tool: ManagementTool, path_args: Mapping[str, object], query_args: Mapping[str, object]) -> str:
+    for param_name in tool.path_param_names:
+        if path_args.get(param_name) is None:
+            raise ValueError(f"missing path parameter '{param_name}' for tool '{tool.name}'")
     path: Final = "/".join(
         _sanitize_path_parameter_value(path_args.get(segment[1:-1]), segment[1:-1])
         if segment.startswith("{") and segment.endswith("}")
