@@ -1963,6 +1963,9 @@
     "tests/integration/providers/test_openai_chat_wire.py::test_openai_chat_tool_choice_without_tools_is_not_forwarded": [
       "providers.openai_chat_wire.tool_choice_without_tools_is_dropped_before_the_wire"
     ],
+    "tests/integration/providers/test_sagemaker_chat_wire.py::test_sagemaker_chat_signs_the_inference_component_header_and_sends_hf_model_name_as_the_body_model": [
+      "providers.sagemaker_chat_wire.inference_component_header_is_signed_and_hf_model_name_is_the_body_model"
+    ],
     "tests/integration/providers/test_openai_image_edit_wire.py::test_openai_compatible_image_edit_forwards_seed_form_field_to_backend": [
       "other.provider_wire.openai.image_edit_forwards_provider_specific_form_fields"
     ],
