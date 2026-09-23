@@ -200,7 +200,7 @@ impl NativeSecretManager {
         run_sync_value(py, async move {
             read_secret_from_python_manager(&backend, &name, &settings, &ProcessEnvironment)
                 .await
-                .map_err(|error| PyValueError::new_err(error.to_string()))
+                .map_err(|error| python_read_error(backend.system(), &name, error))
                 .and_then(|value| python_secret_value(value, &name))
         })
     }
@@ -256,6 +256,78 @@ impl NativeSecretManager {
         })
     }
 
+    #[pyo3(signature = (secret_name, secret_value, description=None, optional_params=None, timeout=None, tags=None))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "preserves the Python secret-manager write signature"
+    )]
+    fn async_write_secret<'py>(
+        &self,
+        py: Python<'py>,
+        secret_name: String,
+        secret_value: String,
+        description: Option<&Bound<'py, PyAny>>,
+        optional_params: Option<&Bound<'py, PyAny>>,
+        timeout: Option<&Bound<'py, PyAny>>,
+        tags: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let backend = self.backend()?;
+        let _ = (description, optional_params, timeout, tags);
+        run_async_value(py, async move {
+            super::mutation::mutation_value(
+                litellm_secrets::write_python_provider(
+                    &backend,
+                    &secret_name,
+                    &litellm_secrets::SecretValue::new(secret_value),
+                )
+                .await,
+            )
+        })
+    }
+
+    #[pyo3(signature = (secret_name, recovery_window_in_days=None, optional_params=None, timeout=None))]
+    fn async_delete_secret<'py>(
+        &self,
+        py: Python<'py>,
+        secret_name: String,
+        recovery_window_in_days: Option<&Bound<'py, PyAny>>,
+        optional_params: Option<&Bound<'py, PyAny>>,
+        timeout: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let backend = self.backend()?;
+        let _ = (recovery_window_in_days, optional_params, timeout);
+        run_async_value(py, async move {
+            super::mutation::mutation_value(
+                litellm_secrets::delete_python_provider(&backend, &secret_name).await,
+            )
+        })
+    }
+
+    #[pyo3(signature = (current_secret_name, new_secret_name, new_secret_value, optional_params=None, timeout=None))]
+    fn async_rotate_secret<'py>(
+        &self,
+        py: Python<'py>,
+        current_secret_name: String,
+        new_secret_name: String,
+        new_secret_value: String,
+        optional_params: Option<&Bound<'py, PyAny>>,
+        timeout: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let backend = self.backend()?;
+        let _ = (optional_params, timeout);
+        run_async_value(py, async move {
+            super::mutation::mutation_value(
+                litellm_secrets::rotate_python_provider(
+                    &backend,
+                    &current_secret_name,
+                    &new_secret_name,
+                    &litellm_secrets::SecretValue::new(new_secret_value),
+                )
+                .await,
+            )
+        })
+    }
+
     #[pyo3(signature = (name, settings=None))]
     fn read_secret_async<'py>(
         &self,
@@ -271,7 +343,7 @@ impl NativeSecretManager {
         run_async_value(py, async move {
             read_secret_from_python_manager(&backend, &name, &settings, &ProcessEnvironment)
                 .await
-                .map_err(|error| PyValueError::new_err(error.to_string()))
+                .map_err(|error| python_read_error(backend.system(), &name, error))
                 .and_then(|value| python_secret_value(value, &name))
         })
     }
@@ -332,4 +404,18 @@ fn python_secret_value(payload: PythonSecretRead, name: &str) -> PyResult<Py<PyA
         Some(Secret::Json(value)) => value,
     };
     Python::attach(|py| to_py(py, &value))
+}
+
+fn python_read_error(
+    system: KeyManagementSystem,
+    name: &str,
+    error: litellm_secrets::Error,
+) -> PyErr {
+    let message = match (system, error) {
+        (KeyManagementSystem::Cyberark, litellm_secrets::Error::ManagedSecretMissing) => {
+            format!("No secret found in CyberArk Secret Manager for {name}")
+        }
+        (_, error) => error.to_string(),
+    };
+    PyValueError::new_err(message)
 }

@@ -1,3 +1,4 @@
+use super::python::AuthenticationRetry;
 use super::*;
 
 impl CyberArkSecretManager {
@@ -11,10 +12,21 @@ impl CyberArkSecretManager {
         name: &str,
         context: &CyberarkOperationContext,
     ) -> Result<Option<SecretValue>, Error> {
+        self.read_with_retry(name, context, AuthenticationRetry::Unauthorized)
+            .await
+    }
+
+    pub(super) async fn read_with_retry(
+        &self,
+        name: &str,
+        context: &CyberarkOperationContext,
+        retry: AuthenticationRetry,
+    ) -> Result<Option<SecretValue>, Error> {
         validate_secret_name(name)?;
-        let read = self
-            .secrets
-            .read(name.to_owned(), self.read_uncached(name, context));
+        let read = self.secrets.read(
+            name.to_owned(),
+            self.read_uncached_with_retry(name, context, retry),
+        );
         match context.timeout {
             Some(timeout) => tokio::time::timeout(timeout, read)
                 .await
@@ -28,6 +40,16 @@ impl CyberArkSecretManager {
         name: &str,
         context: &CyberarkOperationContext,
     ) -> Result<Option<SecretValue>, Error> {
+        self.read_uncached_with_retry(name, context, AuthenticationRetry::Unauthorized)
+            .await
+    }
+
+    pub(super) async fn read_uncached_with_retry(
+        &self,
+        name: &str,
+        context: &CyberarkOperationContext,
+        retry: AuthenticationRetry,
+    ) -> Result<Option<SecretValue>, Error> {
         let had_cached_token = self.token.get(&()).await.is_some();
         let response = with_timeout(
             self.client
@@ -37,7 +59,9 @@ impl CyberArkSecretManager {
         )
         .send()
         .await?;
-        let response = if had_cached_token && response.status() == reqwest::StatusCode::UNAUTHORIZED
+        let response = if matches!(retry, AuthenticationRetry::Unauthorized)
+            && had_cached_token
+            && response.status() == reqwest::StatusCode::UNAUTHORIZED
         {
             self.token.invalidate(&()).await;
             with_timeout(

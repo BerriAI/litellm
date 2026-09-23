@@ -92,6 +92,16 @@ impl CyberArkSecretManager {
         ))
     }
 
+    pub(super) fn authentication_url(&self) -> Result<reqwest::Url, Error> {
+        self.endpoint
+            .join(&format!(
+                "authn/{}/{}/authenticate",
+                self.account,
+                utf8_percent_encode(&self.username, SECRET_NAME_SAFE)
+            ))
+            .map_err(|_| Error::Endpoint)
+    }
+
     pub(super) async fn authenticate(
         &self,
         context: &CyberarkOperationContext,
@@ -103,14 +113,7 @@ impl CyberArkSecretManager {
         if let Some(token) = self.token.get(&()).await {
             return Ok(token);
         }
-        let url = self
-            .endpoint
-            .join(&format!(
-                "authn/{}/{}/authenticate",
-                self.account,
-                utf8_percent_encode(&self.username, SECRET_NAME_SAFE)
-            ))
-            .map_err(|_| Error::Endpoint)?;
+        let url = self.authentication_url()?;
         let response = with_timeout(
             self.client.post(url).body(self.api_key.expose().to_owned()),
             context,

@@ -4,4 +4,6 @@ mod error;
 mod secret_manager;
 
 pub use error::Error;
-pub use secret_manager::{CyberArkSecretManager, DeleteOutcome};
+pub use secret_manager::{
+    CyberArkSecretManager, DeleteOutcome, PythonRotationFailure, PythonWriteFailure,
+};

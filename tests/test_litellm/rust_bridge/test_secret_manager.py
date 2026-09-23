@@ -29,9 +29,11 @@ from litellm.rust_bridge.secret_manager import (
     capture_secret_manager,
     native_secret_manager_config,
     resolve_native_provider_reader,
+    resolve_native_provider_writer,
     resolve_native_secret_manager,
 )
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
+from litellm.secret_managers.cyberark_secret_manager import CyberArkSecretManager
 from litellm.secret_managers.dispatch import get_secret_from_manager
 from litellm.secret_managers.hashicorp_secret_manager import HashicorpSecretManager
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
@@ -805,3 +807,281 @@ def test_public_google_reader_uses_the_selected_binding_without_replaying_python
     )
     assert manager.get_secret_from_google_secret_manager(secret_name="KEY") == value
     assert runtime.calls == (("KEY", None),)
+
+
+def _cyberark(monkeypatch: pytest.MonkeyPatch, address: str) -> CyberArkSecretManager:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setenv("CYBERARK_API_BASE", address)
+    monkeypatch.setenv("CYBERARK_API_KEY", "api-key")
+    monkeypatch.setenv("CYBERARK_ACCOUNT", "account")
+    monkeypatch.setenv("CYBERARK_USERNAME", "reader")
+    return CyberArkSecretManager()
+
+
+def _select_cyberark_mutations(monkeypatch: pytest.MonkeyPatch, rollout: Rollout) -> None:
+    module: Final = import_module("litellm.secret_managers.cyberark_secret_manager")
+    _select_provider_reads(monkeypatch, module.__name__, rollout)
+    monkeypatch.setattr(
+        module, "resolve_native_provider_writer",
+        partial(resolve_native_provider_writer, rules=(SecretManagerRule(rollout),)),
+    )
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+async def test_public_cyberark_writes_and_deletes_share_the_read_cache(
+    monkeypatch: pytest.MonkeyPatch, rollout: Rollout,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        for body in (b"token", b"old", {}, {}, b"provider-after-delete"):
+            server.enqueue(ResponseSpec(body=body))
+        server.expected_requests = 5
+        manager: Final = _cyberark(monkeypatch, server.base_url)
+        _select_cyberark_mutations(monkeypatch, rollout)
+        assert manager.sync_read_secret("KEY") == "old"
+        pending: Final = manager.async_write_secret(
+            "KEY", "new-value", "ignored", {"ignored": object()}, 0, {"ignored": object()},
+        )
+        assert inspect.iscoroutine(pending)
+        assert len(server.requests) == 2
+        assert await asyncio.create_task(pending) == {
+            "status": "success", "message": "Secret KEY written successfully",
+        }
+        assert manager.sync_read_secret("KEY") == "new-value"
+        assert await manager.async_read_secret("KEY") == "new-value"
+        assert len(server.requests) == 4
+        assert await manager.async_delete_secret(secret_name="KEY", recovery_window_in_days=None, timeout=0) == {
+            "status": "not_supported",
+            "message": "CyberArk Conjur does not support direct secret deletion. Use policy updates to remove variables.",
+        }
+        assert len(server.requests) == 4
+        assert manager.sync_read_secret("KEY") == "provider-after-delete"
+        assert tuple(request.path for request in server.requests) == (
+            "/authn/account/reader/authenticate", "/secrets/account/variable/KEY",
+            "/policies/account/policy/root", "/secrets/account/variable/KEY", "/secrets/account/variable/KEY",
+        )
+        assert server.requests[3].raw_body == b"new-value"
+
+
+@pytest.mark.parametrize("status", (401, 403, 500))
+@pytest.mark.parametrize("authentication", (False, True))
+async def test_public_cyberark_write_errors_match_python_without_http_retries(
+    monkeypatch: pytest.MonkeyPatch, status: int, authentication: bool,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        responses: Final = (
+            (ResponseSpec(status=status, body={}),) * 2 if authentication else (
+                ResponseSpec(body=b"token"), ResponseSpec(body={}), ResponseSpec(status=status, body={}),
+            )
+        )
+        for response in responses * 2:
+            server.enqueue(response)
+        server.expected_requests = len(responses) * 2
+        reference_manager: Final = _cyberark(monkeypatch, server.base_url)
+        _select_cyberark_mutations(monkeypatch, Rollout.PYTHON_ONLY)
+        reference: Final = await reference_manager.async_write_secret("KEY", "value")
+        native_manager: Final = _cyberark(monkeypatch, server.base_url)
+        _select_cyberark_mutations(monkeypatch, Rollout.RUST_REQUIRED)
+        actual: Final = await native_manager.async_write_secret("KEY", "value")
+        assert actual == reference
+        assert tuple(actual) == tuple(reference)
+        assert actual["status"] == "error"
+        assert str(status) in actual["message"]
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+async def test_public_cyberark_write_recovers_from_initial_policy_authentication_failure(
+    monkeypatch: pytest.MonkeyPatch, rollout: Rollout,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.enqueue(ResponseSpec(status=401, body={}))
+        server.enqueue(ResponseSpec(body=b"token"))
+        server.enqueue(ResponseSpec(body={}))
+        server.expected_requests = 3
+        manager: Final = _cyberark(monkeypatch, server.base_url)
+        _select_cyberark_mutations(monkeypatch, rollout)
+        assert await manager.async_write_secret("KEY", "value") == {
+            "status": "success", "message": "Secret KEY written successfully",
+        }
+        assert tuple(request.path for request in server.requests) == (
+            "/authn/account/reader/authenticate", "/authn/account/reader/authenticate", "/secrets/account/variable/KEY",
+        )
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+@pytest.mark.parametrize("name", ("../KEY", "line\nKEY", "a\u2028b"))
+async def test_public_cyberark_write_rejects_unsafe_names_before_authentication(
+    monkeypatch: pytest.MonkeyPatch, rollout: Rollout, name: str,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.expected_requests = 0
+        manager: Final = _cyberark(monkeypatch, server.base_url)
+        _select_cyberark_mutations(monkeypatch, rollout)
+        assert await manager.async_write_secret(name, "value") == {
+            "status": "error", "message": f"Invalid secret_name {name!r}",
+        }
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+@pytest.mark.parametrize("same_name", (False, True))
+async def test_public_cyberark_rotation_returns_the_write_response_and_retains_old_alias(
+    monkeypatch: pytest.MonkeyPatch, rollout: Rollout, same_name: bool,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        for body in (b"token", b"old-value", {}, {}):
+            server.enqueue(ResponseSpec(body=body))
+        if rollout is Rollout.RUST_REQUIRED:
+            server.enqueue(ResponseSpec(body=b"new-value"))
+        server.expected_requests = 5 if rollout is Rollout.RUST_REQUIRED else 4
+        manager: Final = _cyberark(monkeypatch, server.base_url)
+        _select_cyberark_mutations(monkeypatch, rollout)
+        new_name: Final = "OLD" if same_name else "NEW"
+        pending: Final = manager.async_rotate_secret("OLD", new_name, "new-value", {"ignored": object()}, 0)
+        assert inspect.iscoroutine(pending)
+        assert server.requests == []
+        assert await asyncio.create_task(pending) == {
+            "status": "success", "message": f"Secret {new_name} written successfully",
+        }
+        assert tuple(request.method for request in server.requests) == (
+            ("POST", "GET", "POST", "POST", "GET") if rollout is Rollout.RUST_REQUIRED
+            else ("POST", "GET", "POST", "POST")
+        )
+        assert server.requests[3].raw_body == b"new-value"
+
+
+@pytest.mark.parametrize("replacement", (None, b"wrong-value"))
+async def test_public_cyberark_rotation_requires_a_fresh_matching_replacement(
+    monkeypatch: pytest.MonkeyPatch, replacement: bytes | None,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        for body in (b"token", b"old-value", {}, {}):
+            server.enqueue(ResponseSpec(body=body))
+        server.enqueue(ResponseSpec(status=404 if replacement is None else 200, body=replacement))
+        server.expected_requests = 5
+        manager: Final = _cyberark(monkeypatch, server.base_url)
+        _select_cyberark_mutations(monkeypatch, Rollout.RUST_REQUIRED)
+        message: Final = "Failed to verify new secret NEW" if replacement is None else "New secret value mismatch"
+        with pytest.raises(ValueError, match=message):
+            await manager.async_rotate_secret("OLD", "NEW", "new-value")
+        assert manager.sync_read_secret("OLD") == "old-value"
+        assert tuple(request.path for request in server.requests) == (
+            "/authn/account/reader/authenticate", "/secrets/account/variable/OLD", "/policies/account/policy/root",
+            "/secrets/account/variable/NEW", "/secrets/account/variable/NEW",
+        )
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+async def test_public_cyberark_cached_authentication_does_not_retry_denied_reads(
+    monkeypatch: pytest.MonkeyPatch, rollout: Rollout,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.enqueue(ResponseSpec(body=b"token"))
+        server.enqueue(ResponseSpec(body=b"value"))
+        server.enqueue(ResponseSpec(status=401, body={}))
+        server.expected_requests = 3
+        manager: Final = _cyberark(monkeypatch, server.base_url)
+        _select_cyberark_mutations(monkeypatch, rollout)
+        assert manager.sync_read_secret("OLD") == "value"
+        assert await manager.async_read_secret("NEW") is None
+
+
+async def test_cyberark_handler_errors_match_python_after_cached_authentication_is_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        for response in (
+            ResponseSpec(body=b"token"), ResponseSpec(body=b"value"), ResponseSpec(status=401, body={}),
+        ) * 2:
+            server.enqueue(response)
+        server.expected_requests = 6
+        reference_manager: Final = _cyberark(monkeypatch, server.base_url)
+        python_rules: Final = (SecretManagerRule(Rollout.PYTHON_ONLY),)
+        native_rules: Final = (SecretManagerRule(Rollout.RUST_REQUIRED),)
+        assert get_secret_from_manager(reference_manager, "cyberark", "OLD", rules=python_rules) == "value"
+        with pytest.raises(ValueError, match="No secret found in CyberArk Secret Manager for NEW") as reference:
+            get_secret_from_manager(reference_manager, "cyberark", "NEW", rules=python_rules)
+        native_manager: Final = _cyberark(monkeypatch, server.base_url)
+        _select_cyberark_mutations(monkeypatch, Rollout.RUST_REQUIRED)
+        assert get_secret_from_manager(native_manager, "cyberark", "OLD", rules=native_rules) == "value"
+        with pytest.raises(ValueError, match="No secret found in CyberArk Secret Manager for NEW") as actual:
+            get_secret_from_manager(native_manager, "cyberark", "NEW", rules=native_rules)
+        assert actual.value.args == reference.value.args
+
+
+async def test_public_cyberark_connection_errors_match_python(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.expected_requests = 0
+        address: Final = server.base_url
+    reference_manager: Final = _cyberark(monkeypatch, address)
+    _select_cyberark_mutations(monkeypatch, Rollout.PYTHON_ONLY)
+    reference: Final = await reference_manager.async_write_secret("KEY", "value")
+    native_manager: Final = _cyberark(monkeypatch, address)
+    _select_cyberark_mutations(monkeypatch, Rollout.RUST_REQUIRED)
+    actual: Final = await native_manager.async_write_secret("KEY", "value")
+    assert actual == reference
+    assert actual["status"] == "error"
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+@pytest.mark.parametrize("operation", ("write", "delete", "rotate"))
+async def test_public_cyberark_mutations_preserve_missing_extension_selection(
+    monkeypatch: pytest.MonkeyPatch, rollout: Rollout, operation: str,
+) -> None:
+    binding: Final[NativeBinding[NativeSecretManagerFactory]] = NativeBinding("unused", validate=lambda value: None)
+    binding.override(None)
+    module: Final = import_module("litellm.secret_managers.cyberark_secret_manager")
+    _select_provider_reads(monkeypatch, module.__name__, Rollout.PYTHON_ONLY)
+    monkeypatch.setattr(
+        module, "resolve_native_provider_writer",
+        partial(resolve_native_provider_writer, rules=(SecretManagerRule(rollout),), binding=binding),
+    )
+    with recording_service() as server:
+        bodies: Final = () if rollout is Rollout.RUST_REQUIRED or operation == "delete" else (
+            (b"token", b"old", {}, {}) if operation == "rotate" else (b"token", {}, {})
+        )
+        for body in bodies:
+            server.enqueue(ResponseSpec(body=body))
+        server.expected_requests = len(bodies)
+        manager: Final = _cyberark(monkeypatch, server.base_url)
+        call: Final = {
+            "write": partial(manager.async_write_secret, "KEY", "value"),
+            "delete": partial(manager.async_delete_secret, "KEY"),
+            "rotate": partial(manager.async_rotate_secret, "OLD", "NEW", "value"),
+        }[operation]
+        pending: Final = call()
+        assert inspect.iscoroutine(pending)
+        assert server.requests == []
+        if rollout is Rollout.RUST_REQUIRED:
+            with pytest.raises(RuntimeError, match="runtime is unavailable"):
+                await pending
+        else:
+            result: Final = await pending
+            assert result["status"] == ("not_supported" if operation == "delete" else "success")
+
+
+async def test_public_cyberark_rotation_stops_after_a_failed_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        for body in (b"token", b"old-value", {}):
+            server.enqueue(ResponseSpec(body=body))
+        server.enqueue(ResponseSpec(status=401, body={}))
+        server.expected_requests = 4
+        manager: Final = _cyberark(monkeypatch, server.base_url)
+        _select_cyberark_mutations(monkeypatch, Rollout.RUST_REQUIRED)
+        response: Final = await manager.async_rotate_secret("OLD", "NEW", "new-value")
+        assert response["status"] == "error"
+        assert "401" in response["message"]
+        assert manager.sync_read_secret("OLD") == "old-value"
+        assert tuple(request.method for request in server.requests) == ("POST", "GET", "POST", "POST")

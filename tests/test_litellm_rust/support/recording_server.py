@@ -28,6 +28,8 @@ class ResponseSpec:
     events: tuple[tuple[str, object], ...] = ()
 
     def payloads(self) -> tuple[bytes, ...]:
+        if isinstance(self.body, bytes):
+            return (self.body,)
         if not self.events:
             return (json.dumps(self.body).encode(),)
         return tuple(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in self.events)

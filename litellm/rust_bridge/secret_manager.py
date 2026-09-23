@@ -83,7 +83,7 @@ _ADAPTERS: Final = (
         KeyManagementSystem.CYBERARK,
         "litellm.secret_managers.cyberark_secret_manager",
         "CyberArkSecretManager",
-        ("sync_read_secret", "async_read_secret"),
+        ("sync_read_secret", "async_read_secret", "async_write_secret", "async_delete_secret", "async_rotate_secret"),
         environment_attributes=(
             ("CYBERARK_API_BASE", "conjur_addr"),
             ("CYBERARK_ACCOUNT", "conjur_account"),
@@ -237,4 +237,49 @@ def resolve_native_provider_reader(
         return None
     if not isinstance(runtime, NativeProviderReader):
         raise TypeError("Rust secret manager provider reads are unavailable")
+    return runtime
+
+
+@runtime_checkable
+class NativeProviderWriter(Protocol):
+    def async_write_secret(
+        self,
+        secret_name: str,
+        secret_value: str,
+        description: str | None = None,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        tags: object = None,
+    ) -> Awaitable[dict[str, JsonValue]]: ...
+
+    def async_delete_secret(
+        self,
+        secret_name: str,
+        recovery_window_in_days: int | None = 7,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Awaitable[dict[str, JsonValue]]: ...
+
+    def async_rotate_secret(
+        self,
+        current_secret_name: str,
+        new_secret_name: str,
+        new_secret_value: str,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Awaitable[dict[str, JsonValue]]: ...
+
+
+def resolve_native_provider_writer(
+    client: object,
+    system: str,
+    rules: Rules | None = None,
+    *,
+    binding: NativeBinding[NativeSecretManagerFactory] = NATIVE_SECRET_MANAGER,
+) -> NativeProviderWriter | None:
+    runtime: Final = resolve_native_secret_manager(client, system, rules, binding=binding)
+    if runtime is None:
+        return None
+    if not isinstance(runtime, NativeProviderWriter):
+        raise TypeError("Rust secret manager provider writes are unavailable")
     return runtime

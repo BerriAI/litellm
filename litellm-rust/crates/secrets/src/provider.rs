@@ -41,10 +41,10 @@ pub async fn read_python_provider(
             ))
         }
         #[cfg(feature = "cyberark")]
-        (SecretManager::Cyberark(client), SecretOperationContext::Cyberark(context)) => {
+        (SecretManager::Cyberark(client), SecretOperationContext::Cyberark(_)) => {
             Ok(PythonSecretRead::Value(
                 client
-                    .async_read_secret_with_context(&request.secret_name, context)
+                    .read_for_python(&request.secret_name)
                     .await
                     .unwrap_or(None)
                     .map(Secret::String),
@@ -58,4 +58,110 @@ pub async fn read_python_provider(
             .map_err(Error::from),
         _ => Err(Error::NativeBackendUnavailable),
     }
+}
+
+#[derive(Debug)]
+pub enum PythonMutationError {
+    Unsupported,
+    #[cfg(feature = "cyberark")]
+    CyberarkWrite {
+        name: String,
+        failure: Box<litellm_secrets_cyberark::PythonWriteFailure>,
+    },
+    CurrentMissing(String),
+    ReplacementMissing(String),
+    ReplacementMismatch,
+}
+
+pub async fn write_python_provider(
+    manager: &SecretManager,
+    name: &str,
+    value: &crate::SecretValue,
+) -> Result<serde_json::Value, PythonMutationError> {
+    #[cfg(not(feature = "cyberark"))]
+    let _ = (name, value);
+    match manager {
+        #[cfg(feature = "cyberark")]
+        SecretManager::Cyberark(client) => {
+            client
+                .write_for_python(name, value)
+                .await
+                .map_err(|failure| PythonMutationError::CyberarkWrite {
+                    name: name.to_owned(),
+                    failure: Box::new(failure),
+                })?;
+            Ok(write_success(name))
+        }
+        _ => Err(PythonMutationError::Unsupported),
+    }
+}
+
+pub async fn delete_python_provider(
+    manager: &SecretManager,
+    name: &str,
+) -> Result<serde_json::Value, PythonMutationError> {
+    #[cfg(not(feature = "cyberark"))]
+    let _ = name;
+    match manager {
+        #[cfg(feature = "cyberark")]
+        SecretManager::Cyberark(client) => {
+            client
+                .async_delete_secret(name, None)
+                .await
+                .map_err(|failure| PythonMutationError::CyberarkWrite {
+                    name: name.to_owned(),
+                    failure: Box::new(litellm_secrets_cyberark::PythonWriteFailure {
+                        source: failure,
+                        request_url: None,
+                        authentication: false,
+                    }),
+                })?;
+            Ok(serde_json::json!({
+                "status": "not_supported",
+                "message": "CyberArk Conjur does not support direct secret deletion. Use policy updates to remove variables.",
+            }))
+        }
+        _ => Err(PythonMutationError::Unsupported),
+    }
+}
+
+pub async fn rotate_python_provider(
+    manager: &SecretManager,
+    current_name: &str,
+    new_name: &str,
+    value: &crate::SecretValue,
+) -> Result<serde_json::Value, PythonMutationError> {
+    #[cfg(not(feature = "cyberark"))]
+    let _ = (current_name, new_name, value);
+    match manager {
+        #[cfg(feature = "cyberark")]
+        SecretManager::Cyberark(client) => {
+            use litellm_secrets_cyberark::PythonRotationFailure;
+            client
+                .rotate_for_python(current_name, new_name, value)
+                .await
+                .map_err(|failure| match failure {
+                    PythonRotationFailure::CurrentMissing => {
+                        PythonMutationError::CurrentMissing(current_name.to_owned())
+                    }
+                    PythonRotationFailure::Write(failure) => PythonMutationError::CyberarkWrite {
+                        name: new_name.to_owned(),
+                        failure: Box::new(failure),
+                    },
+                    PythonRotationFailure::ReplacementMissing => {
+                        PythonMutationError::ReplacementMissing(new_name.to_owned())
+                    }
+                    PythonRotationFailure::ReplacementMismatch => {
+                        PythonMutationError::ReplacementMismatch
+                    }
+                })?;
+            Ok(write_success(new_name))
+        }
+        _ => Err(PythonMutationError::Unsupported),
+    }
+}
+
+#[cfg(feature = "cyberark")]
+fn write_success(name: &str) -> serde_json::Value {
+    serde_json::json!({"status": "success", "message": format!("Secret {name} written successfully")})
 }

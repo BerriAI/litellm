@@ -1,3 +1,4 @@
+use super::python::{AuthenticationRetry, PythonWriteFailure};
 use super::*;
 
 impl CyberArkSecretManager {
@@ -23,36 +24,64 @@ impl CyberArkSecretManager {
         _description: Option<&str>,
         context: &CyberarkOperationContext,
     ) -> Result<(), Error> {
-        validate_secret_name(name)?;
+        self.write_with_retry(name, value, context, AuthenticationRetry::Unauthorized)
+            .await
+            .map_err(|failure| failure.source)
+    }
+
+    pub(super) async fn write_with_retry(
+        &self,
+        name: &str,
+        value: &SecretValue,
+        context: &CyberarkOperationContext,
+        retry: AuthenticationRetry,
+    ) -> Result<(), PythonWriteFailure> {
+        validate_secret_name(name).map_err(|source| PythonWriteFailure::local(source.into()))?;
         self.ensure_variable_exists(name, context).await;
-        let response = with_timeout(
-            self.client
-                .post(self.secret_url(name)?)
-                .header("Authorization", self.authorization_header(context).await?)
-                .body(value.expose().to_owned()),
-            context,
-        )
-        .send()
-        .await?;
-        let response = if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        let url = self.secret_url(name).map_err(PythonWriteFailure::local)?;
+        let response = self.post_value(&url, value, context).await?;
+        let response = if matches!(retry, AuthenticationRetry::Unauthorized)
+            && response.status() == reqwest::StatusCode::UNAUTHORIZED
+        {
             self.token.invalidate(&()).await;
-            with_timeout(
-                self.client
-                    .post(self.secret_url(name)?)
-                    .header("Authorization", self.authorization_header(context).await?)
-                    .body(value.expose().to_owned()),
-                context,
-            )
-            .send()
-            .await?
+            self.post_value(&url, value, context).await?
         } else {
             response
         };
         if !response.status().is_success() {
-            return Err(Error::Status(response.status().as_u16()));
+            return Err(PythonWriteFailure::request(
+                Error::Status(response.status().as_u16()),
+                url,
+            ));
         }
         self.secrets.insert(name.to_owned(), value.clone()).await;
         Ok(())
+    }
+
+    async fn post_value(
+        &self,
+        url: &reqwest::Url,
+        value: &SecretValue,
+        context: &CyberarkOperationContext,
+    ) -> Result<reqwest::Response, PythonWriteFailure> {
+        let authorization =
+            self.authorization_header(context)
+                .await
+                .map_err(|source| PythonWriteFailure {
+                    source,
+                    request_url: self.authentication_url().ok(),
+                    authentication: true,
+                })?;
+        with_timeout(
+            self.client
+                .post(url.clone())
+                .header("Authorization", authorization)
+                .body(value.expose().to_owned()),
+            context,
+        )
+        .send()
+        .await
+        .map_err(|source| PythonWriteFailure::request(source.into(), url.clone()))
     }
 
     pub(super) async fn ensure_variable_exists(

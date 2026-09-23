@@ -1,5 +1,7 @@
 mod client;
+mod python;
 mod read;
+pub use python::{PythonRotationFailure, PythonWriteFailure};
 mod write;
 
 use std::{fs, sync::Arc, time::Duration};

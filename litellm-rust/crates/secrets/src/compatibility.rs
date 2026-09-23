@@ -21,6 +21,12 @@ pub async fn get_secret_from_python_manager(
             .map_err(Error::from);
     }
     let result = match manager {
+        #[cfg(feature = "cyberark")]
+        SecretManager::Cyberark(client) => Ok(client
+            .read_for_python(name)
+            .await
+            .unwrap_or(None)
+            .map(Secret::String)),
         #[cfg(feature = "google")]
         SecretManager::GoogleSecretManager(client) => client
             .get_secret_for_python(name)
