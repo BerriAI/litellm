@@ -7,10 +7,13 @@ These are HTTP (not WebSocket) endpoints used by the WebRTC flow:
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
 
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.types.router import GenericLiteLLMParams
 
 
 class BaseRealtimeHTTPConfig(ABC):
@@ -49,6 +52,14 @@ class BaseRealtimeHTTPConfig(ABC):
         Resolution order (provider-specific):
           explicit api_key → litellm.api_key → env var → ""
         """
+
+    def get_extra_headers(
+        self,
+        litellm_params: GenericLiteLLMParams,
+        api_key: str,
+        extra_headers: Mapping[str, object] | None,
+    ) -> Mapping[str, object] | None:
+        return extra_headers
 
     # ------------------------------------------------------------------ #
     # client_secrets endpoint                                              #

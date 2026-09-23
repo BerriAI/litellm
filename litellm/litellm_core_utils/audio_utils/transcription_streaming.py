@@ -120,6 +120,8 @@ class LoggingTranscriptionStream(Stream[TranscriptionStreamEvent]):
         if self._finalized or self._failed:
             return
         self._finalized = True
+        if self._collector.done_event is None and self._collector.duration is None:
+            return
         self._logging_obj.success_handler(
             self._collector.response(),
             self._start_time,
@@ -174,6 +176,8 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
         if self._finalized or self._failed:
             return
         self._finalized = True
+        if self._collector.done_event is None and self._collector.duration is None:
+            return
         response: Final = self._collector.response()
         end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
         self._logging_obj.handle_sync_success_callbacks_for_async_calls(

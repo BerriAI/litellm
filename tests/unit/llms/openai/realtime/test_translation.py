@@ -11,6 +11,18 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.realtime.http_transformation import OpenAIRealtimeHTTPConfig
 from litellm.types.realtime import RealtimeSessionConfig
+from litellm.types.router import GenericLiteLLMParams
+
+
+def test_azure_realtime_http_headers_use_ad_token_without_api_key():
+    config = AzureRealtimeHTTPConfig()
+    params = GenericLiteLLMParams(azure_ad_token="test-ad-token")
+
+    assert config.get_extra_headers(params, "", {"X-Trace": "trace"}) == {
+        "X-Trace": "trace",
+        "Authorization": "Bearer test-ad-token",
+    }
+    assert config.get_extra_headers(params, "test-api-key", {"X-Trace": "trace"}) == {"X-Trace": "trace"}
 
 
 def test_realtime_session_config_supports_translation_and_live_transcription_fields():
