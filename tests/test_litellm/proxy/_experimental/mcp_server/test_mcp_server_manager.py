@@ -7,6 +7,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, Final, Literal, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10033,7 +10034,7 @@ class _RetryFakeClient:
         self._MCPClient = MCPClient
         self.attempts = 0
 
-    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False):
+    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, persistent_session=None):
         self.attempts += 1
         if self._raises is not None:
             if raise_on_error:
@@ -10245,7 +10246,7 @@ class TestOBOConcurrencyLimit:
         inflight = {"current": 0, "peak": 0}
 
         class _ConcurrencyRecordingClient:
-            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False):
+            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, persistent_session=None):
                 inflight["current"] += 1
                 inflight["peak"] = max(inflight["peak"], inflight["current"])
                 try:
@@ -10292,6 +10293,51 @@ class TestOBOConcurrencyLimit:
         assert peak_while_blocked == max_concurrent
         assert inflight["current"] == 0
         assert all(result.is_error is False for result in results)
+
+    @pytest.mark.asyncio
+    async def test_obo_dispatch_reuses_the_gateway_sessions_persistent_upstream_session(self):
+        server = MCPServer(
+            server_id="obo-stateful",
+            name="obo",
+            url="https://upstream.example/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+        sessions_seen = []
+
+        class _SessionRecordingClient:
+            async def discovery_auth_fingerprint(self):
+                return "same-token"
+
+            def open_persistent_session(self):
+                return SimpleNamespace(closed=False, close=lambda: None)
+
+            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, persistent_session=None):
+                sessions_seen.append(persistent_session)
+                return CallToolResult(content=[], isError=False)
+
+        manager = MCPServerManager()
+        manager._create_mcp_client = AsyncMock(return_value=_SessionRecordingClient())
+
+        for tool in ("select_project", "create_feature"):
+            result = await manager._call_regular_mcp_tool(
+                mcp_server=server,
+                original_tool_name=tool,
+                arguments={},
+                tasks=[],
+                mcp_auth_header=None,
+                mcp_server_auth_headers=None,
+                oauth2_headers={"Authorization": "Bearer subject-jwt"},
+                raw_headers={"mcp-session-id": "gateway-1"},
+                proxy_logging_obj=None,
+            )
+            assert result.is_error is False
+
+        assert len(sessions_seen) == 2 and None not in sessions_seen, sessions_seen
+        assert sessions_seen[0] is sessions_seen[1], "OBO calls in one gateway session must share one upstream session"
 
 
 class TestOBOEndpointDiscovery:

@@ -5810,6 +5810,10 @@ class MCPServerManager:
         for key in tuple(key for key in self._upstream_sessions if key[0] == gateway_session_id):
             self._upstream_sessions.pop(key).close()
 
+    def _drop_upstream_session(self, session: PersistentMCPSession | None) -> None:
+        for key in tuple(key for key, value in self._upstream_sessions.items() if value is session):
+            self._upstream_sessions.pop(key).close()
+
     async def _obo_call_tool_with_retry(
         self,
         *,
@@ -5824,6 +5828,7 @@ class MCPServerManager:
         user_api_key_auth: UserAPIKeyAuth | None,
         raw_headers: Mapping[str, str] | None = None,
         client_ip: str | None = None,
+        persistent_session: PersistentMCPSession | None = None,
     ) -> CallToolResult:
         """Call a token_exchange (OBO) tool; on an upstream 401/403 re-mint the token once and retry.
 
@@ -5834,11 +5839,15 @@ class MCPServerManager:
         """
         try:
             return await client.call_tool(
-                call_tool_params, host_progress_callback=host_progress_callback, raise_on_error=True
+                call_tool_params,
+                host_progress_callback=host_progress_callback,
+                raise_on_error=True,
+                persistent_session=persistent_session,
             )
         except Exception as exc:
             if _extract_upstream_auth_failure(exc) is None:
                 return MCPClient.error_tool_result(exc)
+            self._drop_upstream_session(persistent_session)
             spec: Final = to_server_spec(mcp_server)
             if spec is not None:
                 await self._cred_provider.invalidate_credentials(to_subject(user_api_key_auth, subject_token), spec)
@@ -5852,7 +5861,11 @@ class MCPServerManager:
                 raw_headers=raw_headers,
                 client_ip=client_ip,
             )
-            return await retry_client.call_tool(call_tool_params, host_progress_callback=host_progress_callback)
+            return await retry_client.call_tool(
+                call_tool_params,
+                host_progress_callback=host_progress_callback,
+                persistent_session=await self._upstream_session_for(retry_client, mcp_server, raw_headers),
+            )
 
     async def _call_regular_mcp_tool(
         self,
@@ -6041,6 +6054,7 @@ class MCPServerManager:
                         user_api_key_auth=user_api_key_auth,
                         raw_headers=raw_headers,
                         client_ip=client_ip,
+                        persistent_session=persistent_session,
                     )
 
             tool_call_coro = _obo_call_tool_limited()
