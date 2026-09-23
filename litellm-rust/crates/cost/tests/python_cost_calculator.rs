@@ -649,3 +649,19 @@ fn batch_model_info_honors_an_explicitly_zero_batch_rate() {
     let cost = batch_cost_from_model_info(&model_info, &usage, Some("anthropic"), None).unwrap();
     assert_eq!((cost.prompt, cost.completion), (0.0, 0.0));
 }
+
+#[rstest]
+fn batch_model_info_rejects_invalid_rates_with_an_error_not_a_negative_cost() {
+    let model_info = json!({
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 15e-6,
+        "input_cost_per_token_batches": -1e-6
+    });
+    let usage = ChatUsage {
+        prompt_tokens: 1000,
+        completion_tokens: 500,
+        total_tokens: 1500,
+        ..ChatUsage::default()
+    };
+    assert!(batch_cost_from_model_info(&model_info, &usage, Some("anthropic"), None).is_err());
+}

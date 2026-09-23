@@ -1551,3 +1551,61 @@ fn rateless_custom_pricing_strips_provider_reported_cost_like_python() {
     let reported = completion_cost_from_response(&catalog, base).unwrap();
     assert!((reported.cost.total - 99.0).abs() < 1e-12);
 }
+
+#[rstest]
+fn responses_websocket_prices_built_in_tools_from_each_tiers_usage() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/model".to_owned(),
+        json!({
+            "input_cost_per_token": 0.002,
+            "output_cost_per_token": 0.003,
+            "search_context_cost_per_query": {"search_context_size_medium": 0.02}
+        }),
+    )]));
+    let response = json!({"results": [
+        {"type": "response.completed", "response": {"service_tier": "default", "usage": {
+            "input_tokens": 100, "output_tokens": 40,
+            "input_token_details": {"web_search_requests": 2}
+        }}},
+        {"type": "response.incomplete", "response": {"service_tier": "priority", "usage": {
+            "input_tokens": 60, "output_tokens": 10,
+            "input_token_details": {"web_search_requests": 3}
+        }}}
+    ]});
+    let empty = json!({});
+    let base = request(
+        Some(&response),
+        Some("model"),
+        Some("openai"),
+        &empty,
+        &empty,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                call_type: Some("_aresponses_websocket"),
+                ..base.input
+            },
+            built_in_tool_config: Some(BuiltInToolCostConfig {
+                response_kind: ToolResponseKind::Other,
+                params: &empty,
+                defaults: DefaultToolRates {
+                    file_search_per_call: 0.0,
+                    azure_file_search_per_gb_day: 0.0,
+                    azure_vector_store_per_gb_day: 0.0,
+                    azure_computer_input_per_1k_tokens: 0.0,
+                    azure_computer_output_per_1k_tokens: 0.0,
+                    code_interpreter_per_session: None,
+                    xai_web_search_per_call: 0.0,
+                    groq_browser_open_per_call: 0.0,
+                },
+            }),
+            ..base
+        },
+    )
+    .unwrap();
+    let tokens = 100.0 * 0.002 + 40.0 * 0.003 + 60.0 * 0.002 + 10.0 * 0.003;
+    assert!((result.cost.built_in_tools - 2.0 * 0.02).abs() < 1e-12);
+    assert!((result.cost.total - tokens - 2.0 * 0.02).abs() < 1e-12);
+}

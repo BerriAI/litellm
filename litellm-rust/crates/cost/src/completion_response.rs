@@ -525,7 +525,7 @@ fn add_completion_costs(first: CompletionCost, second: CompletionCost) -> Comple
     }
 }
 
-fn built_in_tool_cost(
+fn config_driven_tool_cost(
     catalog: &ModelInfoCatalog,
     request: CompletionResponseCostRequest<'_>,
     model: &str,
@@ -534,25 +534,24 @@ fn built_in_tool_cost(
     usage: Option<&ChatUsage>,
 ) -> f64 {
     let Some(config) = request.built_in_tool_config else {
-        return request.built_in_tool_cost;
+        return 0.0;
     };
     let Some(response) = request.input.model_selection.response else {
-        return request.built_in_tool_cost;
+        return 0.0;
     };
-    request.built_in_tool_cost
-        + catalog.built_in_tool_cost(
-            model,
+    catalog.built_in_tool_cost(
+        model,
+        provider,
+        region,
+        BuiltInToolCostRequest {
+            response,
+            response_kind: config.response_kind,
+            usage,
             provider,
-            region,
-            BuiltInToolCostRequest {
-                response,
-                response_kind: config.response_kind,
-                usage,
-                provider,
-                params: config.params,
-                defaults: config.defaults,
-            },
-        )
+            params: config.params,
+            defaults: config.defaults,
+        },
+    )
 }
 
 fn price_responses_websocket(
@@ -608,10 +607,17 @@ fn price_responses_websocket(
                 },
             )?;
             let built_in = if index == 0 {
-                built_in_tool_cost(catalog, request, &model, provider, region, Some(usage))
+                request.built_in_tool_cost
             } else {
                 0.0
-            };
+            } + config_driven_tool_cost(
+                catalog,
+                request,
+                &model,
+                provider,
+                region,
+                Some(usage),
+            );
             let additional = if index == 0 {
                 request.additional_costs
             } else {
@@ -868,7 +874,8 @@ pub fn completion_cost_from_response(
         if is_search {
             0.0
         } else {
-            built_in_tool_cost(catalog, request, &model, provider, region, Some(usage))
+            request.built_in_tool_cost
+                + config_driven_tool_cost(catalog, request, &model, provider, region, Some(usage))
         },
         &additional_costs,
         provider,
