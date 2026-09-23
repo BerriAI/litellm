@@ -159,6 +159,9 @@
     "tests/integration/routing/test_redis_recovery.py::test_owned_redis_outage_recovers_requests_and_real_response_cache": [
       "other.routing.redis.owned_outage_recovers_serving_and_response_cache"
     ],
+    "tests/integration/routing/test_team_model_tpm_limit.py::test_concurrent_team_model_tpm_requests_reserve_tokens_before_reaching_the_provider": [
+      "routing.team_model_tpm.concurrent_requests_over_the_limit_are_rejected_before_the_provider_call"
+    ],
     "tests/integration/providers/test_anthropic_wire.py::test_anthropic_bare_string_content_item_is_rejected_as_client_error_before_the_wire[type_word]": [
       "other.provider_wire.anthropic.bare_string_content_item_is_client_error"
     ],
