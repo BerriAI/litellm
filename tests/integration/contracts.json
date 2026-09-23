@@ -2019,6 +2019,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/authorization/test_jwt_default_team_provisioning.py::test_jwt_subject_without_team_claim_is_provisioned_into_configured_default_team": [
+      "authorization.jwt.new_subject_without_team_claim_joins_default_team"
     ]
   },
   "browser": {
