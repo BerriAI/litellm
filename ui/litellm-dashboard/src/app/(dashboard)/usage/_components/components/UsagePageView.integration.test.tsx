@@ -40,7 +40,11 @@ vi.mock("@/components/activity_metrics", () => ({
 }));
 
 vi.mock("@/components/view_user_spend", () => ({
-  default: () => <div>View User Spend</div>,
+  default: ({ userSpend }: { userSpend: number }) => (
+    <div>
+      View User Spend <output aria-label="Total Spend">{userSpend}</output>
+    </div>
+  ),
 }));
 
 vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
@@ -523,6 +527,22 @@ describe("UsagePage", () => {
     // Check for chart titles (these are in the Cost tab)
     expect(screen.getByText("Daily Spend")).toBeInTheDocument();
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
+  });
+
+  it("uses a successful capped aggregate for both cost totals and Key Activity", async () => {
+    mockUserDailyActivityAggregatedCall.mockResolvedValue({
+      ...mockSpendData,
+      metadata: { ...mockSpendData.metadata, api_key_limit: 1, total_api_keys: 2 },
+    });
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    expect(await screen.findByLabelText("Total Spend")).toHaveTextContent("125.75");
+    fireEvent.click(screen.getByRole("tab", { name: "Key Activity" }));
+
+    expect(screen.getByRole("note")).toHaveTextContent("Only the 1 highest-spend keys of 2 are loaded");
+    expect(screen.getByRole("button", { name: "Export Data" })).toBeDisabled();
+    expect(mockUserDailyActivityCall).not.toHaveBeenCalled();
   });
 
   it("should render the daily spend and top models charts with cyan bars", async () => {
