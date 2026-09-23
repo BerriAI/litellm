@@ -106,9 +106,25 @@ pub fn prepare_completion_input(
     cost_map: &HashMap<String, Value>,
 ) -> Result<PreparedCompletionInput, UsageError> {
     let response = request.model_selection.response;
-    let selected_model = select_model_name_for_cost_calc(request.model_selection, cost_map);
+    let call_type =
+        infer_call_type(request.call_type, request.response_kind).unwrap_or("completion");
+    let model = if matches!(call_type, "image_generation" | "aimage_generation")
+        && request.model_selection.model == Some("")
+        && request.model_selection.provider == Some("azure")
+    {
+        Some("dall-e-2")
+    } else {
+        request.model_selection.model
+    };
+    let selected_model = select_model_name_for_cost_calc(
+        ModelSelectionRequest {
+            model,
+            ..request.model_selection
+        },
+        cost_map,
+    );
     let response_model = get_response_model(response).map(str::to_owned);
-    let requested_model = request.model_selection.model.map(str::to_owned);
+    let requested_model = model.map(str::to_owned);
     let usage = response.map(get_usage_object).transpose()?.flatten();
     let service_tier = select_service_tier(
         request.service_tier,
@@ -117,9 +133,7 @@ pub fn prepare_completion_input(
         request.model_selection.hidden_params,
     );
     Ok(PreparedCompletionInput {
-        call_type: infer_call_type(request.call_type, request.response_kind)
-            .unwrap_or("completion")
-            .to_owned(),
+        call_type: call_type.to_owned(),
         model_candidates: [selected_model, response_model, requested_model],
         service_tier,
         usage,

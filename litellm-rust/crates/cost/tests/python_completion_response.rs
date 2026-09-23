@@ -1205,6 +1205,33 @@ fn image_response_uses_image_route_before_discount_and_margin() {
 }
 
 #[rstest]
+#[case("image_generation")]
+#[case("aimage_generation")]
+fn azure_image_response_uses_dall_e_2_for_empty_model(#[case] call_type: &str) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "standard/1024-x-1024/dall-e-2".to_owned(),
+        json!({"output_cost_per_image": 0.04}),
+    )]));
+    let response = json!({"data": [{}, {}]});
+    let empty = json!({});
+    let base = request(Some(&response), Some(""), Some("azure"), &empty, &empty);
+    let actual = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                response_kind: Some(ResponseKind::ImageGeneration),
+                call_type: Some(call_type),
+                ..base.input
+            },
+            ..base
+        },
+    )
+    .unwrap();
+    assert_eq!(actual.model, "azure/dall-e-2");
+    assert_eq!(actual.cost.total, 2.0 * 0.04);
+}
+
+#[rstest]
 fn video_response_prefers_provider_total_without_deployment_and_multiplies_custom_rate() {
     let catalog = ModelInfoCatalog::new(HashMap::from([(
         "openai/video".to_owned(),
