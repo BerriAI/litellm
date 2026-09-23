@@ -6,6 +6,8 @@ from mcp.types import GetPromptRequest, GetPromptRequestParams, GetPromptResult
 
 from litellm.proxy._experimental.mcp_server.operations import GatewayOperations, prepare_context
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.mcp import MCPAuth, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 @pytest.mark.asyncio
@@ -365,10 +367,7 @@ async def test_explicit_proxy_context_lists_builtin_tools_and_blocks_direct_tool
     allowed.assert_not_awaited()
 
 
-def _server(server_id: str, auth_type):
-    from litellm.types.mcp import MCPTransport
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer
-
+def _server(server_id: str, auth_type: MCPAuth) -> MCPServer:
     return MCPServer(
         server_id=server_id,
         name=f"{server_id}-server",
@@ -386,7 +385,15 @@ class TestChallengeMissingTokenExchangeSubject:
     before the best-effort listing swallows the upstream 401 and tool resolution turns it into a 500."""
 
     @staticmethod
-    def _challenge(server, allowed, *, user=None, oauth2_headers=None, raw_headers=None, requested_server=None):
+    def _challenge(
+        server: MCPServer | None,
+        allowed: list[MCPServer],
+        *,
+        user: UserAPIKeyAuth | None = None,
+        oauth2_headers: dict[str, str] | None = None,
+        raw_headers: dict[str, str] | None = None,
+        requested_server: MCPServer | None = None,
+    ) -> None:
         from litellm.proxy._experimental.mcp_server.operations import _challenge_missing_token_exchange_subject
 
         return _challenge_missing_token_exchange_subject(
@@ -400,7 +407,6 @@ class TestChallengeMissingTokenExchangeSubject:
 
     def test_missing_subject_raises_401_challenge(self):
         from fastapi import HTTPException
-        from litellm.types.mcp import MCPAuth
 
         server = _server("te-cold", MCPAuth.oauth2_token_exchange)
         with pytest.raises(HTTPException) as exc_info:
@@ -420,9 +426,8 @@ class TestChallengeMissingTokenExchangeSubject:
         ["Bearer sk-admission", "Bearer sk-some-other-virtual-key"],
         ids=["repeated-admission-key", "another-virtual-key"],
     )
-    def test_litellm_key_in_authorization_is_not_a_subject(self, authorization):
+    def test_litellm_key_in_authorization_is_not_a_subject(self, authorization: str):
         from fastapi import HTTPException
-        from litellm.types.mcp import MCPAuth
 
         server = _server("te-vk", MCPAuth.oauth2_token_exchange)
         with pytest.raises(HTTPException) as exc_info:
@@ -436,7 +441,6 @@ class TestChallengeMissingTokenExchangeSubject:
         assert exc_info.value.status_code == 401
 
     def test_subject_present_does_not_challenge(self):
-        from litellm.types.mcp import MCPAuth
 
         server = _server("te-ok", MCPAuth.oauth2_token_exchange)
         assert (
@@ -451,7 +455,6 @@ class TestChallengeMissingTokenExchangeSubject:
         )
 
     def test_server_outside_allowlist_is_not_challenged(self):
-        from litellm.types.mcp import MCPAuth
 
         server = _server("te-hidden", MCPAuth.oauth2_token_exchange)
         other = _server("te-visible", MCPAuth.oauth2_token_exchange)
@@ -461,7 +464,6 @@ class TestChallengeMissingTokenExchangeSubject:
     def test_prefix_owner_differing_from_server_id_is_not_challenged(self):
         """An explicit server_id that disagrees with the tool prefix keeps the existing mismatch answer."""
         from fastapi import HTTPException
-        from litellm.types.mcp import MCPAuth
 
         prefix_owner = _server("te-prefix", MCPAuth.oauth2_token_exchange)
         requested = _server("te-requested", MCPAuth.oauth2_token_exchange)
@@ -475,8 +477,7 @@ class TestChallengeMissingTokenExchangeSubject:
         "auth_type",
         ["oauth2", "oauth_delegate", "oauth2_id_jag", "bearer_token", "api_key", "none"],
     )
-    def test_other_auth_types_are_untouched(self, auth_type):
-        from litellm.types.mcp import MCPAuth
+    def test_other_auth_types_are_untouched(self, auth_type: str):
 
         server = _server("na", MCPAuth(auth_type))
         assert self._challenge(server, [server], user=UserAPIKeyAuth(api_key="sk-admission")) is None
@@ -488,7 +489,6 @@ async def test_execute_mcp_tool_challenges_missing_subject_before_cold_listing()
     from fastapi import HTTPException
     from datetime import datetime, timezone
     from litellm.proxy._experimental.mcp_server import operations
-    from litellm.types.mcp import MCPAuth
 
     server = _server("te-exec", MCPAuth.oauth2_token_exchange)
     listing = AsyncMock()
