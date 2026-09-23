@@ -65,36 +65,6 @@ fn context_rate(model_info: &Value) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn xai_web_search_cost(usage: &ChatUsage, model_info: &Value, defaults: DefaultToolRates) -> f64 {
-    if usage
-        .cost
-        .is_some_and(|cost| cost.is_finite() && cost >= 0.0)
-    {
-        return 0.0;
-    }
-    let count = usage
-        .extra
-        .get("server_side_tool_usage_details")
-        .and_then(|details| details.get("web_search_calls"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let rate = [
-        "search_context_size_medium",
-        "search_context_size_low",
-        "search_context_size_high",
-    ]
-    .into_iter()
-    .filter_map(|key| {
-        model_info
-            .get("search_context_cost_per_query")
-            .and_then(|rates| rates.get(key))
-            .and_then(Value::as_f64)
-    })
-    .find(|rate| *rate > 0.0)
-    .unwrap_or(defaults.xai_web_search_per_call);
-    rate * count as f64
-}
-
 fn provider_web_search_cost(
     request: BuiltInToolCostRequest<'_>,
     model_info: &Value,
@@ -107,7 +77,13 @@ fn provider_web_search_cost(
             web_search_requests(request).map(|count| context_rate(model_info) * count as f64)
         }
         "perplexity" => Some(0.0),
-        "xai" => usage.map(|usage| xai_web_search_cost(usage, model_info, request.defaults)),
+        "xai" => usage.map(|usage| {
+            crate::xai_cost::cost_per_web_search_request(
+                usage,
+                model_info,
+                request.defaults.xai_web_search_per_call,
+            )
+        }),
         "groq" => usage.map(|usage| {
             server_tool_count(usage, "web_search_requests").unwrap_or(0) as f64
                 * context_rate(model_info)

@@ -536,6 +536,10 @@ fn main() {
             }),
         ),
         (
+            "xai/reasoning".to_owned(),
+            json!({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}),
+        ),
+        (
             "vertex_ai/rerank".to_owned(),
             json!({"input_cost_per_query": 0.25}),
         ),
@@ -681,4 +685,26 @@ fn main() {
         })
         .unwrap();
     println!("perplexity_prompt={perplexity_prompt:.6} perplexity_output={perplexity_output:.6}");
+    let xai_usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "total_tokens": 170,
+        "completion_tokens_details": {"reasoning_tokens": 20}
+    }}))
+    .unwrap()
+    .unwrap();
+    let (xai_prompt, xai_output) = model_info_catalog
+        .cost_per_token(ModelCostRequest {
+            model: "reasoning",
+            provider: Some("xai"),
+            region: None,
+            usage: &xai_usage,
+            service_tier: None,
+            data_residency: None,
+            vertex_location: None,
+            at,
+            response_time_ms: None,
+        })
+        .unwrap();
+    println!("xai_prompt={xai_prompt:.6} xai_output={xai_output:.6}");
 }

@@ -23,6 +23,7 @@ use crate::provider_cache::apply_provider_cache_read_default;
 use crate::responses_usage::ChatUsage;
 use crate::retrieval_cost::{rerank_cost, vector_store_search_cost};
 use crate::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
+use crate::xai_cost::{cost_per_token as xai_cost_per_token, reported_cost as xai_reported_cost};
 use crate::{Cost, Pricing, PricingError, Rates, Request, calculate};
 
 #[derive(Clone, Debug, Default)]
@@ -204,6 +205,11 @@ impl ModelInfoCatalog {
         {
             return Ok((0.0, cost));
         }
+        if request.provider == Some("xai")
+            && let Some(cost) = xai_reported_cost(request.usage)
+        {
+            return Ok((0.0, cost));
+        }
         let key = self
             .select_model_key(request.model, request.provider, request.region)
             .ok_or(CatalogError::ModelNotFound)?;
@@ -217,6 +223,9 @@ impl ModelInfoCatalog {
                 &model_info,
                 request.at,
             ));
+        }
+        if request.provider == Some("xai") {
+            return Ok(xai_cost_per_token(request.usage, &model_info, request.at));
         }
         Ok(calculate_generic_cost_from_model_info_with_region(
             request.usage,
