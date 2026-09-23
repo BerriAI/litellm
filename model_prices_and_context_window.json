@@ -54207,7 +54207,7 @@
         "litellm_provider": "openai",
         "mode": "video_generation",
         "output_cost_per_video_per_second": 0.5,
-        "source": "https://platform.openai.com/docs/api-reference/videos",
+        "source": "https://developers.openai.com/api/docs/pricing",
         "supported_modalities": [
             "text",
             "image"
