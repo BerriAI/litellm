@@ -66,7 +66,10 @@ async function createServer(
     },
     remove: async () => {
       const removed = await request.delete(`/v1/mcp/server/${id}`, { headers });
-      expect(removed.ok(), await removed.text()).toBe(true);
+      expect(
+        removed.ok() || removed.status() === 404,
+        await removed.text(),
+      ).toBe(true);
     },
   };
 }
@@ -367,7 +370,6 @@ test("clearing credentials for a server deleted underneath the modal reports the
 }) => {
   const server = await createServer(request, [TOKEN]);
   const survivor = await createServer(request, [TOKEN]);
-  let removed = false;
   try {
     const stored = await request.post(server.statusUrl, {
       headers,
@@ -380,7 +382,6 @@ test("clearing credentials for a server deleted underneath the modal reports the
     await card.getByRole("button", { name: "Update", exact: true }).click();
     await expect(dialog).toBeVisible();
     await server.remove();
-    removed = true;
     const cleared = page.waitForResponse(
       (response) =>
         response.request().method() === "DELETE" &&
@@ -409,7 +410,7 @@ test("clearing credentials for a server deleted underneath the modal reports the
     ).toBeVisible();
     await expect(page.getByText(server.name)).toHaveCount(0);
   } finally {
-    if (!removed) await server.remove();
+    await server.remove();
     await survivor.remove();
   }
 });
