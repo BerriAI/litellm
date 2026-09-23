@@ -158,14 +158,29 @@ pub fn completion_cost_from_response(
         .unwrap_or(&empty_usage);
     let empty_params = Value::Null;
     let call = cost_call(&prepared.call_type, request, &empty_params)?;
+    let hidden_params = request.input.model_selection.hidden_params;
+    let provider = hidden_params
+        .and_then(|hidden| hidden.get("custom_llm_provider"))
+        .and_then(Value::as_str)
+        .or(request.provider);
+    let explicit_pricing = request.input.model_selection.custom_pricing
+        || request.input.model_selection.base_model.is_some();
+    let region = if explicit_pricing {
+        None
+    } else {
+        hidden_params
+            .and_then(|hidden| hidden.get("region_name"))
+            .and_then(Value::as_str)
+            .or(request.region)
+    };
     let attempts: Vec<_> = prepared.model_candidates.iter().flatten().collect();
     let prices: Vec<_> = attempts
         .iter()
         .map(|model| {
             let cost_request = ModelCostRequest {
                 model,
-                provider: request.provider,
-                region: request.region,
+                provider,
+                region,
                 usage,
                 service_tier: prepared.service_tier.as_deref(),
                 data_residency: request.data_residency,
@@ -189,7 +204,7 @@ pub fn completion_cost_from_response(
         output,
         request.built_in_tool_cost,
         request.additional_costs,
-        request.provider,
+        provider,
         request.discount_config,
         request.margin_config,
     );

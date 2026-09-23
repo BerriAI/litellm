@@ -249,6 +249,112 @@ fn retrieve_batch_response_uses_batch_rates() {
 }
 
 #[rstest]
+fn hidden_provider_selects_pricing_and_margin_after_model_fallback() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "anthropic/served".to_owned(),
+        json!({"input_cost_per_token": 0.01, "output_cost_per_token": 0.0}),
+    )]));
+    let response =
+        json!({"model": "served", "usage": {"prompt_tokens": 10, "completion_tokens": 0}});
+    let hidden = json!({"custom_llm_provider": "anthropic"});
+    let discount = json!({"anthropic": 0.1});
+    let empty = json!({});
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                model_selection: ModelSelectionRequest {
+                    hidden_params: Some(&hidden),
+                    ..request(
+                        Some(&response),
+                        Some("requested"),
+                        Some("openai"),
+                        &discount,
+                        &empty,
+                    )
+                    .input
+                    .model_selection
+                },
+                ..request(
+                    Some(&response),
+                    Some("requested"),
+                    Some("openai"),
+                    &discount,
+                    &empty,
+                )
+                .input
+            },
+            ..request(
+                Some(&response),
+                Some("requested"),
+                Some("openai"),
+                &discount,
+                &empty,
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(result.model, "served");
+    assert!((result.cost.total - 0.09).abs() < 1e-12);
+}
+
+#[rstest]
+fn explicit_base_model_suppresses_regional_catalog_lookup() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        (
+            "openai/base".to_owned(),
+            json!({"input_cost_per_token": 0.01, "output_cost_per_token": 0.0}),
+        ),
+        (
+            "openai/eu/base".to_owned(),
+            json!({"input_cost_per_token": 0.02, "output_cost_per_token": 0.0}),
+        ),
+    ]));
+    let response = json!({"usage": {"prompt_tokens": 10, "completion_tokens": 0}});
+    let hidden = json!({"region_name": "eu"});
+    let empty = json!({});
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                model_selection: ModelSelectionRequest {
+                    base_model: Some("base"),
+                    hidden_params: Some(&hidden),
+                    ..request(
+                        Some(&response),
+                        Some("requested"),
+                        Some("openai"),
+                        &empty,
+                        &empty,
+                    )
+                    .input
+                    .model_selection
+                },
+                ..request(
+                    Some(&response),
+                    Some("requested"),
+                    Some("openai"),
+                    &empty,
+                    &empty,
+                )
+                .input
+            },
+            region: Some("eu"),
+            ..request(
+                Some(&response),
+                Some("requested"),
+                Some("openai"),
+                &empty,
+                &empty,
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(result.model, "openai/base");
+    assert!((result.cost.total - 0.1).abs() < 1e-12);
+}
+
+#[rstest]
 fn unsupported_call_does_not_silently_bill_as_tokens() {
     let catalog = ModelInfoCatalog::new(HashMap::new());
     let response = json!({"model": "image"});
