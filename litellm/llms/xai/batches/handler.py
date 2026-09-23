@@ -6,10 +6,10 @@ paths share the URL builders and response mapping in ``transformation.py`` and d
 """
 
 from collections.abc import Coroutine
-from typing import Final, NotRequired, TypedDict
+from typing import Final
 
 import httpx
-from typing_extensions import ReadOnly
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
