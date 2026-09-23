@@ -1,4 +1,5 @@
 import base64
+import binascii
 import json
 import threading
 import time
@@ -271,9 +272,9 @@ def _span_response_id(span: Mapping[str, object]) -> str | None:
     if value.startswith("resp_"):
         try:
             decoded: Final = base64.b64decode(value[5:] + "===").decode()
-        except Exception:
+        except (binascii.Error, UnicodeDecodeError):
             return value
-        marker, _, suffix = decoded.partition("response_id:")
+        _, _, suffix = decoded.partition("response_id:")
         if suffix:
             return suffix.split(";", 1)[0]
     return value
@@ -586,9 +587,10 @@ def test_langfuse_otel_metadata_reaches_langfuse_for_responses_sse_stream(gatewa
                 for line in stream.iter_lines()
                 if line.startswith("data: ") and line != "data: [DONE]"
             )
-        completed: Final = tuple(event for event in events if event.get("type") == "response.completed")
-        assert completed, events
-        attrs: Final = _marked_span(rig.collector, marker, "langfuse.observation.metadata")
+        response_id: Final = next(
+            event["response_id"] for event in events if event.get("type") == "response.output_text.delta"
+        )
+        attrs: Final = _observation_span(rig.collector, response_id)
         _assert_identity(attrs, _chat_identity_fields(identity), spend_logs_metadata={"ticket": "LIT-8283"})
 
 
@@ -735,8 +737,8 @@ def test_langfuse_otel_spend_logs_metadata_roundtrips_oversized_and_nonstring_va
         _assert_identity(attrs, _chat_identity_fields(identity))
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.unauthenticated_request_emits_no_span")
-def test_langfuse_otel_unauthenticated_request_emits_no_span(gateway: Gateway, tmp_path: Path) -> None:
+@pytest.mark.covers("other.observability.langfuse_otel.unauthenticated_request_leaks_no_identity")
+def test_langfuse_otel_unauthenticated_request_leaks_no_identity(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-unauth-" + uuid.uuid4().hex
     with (
         _langfuse_rig(gateway, tmp_path, {}, marker) as rig,
@@ -781,16 +783,20 @@ def test_langfuse_otel_unauthenticated_request_emits_no_span(gateway: Gateway, t
         settled: Final = eventually(
             watch, lambda spans: sum(_span_response_id(s) == second_id for s in spans) == 1, seconds=25
         )
-        for span in (span for span in settled if f"{marker}-denied" in json.dumps(span, default=str)):
-            assert not [name for name in span if name.startswith("langfuse.trace.metadata.user_api_key")], span
-            leaked: Final = json.loads(str(span.get("langfuse.observation.metadata", "{}")))
-            for field in (
-                "user_api_key_alias",
-                "user_api_key_team_id",
-                "user_api_key_team_alias",
-                "user_api_key_end_user_id",
-            ):
-                assert field not in leaked, leaked
+        denied_spans: Final = tuple(span for span in settled if f"{marker}-denied" in json.dumps(span, default=str))
+        assert len(denied_spans) == 1, [s.get("llm.response.id") for s in settled]
+        denied_span: Final = denied_spans[0]
+        assert not [name for name in denied_span if name.startswith("langfuse.trace.metadata.user_api_key")], (
+            denied_span
+        )
+        leaked: Final = json.loads(str(denied_span.get("langfuse.observation.metadata", "{}")))
+        for field in (
+            "user_api_key_alias",
+            "user_api_key_team_id",
+            "user_api_key_team_alias",
+            "user_api_key_end_user_id",
+        ):
+            assert field not in leaked, leaked
 
 
 @pytest.mark.covers("other.observability.langfuse_otel.repeated_requests_each_emit_one_span")
@@ -831,9 +837,11 @@ def test_langfuse_otel_repeated_identical_requests_emit_one_span_each(gateway: G
 def test_langfuse_otel_sink_outage_mid_burst_lands_every_response_id_once(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-chaos-outage-" + uuid.uuid4().hex
     outage: Final = threading.Event()
+    rejected: Final = []  # mutable-ok: the wire server thread records each 503 it serves
 
     def sink_reply(request: Request) -> Reply:
         if outage.is_set():
+            rejected.append(1)
             return Reply(status=503, body=b'{"error": "sink outage"}')
         return Reply()
 
@@ -889,8 +897,11 @@ def test_langfuse_otel_sink_outage_mid_burst_lands_every_response_id_once(gatewa
             while sum(f.done() for f in futures) < 10:
                 wait(futures, timeout=0.05)
             outage.set()
-            while sum(f.done() for f in futures) < 25:
-                wait(futures, timeout=0.05)
+            eventually(
+                lambda: (sum(f.done() for f in futures), len(rejected)),
+                lambda progress: progress[0] >= 25 and progress[1] >= 1,
+                seconds=20,
+            )
             outage.clear()
             response_ids: Final = tuple(f.result() for f in futures)
         assert len(set(response_ids)) == 30, response_ids
@@ -902,6 +913,7 @@ def test_langfuse_otel_sink_outage_mid_burst_lands_every_response_id_once(gatewa
         assert sorted(_span_response_id(span) for span in settled if _span_response_id(span) in response_ids) == sorted(
             response_ids
         )
+        assert len(rejected) >= 1, "sink outage never served a 503"
 
 
 @pytest.mark.covers("other.observability.langfuse_otel.worker_kill_burst_keeps_serving")
@@ -931,13 +943,16 @@ def test_langfuse_otel_worker_kill_mid_burst_keeps_serving_and_exports(gateway: 
             return response.status_code, response.json()["id"] if response.status_code == 200 else response.text
 
         workers: Final = tuple(psutil.Process(rig.proxy.process.pid).children(recursive=True))
-        assert workers, "owned proxy reported no worker children"
+        leaves: Final = tuple(worker for worker in workers if not worker.children())
+        assert len(leaves) >= 2, f"expected multiple worker leaves, got {workers!r}"
+        victim: Final = leaves[0]
         with ThreadPoolExecutor(max_workers=20) as pool:
             futures: Final = tuple(pool.submit(call, index) for index in range(20))
             while sum(f.done() for f in futures) < 5:
                 wait(futures, timeout=0.05)
-            workers[0].kill()
+            victim.kill()
             outcomes: Final = tuple(f.result() for f in futures)
+        assert not victim.is_running() or victim.status() == psutil.STATUS_ZOMBIE
         failures: Final = tuple(status for status, _ in outcomes if status != 200)
         succeeded: Final = tuple(identifier for status, identifier in outcomes if status == 200)
         assert len(set(succeeded)) == len(succeeded), outcomes
