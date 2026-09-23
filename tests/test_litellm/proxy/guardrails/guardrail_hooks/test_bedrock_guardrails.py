@@ -7405,7 +7405,12 @@ async def test_during_call_hook_tool_output_payloadless_shell_falls_through():
     mock_response.json.return_value = {"action": "NONE", "assessments": []}
     data = {
         "messages": [
-            {"role": "tool", "content": json.dumps([{"type": "input_file"}, {"type": "output_text", "file_id": "f-1", "text": "done"}])},
+            {
+                "role": "tool",
+                "content": json.dumps(
+                    [{"type": "input_file"}, {"type": "output_text", "file_id": "f-1", "text": "done"}]
+                ),
+            },
             {"role": "user", "content": "summarize"},
         ]
     }
@@ -7423,3 +7428,77 @@ async def test_during_call_hook_tool_output_payloadless_shell_falls_through():
 
     mock_post.assert_called_once()
     assert "input_file" in data["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_stray_file_id_on_text_part_is_not_refused():
+    """A text part carrying a stray file_id is still text; only attachment types refuse."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-stray-file-id",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+    data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "file_id": "f1"}],
+            }
+        ]
+    }
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    mock_post.assert_called_once()
+    assert data["messages"][0]["content"][0]["text"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_refuses_input_file_part_with_file_id_only():
+    """An input_file part whose only payload is file_id is still an unscannable attachment."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-file-id-refusal",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi"}, {"type": "input_file", "file_id": "f1"}],
+            }
+        ]
+    }
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_post.assert_not_called()

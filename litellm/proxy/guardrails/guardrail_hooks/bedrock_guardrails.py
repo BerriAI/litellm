@@ -524,7 +524,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 self._handle_unscannable_attachment(reason="image part carries no inline url")
             return await self._build_image_content_item(image_url=image_url)
         payload_key: Final = _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS.get(str(part.get("type")))
-        if (payload_key is not None and part.get(payload_key)) or part.get("file_id"):
+        if payload_key is not None and (part.get(payload_key) or part.get("file_id")):
             self._handle_unscannable_attachment(reason="a document, file, video or audio attachment cannot be scanned")
         if part.get("type") == "image":
             return await self._build_anthropic_image_content_item(part=part)
@@ -698,7 +698,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         part_map: Final = cast(Mapping[str, object], part)  # cast-ok: narrowed to dict on the line above
         part_type: Final = part_map.get("type")
         payload_key: Final = _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS.get(str(part_type))
-        if (payload_key is not None and part_map.get(payload_key)) or part_map.get("file_id"):
+        if payload_key is not None and (part_map.get(payload_key) or part_map.get("file_id")):
             self._handle_unscannable_attachment(reason="a document, file, video or audio attachment cannot be scanned")
         if part_type == "image_url":
             image_url: Final = self._get_image_url(item=part_map)
