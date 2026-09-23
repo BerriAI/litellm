@@ -5,6 +5,8 @@ Cost calculator for MCP tools.
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from pydantic import TypeAdapter, ValidationError
+
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.mcp import MCPServerCostInfo
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -80,26 +82,25 @@ class MCPCostCalculator:
         )
 
 
-def _costs_nothing(cost: object) -> bool:
-    return cost is None or (isinstance(cost, int | float) and cost <= 0)
+_SERVER_COST_INFO: Final = TypeAdapter(MCPServerCostInfo)
+_POST_CALL_HOOK: Final = "async_post_mcp_tool_call_hook"
 
 
 def _is_priced(server: MCPServer) -> bool:
-    cost_info: Final = (server.mcp_info or {}).get("mcp_server_cost_info")
-    if cost_info is None:
+    raw_cost_info: Final = None if server.mcp_info is None else server.mcp_info.get("mcp_server_cost_info")
+    if raw_cost_info is None:
         return False
-    if not isinstance(cost_info, dict):
+    try:
+        cost_info: Final = _SERVER_COST_INFO.validate_python(raw_cost_info, strict=True)
+    except ValidationError:
         return True
-    tool_costs: Final = cost_info.get("tool_name_to_cost_per_query") or {}
-    if not isinstance(tool_costs, dict):
-        return True
-    return not _costs_nothing(cost_info.get("default_cost_per_query")) or not all(
-        _costs_nothing(cost) for cost in tool_costs.values()
-    )
+    tool_costs: Final = cost_info.get("tool_name_to_cost_per_query")
+    tool_prices: Final = () if tool_costs is None else tuple(tool_costs.values())
+    return any(price is not None and price > 0 for price in (cost_info.get("default_cost_per_query"), *tool_prices))
 
 
 def _may_price_mcp_calls(callback: object) -> bool:
-    return (
-        isinstance(callback, CustomLogger)
-        and type(callback).async_post_mcp_tool_call_hook is not CustomLogger.async_post_mcp_tool_call_hook
-    )
+    if not isinstance(callback, CustomLogger):
+        return False
+    mro: Final = type(callback).__mro__
+    return any(_POST_CALL_HOOK in vars(cls) for cls in mro[: mro.index(CustomLogger)])

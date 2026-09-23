@@ -99,6 +99,7 @@ class _PricingHook(CustomLogger):
             id="prices all set to zero",
         ),
         pytest.param([], [CustomLogger()], id="callback without the post-call hook"),
+        pytest.param([], ["langfuse"], id="callback registered by name"),
     ],
 )
 def test_tool_calls_cannot_cost_until_something_prices_them(servers, callbacks):
@@ -113,6 +114,7 @@ def test_tool_calls_cannot_cost_until_something_prices_them(servers, callbacks):
         pytest.param([_server(), _server({"default_cost_per_query": 0.01})], [], id="any one server priced"),
         pytest.param([_server({"default_cost_per_query": "0.01"})], [], id="unparsed price counts as priced"),
         pytest.param([_server({"tool_name_to_cost_per_query": ["search"]})], [], id="malformed tool prices"),
+        pytest.param([_server("0.01")], [], id="malformed cost block"),
         pytest.param([], [_PricingHook()], id="callback that can set the cost"),
     ],
 )
