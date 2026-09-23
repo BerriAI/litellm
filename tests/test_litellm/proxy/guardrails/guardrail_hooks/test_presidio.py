@@ -2519,6 +2519,37 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_without_pii_are_for
     assert collected == byte_chunks
 
 
+def _gemini_sse(text: str) -> bytes:
+    payload = {"candidates": [{"content": {"parts": [{"text": text}], "role": "model"}, "index": 0}]}
+    return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_gemini_sse_bytes_are_forwarded_incrementally_until_upstream_aborts():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    frames = [_gemini_sse("Partial one from John Smith. "), _gemini_sse("Partial two. ")]
+    collected: list[object] = []
+
+    async def mock_stream():
+        for frame in frames:
+            yield frame
+        raise ConnectionError("upstream closed mid-stream")
+
+    with pytest.raises(ConnectionError):
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=mock_stream(),
+            request_data={},
+        ):
+            collected.append(chunk)
+
+    assert collected == frames
+
+
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_anthropic_sse_bytes_fail_closed_when_presidio_is_unreachable():
     """

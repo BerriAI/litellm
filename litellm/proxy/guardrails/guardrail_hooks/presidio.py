@@ -42,6 +42,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     assemble_anthropic_sse_stream,
+    is_anthropic_sse_stream,
     model_response_text,
 )
 from litellm.types.guardrails import (
@@ -1365,6 +1366,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         all_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
                     if passthrough_due_to_unknown_stream_shape or all_chunks:
+                        yield chunk
+                        continue
+                    if not is_anthropic_sse_stream((chunk,)):
+                        passthrough_due_to_unknown_stream_shape = True
                         yield chunk
                         continue
                     for masked_chunk in await self._mask_anthropic_sse_stream(chunk, stream, request_data):
