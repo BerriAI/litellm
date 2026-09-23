@@ -235,6 +235,22 @@ class TestVertexAIFilesHandler:
 
         assert bucket == "my-model-bucket"
 
+    def test_resolve_read_gcs_config_prefers_gcs_bucket_name_over_legacy(self):
+        bucket, _ = self.handler._resolve_read_gcs_config(
+            litellm_params={"gcs_bucket_name": "my-model-bucket", "bucket_name": "legacy-bucket"},
+            vertex_credentials=None,
+        )
+
+        assert bucket == "my-model-bucket"
+
+    def test_resolve_read_gcs_config_accepts_legacy_bucket_name_alone(self):
+        bucket, _ = self.handler._resolve_read_gcs_config(
+            litellm_params={"bucket_name": "legacy-bucket"},
+            vertex_credentials=None,
+        )
+
+        assert bucket == "legacy-bucket"
+
     def test_resolve_read_gcs_config_serializes_dict_credentials(self, monkeypatch):
         monkeypatch.delenv("GCS_PATH_SERVICE_ACCOUNT", raising=False)
 

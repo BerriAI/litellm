@@ -6308,13 +6308,7 @@ def test_get_deployment_credentials_with_provider_includes_bucket_name():
     assert credentials["custom_llm_provider"] == "vertex_ai"
 
 
-def test_get_deployment_credentials_with_provider_maps_legacy_bucket_name():
-    """
-    Regression: deployments configured with the legacy ``bucket_name`` key lost it
-    on the strict CredentialLiteLLMParams dump, so batch output retrieval resolved
-    the wrong bucket and failed with "file_id bucket does not match the configured
-    storage bucket". The legacy key must map to ``gcs_bucket_name``.
-    """
+def test_get_deployment_credentials_with_provider_keeps_legacy_bucket_name():
     router = litellm.Router(
         model_list=[
             {
@@ -6332,10 +6326,11 @@ def test_get_deployment_credentials_with_provider_maps_legacy_bucket_name():
     credentials = router.get_deployment_credentials_with_provider(model_id="vertex-gemini")
 
     assert credentials is not None
-    assert credentials["gcs_bucket_name"] == "my-legacy-bucket"
+    assert credentials["bucket_name"] == "my-legacy-bucket"
+    assert "gcs_bucket_name" not in credentials
 
 
-def test_get_deployment_credentials_with_provider_prefers_gcs_bucket_name_over_legacy():
+def test_get_deployment_credentials_with_provider_keeps_both_bucket_keys():
     router = litellm.Router(
         model_list=[
             {
@@ -6355,6 +6350,7 @@ def test_get_deployment_credentials_with_provider_prefers_gcs_bucket_name_over_l
 
     assert credentials is not None
     assert credentials["gcs_bucket_name"] == "new-bucket"
+    assert credentials["bucket_name"] == "legacy-bucket"
 
 
 def test_get_deployment_credentials_with_provider_resolves_credential_name():
