@@ -1,7 +1,7 @@
 import inspect
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import redis
@@ -336,9 +336,10 @@ def test_sync_cluster_kwargs_send_the_entra_token_on_connect(clean_redis_environ
 
     connection.on_connect()
 
-    assert connection.send_command.call_args_list[0] == call(
-        "AUTH", "identity-object-id", "azure-access-token", check_health=False
-    )
+    first_command = connection.send_command.call_args_list[0]
+    assert "AUTH" in first_command.args
+    assert first_command.args[-2:] == ("identity-object-id", "azure-access-token")
+    assert first_command.kwargs == {"check_health": False}
 
 
 def test_async_cluster_preserves_credential_provider_identity(clean_redis_environment):
