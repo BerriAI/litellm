@@ -4171,8 +4171,6 @@ def test_process_hidden_params_uses_hidden_params_cost_after_failure_handler_zer
 
 
 def test_process_hidden_params_falls_through_on_none_response_cost():
-    """A present-but-None response_cost in _hidden_params must not be copied
-    as the cost; it falls through to the calculator (issue #41976)."""
     from datetime import datetime
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
