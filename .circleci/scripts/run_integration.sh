@@ -112,7 +112,13 @@ if [ "$suite" = cost ]; then
   export INTEGRATION_WORKERS=8
 fi
 if [ "$suite" = mcp ]; then
-  export INTEGRATION_WORKERS=4
+  export INTEGRATION_WORKERS=4 INTEGRATION_COVERAGE=1
+fi
+coverage_data="$PWD/$results/coverage/data"
+proxy_command=(.venv/bin/python -m integration._support.proxy)
+if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
+  mkdir -p "$(dirname "$coverage_data")"
+  proxy_command=(.venv/bin/python -m coverage run --rcfile=tests/integration/mcp_coverage.toml -m integration._support.proxy)
 fi
 start_proxy() {
   local port="$1"
@@ -136,8 +142,8 @@ start_proxy() {
     INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
     LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" LITELLM_UI_PATH="$LITELLM_UI_PATH" PROXY_BASE_URL="http://127.0.0.1:$port" \
     LITELLM_MODE=PRODUCTION STORE_MODEL_IN_DB=True "${cost_map_env[@]}" \
-    AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
-    .venv/bin/python -m integration._support.proxy --config tests/integration/proxy_config.yaml \
+    AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 COVERAGE_FILE="$coverage_data" \
+    "${proxy_command[@]}" --config tests/integration/proxy_config.yaml \
     --host 127.0.0.1 --port "$port" --num_workers 1 --telemetry False \
     --use_prisma_db_push --enforce_prisma_migration_check \
     > "$results/$log_name" 2>&1 &
@@ -190,3 +196,23 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_ORDER_SEED="$INTEGRATION_ORDER_SEED" \
   LITELLM_LOCAL_MODEL_COST_MAP=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
   .venv/bin/python tests/integration/run.py "$suite" --results "$results"
+
+if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
+  for covered_pid in "$proxy_pid" "$peer_pid"; do
+    [ -n "$covered_pid" ] || continue
+    kill -TERM -- "-$covered_pid"
+    for _ in {1..300}; do
+      kill -0 "$covered_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    wait "$covered_pid" 2>/dev/null || true
+  done
+  proxy_pid=""
+  peer_pid=""
+  COVERAGE_FILE="$coverage_data" .venv/bin/python -m coverage combine --rcfile=tests/integration/mcp_coverage.toml
+  COVERAGE_FILE="$coverage_data" .venv/bin/python -m coverage report --rcfile=tests/integration/mcp_coverage.toml \
+    > "$results/coverage/coverage.txt"
+  COVERAGE_FILE="$coverage_data" .venv/bin/python -m coverage html --rcfile=tests/integration/mcp_coverage.toml \
+    -d "$results/coverage/html"
+  tail -n 1 "$results/coverage/coverage.txt"
+fi
