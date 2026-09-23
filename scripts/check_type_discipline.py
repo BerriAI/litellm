@@ -106,7 +106,9 @@ LIT013  Comprehension with more than one `for` clause or more than one `if` clau
         split the comprehension into a helper generator, a named intermediate, or
         a plain loop instead. A comprehension nested inside another's element or
         iterable is its own node and is judged separately. Suppress with
-        `# comprehension-ok: <reason>` on any line the comprehension spans.
+        `# comprehension-ok: <reason>` on any line the comprehension spans; when
+        comprehensions nest, the comment belongs to the innermost one spanning
+        that line.
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
@@ -1052,7 +1054,31 @@ def iter_typeddict_violations(path: Path, tree: ast.AST, comments: Comments) -> 
 COMPREHENSION_NODES = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 
 
+def _span(node: ast.expr) -> range:
+    return range(node.lineno, (node.end_lineno or node.lineno) + 1)
+
+
+def _suppressed_comprehensions(tree: ast.AST, ok_lines: frozenset[int]) -> frozenset[int]:
+    """ids() of the comprehension each `# comprehension-ok` line suppresses.
+
+    A suppression belongs to the innermost comprehension whose span contains its
+    line, so a comment inside a nested comprehension never silences the enclosing
+    one (LIT013 judges each comprehension as its own node).
+    """
+    comps: Final = tuple(n for n in ast.walk(tree) if isinstance(n, COMPREHENSION_NODES))
+
+    def len_of_span(node: ast.expr) -> int:
+        return len(_span(node))
+
+    def owner(line: int) -> ast.expr | None:
+        containing: Final = tuple(n for n in comps if line in _span(n))
+        return min(containing, key=len_of_span, default=None)
+
+    return frozenset(id(o) for o in (owner(line) for line in ok_lines) if o is not None)
+
+
 def iter_comprehension_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+    suppressed: Final = _suppressed_comprehensions(tree, comments.comprehension_ok_lines)
     for node in ast.walk(tree):
         if not isinstance(node, COMPREHENSION_NODES):
             continue
@@ -1060,7 +1086,7 @@ def iter_comprehension_violations(path: Path, tree: ast.AST, comments: Comments)
         if_count = sum(len(g.ifs) for g in node.generators)
         if for_count <= 1 and if_count <= 1:
             continue
-        if not comments.comprehension_ok_lines.isdisjoint(range(node.lineno, (node.end_lineno or node.lineno) + 1)):
+        if id(node) in suppressed:
             continue
         yield Violation(
             path,

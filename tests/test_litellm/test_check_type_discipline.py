@@ -753,6 +753,37 @@ def test_comprehension_ok_without_reason_is_lit005_and_does_not_suppress(tmp_pat
     assert "LIT013" in codes
 
 
+def test_suppression_inside_inner_comprehension_does_not_silence_the_outer(tmp_path):
+    src = (
+        "y = [\n"                          # line 1, outer comprehension starts
+        "    x\n"
+        "    for a in [\n"
+        "        z for i in ys\n"
+        "        for z in i\n"
+        "    ]  # comprehension-ok: inner flatten is the clearest form\n"
+        "    for x in a\n"
+        "]\n"
+    )
+    f = tmp_path / "snippet.py"
+    f.write_text(src, encoding="utf-8")
+    flagged = [v for v in checker.check_file(f) if v.code == "LIT013"]
+    assert [v.line for v in flagged] == [1]
+
+
+def test_suppression_on_outer_closing_line_does_not_silence_the_inner(tmp_path):
+    src = (
+        "y = [\n"                          # line 1, outer comprehension starts
+        "    x\n"
+        "    for a in [z for i in ys for z in i]\n"  # line 3, inner comprehension
+        "    for x in a\n"
+        "]  # comprehension-ok: outer flatten is the clearest form\n"
+    )
+    f = tmp_path / "snippet.py"
+    f.write_text(src, encoding="utf-8")
+    flagged = [v for v in checker.check_file(f) if v.code == "LIT013"]
+    assert [v.line for v in flagged] == [3]
+
+
 def test_violation_message_names_the_clause_counts(tmp_path):
     f = tmp_path / "snippet.py"
     f.write_text("y = [x for a in xs for x in a if x]\n", encoding="utf-8")
