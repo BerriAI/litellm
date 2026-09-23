@@ -23,6 +23,7 @@ import builtins
 import logging
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from itertools import groupby
 from typing import Any, Final
 
 import litellm
@@ -424,12 +425,22 @@ class RouterBudgetLimiting(CustomLogger):
             detached_increment_operations: Final = self._detached_increment_operations
             if detached_increment_operations is None:
                 return
-            self.redis_increment_operation_queue = (
-                list(  # mutable-ok: restored flush batch must stay appendable
-                    detached_increment_operations
+            operations: Final = (*detached_increment_operations, *self.redis_increment_operation_queue)
+            grouped_operations: Final = (
+                (key, tuple(group))
+                for key, group in groupby(
+                    sorted(operations, key=lambda operation: operation["key"]),
+                    key=lambda operation: operation["key"],
                 )
-                + self.redis_increment_operation_queue
             )
+            self.redis_increment_operation_queue = [
+                RedisPipelineIncrementOperation(
+                    key=key,
+                    increment_value=sum(operation["increment_value"] for operation in group),
+                    ttl=group[-1]["ttl"],
+                )
+                for key, group in grouped_operations
+            ]
             self._detached_increment_operations = None
 
     async def _flush_queued_increment_operations(self, redis_cache: RedisCache) -> bool:

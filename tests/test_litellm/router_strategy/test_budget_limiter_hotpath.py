@@ -2,6 +2,7 @@ import asyncio
 import gc
 import logging
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -32,9 +33,7 @@ async def test_get_llm_provider_for_deployment_dict_does_not_require_litellm_par
 ):
     class RaiseOnInit:
         def __init__(self, *args, **kwargs):
-            raise AssertionError(
-                "LiteLLM_Params should not be instantiated in hot path"
-            )
+            raise AssertionError("LiteLLM_Params should not be instantiated in hot path")
 
     monkeypatch.setattr(
         "litellm.router_strategy.budget_limiter.LiteLLM_Params",
@@ -101,9 +100,7 @@ async def test_get_llm_provider_for_deployment_dict_view_supports_mapping_and_at
 
 
 @pytest.mark.asyncio
-async def test_async_filter_deployments_resolves_provider_once_per_deployment(
-    disable_budget_sync, monkeypatch
-):
+async def test_async_filter_deployments_resolves_provider_once_per_deployment(disable_budget_sync, monkeypatch):
     provider_budget = RouterBudgetLimiting(
         dual_cache=DualCache(),
         provider_budget_config={
@@ -209,9 +206,7 @@ def _legacy_provider_resolution(deployment):
     Reference implementation used before hot-path optimization.
     """
     try:
-        _litellm_params = LiteLLM_Params(
-            **deployment.get("litellm_params", {"model": ""})
-        )
+        _litellm_params = LiteLLM_Params(**deployment.get("litellm_params", {"model": ""}))
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(
             model=_litellm_params.model,
             litellm_params=_litellm_params,
@@ -230,9 +225,7 @@ def _legacy_provider_resolution(deployment):
     ],
 )
 @pytest.mark.asyncio
-async def test_get_llm_provider_for_deployment_matches_legacy_behavior(
-    disable_budget_sync, deployment
-):
+async def test_get_llm_provider_for_deployment_matches_legacy_behavior(disable_budget_sync, deployment):
     provider_budget = RouterBudgetLimiting(
         dual_cache=DualCache(),
         provider_budget_config={},
@@ -244,9 +237,7 @@ async def test_get_llm_provider_for_deployment_matches_legacy_behavior(
     assert current_provider == legacy_provider
 
 
-def test_register_deployment_budget_for_runtime_added_deployment(
-    disable_budget_sync, monkeypatch
-):
+def test_register_deployment_budget_for_runtime_added_deployment(disable_budget_sync, monkeypatch):
     import asyncio
 
     monkeypatch.setattr(asyncio, "create_task", lambda coro: None)
@@ -276,9 +267,7 @@ def test_register_deployment_budget_for_runtime_added_deployment(
     assert budget_limiter._get_budget_config_for_deployment(model_id) is None
 
 
-def test_router_add_deployment_registers_deployment_budget(
-    disable_budget_sync, monkeypatch
-):
+def test_router_add_deployment_registers_deployment_budget(disable_budget_sync, monkeypatch):
     import asyncio
 
     from litellm import Router
@@ -306,9 +295,7 @@ def test_router_add_deployment_registers_deployment_budget(
 
     budget_limiter = router._get_router_deployment_budget_limiter()
     assert budget_limiter is not None
-    config = budget_limiter._get_budget_config_for_deployment(
-        "runtime-budget-deployment"
-    )
+    config = budget_limiter._get_budget_config_for_deployment("runtime-budget-deployment")
     assert config is not None
     assert config.max_budget == 0.000000000001
 
@@ -384,7 +371,9 @@ async def test_push_waits_for_redis_before_completing(disable_budget_sync):
 async def test_push_task_failure_is_logged_once_and_not_leaked(disable_budget_sync, caplog):
     """A real Redis failure on the background push must surface as one error line, never as an unretrieved task exception."""
     redis_cache = MagicMock(spec=RedisCache)
-    redis_cache.async_increment_pipeline = AsyncMock(side_effect=ConnectionError("Error 61 connecting to 127.0.0.1:6379"))
+    redis_cache.async_increment_pipeline = AsyncMock(
+        side_effect=ConnectionError("Error 61 connecting to 127.0.0.1:6379")
+    )
     limiter = await _limiter_with_redis(redis_cache)
     loop = asyncio.get_running_loop()
     unretrieved = MagicMock()
@@ -579,7 +568,36 @@ async def test_should_keep_new_increments_when_pipeline_flush_fails() -> None:
     allow_pipeline_to_complete.set()
     await push_task
 
-    assert budget_limiter.redis_increment_operation_queue == [_increment(10.0), _increment(20.0)]
+    assert budget_limiter.redis_increment_operation_queue == [_increment(30.0)]
+
+
+@pytest.mark.asyncio
+async def test_failed_redis_flushes_coalesce_spend_by_key() -> None:
+    other_spend_key: Final = "provider_spend:other:1d"
+    redis_cache: Final = _MockRedisCache(
+        initial_values={_SPEND_KEY: 0.0, other_spend_key: 0.0}, should_fail_pipeline=True
+    )
+    in_memory_cache: Final = _MockInMemoryCache(initial_values={_SPEND_KEY: 0.0, other_spend_key: 0.0})
+    budget_limiter: Final = _new_router_budget_limiter(redis_cache=redis_cache, in_memory_cache=in_memory_cache)
+
+    for spend_key, response_cost, ttl in (
+        (_SPEND_KEY, 10.0, 90),
+        (other_spend_key, 4.0, 50),
+        (_SPEND_KEY, 20.0, 80),
+        (_SPEND_KEY, 30.0, 70),
+    ):
+        await budget_limiter._increment_spend_in_current_window(spend_key, response_cost, ttl)
+        assert await budget_limiter._push_in_memory_increments_to_redis() is False
+
+    queued: Final = {operation["key"]: operation for operation in budget_limiter.redis_increment_operation_queue}
+    assert len(budget_limiter.redis_increment_operation_queue) == 2
+    assert queued[_SPEND_KEY] == RedisPipelineIncrementOperation(key=_SPEND_KEY, increment_value=60.0, ttl=70)
+    assert queued[other_spend_key] == RedisPipelineIncrementOperation(key=other_spend_key, increment_value=4.0, ttl=50)
+
+    redis_cache.should_fail_pipeline = False
+    assert await budget_limiter._push_in_memory_increments_to_redis() is True
+    assert redis_cache.values == {_SPEND_KEY: 60.0, other_spend_key: 4.0}
+    assert budget_limiter.redis_increment_operation_queue == []
 
 
 @pytest.mark.asyncio
