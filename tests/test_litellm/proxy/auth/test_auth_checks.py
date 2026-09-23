@@ -3386,6 +3386,59 @@ async def test_team_member_max_budget_alert_check_dispatches_only_at_configured_
     assert call_info.token is None
 
 
+@pytest.mark.asyncio
+async def test_check_team_member_budget_dispatches_the_configured_alert_before_the_hard_cap():
+    from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
+
+    captured: list[tuple[str, CallInfo]] = []
+
+    class RecordingProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            captured.append((type, user_info))
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="platform",
+        metadata={"team_member_max_budget_alert_emails": {"50": [], "100": ["finance@co.com"]}},
+    )
+    user_object = LiteLLM_UserTable(user_id="user-1", user_email="member@co.com")
+    valid_token = UserAPIKeyAuth(token="tok-1", user_id="user-1", team_id="team-1")
+    team_membership = LiteLLM_TeamMembership(
+        user_id="user-1",
+        team_id="team-1",
+        spend=0.10,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+    )
+
+    async def spend_from_fallback(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return fallback_spend
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", spend_from_fallback),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_membership", new_callable=AsyncMock, return_value=team_membership
+        ),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_team_member_budget(
+                team_object=team_object,
+                user_object=user_object,
+                valid_token=valid_token,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=RecordingProxyLogging(),
+            )
+    await asyncio.sleep(0)
+
+    assert (exc_info.value.entity_type, exc_info.value.entity_id) == ("team_member", "user-1:team-1")
+    assert [type for type, _ in captured] == ["max_budget_alert"], captured
+    call_info = captured[0][1]
+    assert call_info.event_group == Litellm_EntityType.TEAM_MEMBER
+    assert (call_info.spend, call_info.max_budget) == (0.10, 0.10)
+    assert (call_info.user_id, call_info.user_email, call_info.team_id) == ("user-1", "member@co.com", "team-1")
+    assert call_info.max_budget_alert_emails == {"50": [], "100": ["finance@co.com"]}
+
+
 @pytest.mark.parametrize(
     "spend, max_budget, expect_alert",
     [
