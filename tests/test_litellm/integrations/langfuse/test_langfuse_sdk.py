@@ -34,6 +34,7 @@ from litellm.integrations.langfuse.langfuse import (
 from litellm.integrations.langfuse.langfuse_sdk import (
     DiscardingSpanExporter,
     LangfuseApiClient,
+    LangfusePromptError,
     LangfuseSpanExporter,
     LangfuseTracing,
     _build_span_exporter,
@@ -1065,10 +1066,15 @@ def test_auth_check_and_project_id_make_one_round_trip_when_langfuse_is_down(sta
     assert monotonic() - started < 0.5
 
 
-@pytest.mark.parametrize("status", [500, 503, 429], ids=["http-500", "http-503", "http-429"])
-def test_cold_prompt_miss_makes_one_round_trip_when_langfuse_is_down(status: int):
+@pytest.mark.parametrize(
+    ("status", "round_trips"),
+    [(500, 2), (503, 2), (429, 1), (404, 1)],
+    ids=["http-500", "http-503", "http-429", "http-404"],
+)
+def test_cold_prompt_miss_never_sleeps_when_langfuse_is_down(status: int, round_trips: int):
     """A cold ``get_prompt`` fetches inline on the event loop; with the generated client's default retries a
-    429 carrying ``Retry-After: 30`` used to hold the loop for a minute."""
+    429 carrying ``Retry-After: 30`` used to hold the loop for a minute. A 5xx gets the v2 client's one
+    quick retry, a 429 or 4xx none."""
     requests: list[httpx.Request] = []
 
     def fail(request: httpx.Request) -> httpx.Response:
@@ -1083,10 +1089,64 @@ def test_cold_prompt_miss_makes_one_round_trip_when_langfuse_is_down(status: int
     )
 
     started = monotonic()
-    with pytest.raises(ApiError):
+    with pytest.raises(LangfusePromptError) as caught:
         client.get_prompt("greeting")
-    assert len(requests) == 1
+    assert len(requests) == round_trips
     assert monotonic() - started < 0.5
+    assert caught.value.status_code == status
+
+
+@pytest.mark.parametrize("first_failure", [503, "connect-error"], ids=["http-503", "connect-error"])
+def test_one_transient_failure_on_a_cold_prompt_miss_does_not_fail_the_call(first_failure: int | str):
+    """The v2 client retried a cold fetch once; a single Langfuse blip must not fail the LLM call."""
+    requests: list[httpx.Request] = []
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) > 1:
+            return httpx.Response(200, request=request, json=_TEXT_PROMPT_BODY)
+        if isinstance(first_failure, int):
+            return httpx.Response(first_failure, request=request, json={"message": "down"})
+        raise httpx.ConnectError("refused", request=request)
+
+    client = build_langfuse_client(
+        public_key="pk",
+        secret_key="sk",
+        base_url="http://127.0.0.1:1",
+        httpx_client=httpx.Client(transport=httpx.MockTransport(flaky)),
+    )
+
+    started = monotonic()
+    assert client.get_prompt("greeting").compile() == "hello"
+    assert len(requests) == 2
+    assert monotonic() - started < 0.5
+    assert client.get_prompt("greeting").compile() == "hello", "the retried prompt is cached like any other"
+    assert len(requests) == 2
+
+
+def test_prompt_fetch_error_carries_status_and_body_but_no_upstream_headers():
+    """The proxy forwards an exception's ``headers`` to its client and prints ``str(e)``; the generated
+    ``ApiError`` carries Langfuse's response headers in both."""
+    upstream_headers = {"server": "langfuse-edge", "set-cookie": "session=abc; HttpOnly", "x-upstream-internal": "1"}
+
+    def not_found(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, request=request, headers=upstream_headers, json={"message": "Prompt not found"})
+
+    client = build_langfuse_client(
+        public_key="pk",
+        secret_key="sk",
+        base_url="http://127.0.0.1:1",
+        httpx_client=httpx.Client(transport=httpx.MockTransport(not_found)),
+    )
+
+    with pytest.raises(Exception, match="Prompt not found") as caught:
+        client.get_prompt("missing")
+
+    error = caught.value
+    assert getattr(error, "headers", None) is None
+    assert getattr(error, "status_code", None) == 404
+    assert not any(header in str(error) for header in upstream_headers)
+    assert error.__cause__ is None and error.__suppress_context__, "the header-bearing ApiError must not ride along"
 
 
 _TEXT_PROMPT_BODY: Final[dict[str, object]] = {

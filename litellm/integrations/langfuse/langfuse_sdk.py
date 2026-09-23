@@ -9,7 +9,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime
-from functools import reduce
+from functools import partial, reduce
 from hashlib import sha256
 from importlib.metadata import version
 from itertools import chain
@@ -47,6 +47,7 @@ __all__ = (
     "DiscardingSpanExporter",
     "LangfuseApiClient",
     "LangfuseObservation",
+    "LangfusePromptError",
     "LangfuseSpanExporter",
     "LangfuseTracing",
     "TraceIdHashSampler",
@@ -1075,6 +1076,20 @@ def _api_error_reason(error: ApiError) -> str:
     return f"status_code: {detail.status_code}, body: {detail.body}"
 
 
+class LangfusePromptError(Exception):
+    """An ``ApiError`` without its ``headers``, which the proxy would otherwise forward to its own client."""
+
+    def __init__(self, error: ApiError) -> None:
+        detail: Final = _ApiErrorDetail.model_validate(error)
+        super().__init__(f"status_code: {detail.status_code}, body: {detail.body}")
+        self.status_code: Final = detail.status_code
+        self.body: Final = detail.body
+
+
+def _is_server_error(error: ApiError) -> bool:
+    return error.status_code is not None and error.status_code >= 500
+
+
 class LangfuseApiClient:
     """litellm's handle on one Langfuse project over its REST API: prompts, ``auth_check`` and the project id.
 
@@ -1129,13 +1144,30 @@ class LangfuseApiClient:
         return cached.prompt
 
     def _fetch(self, key: _PromptKey) -> PromptClient:
-        name, version, label = key
-        fetched: Final = _prompt_client(
-            self.api.prompts.get(quote(name, safe=""), version=version, label=label, request_options=_NO_REST_RETRIES)
-        )
+        fetched: Final = _prompt_client(self._request_prompt(key))
         with self._lock:
             self._prompts[key] = _CachedPrompt(prompt=fetched, fetched_at=monotonic())
         return fetched
+
+    def _request_prompt(self, key: _PromptKey) -> Prompt:
+        """Retried once, at once, after a 5xx or a transport failure: a cold miss runs on the caller's event
+        loop, so the generated client's sleeping retries stay off."""
+        name, version, label = key
+        request: Final = partial(
+            self.api.prompts.get, quote(name, safe=""), version=version, label=label, request_options=_NO_REST_RETRIES
+        )
+        try:
+            return request()
+        except ApiError as error:
+            if not _is_server_error(error):
+                raise LangfusePromptError(error) from None
+            verbose_logger.debug("Langfuse prompt %r fetch failed (%s), retrying once", name, _api_error_reason(error))
+        except httpx.TransportError as error:
+            verbose_logger.debug("Langfuse prompt %r fetch failed (%s), retrying once", name, error)
+        try:
+            return request()
+        except ApiError as error:
+            raise LangfusePromptError(error) from None
 
     def _refresh_in_background(self, key: _PromptKey) -> None:
         with self._lock:
