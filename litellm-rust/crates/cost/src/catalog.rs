@@ -584,6 +584,13 @@ impl ModelInfoCatalog {
         &self,
         request: ModelCostRequest<'_>,
     ) -> Result<(f64, f64), CatalogError> {
+        if let Some(cost) = self
+            .select_model_key(request.model, request.provider, request.region)
+            .and_then(|key| self.entries.get(key))
+            .and_then(|info| per_second_pricing_cost(info, request.response_time_ms))
+        {
+            return Ok(cost);
+        }
         if request.provider == Some("azure_ai") {
             return self.azure_ai_cost_per_token(request, None);
         }
@@ -591,11 +598,7 @@ impl ModelInfoCatalog {
             return self.databricks_cost_per_token(request);
         }
         if request.provider == Some("lemonade") {
-            let per_second = self
-                .select_model_key(request.model, Some("lemonade"), request.region)
-                .and_then(|key| self.entries.get(key))
-                .and_then(|info| per_second_pricing_cost(info, request.response_time_ms));
-            return Ok(per_second.unwrap_or_else(|| self.lemonade_cost_per_token(request)));
+            return Ok(self.lemonade_cost_per_token(request));
         }
         if request.provider == Some("perplexity")
             && let Some(cost) = request.usage.cost

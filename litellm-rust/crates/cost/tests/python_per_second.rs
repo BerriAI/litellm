@@ -67,3 +67,36 @@ fn model_info_catalog_routes_wall_clock_pricing_before_tokens() {
         (1.0, 2.0)
     );
 }
+
+#[rstest]
+#[case("perplexity")]
+#[case("xai")]
+fn wall_clock_pricing_precedes_provider_reported_cost(#[case] provider: &str) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        format!("{provider}/model"),
+        json!({"mode": "responses", "input_cost_per_second": 0.5, "output_cost_per_second": 1.0}),
+    )]));
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "cost": 0.7
+    }}))
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        catalog
+            .cost_per_token(ModelCostRequest {
+                model: "model",
+                provider: Some(provider),
+                region: None,
+                usage: &usage,
+                service_tier: None,
+                data_residency: None,
+                vertex_location: None,
+                at: "2026-01-01T18:00Z".parse().unwrap(),
+                response_time_ms: Some(2000.0),
+            })
+            .unwrap(),
+        (1.0, 2.0)
+    );
+}
