@@ -7593,7 +7593,7 @@ class ProxyConfig:
 
     async def _apply_batch_line_items_setting(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         key: Final = "store_batch_line_items_in_callbacks"
-        if key not in db_values or self.settings.owned_by_config(key):
+        if key not in db_values and not self.settings.owned_by_config(key):
             return
         value: Final = coerce_bool(self.settings.get(key))
         if value is not None:
