@@ -1,10 +1,11 @@
+use crate::logger::run_sync_value;
 use litellm_auth_aws::AwsAuthConfig;
 use litellm_cache_gcs::{DEFAULT_ENDPOINT, GcsConfig};
 use litellm_cache_qdrant_semantic::{OpenAiEmbedderConfig, Quantization};
 use litellm_cache_redis::{RedisNode, RedisTopology};
 use litellm_cache_redis_semantic::RedisSemanticConfig;
 use litellm_cache_s3::{S3CacheConfig, S3Endpoint};
-use litellm_host_python::{release_gil, run_sync_value};
+use litellm_host_python::release_gil;
 use litellm_http::ClientVariant;
 use pyo3::{
     PyTraverseError, PyVisit,
