@@ -11,6 +11,8 @@ from litellm.endpoints.speech.speech_to_completion_bridge.transformation import 
 )
 from litellm.types.utils import ChatCompletionAudioResponse, Choices, Message, ModelResponse
 
+pytestmark = pytest.mark.usefixtures("local_model_cost_map")
+
 GEMINI_TTS_MODEL: Final = "gemini-3.1-flash-tts-preview"
 PCM_BYTES: Final = b"\x01\x02\x03\x04" * 6
 
