@@ -14,6 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_seriali
 
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
 
+# The classifier_type values that can call classifier_llm_config.model. Every consumer asking
+# "is the classifier model a real dependency of this router" resolves it here, including the ones
+# that only hold the raw config mapping and cannot reach ComplexityRouterConfig.uses_llm_classifier.
+LLM_CLASSIFIER_TYPES: Final[frozenset[str]] = frozenset({"llm"})
+
 
 class ComplexityTier(str, Enum):
     """Complexity tiers for routing decisions."""
