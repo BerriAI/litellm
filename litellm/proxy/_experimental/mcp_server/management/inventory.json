@@ -168,10 +168,10 @@
     "excluded": "tag:containers"
   },
   "DELETE /v1/evals/{eval_id}": {
-    "tool": "delete_eval_v1_evals__eval_id__delete"
+    "excluded": "excluded path prefix"
   },
   "DELETE /v1/evals/{eval_id}/runs/{run_id}": {
-    "tool": "delete_run_v1_evals__eval_id__runs__run_id__delete"
+    "excluded": "excluded path prefix"
   },
   "DELETE /v1/files/{file_id}": {
     "excluded": "data plane, public or ui route group"
@@ -1059,16 +1059,16 @@
     "excluded": "tag:containers"
   },
   "GET /v1/evals": {
-    "tool": "list_evals_v1_evals_get"
+    "excluded": "excluded path prefix"
   },
   "GET /v1/evals/{eval_id}": {
-    "tool": "get_eval_v1_evals__eval_id__get"
+    "excluded": "excluded path prefix"
   },
   "GET /v1/evals/{eval_id}/runs": {
-    "tool": "list_runs_v1_evals__eval_id__runs_get"
+    "excluded": "excluded path prefix"
   },
   "GET /v1/evals/{eval_id}/runs/{run_id}": {
-    "tool": "get_run_v1_evals__eval_id__runs__run_id__get"
+    "excluded": "excluded path prefix"
   },
   "GET /v1/files": {
     "excluded": "data plane, public or ui route group"
@@ -2247,19 +2247,19 @@
     "excluded": "data plane, public or ui route group"
   },
   "POST /v1/evals": {
-    "excluded": "undeclared request body"
+    "excluded": "excluded path prefix"
   },
   "POST /v1/evals/{eval_id}": {
-    "excluded": "undeclared request body"
+    "excluded": "excluded path prefix"
   },
   "POST /v1/evals/{eval_id}/cancel": {
-    "excluded": "undeclared request body"
+    "excluded": "excluded path prefix"
   },
   "POST /v1/evals/{eval_id}/runs": {
-    "excluded": "undeclared request body"
+    "excluded": "excluded path prefix"
   },
   "POST /v1/evals/{eval_id}/runs/{run_id}": {
-    "excluded": "undeclared request body"
+    "excluded": "excluded path prefix"
   },
   "POST /v1/files": {
     "excluded": "data plane, public or ui route group"

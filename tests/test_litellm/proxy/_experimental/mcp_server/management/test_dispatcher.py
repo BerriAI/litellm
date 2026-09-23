@@ -131,6 +131,27 @@ async def test_get_parity_status_and_body():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("replacement", [True, False])
+async def test_dispatch_uses_current_routes_after_backend_partition(_dispatch_fixture, replacement):
+    app = _dispatch_fixture
+    app.router.routes = [route for route in app.routes if getattr(route, "path", None) != "/admin/items/{item_id}"]
+    if replacement:
+
+        @app.get("/admin/items/{item_id}")
+        async def current_item(item_id: str):
+            return {"current_item": item_id}
+
+    result = await call_tool("get_item", {"path": {"item_id": "current"}}, _ctx())
+    if replacement:
+        assert result.is_error is False
+        assert result.structured_content == {"current_item": "current"}
+    else:
+        assert result.is_error is True
+        assert "Not Found" in _text(result)
+    assert app.state.get_item_hits == 0
+
+
+@pytest.mark.asyncio
 async def test_body_reaches_handler_never_the_query_string():
     result = await call_tool("make_item", {"body": {"name": "n", "q": "not-query"}}, _ctx())
     assert result.is_error is False, _text(result)

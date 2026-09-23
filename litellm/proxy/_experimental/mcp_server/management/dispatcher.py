@@ -22,7 +22,6 @@ from fastapi.middleware.asyncexitstack import AsyncExitStackMiddleware
 from pydantic import TypeAdapter
 from starlette.middleware.errors import ServerErrorMiddleware
 from starlette.middleware.exceptions import ExceptionMiddleware
-from starlette.routing import Router
 from starlette.types import ASGIApp, ExceptionHandler, Receive, Scope, Send
 from typing_extensions import ReadOnly, TypedDict
 
@@ -124,10 +123,6 @@ def build_management_asgi_app(app: FastAPI) -> ASGIApp:
     ``scope["state"]``. ``scope["app"]`` stays the real app.
     """
 
-    # app.routes is aliased, not copied: optional feature routers mount lazily
-    # (e.g. access_groups on first hit) and must stay reachable through this view.
-    router: Final = Router()
-    router.routes = app.routes
     handler_map: Final = cast(  # cast-ok: Starlette stores handlers under Any keys
         Mapping[object, ExceptionHandler], app.exception_handlers
     )
@@ -137,7 +132,7 @@ def build_management_asgi_app(app: FastAPI) -> ASGIApp:
     error_handler: Final = app.exception_handlers.get(Exception) or app.exception_handlers.get(500)
     core: Final = LazyFeatureMiddleware(
         ServerErrorMiddleware(
-            AsyncExitStackMiddleware(ExceptionMiddleware(router, handlers=exception_handlers)),
+            AsyncExitStackMiddleware(ExceptionMiddleware(app.router, handlers=exception_handlers)),
             handler=error_handler,
         ),
         app,

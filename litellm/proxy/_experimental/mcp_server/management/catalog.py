@@ -45,6 +45,8 @@ _EXCLUDED_TAGS: Final = frozenset(
         "files",
         "batch",
         "fine-tuning",
+        "OpenAI Evals API",
+        "OpenAI Evals API - Runs",
         "images",
         "realtime",
         "WebSocket",
@@ -118,6 +120,7 @@ _EXCLUDED_PATH_PREFIXES: Final = (
     "/public/",
     "/memory",
     "/v1/memory",
+    "/v1/evals",
 )
 
 _JSON_MEDIA_TYPE: Final = "application/json"

@@ -225,7 +225,15 @@ def test_inventory_command_writes_current_catalog(tmp_path, monkeypatch, capsys)
 
 
 @pytest.mark.parametrize(
-    "path", ["/apply_guardrail", "/guardrails/apply_guardrail", "/v1/a2a/discover", "/policy/templates/enrich/stream"]
+    "path",
+    [
+        "/apply_guardrail",
+        "/guardrails/apply_guardrail",
+        "/v1/a2a/discover",
+        "/policy/templates/enrich/stream",
+        "/v1/evals",
+        "/v1/evals/eval-id/runs/run-id",
+    ],
 )
 def test_data_plane_execution_is_excluded_from_management(path):
     spec = _spec(
@@ -242,6 +250,14 @@ def test_data_plane_execution_is_excluded_from_management(path):
     catalog = build_catalog(spec)
     assert not catalog.tools
     assert f"POST {path}" in catalog.exclusions
+
+
+@pytest.mark.parametrize("tag", ["OpenAI Evals API", "OpenAI Evals API - Runs"])
+@pytest.mark.parametrize("method", ["get", "delete"])
+def test_provider_eval_resources_are_excluded_from_management(tag, method):
+    catalog = build_catalog(_spec({"/provider-eval": {method: _operation(operationId="eval", tags=[tag])}}))
+    assert not catalog.tools
+    assert f"{method.upper()} /provider-eval" in catalog.exclusions
 
 
 @pytest.mark.parametrize("required", [True, False], ids=["required-query", "optional-query"])
