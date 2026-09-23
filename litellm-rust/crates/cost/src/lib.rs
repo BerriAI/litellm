@@ -5,6 +5,7 @@ pub mod custom_pricing;
 pub mod interactions_usage;
 pub mod non_token;
 pub mod responses_usage;
+pub mod transcription_usage;
 pub mod usage_dispatch;
 
 #[derive(Clone, Copy, Debug, PartialEq)]

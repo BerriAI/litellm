@@ -258,4 +258,25 @@ fn main() {
         interactions_usage.token_usage().cache_read_tokens,
         interactions_usage.completion_tokens
     );
+    let transcription_usage = get_usage_object(&json!({
+        "usage": {
+            "type": "tokens",
+            "input_tokens": 20,
+            "output_tokens": 5,
+            "total_tokens": 25,
+            "input_token_details": {"text_tokens": 4, "audio_tokens": 16}
+        }
+    }))
+    .unwrap()
+    .unwrap();
+    println!(
+        "transcription_prompt={} audio={} completion={}",
+        transcription_usage.prompt_tokens,
+        transcription_usage
+            .prompt_tokens_details
+            .unwrap()
+            .audio_tokens
+            .unwrap(),
+        transcription_usage.completion_tokens
+    );
 }

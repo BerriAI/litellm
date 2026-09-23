@@ -10,6 +10,9 @@ use crate::responses_usage::{
     ChatUsage, CompletionTokenDetails, PromptTokenDetails, UsageError, is_response_api_usage,
     transform_response_api_usage_to_chat_usage,
 };
+use crate::transcription_usage::{
+    is_transcription_usage_object, transform_transcription_usage_object,
+};
 
 fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
     let object = raw.as_object().ok_or(UsageError::InvalidShape)?;
@@ -115,6 +118,9 @@ pub fn get_usage_object(response: &Value) -> Result<Option<ChatUsage>, UsageErro
         return Ok(Some(transform_anthropic_usage_to_chat_usage(
             usage, None, false,
         )?));
+    }
+    if is_transcription_usage_object(usage) {
+        return transform_transcription_usage_object(usage);
     }
     if is_response_api_usage(usage) {
         return Ok(Some(transform_response_api_usage_to_chat_usage(usage)?));
