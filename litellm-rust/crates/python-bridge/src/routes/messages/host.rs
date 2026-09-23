@@ -15,6 +15,7 @@ use pyo3::{
     types::{PyBytes, PyDict},
 };
 use serde_json::{Map, Value};
+use std::time::Instant;
 
 use crate::{
     errors::{RustUpstreamError, messages_error_to_pyerr},
@@ -48,7 +49,10 @@ const BODY_FIELDS: [&str; 20] = [
 
 /// A route operation the host answered with a Python awaitable.
 enum Pending {
-    Lookup,
+    Lookup {
+        arguments: Py<PyDict>,
+        started: Instant,
+    },
 }
 
 /// The Python side of the Messages route: projects the prepared arguments, serves the
@@ -94,6 +98,7 @@ impl MessagesRouteHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<Invoke<Messages>, InvokeError<Error>> {
+        let started = Instant::now();
         let module = py
             .import("litellm.rust_bridge.call_cache")
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?;
@@ -103,25 +108,45 @@ impl MessagesRouteHost {
                 .and_then(|lookup| lookup.call1((self.call_type, arguments)))
                 .map(Bound::unbind)
                 .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?;
-            self.pending = Some(Pending::Lookup);
+            self.pending = Some(Pending::Lookup {
+                arguments: arguments.clone().unbind(),
+                started,
+            });
             Ok(Invoke::Await(awaitable))
         } else {
             module
                 .getattr("lookup_sync")
                 .and_then(|lookup| lookup.call1((self.call_type, arguments)))
-                .map_err(|error| InvokeError::Python(self.map_failure(py, error)))
-                .map(|result| self.cached(&result))
+                .and_then(|result| self.cached(py, &result, arguments, started))
                 .map(Invoke::Ready)
+                .map_err(|error| InvokeError::Python(self.map_failure(py, error)))
         }
     }
 
-    fn cached(&self, value: &Bound<'_, PyAny>) -> MessagesOpResult {
+    fn cached(
+        &self,
+        py: Python<'_>,
+        value: &Bound<'_, PyAny>,
+        arguments: &Bound<'_, PyDict>,
+        started: Instant,
+    ) -> PyResult<MessagesOpResult> {
         if value.is_none() {
-            return MessagesOpResult::Cached(None);
+            return Ok(MessagesOpResult::Cached(None));
         }
         match from_py::<AnthropicMessagesResponse>(value) {
-            Ok(message) => MessagesOpResult::Cached(Some(Box::new(message))),
-            Err(_) => MessagesOpResult::Cached(None),
+            Ok(message) => {
+                py.import("litellm.rust_bridge.call_cache")?
+                    .getattr("mark_hit")?
+                    .call1((
+                        self.call_type,
+                        arguments,
+                        value,
+                        self.asynchronous,
+                        started.elapsed().as_secs_f64() * 1000.0,
+                    ))?;
+                Ok(MessagesOpResult::Cached(Some(Box::new(message))))
+            }
+            Err(_) => Ok(MessagesOpResult::Cached(None)),
         }
     }
 
@@ -238,10 +263,11 @@ impl RouteHost for MessagesRouteHost {
         result: PyResult<Py<PyAny>>,
     ) -> Result<MessagesOpResult, InvokeError<Error>> {
         match self.pending.take() {
-            Some(Pending::Lookup) => {
+            Some(Pending::Lookup { arguments, started }) => {
                 let value =
                     result.map_err(|error| InvokeError::Python(self.map_failure(py, error)))?;
-                Ok(self.cached(value.bind(py)))
+                self.cached(py, value.bind(py), arguments.bind(py), started)
+                    .map_err(|error| InvokeError::Python(self.map_failure(py, error)))
             }
             None => Err(InvokeError::Python(
                 pyo3::exceptions::PyRuntimeError::new_err("route host has no pending operation"),

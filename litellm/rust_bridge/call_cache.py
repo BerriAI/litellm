@@ -7,7 +7,6 @@ call honor the same cache selection at use time.
 from __future__ import annotations
 
 import datetime
-import time
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final, cast
@@ -100,11 +99,28 @@ def _mark_hit(
     logging_obj.model_call_details["cache_hit"] = True
 
 
+def mark_hit(
+    call_type: str,
+    kwargs: Mapping[str, object],
+    cached: Mapping[str, object],
+    is_async: bool,
+    duration_ms: float,
+) -> None:
+    if _logging_obj(kwargs) is None:
+        return
+    cache: Final = litellm.cache
+    if cache is None:
+        return
+    request: Final = _request_kwargs(kwargs)
+    key: Final = _cache_key(cache, kwargs, request)
+    request_kwargs: Final = MappingProxyType({name: value for name, value in request.items() if name != "cache_key"})
+    _mark_hit(kwargs, call_type, request_kwargs, key, cached, is_async, duration_ms)
+
+
 async def lookup(call_type: str, kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
     cache: Final = litellm.cache
     if cache is None or not _lookup_enabled(cache, call_type, kwargs):
         return None
-    started: Final = time.perf_counter()
     request: Final = _request_kwargs(kwargs)
     key: Final = _cache_key(cache, kwargs, request)
     request_kwargs: Final = MappingProxyType({name: value for name, value in request.items() if name != "cache_key"})
@@ -117,7 +133,6 @@ async def lookup(call_type: str, kwargs: Mapping[str, object]) -> Mapping[str, o
     if not isinstance(result, Mapping):
         return None
     found: Final = cast(Mapping[str, object], result)  # cast-ok: isinstance narrows the hit to a Mapping
-    _mark_hit(kwargs, call_type, request_kwargs, key, found, True, (time.perf_counter() - started) * 1000)
     return found
 
 
@@ -125,7 +140,6 @@ def lookup_sync(call_type: str, kwargs: Mapping[str, object]) -> Mapping[str, ob
     cache: Final = litellm.cache
     if cache is None or not _lookup_enabled(cache, call_type, kwargs):
         return None
-    started: Final = time.perf_counter()
     request: Final = _request_kwargs(kwargs)
     key: Final = _cache_key(cache, kwargs, request)
     request_kwargs: Final = MappingProxyType({name: value for name, value in request.items() if name != "cache_key"})
@@ -133,7 +147,6 @@ def lookup_sync(call_type: str, kwargs: Mapping[str, object]) -> Mapping[str, ob
     if not isinstance(result, Mapping):
         return None
     found: Final = cast(Mapping[str, object], result)  # cast-ok: isinstance narrows the hit to a Mapping
-    _mark_hit(kwargs, call_type, request_kwargs, key, found, False, (time.perf_counter() - started) * 1000)
     return found
 
 

@@ -142,7 +142,7 @@ def test_lookup_sync_treats_a_non_mapping_hit_as_a_miss(monkeypatch: pytest.Monk
     assert call_cache.lookup_sync(_CALL_TYPE, _kwargs()) is None
 
 
-def test_a_lookup_hit_marks_the_supplied_logging_object(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_validated_lookup_hit_marks_the_supplied_logging_object(monkeypatch: pytest.MonkeyPatch) -> None:
     _local_cache(monkeypatch)
     call_cache.store_sync(_CALL_TYPE, _kwargs(), _RESPONSE)
     logging_obj: Final = Logging(
@@ -155,7 +155,10 @@ def test_a_lookup_hit_marks_the_supplied_logging_object(monkeypatch: pytest.Monk
         function_id="hit-call",
     )
 
-    assert call_cache.lookup_sync(_CALL_TYPE, _kwargs(litellm_logging_obj=logging_obj)) == _RESPONSE
+    kwargs: Final = _kwargs(litellm_logging_obj=logging_obj)
+    assert call_cache.lookup_sync(_CALL_TYPE, kwargs) == _RESPONSE
+    assert logging_obj.model_call_details.get("cache_hit") is not True
+    call_cache.mark_hit(_CALL_TYPE, kwargs, _RESPONSE, False, 0.1)
     assert logging_obj.model_call_details["cache_hit"] is True
 
 

@@ -126,6 +126,26 @@ async def test_a_second_identical_call_is_served_from_the_native_response_cache(
 
 
 @pytest.mark.asyncio
+async def test_a_malformed_cached_message_is_a_miss_for_callbacks(
+    messages_server: RecordingServer, local_cache: Cache
+) -> None:
+    key: Final = "malformed-messages-cache"
+    local_cache.add_cache({"id": "incomplete"}, cache_key=key)
+    recorder: Final = RecordingLogger()
+
+    response: Final = await litellm.anthropic.messages.acreate(
+        **arguments(messages_server, cache_key=key, callbacks=[recorder])
+    )
+    await drain_logging()
+
+    assert response["content"] == MESSAGES_RESPONSE["content"]
+    assert len(messages_server.requests) == 1
+    success: Final = await recorder.wait_for_async("async_log_success_event", count=1)
+    assert len(success) == 1
+    assert success[0].kwargs.get("cache_hit") is not True
+
+
+@pytest.mark.asyncio
 async def test_a_python_selected_cache_stores_in_the_python_backend(
     messages_server: RecordingServer, route_only_rules: None
 ) -> None:
