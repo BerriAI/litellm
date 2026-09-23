@@ -1975,6 +1975,9 @@
     "tests/integration/providers/test_tencent_chat_wire.py::test_tencent_thinking_is_sent_in_provider_body_instead_of_failing_the_request[thinking_enabled]": [
       "other.provider_wire.tencent.thinking_reaches_provider_in_request_body"
     ],
+    "tests/integration/providers/test_vertex_batch_output_info_wire.py::test_vertex_batch_create_survives_explicit_null_output_info": [
+      "other.provider_wire.vertex_ai.batch_create_with_null_output_info_returns_batch_instead_of_500"
+    ],
     "tests/integration/providers/test_websearch_interception_wire.py::test_capped_websearch_interception_loop_ends_turn_instead_of_exposing_internal_tool_use": [
       "other.provider_wire.anthropic.websearch_interception_capped_loop_ends_turn_without_internal_tool_use"
     ],
