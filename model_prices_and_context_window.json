@@ -72194,6 +72194,21 @@
         "supports_vision": false,
         "supports_web_search": false
     },
+    "openrouter/stealth/space-bunny-alpha": {
+        "input_cost_per_token": 0,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "source": "https://openrouter.ai/stealth/space-bunny-alpha",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
     "openrouter/stepfun/step-3.5-flash": {
         "input_cost_per_token": 1e-07,
         "litellm_provider": "openrouter",
