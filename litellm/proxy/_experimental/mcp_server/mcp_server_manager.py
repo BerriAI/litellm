@@ -48,7 +48,7 @@ from mcp.types import (
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, BaseModel, TypeAdapter
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, assert_never
 
 import litellm
 from litellm._logging import verbose_logger
@@ -2212,6 +2212,8 @@ class MCPServerManager:
                     status_code=503,
                     detail=f"OAuth metadata discovery {reason} for MCP server {server_ref!r}",
                 )
+
+        return assert_never(outcome)
 
     async def _rejoin_oauth_metadata_discovery(self, server: MCPServer, *, retry_stale: bool) -> MCPServer:
         if retry_stale:
