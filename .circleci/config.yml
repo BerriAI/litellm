@@ -3189,7 +3189,7 @@ jobs:
           command: |
             [[ "$ROUTING_PARITY_BASE" =~ ^[0-9a-f]{40}$ ]] || exit 1
             git fetch --depth 1 origin "$ROUTING_PARITY_BASE"
-            git rm -r --quiet litellm enterprise litellm-proxy-extras
+            git rm -r -f --quiet litellm enterprise litellm-proxy-extras
             git checkout "$ROUTING_PARITY_BASE" -- litellm enterprise litellm-proxy-extras
             git reset --quiet
             test -f litellm/rust_bridge/_native.abi3.so
@@ -3213,7 +3213,7 @@ jobs:
       - run:
           name: Check out head product code
           command: |
-            git rm -r --quiet litellm enterprise litellm-proxy-extras
+            git rm -r -f --quiet litellm enterprise litellm-proxy-extras
             git checkout "$CIRCLE_SHA1" -- litellm enterprise litellm-proxy-extras
             git reset --quiet
             test -f litellm/rust_bridge/_native.abi3.so
