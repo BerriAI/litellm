@@ -1,8 +1,9 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use litellm_secrets_types::{
-    AwsOperationContext, CyberarkOperationContext, HashicorpOperationContext,
-    SecretOperationContext, SecretValue, SecretWriteContext,
+    AwsOperationContext, AzureOperationContext, CyberarkOperationContext, GoogleOperationContext,
+    HashicorpOperationContext, KeyManagementSystem, SecretOperationContext, SecretValue,
+    SecretWriteContext,
 };
 use rstest::{fixture, rstest};
 
@@ -107,4 +108,41 @@ fn rotation_write_context_preserves_the_operation_context(aws_context: SecretOpe
     assert_eq!(context.description.as_deref(), Some("Rotated from current"));
     assert!(context.tags.is_empty());
     assert_eq!(context.operation, aws_context);
+}
+
+#[rstest]
+#[case(
+    KeyManagementSystem::AwsSecretManager,
+    SecretOperationContext::Aws(Default::default())
+)]
+#[case(KeyManagementSystem::AzureKeyVault, SecretOperationContext::Azure(AzureOperationContext { timeout: Some(Duration::from_secs(1)) }))]
+#[case(KeyManagementSystem::GoogleSecretManager, SecretOperationContext::Google(GoogleOperationContext { timeout: Some(Duration::from_secs(1)) }))]
+#[case(
+    KeyManagementSystem::HashicorpVault,
+    SecretOperationContext::Hashicorp(Default::default())
+)]
+#[case(
+    KeyManagementSystem::Cyberark,
+    SecretOperationContext::Cyberark(Default::default())
+)]
+fn provider_context_accepts_only_its_owner(
+    #[case] owner: KeyManagementSystem,
+    #[case] context: SecretOperationContext,
+) {
+    for system in [
+        KeyManagementSystem::AwsSecretManager,
+        KeyManagementSystem::AzureKeyVault,
+        KeyManagementSystem::GoogleSecretManager,
+        KeyManagementSystem::HashicorpVault,
+        KeyManagementSystem::Cyberark,
+    ] {
+        assert_eq!(context.validate_for(system).is_ok(), system == owner);
+        assert!(SecretOperationContext::Default.validate_for(system).is_ok());
+    }
+    if matches!(
+        owner,
+        KeyManagementSystem::AzureKeyVault | KeyManagementSystem::GoogleSecretManager
+    ) {
+        assert_eq!(context.timeout(), Some(Duration::from_secs(1)));
+    }
 }

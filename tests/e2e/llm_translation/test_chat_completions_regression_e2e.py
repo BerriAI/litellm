@@ -110,10 +110,11 @@ def _vision_messages() -> list[ChatMessage]:
 
 def _assert_describes_cat(response: ChatResponse) -> None:
     assert response.choices, f"vision returned no choices: {response}"
-    message = response.choices[0].message
-    content = (message.content if message else None) or ""
+    choice = response.choices[0]
+    content = (choice.message.content if choice.message else None) or ""
     assert any(term in content.lower() for term in ("cat", "feline", "kitten", "kitty")), (
-        f"vision response did not describe the image: {content[:200]}"
+        f"vision response did not describe the image: {content[:200]!r} "
+        f"(finish_reason={choice.finish_reason!r}, usage={response.usage})"
     )
 
 
@@ -421,7 +422,11 @@ class TestVertexChatCompletions:
         model = self._register(client, resources, "e2e-vertex-vision")
         key = resources.key()
 
-        response = unwrap(client.proxy.chat(key, ChatBody(model=model, messages=_vision_messages(), max_tokens=32)))
+        response = unwrap(
+            client.proxy.chat(
+                key, ChatBody(model=model, messages=_vision_messages(), max_tokens=32, reasoning_effort="none")
+            )
+        )
         _assert_describes_cat(response)
 
     @pytest.mark.covers(

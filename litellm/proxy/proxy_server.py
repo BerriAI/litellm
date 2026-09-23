@@ -630,6 +630,9 @@ from litellm.proxy.management_endpoints.prompt_caching_requests import (
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
+from litellm.proxy.management_endpoints.session_endpoints import (
+    router as session_management_router,
+)
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
 )
@@ -6341,10 +6344,12 @@ class ProxyConfig:
 
             ### [DEPRECATED] LOAD FROM GOOGLE KMS ### old way of loading from google kms
             use_google_kms: Final = general_settings.get("use_google_kms", False)
-            load_google_kms(use_google_kms=use_google_kms)
+            if use_google_kms:
+                self.initialize_secret_manager(KeyManagementSystem.GOOGLE_KMS.value)
             ### [DEPRECATED] LOAD FROM AZURE KEY VAULT ### old way of loading from azure secret manager
             use_azure_key_vault: Final = general_settings.get("use_azure_key_vault", False)
-            load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
+            if use_azure_key_vault is not False:
+                self.initialize_secret_manager(KeyManagementSystem.AZURE_KEY_VAULT.value)
             ### ALERTING ###
             self._load_alerting_settings(general_settings=general_settings)
             ### PLUGINS ###
@@ -6845,6 +6850,7 @@ class ProxyConfig:
         """
         Initialize the relevant secret manager if `key_management_system` is provided
         """
+        previous_client: Final[object] = litellm.secret_manager_client
         if key_management_system is not None:
             if key_management_system == KeyManagementSystem.AZURE_KEY_VAULT.value:
                 ### LOAD FROM AZURE KEY VAULT ###
@@ -6892,6 +6898,11 @@ class ProxyConfig:
                 load_custom_secret_manager(config_file_path=config_file_path)
             else:
                 raise ValueError("Invalid Key Management System selected")
+
+            from litellm.rust_bridge.secret_manager import capture_secret_manager
+
+            if litellm.secret_manager_client is not previous_client:
+                capture_secret_manager(litellm.secret_manager_client, key_management_system)
 
     def get_model_info_with_id(self, model, db_model=False) -> RouterModelInfo:
         """
@@ -17012,6 +17023,19 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
     if user_obj and hasattr(user_obj, "__dict__"):
         user_obj.__dict__.pop("password", None)
 
+    # The password just changed via an invitation/reset link; any UI session
+    # minted under the old password may be in hostile hands. Revoke them all —
+    # the caller holds only the short-lived onboarding JWT, and the fresh
+    # session key is minted below, after this sweep.
+    from litellm.proxy.management_endpoints.session_endpoints import (
+        revoke_ui_session_keys,
+    )
+
+    await revoke_ui_session_keys(
+        user_id=invite_obj.user_id,
+        user_api_key_dict=UserAPIKeyAuth(user_id=invite_obj.user_id),
+    )
+
     try:
         jwt_token: Final = await _generate_onboarding_ui_session_token(user_obj=user_obj)
     except Exception as e:
@@ -19431,6 +19455,7 @@ app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
 app.include_router(password_management_router)
+app.include_router(session_management_router)
 app.include_router(team_router)
 app.include_router(ui_sso_router)
 app.include_router(organization_router)

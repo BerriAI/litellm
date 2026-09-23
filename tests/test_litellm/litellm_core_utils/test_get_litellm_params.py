@@ -269,5 +269,7 @@ class TestMetadataFallsBackToLitellmMetadata:
     "value, expected",
     [("true", True), ("false", False), (" TRUE ", True), (True, True), (None, None), ("os.environ/DROP_PARAMS", None)],
 )
-def test_drop_params_strings_reach_litellm_params_as_flags(value, expected):
+def test_drop_params_strings_reach_litellm_params_as_flags(
+    value: str | bool | None, expected: bool | None
+) -> None:
     assert get_litellm_params(drop_params=value)["drop_params"] is expected

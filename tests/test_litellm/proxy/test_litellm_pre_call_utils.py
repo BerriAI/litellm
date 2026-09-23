@@ -4377,6 +4377,45 @@ def test_match_and_track_policies_preserves_attachment_and_request_body_order():
     assert applied_policy_names == policy_names
 
 
+def test_match_and_track_policies_keeps_condition_missing_child_alongside_unconditional_sibling():
+    from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
+    from litellm.types.proxy.policy_engine import (
+        Policy,
+        PolicyCondition,
+        PolicyGuardrails,
+        PolicyMatchContext,
+    )
+
+    policies = {
+        "baseline": Policy(guardrails=PolicyGuardrails(add=["baseline_guardrail"])),
+        "parent": Policy(guardrails=PolicyGuardrails(add=["pii_blocker"])),
+        "child": Policy(
+            inherit="parent",
+            guardrails=PolicyGuardrails(add=["child_guard"]),
+            condition=PolicyCondition(model="claude.*"),
+        ),
+    }
+    attachment_registry = AttachmentRegistry()
+    attachment_registry.load_attachments(
+        [
+            {"policy": "baseline", "scope": "*"},
+            {"policy": "child", "scope": "*"},
+        ]
+    )
+    data = {"metadata": {}}
+
+    applied_policy_names, _ = _match_and_track_policies(
+        data=data,
+        context=PolicyMatchContext(model="gpt-5.5"),
+        request_body_policies=[],
+        policies_override=policies,
+        attachment_registry_override=attachment_registry,
+    )
+
+    assert applied_policy_names == ["baseline", "child"]
+    assert data["metadata"]["applied_policies"] == ["baseline", "child"]
+
+
 @pytest.mark.asyncio
 async def test_add_guardrails_from_policy_engine_keeps_a_policy_added_guardrail_its_pipeline_also_steps():
     from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
@@ -4417,6 +4456,48 @@ async def test_add_guardrails_from_policy_engine_keeps_a_policy_added_guardrail_
     assert data["metadata"]["guardrails"] == ["pii_blocker"]
     assert data["metadata"]["_pipeline_managed_guardrails"] == {"pii_blocker"}
     assert [pipeline.mode for _policy_name, pipeline in data["metadata"]["_guardrail_pipelines"]] == ["post_call"]
+
+
+@pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine_applies_inherited_parent_guardrail_when_child_condition_misses():
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import (
+        Policy,
+        PolicyAttachment,
+        PolicyCondition,
+        PolicyGuardrails,
+    )
+
+    data = {"model": "gpt-5.5", "messages": [{"role": "user", "content": "Hello"}], "metadata": {}}
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {
+        "parent": Policy(guardrails=PolicyGuardrails(add=["pii_blocker"])),
+        "child": Policy(
+            inherit="parent",
+            guardrails=PolicyGuardrails(add=["child_guard"]),
+            condition=PolicyCondition(model="claude.*"),
+        ),
+    }
+    policy_registry._initialized = True
+    attachment_registry = get_attachment_registry()
+    attachment_registry._attachments = [PolicyAttachment(policy="child", scope="*")]
+    attachment_registry._initialized = True
+
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+    finally:
+        policy_registry._policies = {}
+        policy_registry._initialized = False
+        attachment_registry._attachments = []
+        attachment_registry._initialized = False
+
+    assert "pii_blocker" in data["metadata"]["guardrails"]
+    assert "child_guard" not in data["metadata"]["guardrails"]
 
 
 @pytest.mark.asyncio
