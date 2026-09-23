@@ -45,7 +45,7 @@ function ClassifierOption({
   const state = useContext(AutoRouterAvailabilityContext);
   const allowance = state.data?.allowances.find((entry) => entry.key === feature);
   const fresh = !state.isPending && !state.isError && !state.isChecking;
-  const exhausted = fresh && isAllowanceExhausted(allowance);
+  const exhausted = isAllowanceExhausted(allowance);
   return (
     <div className="relative">
       <DropdownMenuRadioItem value={value} disabled={disabled || exhausted} closeOnClick className="py-3">
@@ -61,7 +61,7 @@ function ClassifierOption({
           <span className={`text-xs leading-5 text-muted-foreground ${exhausted ? "pr-28" : ""}`}>{description}</span>
         </span>
       </DropdownMenuRadioItem>
-      {exhausted && (
+      {fresh && exhausted && (
         <DropdownMenuItem
           render={<a href={AUTO_ROUTER_CONTACT_URL} target="_blank" rel="noopener noreferrer" />}
           aria-label={`Talk to our team about ${label}`}

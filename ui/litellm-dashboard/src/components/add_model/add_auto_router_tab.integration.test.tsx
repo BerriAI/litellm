@@ -215,6 +215,52 @@ describe("AddAutoRouterTab", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Heuristic" })).toHaveTextContent("Rule-based"));
   });
 
+  it.each(["exhausted", "available", "failed"])(
+    "keeps an exhausted option disabled through a background refresh that becomes %s",
+    async (result) => {
+      vi.mocked(apiClient.post).mockResolvedValue({
+        allowances: [{ key: "heuristic_v2", limit: 1, remaining: 0, available: true }],
+        error: null,
+      });
+      renderWithProviders(<Harness />);
+      fireEvent.click(screen.getByRole("button", { name: "Heuristic" }));
+      const option = screen.getByRole("menuitemradio", { name: /^Heuristic v2/ });
+      await waitFor(() => expect(option).toHaveTextContent("0 of 1 available"));
+      expect(option).toHaveAttribute("aria-disabled", "true");
+      let complete: (() => void) | undefined;
+      vi.mocked(apiClient.post).mockImplementationOnce(
+        () =>
+          new Promise((resolve, reject) => {
+            complete = () =>
+              result === "failed"
+                ? reject(new Error("availability unavailable"))
+                : resolve({
+                    allowances: [
+                      { key: "heuristic_v2", limit: 1, remaining: result === "available" ? 1 : 0, available: true },
+                    ],
+                    error: null,
+                  });
+          }),
+      );
+      await act(async () => {
+        void testQueryClient.refetchQueries({ queryKey: ["autoRouterAvailability"] });
+      });
+      await waitFor(() => expect(option).toHaveTextContent("Checking availability"));
+      expect(option).toHaveAttribute("aria-disabled", "true");
+      fireEvent.click(option);
+      expect(screen.getByRole("button", { name: "Heuristic" })).toHaveTextContent("Rule-based");
+      await act(async () => complete?.());
+      await waitFor(() => expect(option).not.toHaveTextContent("Checking availability"));
+      if (result === "available") {
+        expect(option).not.toHaveAttribute("aria-disabled", "true");
+        fireEvent.click(option);
+        expect(screen.getByRole("button", { name: "Heuristic" })).toHaveTextContent("Heuristic v2");
+      } else {
+        expect(option).toHaveAttribute("aria-disabled", "true");
+      }
+    },
+  );
+
   it("clears a customization rejection after restoring tiers and keeps the selected models", async () => {
     const user = userEvent.setup();
     const blocked = "Custom tiers or classifier instructions has no available allowance";

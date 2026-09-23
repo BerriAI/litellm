@@ -7693,6 +7693,12 @@ class ProxyConfig:
     def _should_load_db_object(self, object_type: str | SupportedDBObjectType) -> bool:
         return should_load_db_object(object_type=object_type)
 
+    def remove_auto_router_catalog_entries(self, model_ids: frozenset[str]) -> None:
+        if self.auto_router_db_catalog is not None:
+            self.auto_router_db_catalog = tuple(
+                row for row in self.auto_router_db_catalog if row.model_id not in model_ids
+            )
+
     async def _get_models_from_db(self, prisma_client: PrismaClient) -> Sequence[_ProxyModelRow] | None:
         """
         Fetch all model deployments from the DB.
