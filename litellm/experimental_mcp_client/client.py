@@ -672,6 +672,9 @@ class MCPClient:
         await anyio.lowlevel.checkpoint_if_cancelled()
         return result
 
+    def open_persistent_session(self) -> "PersistentMCPSession":
+        return PersistentMCPSession(self)
+
     def update_auth_value(self, mcp_auth_value: str | dict[str, str]) -> None:
         """
         Set the authentication header for the MCP client.
@@ -838,9 +841,14 @@ class MCPClient:
         call_tool_request_params: MCPCallToolRequestParams,
         host_progress_callback: Callable | None = None,
         raise_on_error: bool = False,
+        persistent_session: "PersistentMCPSession | None" = None,
     ) -> MCPCallToolResult:
         """
         Call an MCP Tool.
+
+        persistent_session runs the call inside an already-open upstream session (one
+        upstream mcp-session-id shared by every call of a stateful gateway session) instead of
+        the per-call initialize + teardown that run_with_session performs.
 
         Args:
             raise_on_error: When True, re-raise the underlying exception instead of returning an
@@ -871,8 +879,9 @@ class MCPClient:
                 progress_callback=on_progress,
             )
 
+        run: Final = self.run_with_session if persistent_session is None else persistent_session.run
         try:
-            tool_result: Final = await self.run_with_session(_call_tool_operation, quiet_on_error=raise_on_error)
+            tool_result: Final = await run(_call_tool_operation, quiet_on_error=raise_on_error)
             verbose_logger.info("MCP client tool call '%s' completed successfully", call_tool_request_params.name)
             return tool_result
         except asyncio.CancelledError:
@@ -1178,3 +1187,70 @@ class MCPClient:
                     "the MCP server may have crashed, disconnected, or timed out."
                 )
             raise
+
+
+_PendingOperation: TypeAlias = tuple[Callable[[ClientSession], Awaitable[object]], "asyncio.Future[object]"]
+
+
+class PersistentMCPSession:
+    """One upstream MCP session kept open across operations.
+
+    The SDK transport owns anyio cancel scopes that must be entered and exited by the same
+    task, so a dedicated task holds the session open and serves queued operations in order.
+    """
+
+    def __init__(self, client: MCPClient) -> None:
+        loop: Final = asyncio.get_running_loop()
+        self._client: Final = client
+        self._queue: Final[asyncio.Queue[_PendingOperation | None]] = asyncio.Queue()
+        self._ready: Final[asyncio.Future[None]] = loop.create_future()
+        self._task: Final = loop.create_task(self._serve())
+
+    @property
+    def closed(self) -> bool:
+        return self._task.done()
+
+    async def _serve(self) -> None:
+        async def drain(session: ClientSession) -> None:
+            self._ready.set_result(None)
+            while (pending := await self._queue.get()) is not None:
+                operation, future = pending
+                try:
+                    future.set_result(await operation(session))
+                except Exception as e:
+                    future.set_exception(e)
+                    if isinstance(e, (ValueError, httpx2.HTTPError, OSError, MCPError)):
+                        return
+
+        try:
+            await self._client.run_with_session(drain, quiet_on_error=True)
+        except BaseException as e:
+            if not self._ready.done():
+                self._ready.set_exception(e)
+            if not isinstance(e, Exception):
+                raise
+        finally:
+            while not self._queue.empty():
+                pending = self._queue.get_nowait()
+                if pending is not None and not pending[1].done():
+                    pending[1].set_exception(RuntimeError("upstream MCP session closed"))
+
+    async def run(
+        self,
+        operation: Callable[[ClientSession], Awaitable[TSessionResult]],
+        *,
+        quiet_on_error: bool = False,
+    ) -> TSessionResult:
+        del quiet_on_error
+        await self._ready
+        if self.closed:
+            raise RuntimeError("upstream MCP session closed")
+        future: Final[asyncio.Future[object]] = asyncio.get_running_loop().create_future()
+        self._queue.put_nowait((operation, future))
+        return cast(TSessionResult, await future)
+
+    def close(self) -> None:
+        self._queue.put_nowait(None)
+
+    async def wait_closed(self) -> None:
+        await asyncio.gather(self._task, return_exceptions=True)

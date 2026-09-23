@@ -628,6 +628,7 @@ if MCP_AVAILABLE:
         _stateful_session_locks.pop(session_id, None)
         _stateful_session_active_request_counts.pop(session_id, None)
         _stateful_session_client_info.pop(session_id, None)
+        operations.global_mcp_server_manager.release_upstream_sessions(session_id)
 
     # Keep this alias so existing references to session_manager still work
     session_manager: Final = session_manager_stateless

@@ -1,6 +1,6 @@
 import json
 import queue
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Final
@@ -9,10 +9,11 @@ import httpx
 from integration._support.asgi import asgi_server
 from integration._support.client import Gateway, Scenario
 from integration._support.database import read_rows
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp_tests.mcp_e2e_upstream_server import add, multiply
 from starlette.requests import Request
+from starlette.responses import Response
 from starlette.types import Message, Receive, Scope, Send
 
 
@@ -58,6 +59,55 @@ def mcp_peer() -> Iterator[McpPeer]:
             if buffered is not None:
                 return buffered
             return await receive()
+
+        await app(scope, replay, send)
+
+    with asgi_server(capture) as url:
+        yield McpPeer(url + "/mcp", observed)
+
+
+@contextmanager
+def stateful_mcp_peer() -> Generator[McpPeer]:
+    service: Final = MCPServer("integration-stateful")
+    selected: Final[dict[str, str]] = {}  # mutable-ok: per-session state the upstream keeps across tool calls
+
+    def upstream_session(ctx: Context) -> str:
+        assert ctx.headers is not None, "stateful upstream requires HTTP request headers"
+        return ctx.headers["mcp-session-id"]
+
+    @service.tool()
+    def select_project(name: str, ctx: Context) -> str:
+        selected[upstream_session(ctx)] = name
+        return f"selected {name}"
+
+    @service.tool()
+    def create_feature(title: str, ctx: Context) -> str:
+        project: Final = selected.get(upstream_session(ctx))
+        if project is None:
+            raise ValueError("no project selected in this session")
+        return f"{project}/{title}"
+
+    app: Final = service.streamable_http_app(
+        stateless_http=False,
+        json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+    observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
+
+    async def capture(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["method"] == "GET":
+            await Response(status_code=405)(scope, receive, send)
+            return
+        if scope["type"] != "http" or scope["method"] != "POST":
+            await app(scope, receive, send)
+            return
+        body: Final = await Request(scope, receive).body()
+        observed.put({"body": json.loads(body) if body else None, "headers": dict(scope["headers"])})
+        message: Final[Message] = {"type": "http.request", "body": body, "more_body": False}
+        pending: Final = iter((message,))
+
+        async def replay() -> Message:
+            return next(pending, {"type": "http.disconnect"})
 
         await app(scope, replay, send)
 

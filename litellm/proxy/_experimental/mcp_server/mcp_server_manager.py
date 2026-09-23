@@ -62,7 +62,13 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth, strip_auth_scheme, to_basic_credentials
+from litellm.experimental_mcp_client.client import (
+    MCPClient,
+    MCPSigV4Auth,
+    PersistentMCPSession,
+    strip_auth_scheme,
+    to_basic_credentials,
+)
 from litellm.integrations.custom_guardrail import (
     _sync_guardrail_info_to_logging_obj,  # pyright: ignore[reportPrivateUsage] - the same bridge @log_guardrail_information uses; reimplementing it here would fork the metadata-key logic
 )
@@ -1861,6 +1867,10 @@ class MCPServerManager:
             discovery_ttl, discovery_clock, TypeAdapter(tuple[ResourceTemplate, ...])
         )
         self.registry: dict[str, MCPServer] = {}
+        # (gateway mcp-session-id, server_id, upstream auth fingerprint) -> the one upstream
+        # session every tool call of that gateway session reuses, so stateful upstreams keep
+        # their per-session state between calls. Released with the gateway session.
+        self._upstream_sessions: dict[tuple[str, str, str], PersistentMCPSession] = {}
         self._openapi_health_probes: Callable[[str], _OpenAPIHealthProbe] = lru_cache(maxsize=128)(_OpenAPIHealthProbe)
         self.config_mcp_servers: dict[str, MCPServer] = {}
         """
@@ -5776,6 +5786,30 @@ class MCPServerManager:
         async with semaphore:
             yield
 
+    async def _upstream_session_for(
+        self,
+        client: MCPClient,
+        mcp_server: MCPServer,
+        raw_headers: Mapping[str, str] | None,
+    ) -> PersistentMCPSession | None:
+        gateway_session_id: Final = next(
+            (value for key, value in (raw_headers or {}).items() if key.lower() == "mcp-session-id" and value),
+            None,
+        )
+        if gateway_session_id is None or mcp_server.transport == MCPTransport.stdio:
+            return None
+        key: Final = (gateway_session_id, mcp_server.server_id, await client.discovery_auth_fingerprint())
+        existing: Final = self._upstream_sessions.get(key)
+        if existing is not None and not existing.closed:
+            return existing
+        opened: Final = client.open_persistent_session()
+        self._upstream_sessions[key] = opened
+        return opened
+
+    def release_upstream_sessions(self, gateway_session_id: str) -> None:
+        for key in tuple(key for key in self._upstream_sessions if key[0] == gateway_session_id):
+            self._upstream_sessions.pop(key).close()
+
     async def _obo_call_tool_with_retry(
         self,
         *,
@@ -5982,6 +6016,7 @@ class MCPServerManager:
             raw_headers=raw_headers,
             client_ip=client_ip,
         )
+        persistent_session: Final = await self._upstream_session_for(client, mcp_server, raw_headers)
 
         call_tool_params: Final = MCPCallToolRequestParams(
             name=original_tool_name,
@@ -6019,7 +6054,9 @@ class MCPServerManager:
             async def _call_tool_via_client(client, params):
                 async with self._limit_outbound_concurrency(mcp_server):
                     if not relays_upstream_auth:
-                        return await client.call_tool(params, host_progress_callback=host_progress_callback)
+                        return await client.call_tool(
+                            params, host_progress_callback=host_progress_callback, persistent_session=persistent_session
+                        )
                     # The client-forwarded modes carry the caller's own upstream token, so an upstream
                     # 401 (expired/invalid token) is the caller's to resolve: relay it as
                     # MCPUpstreamAuthError so single-server REST callers turn it into a 401 +
@@ -6031,7 +6068,10 @@ class MCPServerManager:
                     # the same isError degradation the default path produces.
                     try:
                         return await client.call_tool(
-                            params, host_progress_callback=host_progress_callback, raise_on_error=True
+                            params,
+                            host_progress_callback=host_progress_callback,
+                            raise_on_error=True,
+                            persistent_session=persistent_session,
                         )
                     except Exception as e:
                         auth_info: Final = _extract_upstream_auth_failure(e)

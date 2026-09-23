@@ -15,6 +15,9 @@ import httpx2
 import pytest
 from mcp import MCPError
 from mcp.client.streamable_http import streamable_http_client
+from mcp.server.mcpserver import Context
+from mcp.server.mcpserver import MCPServer as UpstreamServer
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.message import SessionMessage
 from mcp.types import (
     CONNECTION_CLOSED,
@@ -2896,3 +2899,64 @@ async def test_cancellation_delivers_termination_over_tcp(
         closed: Final = await asyncio.wait_for(asyncio.gather(*connections, return_exceptions=True), 2)
         assert all(result is None or isinstance(result, asyncio.CancelledError) for result in closed), closed
         await asyncio.wait_for(listener.wait_closed(), 2)
+
+
+class _StatefulUpstreamClient(MCPClient):
+    """An MCPClient whose streamable-HTTP transport talks to an in-process stateful MCP server."""
+
+    def __init__(self, app, **kwargs):
+        super().__init__(**kwargs)
+        self._app = app
+
+    def _create_transport_context(self) -> tuple[_TransportContext, httpx2.AsyncClient]:
+        http_client: Final = self._create_httpx_client_factory(transport=httpx2.ASGITransport(app=self._app))(
+            headers=self._get_auth_headers(), timeout=httpx2.Timeout(self.timeout)
+        )
+        return streamable_http_client(self.server_url, http_client=http_client), http_client
+
+
+def _stateful_upstream():
+    service: Final = UpstreamServer("stateful")
+    selected: Final[dict[str, str]] = {}
+
+    @service.tool()
+    def select_project(name: str, ctx: Context) -> str:
+        selected[ctx.headers["mcp-session-id"]] = name
+        return f"selected {name}"
+
+    @service.tool()
+    def create_feature(title: str, ctx: Context) -> str:
+        return f"{selected[ctx.headers['mcp-session-id']]}/{title}"
+
+    return service.streamable_http_app(
+        stateless_http=False,
+        json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_keeps_upstream_state_across_tool_calls():
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        client: Final = _StatefulUpstreamClient(app, server_url="http://upstream/mcp", transport_type=MCPTransport.http)
+        per_call: Final = await client.call_tool(CallToolRequestParams(name="select_project", arguments={"name": "a"}))
+        assert per_call.is_error is False
+        fresh: Final = await client.call_tool(CallToolRequestParams(name="create_feature", arguments={"title": "b"}))
+        assert fresh.is_error is True, "a fresh upstream session per call must not see the earlier selection"
+
+        session: Final = client.open_persistent_session()
+        try:
+            selected: Final = await client.call_tool(
+                CallToolRequestParams(name="select_project", arguments={"name": "a"}), persistent_session=session
+            )
+            created: Final = await client.call_tool(
+                CallToolRequestParams(name="create_feature", arguments={"title": "b"}), persistent_session=session
+            )
+        finally:
+            session.close()
+        assert selected.is_error is False
+        assert created.is_error is False
+        assert created.content[0].text == "a/b"
+        await asyncio.wait_for(session.wait_closed(), 5)
+        assert session.closed

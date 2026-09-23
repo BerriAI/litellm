@@ -7,7 +7,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Final, Literal, Optional
+from typing import Any, Dict, Final, Literal, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,7 +27,7 @@ import contextlib
 
 import httpx
 import httpx2
-from mcp import ReadResourceResult, Resource
+from mcp import ClientSession, ReadResourceResult, Resource
 from mcp.types import (
     CallToolResult,
     GetPromptResult,
@@ -39,6 +39,7 @@ from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, TypeAdapter
 
 from litellm.constants import MCP_METADATA_TIMEOUT
+from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
@@ -14516,3 +14517,47 @@ async def test_client_sampling_does_not_fill_explicit_context_from_another_ambie
         assert captured["client_ip"] is None
     finally:
         auth_context_var.reset(token)
+
+
+class _OfflineMCPClient(MCPClient):
+    """An MCPClient whose sessions never touch the network: operations run against a stand-in session."""
+
+    async def run_with_session(self, operation, *, quiet_on_error: bool = False):
+        del quiet_on_error
+        return await operation(cast(ClientSession, object()))
+
+
+@pytest.mark.asyncio
+async def test_upstream_session_is_shared_per_gateway_session_and_released_with_it():
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="s1", name="stateful", url="http://upstream/mcp", transport=MCPTransport.http)
+    client: Final = _OfflineMCPClient(server_url=server.url, transport_type=MCPTransport.http)
+    try:
+        assert await manager._upstream_session_for(client, server, None) is None
+        assert await manager._upstream_session_for(client, server, {"accept": "application/json"}) is None
+
+        first: Final = await manager._upstream_session_for(client, server, {"Mcp-Session-Id": "gw-1"})
+        second: Final = await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-1"})
+        other: Final = await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-2"})
+        assert first is not None and first is second, "every call of one gateway session must share one upstream session"
+        assert other is not None and other is not first, "distinct gateway sessions must not share upstream state"
+
+        manager.release_upstream_sessions("gw-1")
+        await asyncio.wait_for(first.wait_closed(), 5)
+        assert first.closed and not other.closed
+        replacement: Final = await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-1"})
+        assert replacement is not first and not replacement.closed
+
+        other.close()
+        await asyncio.wait_for(other.wait_closed(), 5)
+        reopened: Final = await manager._upstream_session_for(client, server, {"mcp-session-id": "gw-2"})
+        assert reopened is not other and not reopened.closed, "a dead upstream session must be replaced, not reused"
+
+        stdio: Final = MCPServer(server_id="s2", name="local", command="cat", transport=MCPTransport.stdio)
+        assert await manager._upstream_session_for(client, stdio, {"mcp-session-id": "gw-1"}) is None
+    finally:
+        for gateway_session_id in ("gw-1", "gw-2"):
+            manager.release_upstream_sessions(gateway_session_id)
+        await asyncio.wait_for(
+            asyncio.gather(*(s.wait_closed() for s in manager._upstream_sessions.values()), return_exceptions=True), 5
+        )

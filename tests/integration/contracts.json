@@ -250,6 +250,9 @@
     "tests/integration/mcp/test_mcp_lifecycle.py::test_generated_mcp_edits_preserve_actual_headers_and_tool_results": [
       "other.mcp.lifecycle.generated_save_reload_preserves_effective_headers"
     ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_stateful_upstream_keeps_selection_across_tool_calls_through_gateway": [
+      "mcp.call_tool.session.stateful_upstream_state_survives_between_tool_calls"
+    ],
     "tests/integration/observability/test_callback_delivery.py::test_concurrent_success_and_failure_join_callbacks_and_rows_without_credentials": [
       "other.observability.callbacks.credentials_stay_out_of_event_bodies",
       "other.observability.callbacks.concurrent_results_join_complete_events_and_rows"
