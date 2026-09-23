@@ -905,7 +905,7 @@ def _headers_without_body_framing(headers: httpx.Headers) -> httpx.Headers:
 async def _error_body_preview_and_relay(response: httpx.Response) -> tuple[str, httpx.Response]:
     if response.is_stream_consumed:
         return response.text, response
-    body_iter: Final = response.aiter_bytes()
+    body_iter: Final = response.aiter_bytes(chunk_size=PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS)
     prefix, rest = await _read_error_body_preview(body_iter)
     preview_text: Final = prefix.decode(response.encoding or "utf-8", errors="replace")
     return preview_text, httpx.Response(

@@ -4441,7 +4441,7 @@ class _ChunkedUpstreamErrorBodyStream(httpx.AsyncByteStream):
 @pytest.mark.asyncio
 async def test_pass_through_request_streaming_upstream_error_reads_only_preview_and_relays_full_body():
     chunk_size: Final = 1024
-    chunks: Final = tuple(b"x" * chunk_size for _ in range(6))
+    chunks: Final = tuple(b"x" * chunk_size for _ in range(10))
     upstream_content: Final = b"".join(chunks)
     body_stream: Final = _ChunkedUpstreamErrorBodyStream(chunks)
     upstream_response: Final = httpx.Response(
@@ -4493,8 +4493,73 @@ async def test_pass_through_request_streaming_upstream_error_reads_only_preview_
     )
     assert streamed_bytes == upstream_content
 
-    assert served_at_warning == [5], (
-        "only the chunks needed to exceed the 4096-byte preview budget may be pulled before the warning"
+    assert served_at_warning == [8], (
+        "the 4096-byte rechunked stream needs two pieces = eight raw chunks to exceed the preview budget"
+    )
+    expected_body: Final = f"{'x' * 4096}... (truncated at 4096 chars)"
+    assert (
+        mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
+        == f"Upstream passthrough request failed with status 500: {expected_body}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_streaming_upstream_error_single_large_chunk_stays_bounded():
+    first_chunk: Final = b"x" * 65536
+    second_chunk: Final = b'{"error": "tail"}'
+    upstream_content: Final = first_chunk + second_chunk
+    body_stream: Final = _ChunkedUpstreamErrorBodyStream((first_chunk, second_chunk))
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "text/plain"},
+        stream=body_stream,
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+
+    served_at_warning: list[int] = []
+    real_warning: Final = verbose_proxy_logger.warning
+
+    def _recording_warning(*args, **kwargs):
+        if args and args[0] == "pass_through_endpoint: upstream %s %s returned %s: %s":
+            served_at_warning.append(body_stream.served)
+        return real_warning(*args, **kwargs)
+
+    with patch.object(verbose_proxy_logger, "warning", side_effect=_recording_warning):
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+            ) as mock_get_client:
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+                ) as mock_success_handler:
+                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                    mock_success_handler.return_value = None
+
+                    async_client: Final = MagicMock()
+                    async_client.build_request = MagicMock(return_value=MagicMock())
+                    async_client.send = AsyncMock(return_value=upstream_response)
+                    mock_get_client.return_value = MagicMock(client=async_client)
+
+                    response: Final = await pass_through_request(
+                        request=_upstream_error_request(),
+                        target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                        custom_headers={},
+                        user_api_key_dict=MagicMock(),
+                        stream=True,
+                    )
+
+    assert isinstance(response, StreamingResponse)
+    assert response.status_code == 500
+    streamed_chunks: Final = [chunk async for chunk in response.body_iterator]
+    streamed_bytes: Final = b"".join(
+        chunk if isinstance(chunk, bytes) else chunk.encode("utf-8") for chunk in streamed_chunks
+    )
+    assert streamed_bytes == upstream_content
+
+    assert served_at_warning == [1], (
+        "the rechunked preview is served from the first raw chunk; the second must not be pulled before the warning"
     )
     expected_body: Final = f"{'x' * 4096}... (truncated at 4096 chars)"
     assert (
