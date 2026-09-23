@@ -2008,6 +2008,9 @@
     "tests/integration/streaming/test_ttft_keepalive.py::test_stream_emits_sse_ping_comments_before_the_first_data_frame_while_upstream_is_silent": [
       "streaming.keepalive.sse_pings_fill_silent_time_to_first_token"
     ],
+    "tests/integration/streaming/test_file_content_streaming.py::test_file_content_streams_the_first_megabyte_to_the_client_before_the_upstream_sends_the_rest": [
+      "streaming.file_content.body_reaches_client_before_upstream_finishes_sending"
+    ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[chat]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
     ],
