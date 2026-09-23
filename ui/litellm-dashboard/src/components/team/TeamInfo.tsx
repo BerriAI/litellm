@@ -2393,7 +2393,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </span>
               ),
               type: "multi-select" as const,
-              options: (info.models || []).map((m: string) => ({ label: m, value: m })),
+              options: [...new Set([...(info.models || []), ...(info.access_group_models || [])])].map(
+                (m: string) => ({ label: m, value: m }),
+              ),
               placeholder: "Leave empty to inherit all team models",
             },
           ],
