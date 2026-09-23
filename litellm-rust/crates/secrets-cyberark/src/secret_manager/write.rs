@@ -1,4 +1,3 @@
-use super::python::{AuthenticationRetry, PythonWriteFailure};
 use super::*;
 
 impl CyberArkSecretManager {
@@ -29,16 +28,16 @@ impl CyberArkSecretManager {
             .map_err(|failure| failure.source)
     }
 
-    pub(super) async fn write_with_retry(
+    pub async fn write_with_retry(
         &self,
         name: &str,
         value: &SecretValue,
         context: &CyberarkOperationContext,
         retry: AuthenticationRetry,
-    ) -> Result<(), PythonWriteFailure> {
-        validate_secret_name(name).map_err(|source| PythonWriteFailure::local(source.into()))?;
+    ) -> Result<(), WriteFailure> {
+        validate_secret_name(name).map_err(|source| WriteFailure::local(source.into()))?;
         self.ensure_variable_exists(name, context).await;
-        let url = self.secret_url(name).map_err(PythonWriteFailure::local)?;
+        let url = self.secret_url(name).map_err(WriteFailure::local)?;
         let response = self.post_value(&url, value, context).await?;
         let response = if matches!(retry, AuthenticationRetry::Unauthorized)
             && response.status() == reqwest::StatusCode::UNAUTHORIZED
@@ -49,7 +48,7 @@ impl CyberArkSecretManager {
             response
         };
         if !response.status().is_success() {
-            return Err(PythonWriteFailure::request(
+            return Err(WriteFailure::request(
                 Error::Status(response.status().as_u16()),
                 url,
             ));
@@ -63,11 +62,11 @@ impl CyberArkSecretManager {
         url: &reqwest::Url,
         value: &SecretValue,
         context: &CyberarkOperationContext,
-    ) -> Result<reqwest::Response, PythonWriteFailure> {
+    ) -> Result<reqwest::Response, WriteFailure> {
         let authorization =
             self.authorization_header(context)
                 .await
-                .map_err(|source| PythonWriteFailure {
+                .map_err(|source| WriteFailure {
                     source,
                     request_url: self.authentication_url().ok(),
                     authentication: true,
@@ -81,7 +80,7 @@ impl CyberArkSecretManager {
         )
         .send()
         .await
-        .map_err(|source| PythonWriteFailure::request(source.into(), url.clone()))
+        .map_err(|source| WriteFailure::request(source.into(), url.clone()))
     }
 
     pub(super) async fn ensure_variable_exists(

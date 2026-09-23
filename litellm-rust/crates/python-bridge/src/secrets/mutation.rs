@@ -41,7 +41,7 @@ pub(super) fn mutation_value(
 fn cyberark_failure(
     py: Python<'_>,
     name: &str,
-    failure: cyberark::PythonWriteFailure,
+    failure: cyberark::WriteFailure,
 ) -> PyResult<String> {
     let message = match failure.source {
         cyberark::Error::Status(status) | cyberark::Error::AuthStatus(status) => {

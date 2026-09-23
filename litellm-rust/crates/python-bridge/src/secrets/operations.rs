@@ -1,5 +1,6 @@
 use litellm_core_utils::settings::Lookup;
 use litellm_secrets::Secret;
+use litellm_secrets::cyberark::AuthenticationRetry;
 use litellm_secrets::{Error, SecretManager};
 use litellm_secrets_types::{PythonSecretRead, SecretOperationContext};
 
@@ -40,7 +41,11 @@ pub(super) async fn read_python_provider(
         (SecretManager::Cyberark(client), SecretOperationContext::Cyberark(_)) => {
             Ok(PythonSecretRead::Value(
                 client
-                    .read_for_python(&request.secret_name)
+                    .read_with_retry(
+                        &request.secret_name,
+                        &Default::default(),
+                        AuthenticationRetry::Never,
+                    )
                     .await
                     .unwrap_or(None)
                     .map(Secret::String),
@@ -61,7 +66,7 @@ pub(super) enum PythonMutationError {
     Vault(Box<litellm_secrets::hashicorp::PythonFailure>),
     CyberarkWrite {
         name: String,
-        failure: Box<litellm_secrets::cyberark::PythonWriteFailure>,
+        failure: Box<litellm_secrets::cyberark::WriteFailure>,
     },
     CurrentMissing(String),
     ReplacementMissing(String),
@@ -76,7 +81,7 @@ pub(super) async fn write_python_provider(
     match manager {
         SecretManager::Cyberark(client) => {
             client
-                .write_for_python(name, value)
+                .write_with_retry(name, value, &Default::default(), AuthenticationRetry::Never)
                 .await
                 .map_err(|failure| PythonMutationError::CyberarkWrite {
                     name: name.to_owned(),
@@ -99,7 +104,7 @@ pub(super) async fn delete_python_provider(
                 .await
                 .map_err(|failure| PythonMutationError::CyberarkWrite {
                     name: name.to_owned(),
-                    failure: Box::new(litellm_secrets::cyberark::PythonWriteFailure {
+                    failure: Box::new(litellm_secrets::cyberark::WriteFailure {
                         source: failure,
                         request_url: None,
                         authentication: false,
@@ -122,25 +127,43 @@ pub(super) async fn rotate_python_provider(
 ) -> Result<serde_json::Value, PythonMutationError> {
     match manager {
         SecretManager::Cyberark(client) => {
-            use litellm_secrets::cyberark::PythonRotationFailure;
-            client
-                .rotate_for_python(current_name, new_name, value)
+            if client
+                .read_fresh_with_retry(
+                    current_name,
+                    &Default::default(),
+                    AuthenticationRetry::Never,
+                )
                 .await
-                .map_err(|failure| match failure {
-                    PythonRotationFailure::CurrentMissing => {
-                        PythonMutationError::CurrentMissing(current_name.to_owned())
-                    }
-                    PythonRotationFailure::Write(failure) => PythonMutationError::CyberarkWrite {
-                        name: new_name.to_owned(),
-                        failure: Box::new(failure),
-                    },
-                    PythonRotationFailure::ReplacementMissing => {
-                        PythonMutationError::ReplacementMissing(new_name.to_owned())
-                    }
-                    PythonRotationFailure::ReplacementMismatch => {
-                        PythonMutationError::ReplacementMismatch
-                    }
+                .ok()
+                .flatten()
+                .is_none()
+            {
+                return Err(PythonMutationError::CurrentMissing(current_name.to_owned()));
+            }
+            client
+                .write_with_retry(
+                    new_name,
+                    value,
+                    &Default::default(),
+                    AuthenticationRetry::Never,
+                )
+                .await
+                .map_err(|failure| PythonMutationError::CyberarkWrite {
+                    name: new_name.to_owned(),
+                    failure: Box::new(failure),
                 })?;
+            let actual = client
+                .read_fresh_with_retry(new_name, &Default::default(), AuthenticationRetry::Never)
+                .await
+                .ok()
+                .flatten()
+                .ok_or_else(|| PythonMutationError::ReplacementMissing(new_name.to_owned()))?;
+            if actual != *value {
+                return Err(PythonMutationError::ReplacementMismatch);
+            }
+            if current_name != new_name {
+                client.invalidate_cached_secret(current_name).await;
+            }
             Ok(write_success(new_name))
         }
         _ => Err(PythonMutationError::Unsupported),

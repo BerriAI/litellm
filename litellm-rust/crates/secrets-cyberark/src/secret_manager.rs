@@ -1,7 +1,5 @@
 mod client;
-mod python;
 mod read;
-pub use python::{PythonRotationFailure, PythonWriteFailure};
 mod write;
 
 use std::{fs, sync::Arc, time::Duration};
@@ -52,6 +50,38 @@ pub struct CyberArkSecretManager {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeleteOutcome {
     NotSupported,
+}
+
+#[derive(Clone, Copy)]
+pub enum AuthenticationRetry {
+    Never,
+    Unauthorized,
+}
+
+#[derive(veil::Redact)]
+pub struct WriteFailure {
+    pub source: Error,
+    #[redact]
+    pub request_url: Option<reqwest::Url>,
+    pub authentication: bool,
+}
+
+impl WriteFailure {
+    fn local(source: Error) -> Self {
+        Self {
+            source,
+            request_url: None,
+            authentication: false,
+        }
+    }
+
+    fn request(source: Error, url: reqwest::Url) -> Self {
+        Self {
+            source,
+            request_url: Some(url),
+            authentication: false,
+        }
+    }
 }
 
 impl CyberArkSecretManager {

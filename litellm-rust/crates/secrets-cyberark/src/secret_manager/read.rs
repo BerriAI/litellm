@@ -1,4 +1,3 @@
-use super::python::AuthenticationRetry;
 use super::*;
 
 impl CyberArkSecretManager {
@@ -16,7 +15,7 @@ impl CyberArkSecretManager {
             .await
     }
 
-    pub(super) async fn read_with_retry(
+    pub async fn read_with_retry(
         &self,
         name: &str,
         context: &CyberarkOperationContext,
@@ -42,6 +41,25 @@ impl CyberArkSecretManager {
     ) -> Result<Option<SecretValue>, Error> {
         self.read_uncached_with_retry(name, context, AuthenticationRetry::Unauthorized)
             .await
+    }
+
+    pub async fn read_fresh_with_retry(
+        &self,
+        name: &str,
+        context: &CyberarkOperationContext,
+        retry: AuthenticationRetry,
+    ) -> Result<Option<SecretValue>, Error> {
+        validate_secret_name(name)?;
+        self.secrets
+            .refresh(
+                name.to_owned(),
+                self.read_uncached_with_retry(name, context, retry),
+            )
+            .await
+    }
+
+    pub async fn invalidate_cached_secret(&self, name: &str) {
+        self.secrets.invalidate(&name.to_owned()).await;
     }
 
     pub(super) async fn read_uncached_with_retry(

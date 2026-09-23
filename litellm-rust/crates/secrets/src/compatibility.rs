@@ -23,7 +23,11 @@ pub async fn get_secret_from_python_manager(
     let result = match manager {
         #[cfg(feature = "cyberark")]
         SecretManager::Cyberark(client) => Ok(client
-            .read_for_python(name)
+            .read_with_retry(
+                name,
+                &Default::default(),
+                litellm_secrets_cyberark::AuthenticationRetry::Never,
+            )
             .await
             .unwrap_or(None)
             .map(Secret::String)),
