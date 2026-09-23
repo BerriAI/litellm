@@ -5,11 +5,11 @@ import logging
 import re
 
 
-from collections.abc import Callable
-from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
@@ -20,7 +20,7 @@ from redis.exceptions import DataError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import Litellm_EntityType, SpendUpdateQueueItem
+from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
     _TEAM_MEMBER_SPEND_SQL,
@@ -28,6 +28,8 @@ from litellm.proxy.db.db_spend_update_writer import (
     _SpendTableName,
     _spend_tables_left_to_send,
 )
+from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
+from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
@@ -302,6 +304,13 @@ class _RecordingDb:
         if self._execute_raw is not None:
             return self._execute_raw()
         return len(args)
+
+    @asynccontextmanager
+    async def _tx(self) -> AsyncIterator["_RecordingDb"]:
+        yield self
+
+    def tx(self, timeout: timedelta | None = None) -> AbstractAsyncContextManager["_RecordingDb"]:
+        return self._tx()
 
 
 class _RecordingPrisma:
@@ -3770,8 +3779,15 @@ async def test_commit_spend_updates_does_not_retry_non_deadlock_data_error(monke
 @pytest.mark.asyncio
 async def test_update_daily_spend_retries_deadlock(monkeypatch):
     """The daily-spend upsert path retries a deadlock on the bulk upsert and then drains successfully."""
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[_deadlock_error(), None])
+    outcomes = iter([_deadlock_error(), None])
+
+    def first_attempt_deadlocks():
+        outcome = next(outcomes)
+        if outcome is not None:
+            raise outcome
+        return 1
+
+    mock_prisma_client = _RecordingPrisma(execute_raw=first_attempt_deadlocks)
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
 
@@ -3786,7 +3802,7 @@ async def test_update_daily_spend_retries_deadlock(monkeypatch):
         entity_id_field="user_id",
     )
 
-    assert mock_prisma_client.db.execute_raw.call_count == 2
+    assert len(mock_prisma_client.db.statements) == 2
     assert daily_spend_transactions == {}
     proxy_logging.failure_handler.assert_not_called()
 
@@ -4247,3 +4263,241 @@ async def test_daily_transaction_attributes_caching_savings_only_with_an_injecti
     assert transaction["cache_creation_input_tokens"] == 1111
     assert transaction["prompt_caching_savings_spend"] != 0.0
     assert transaction["gateway_injected_caching_savings_spend"] == 0.0
+
+
+class _StallingDailySpendFakeDB(_DailySpendFakeDB):
+    """Holds the daily upsert aimed at one table until it is cancelled, like a starved pool does.
+
+    The rollback of that transaction waits for ``rollback_release``: the query engine only
+    rolls back once the statement it is running has returned, which behind a lock takes
+    as long as the lock is held."""
+
+    def __init__(self, stalled_table: str) -> None:
+        super().__init__(failing_table=None)
+        self.stalled_table = stalled_table
+        self.stalled = asyncio.Event()
+        self.rollback_release = asyncio.Event()
+        self.rolled_back = asyncio.Event()
+        self.transaction_outcomes: list[str] = []
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        if self.stalled_table in query:
+            self.stalled.set()
+            await asyncio.Event().wait()
+        return await super().execute_raw(query, *args)
+
+    @asynccontextmanager
+    async def _tx(self) -> AsyncIterator["_StallingDailySpendFakeDB"]:
+        try:
+            yield self
+        except BaseException:
+            await self.rollback_release.wait()
+            self.transaction_outcomes.append("rollback")
+            self.rolled_back.set()
+            raise
+        self.transaction_outcomes.append("commit")
+
+
+def _daily_entity_txn(entity_id_field: str) -> dict:
+    return {key: value for key, value in _daily_txn().items() if key != "user_id"} | {entity_id_field: "entity-1"}
+
+
+_DAILY_SPEND_ENTITIES: Final = [
+    pytest.param("daily_spend_update_queue", "user", "user_id", "LiteLLM_DailyUserSpend", id="user"),
+    pytest.param("daily_team_spend_update_queue", "team", "team_id", "LiteLLM_DailyTeamSpend", id="team"),
+    pytest.param("daily_org_spend_update_queue", "org", "organization_id", "LiteLLM_DailyOrganizationSpend", id="org"),
+    pytest.param("daily_tag_spend_update_queue", "tag", "tag", "LiteLLM_DailyTagSpend", id="tag"),
+    pytest.param(
+        "daily_end_user_spend_update_queue", "end_user", "end_user_id", "LiteLLM_DailyEndUserSpend", id="end_user"
+    ),
+    pytest.param("daily_agent_spend_update_queue", "agent", "agent_id", "LiteLLM_DailyAgentSpend", id="agent"),
+]
+
+_DAILY_SPEND_QUEUES: Final[dict[str, Callable[[DBSpendUpdateWriter], DailySpendUpdateQueue]]] = {
+    "daily_spend_update_queue": lambda writer: writer.daily_spend_update_queue,
+    "daily_team_spend_update_queue": lambda writer: writer.daily_team_spend_update_queue,
+    "daily_org_spend_update_queue": lambda writer: writer.daily_org_spend_update_queue,
+    "daily_tag_spend_update_queue": lambda writer: writer.daily_tag_spend_update_queue,
+    "daily_end_user_spend_update_queue": lambda writer: writer.daily_end_user_spend_update_queue,
+    "daily_agent_spend_update_queue": lambda writer: writer.daily_agent_spend_update_queue,
+}
+
+_DAILY_SPEND_COMMITS: Final = {
+    "user": DBSpendUpdateWriter.update_daily_user_spend,
+    "team": DBSpendUpdateWriter.update_daily_team_spend,
+    "org": DBSpendUpdateWriter.update_daily_org_spend,
+    "tag": DBSpendUpdateWriter.update_daily_tag_spend,
+    "end_user": DBSpendUpdateWriter.update_daily_end_user_spend,
+    "agent": DBSpendUpdateWriter.update_daily_agent_spend,
+}
+
+
+@pytest.mark.parametrize(("queue_name", "entity_type", "entity_id_field", "table"), _DAILY_SPEND_ENTITIES)
+@pytest.mark.asyncio
+async def test_daily_spend_batch_cancelled_mid_flight_is_rolled_back_requeued_and_written_once_by_the_next_flush(
+    queue_name: str, entity_type: str, entity_id_field: str, table: str
+):
+    """Shutdown cancels the scheduler tick while a drained batch waits on the database. The
+    batch has left the queue, so unless the cancellation puts it back, the final flush finds
+    nothing and the spend is gone (F2). The upsert runs in an interactive transaction so a
+    statement that did reach Postgres is rolled back with the cancel and the requeued rows
+    land exactly once."""
+    db_writer = DBSpendUpdateWriter()
+    queue = _DAILY_SPEND_QUEUES[queue_name](db_writer)
+    await queue.add_update({"key-a": _daily_entity_txn(entity_id_field)})
+    await queue.add_update({"key-a": _daily_entity_txn(entity_id_field)})
+    db = _StallingDailySpendFakeDB(stalled_table=table)
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    def flush(prisma_db: _DailySpendFakeDB):
+        return db_writer._flush_daily_spend_queue(
+            queue=queue,
+            entity_type=entity_type,
+            commit=_DAILY_SPEND_COMMITS[entity_type],
+            n_retry_times=0,
+            prisma_client=_WindowSpendFakePrisma(prisma_db),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    tick = asyncio.ensure_future(flush(db))
+    await asyncio.wait_for(db.stalled.wait(), timeout=5)
+    tick.cancel()
+    finished, _ = await asyncio.wait({tick}, timeout=1)
+    assert finished == {tick}, "the cancelled tick must return before the rolled-back statement unwinds"
+    with pytest.raises(asyncio.CancelledError):
+        tick.result()
+
+    assert not queue.update_queue.empty(), "the cancelled batch must go back on the queue before the rollback lands"
+    assert db.transaction_outcomes == []
+    db.rollback_release.set()
+    await asyncio.wait_for(db.rolled_back.wait(), timeout=5)
+    assert db.transaction_outcomes == ["rollback"]
+    assert _daily_upserts(db, table) == []
+
+    final_db = _DailySpendFakeDB(failing_table=None)
+    await flush(final_db)
+
+    (upsert,) = _daily_upserts(final_db, table)
+    assert _row_values(upsert, entity_id_field) == ["entity-1"]
+    assert _row_values(upsert, "spend") == [pytest.approx(0.2)]
+    assert _row_values(upsert, "api_requests") == [2]
+    assert queue.update_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_flush_of_an_empty_daily_queue_requeues_nothing():
+    """A cancel that lands with nothing drained must not push an empty batch onto the queue."""
+    db_writer = DBSpendUpdateWriter()
+    db = _StallingDailySpendFakeDB(stalled_table="LiteLLM_DailyUserSpend")
+
+    class _CancellingQueue(type(db_writer.daily_spend_update_queue)):
+        async def flush_and_get_aggregated_daily_spend_update_transactions(self):
+            drained = await super().flush_and_get_aggregated_daily_spend_update_transactions()
+            asyncio.current_task().cancel()
+            await asyncio.sleep(0)
+            return drained
+
+    queue = _CancellingQueue()
+    with pytest.raises(asyncio.CancelledError):
+        await db_writer._flush_daily_spend_queue(
+            queue=queue,
+            entity_type="user",
+            commit=DBSpendUpdateWriter.update_daily_user_spend,
+            n_retry_times=0,
+            prisma_client=_WindowSpendFakePrisma(db),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert queue.update_queue.empty()
+
+
+class _AnnouncingDailySpendFakeDB(_DailySpendFakeDB):
+    """Signals ``written`` the moment the daily upsert has been committed."""
+
+    def __init__(self) -> None:
+        super().__init__(failing_table=None)
+        self.written = asyncio.Event()
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        rows = await super().execute_raw(query, *args)
+        self.written.set()
+        return rows
+
+
+@pytest.mark.asyncio
+async def test_cancel_that_lands_after_the_daily_batch_committed_does_not_requeue_it():
+    """The commit has returned but the tick has not resumed yet when the cancel arrives.
+    Putting the batch back now would write the same spend twice on the final flush."""
+    db_writer = DBSpendUpdateWriter()
+    queue = db_writer.daily_spend_update_queue
+    await queue.add_update({"key-a": _daily_txn()})
+    db = _AnnouncingDailySpendFakeDB()
+
+    tick = asyncio.ensure_future(
+        db_writer._flush_daily_spend_queue(
+            queue=queue,
+            entity_type="user",
+            commit=DBSpendUpdateWriter.update_daily_user_spend,
+            n_retry_times=0,
+            prisma_client=_WindowSpendFakePrisma(db),
+            proxy_logging_obj=MagicMock(),
+        )
+    )
+    await db.written.wait()
+    tick.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await tick
+
+    assert len(_daily_upserts(db, "LiteLLM_DailyUserSpend")) == 1
+    assert queue.update_queue.empty(), "a batch that already committed must not be requeued"
+
+
+class _DrainedTagRedisBuffer:
+    """Hands out one drained tag batch and records whatever is restored."""
+
+    def __init__(self, drained: dict[str, DailyTagSpendTransaction]) -> None:
+        self.drained = drained
+        self.restored: list[dict[str, DailyTagSpendTransaction]] = []
+
+    async def get_all_daily_tag_spend_update_transactions_from_redis_buffer(
+        self,
+    ) -> dict[str, DailyTagSpendTransaction]:
+        return self.drained
+
+    async def restore_transactions_to_redis(
+        self, daily_tag_spend_update_transactions: dict[str, DailyTagSpendTransaction]
+    ) -> None:
+        self.restored.append(daily_tag_spend_update_transactions)
+
+
+@pytest.mark.asyncio
+async def test_tag_batch_drained_from_redis_and_cancelled_mid_flight_is_restored_before_its_rollback_returns():
+    """The Redis tag drain is destructive. A shutdown cancel used to leave the batch nowhere:
+    Redis no longer had it and the interactive transaction rolled the statement back."""
+    db_writer = DBSpendUpdateWriter()
+    drained = {"key-a": cast(DailyTagSpendTransaction, _daily_entity_txn("tag"))}
+    redis_buffer = _DrainedTagRedisBuffer(drained)
+    db_writer.redis_update_buffer = cast(RedisUpdateBuffer, redis_buffer)
+    db = _StallingDailySpendFakeDB(stalled_table="LiteLLM_DailyTagSpend")
+
+    tick = asyncio.ensure_future(
+        db_writer._drain_and_commit_daily_tag_spend_from_redis(
+            prisma_client=_WindowSpendFakePrisma(db),
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+        )
+    )
+    await asyncio.wait_for(db.stalled.wait(), timeout=5)
+    tick.cancel()
+    finished, _ = await asyncio.wait({tick}, timeout=1)
+    assert finished == {tick}, "the cancelled drain must return before the rolled-back statement unwinds"
+    with pytest.raises(asyncio.CancelledError):
+        tick.result()
+
+    assert redis_buffer.restored == [drained], "the drained tag batch must be back in Redis before the rollback lands"
+    assert db.transaction_outcomes == []
+    db.rollback_release.set()
+    await asyncio.wait_for(db.rolled_back.wait(), timeout=5)
+    assert db.transaction_outcomes == ["rollback"]
+    assert _daily_upserts(db, "LiteLLM_DailyTagSpend") == []
