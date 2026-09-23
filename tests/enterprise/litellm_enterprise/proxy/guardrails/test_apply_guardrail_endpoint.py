@@ -61,9 +61,11 @@ async def test_apply_guardrail_endpoint_returns_correct_response(
         assert response.response_text == "Redacted text: [REDACTED] and [REDACTED]"
 
         # Verify the guardrail was called with correct parameters
+        # the endpoint always forwards the proxy's own metadata, which this
+        # fixture leaves empty, so the guardrail can read the calling key
         mock_guardrail.apply_guardrail.assert_called_once_with(
             inputs={"texts": ["Test text with PII"]},
-            request_data={},
+            request_data={"metadata": {}},
             input_type="request",
         )
 
@@ -198,5 +200,7 @@ async def test_apply_guardrail_endpoint_without_optional_params(mock_proxy_loggi
 
         # Verify the guardrail was called with correct parameters
         mock_guardrail.apply_guardrail.assert_called_once_with(
-            inputs={"texts": ["Test text"]}, request_data={}, input_type="request"
+            inputs={"texts": ["Test text"]},
+            request_data={"metadata": {}},
+            input_type="request",
         )
