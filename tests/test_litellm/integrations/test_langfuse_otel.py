@@ -548,6 +548,42 @@ class TestLangfuseOtelIntegration:
             }
             assert not [key for key in actual if key.startswith("langfuse.trace.metadata.")]
 
+    def test_request_metadata_drops_null_fields_and_skips_empty_trace_identities(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "redact_user_api_key_info", False)
+        request_metadata: Final = {
+            "user_api_key_alias": "prod-key",
+            "user_api_key_user_id": "user-1",
+            "user_api_key_end_user_id": None,
+            "user_api_key_team_id": "",
+            "user_api_key_team_alias": None,
+            "team_id": None,
+            "team_alias": None,
+            "spend_logs_metadata": {"env": "prod"},
+        }
+        kwargs: Final = {
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": {"metadata": request_metadata},
+        }
+
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+
+            actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+
+            assert json.loads(actual["langfuse.observation.metadata"]) == {
+                "user_api_key_alias": "prod-key",
+                "user_api_key_user_id": "user-1",
+                "user_api_key_team_id": "",
+                "spend_logs_metadata": {"env": "prod"},
+                "requester_metadata": {},
+            }
+            assert {key: value for key, value in actual.items() if key.startswith("langfuse.trace.metadata.")} == {
+                "langfuse.trace.metadata.user_api_key_alias": "prod-key",
+                "langfuse.trace.metadata.user_api_key_user_id": "user-1",
+            }
+
     def test_request_metadata_keys_are_absent_without_standard_logging_object(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
