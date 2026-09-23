@@ -5,16 +5,17 @@ A2A Streaming Iterator with token tracking and logging support.
 import asyncio
 from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 from litellm.a2a_protocol.utils import A2ARequestUtils
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 if TYPE_CHECKING:
-    from a2a.types import SendStreamingMessageRequest, SendStreamingMessageResponse
+    from a2a.compat.v0_3.types import SendStreamingMessageRequest, SendStreamingMessageResponse
 
 
 class A2AStreamingIterator:
@@ -38,9 +39,9 @@ class A2AStreamingIterator:
         self.start_time = datetime.now()
 
         # Collect chunks for token counting
-        self.chunks: list[Any] = []
+        self.chunks: list[SendStreamingMessageResponse] = []
         self.collected_text_parts: list[str] = []
-        self.final_chunk: Any | None = None
+        self.final_chunk: SendStreamingMessageResponse | None = None
 
     def __aiter__(self):
         return self
@@ -68,7 +69,7 @@ class A2AStreamingIterator:
             await self._handle_stream_complete()
             raise
 
-    def _collect_text_from_chunk(self, chunk: Any) -> None:
+    def _collect_text_from_chunk(self, chunk: "SendStreamingMessageResponse") -> None:
         """Extract text from a streaming chunk and add to collected parts."""
         try:
             chunk_dict: Final = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
@@ -78,7 +79,7 @@ class A2AStreamingIterator:
         except Exception:
             verbose_logger.debug("Failed to extract text from A2A streaming chunk")
 
-    def _is_completed_chunk(self, chunk: Any) -> bool:
+    def _is_completed_chunk(self, chunk: "SendStreamingMessageResponse") -> bool:
         """Check if chunk indicates stream completion."""
         try:
             chunk_dict: Final = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
@@ -99,11 +100,11 @@ class A2AStreamingIterator:
             # Calculate tokens from collected text
             input_message: Final = A2ARequestUtils.get_input_message_from_request(self.request)
             input_text: Final = A2ARequestUtils.extract_text_from_message(input_message)
-            prompt_tokens: Final = A2ARequestUtils.count_tokens(input_text)
+            prompt_tokens: Final = await asyncify(A2ARequestUtils.count_tokens)(input_text)
 
             # Use the last (most complete) text from chunks
             output_text: Final = self.collected_text_parts[-1] if self.collected_text_parts else ""
-            completion_tokens: Final = A2ARequestUtils.count_tokens(output_text)
+            completion_tokens: Final = await asyncify(A2ARequestUtils.count_tokens)(output_text)
 
             total_tokens: Final = prompt_tokens + completion_tokens
 

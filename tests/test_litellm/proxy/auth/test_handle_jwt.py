@@ -2,12 +2,14 @@ import asyncio
 import re
 import time
 from collections.abc import Mapping, Sequence
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 import httpx
 import pytest
+
+import litellm
 
 from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
@@ -21,17 +23,24 @@ from litellm.proxy._types import (
     Member,
     ProxyErrorTypes,
     ProxyException,
+    RoleBasedPermissions,
+    ScopeMapping,
 )
 from litellm.caching.dual_cache import DualCache
+from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+from litellm.proxy.auth.auth_checks import TeamNotFoundError
 from litellm.proxy.auth.handle_jwt import (
     JWKS_FETCH_ATTEMPTS,
     STALE_CACHE_KEY_PREFIX,
     STALE_WRITTEN_AT_CACHE_KEY_PREFIX,
+    HeaderTeam,
     JWKSUnreachableError,
     JWTAuthManager,
     JWTHandler,
     NoMatchingJWTPublicKeyError,
 )
+from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
+from litellm.types.agents import AgentResponse
 
 
 @pytest.mark.asyncio
@@ -282,6 +291,106 @@ async def test_find_team_with_model_access_uses_request_method_for_passthrough_a
 
     assert exc_info.value.status_code == 403
     assert "allowed_passthrough_routes" in exc_info.value.detail
+
+
+_AUTH_ENFORCED_MODEL_HOST_ROUTES: Final = {
+    "test-uuid-1:subpath:/model-host/v1/extractor:GET,POST": {
+        "endpoint_id": "test-uuid-1",
+        "path": "/model-host/v1/extractor",
+        "type": "subpath",
+        "auth": True,
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_team_allowed_routes_wildcard_grants_auth_passthrough():
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_allowed_routes=["openai_routes", "/model-host/*"])
+    team_without_passthrough_allowlist = LiteLLM_TeamTable(team_id="team-a", models=["all-proxy-models"], metadata={})
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            return_value=team_without_passthrough_allowlist,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            _AUTH_ENFORCED_MODEL_HOST_ROUTES,
+        ),
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+    ):
+        team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+            team_ids={"team-a"},
+            requested_model=None,
+            route="/model-host/v1/extractor/predict",
+            jwt_handler=jwt_handler,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+            request_method="POST",
+        )
+
+    assert team_id == "team-a"
+    assert team_obj == team_without_passthrough_allowlist
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_header_team_allows_auth_passthrough_for_team_allowed_routes_wildcard():
+    from litellm.proxy.utils import ProxyLogging
+
+    jwt_handler = JWTHandler()
+    user_api_key_cache = DualCache()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_ids_jwt_field="groups",
+            user_id_jwt_field="sub",
+            team_allowed_routes=["openai_routes", "/model-host/*"],
+        ),
+    )
+
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
+        patch.object(JWTAuthManager, "check_admin_access", new_callable=AsyncMock, return_value=None),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            return_value=LiteLLM_TeamTable(team_id="team-2", metadata={}),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(None, None, None, None, "user-1"),
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            _AUTH_ENFORCED_MODEL_HOST_ROUTES,
+        ),
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+    ):
+        mock_auth_jwt.return_value = {"sub": "user-1", "scope": "", "groups": ["team-1", "team-2"]}
+
+        result = await JWTAuthManager.auth_builder(
+            api_key="jwt-token",
+            jwt_handler=jwt_handler,
+            request_data={},
+            general_settings={},
+            route="/model-host/v1/extractor/predict",
+            prisma_client=None,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
+            request_headers={"x-litellm-team-id": "team-2"},
+            request_method="POST",
+        )
+
+    assert result["team_id"] == "team-2"
 
 
 @pytest.mark.asyncio
@@ -1886,29 +1995,41 @@ async def test_auth_builder_oidc_enabled_falls_back_to_jwt_auth_for_jwt_tokens()
         assert result["user_object"] == user_object
 
 
-def test_get_team_id_from_header():
-    """Test get_team_id_from_header returns team when valid, None when missing, raises on invalid."""
-    from fastapi import HTTPException
-
-    # Valid team in allowed list
-    result = JWTAuthManager.get_team_id_from_header(
+@pytest.mark.asyncio
+async def test_resolve_team_from_header_returns_allowed_id_none_without_header_and_403_on_invalid():
+    """Without a DB, x-litellm-team-id resolves to the team when it names an allowed
+    team id, to None when the header is absent, and to a 403 for any other value."""
+    allowed = await JWTAuthManager.resolve_team_from_header(
         request_headers={"x-litellm-team-id": "team-1"},
         allowed_team_ids={"team-1", "team-2"},
+        fallback_to_db_teams=False,
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
     )
-    assert result == "team-1"
+    assert allowed == HeaderTeam(header_value="team-1", team_id="team-1")
 
-    # No header returns None
-    result = JWTAuthManager.get_team_id_from_header(
+    absent = await JWTAuthManager.resolve_team_from_header(
         request_headers={"authorization": "Bearer token"},
         allowed_team_ids={"team-1"},
+        fallback_to_db_teams=False,
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
     )
-    assert result is None
+    assert absent is None
 
-    # Invalid team raises 403
     with pytest.raises(HTTPException) as exc_info:
-        JWTAuthManager.get_team_id_from_header(
+        await JWTAuthManager.resolve_team_from_header(
             request_headers={"x-litellm-team-id": "invalid-team"},
             allowed_team_ids={"team-1", "team-2"},
+            fallback_to_db_teams=False,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
         )
     assert exc_info.value.status_code == 403
 
@@ -3243,15 +3364,26 @@ async def test_auth_builder_single_team_db_fallback_when_jwt_has_no_team(
             mock_get_membership.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_auth_builder_single_team_fallback_membership_error_skips_no_raise():
-    """
-    get_team_object succeeds but get_team_membership raises — do not set team; no exception.
-    """
-    from fastapi import HTTPException
+class _UnreachableMembershipPrisma:
+    class db:
+        class litellm_teammembership:
+            @staticmethod
+            async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
+                raise httpx.ConnectError("All connection attempts failed")
 
-    user_id = "u_mem_fail"
-    team_id_val = "team_mem_fail"
+
+@pytest.mark.asyncio
+async def test_auth_builder_single_team_fallback_membership_outage_raises_instead_of_dropping_the_team():
+    """
+    get_team_object succeeds but the membership read hits a database outage: the
+    outage propagates (auth maps it to 503) instead of the team being dropped.
+    """
+    from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    user_id = "u_mem_outage"
+    team_id_val = "team_mem_outage"
     user_object = LiteLLM_UserTable(
         user_id=user_id,
         user_role=LitellmUserRoles.INTERNAL_USER,
@@ -3260,6 +3392,7 @@ async def test_auth_builder_single_team_fallback_membership_error_skips_no_raise
     team_table = LiteLLM_TeamTable(team_id=team_id_val)
     jwt_handler = JWTHandler()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+    cache = UserApiKeyCache()
 
     with (
         patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
@@ -3309,34 +3442,26 @@ async def test_auth_builder_single_team_fallback_membership_error_skips_no_raise
             "litellm.proxy.auth.handle_jwt.get_team_object",
             new_callable=AsyncMock,
         ) as mock_get_team,
-        patch(
-            "litellm.proxy.auth.handle_jwt.get_team_membership",
-            new_callable=AsyncMock,
-        ) as mock_get_membership,
     ):
         mock_auth_jwt.return_value = {"sub": user_id, "scope": ""}
         mock_get_team.return_value = team_table
-        mock_get_membership.side_effect = HTTPException(
-            status_code=500, detail="membership lookup failed"
-        )
 
-        result = await JWTAuthManager.auth_builder(
-            api_key="test_jwt_token",
-            jwt_handler=jwt_handler,
-            request_data={"model": "gpt-4"},
-            general_settings={"enforce_rbac": False},
-            route="/chat/completions",
-            prisma_client=None,
-            user_api_key_cache=None,
-            parent_otel_span=None,
-            proxy_logging_obj=None,
-        )
+        with pytest.raises(httpx.ConnectError) as raised:
+            await JWTAuthManager.auth_builder(
+                api_key="test_jwt_token",
+                jwt_handler=jwt_handler,
+                request_data={"model": "gpt-4"},
+                general_settings={"enforce_rbac": False},
+                route="/chat/completions",
+                prisma_client=_UnreachableMembershipPrisma(),
+                user_api_key_cache=cache,
+                parent_otel_span=None,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+            )
 
-        assert result["team_id"] is None
-        assert result["team_object"] is None
-        assert result["team_membership"] is None
-        mock_get_team.assert_called()
-        mock_get_membership.assert_called_once()
+    mock_get_team.assert_called()
+    surfaced = _as_proxy_exception(raised.value)
+    assert (surfaced.code, surfaced.type) == ("503", ProxyErrorTypes.no_db_connection)
 
 
 # ---------------------------------------------------------------------------
@@ -5198,32 +5323,23 @@ def test_build_decode_kwargs_warns_for_unscoped_global_fallback_in_mixed_deploym
 # ---------------------------------------------------------------------------
 
 
-def test_get_team_id_from_header_defers_to_db_membership_only_without_jwt_claims():
-    """With fallback_to_db_teams=True, an x-litellm-team-id header is accepted
-    provisionally only when the JWT carries no team claims (allowed set empty).
-    When the JWT does carry team claims, the header must still be validated
+@pytest.mark.asyncio
+async def test_resolve_team_from_header_defers_to_db_membership_only_without_jwt_claims():
+    """With fallback_to_db_teams=True, an x-litellm-team-id header naming an existing
+    team is accepted provisionally only when the JWT carries no team claims (allowed
+    set empty). When the JWT does carry team claims, the header must still be validated
     against them, and the flag-off behavior must keep rejecting unknown teams."""
-    deferred = JWTAuthManager.get_team_id_from_header(
-        request_headers={"x-litellm-team-id": "team-from-db"},
-        allowed_team_ids=set(),
-        fallback_to_db_teams=True,
-    )
-    assert deferred == "team-from-db"
+    known_ids = frozenset({"team-from-db"})
+
+    deferred, _, _ = await _resolve_header("team-from-db", set(), True, _teams_by_id(known_ids), _team_alias_lookup_404)
+    assert deferred == HeaderTeam(header_value="team-from-db", team_id="team-from-db")
 
     with pytest.raises(HTTPException) as exc_info:
-        JWTAuthManager.get_team_id_from_header(
-            request_headers={"x-litellm-team-id": "team-x"},
-            allowed_team_ids={"team-1", "team-2"},
-            fallback_to_db_teams=True,
-        )
+        await _resolve_header("team-x", {"team-1", "team-2"}, True, _teams_by_id(known_ids), _team_alias_lookup_404)
     assert exc_info.value.status_code == 403
 
     with pytest.raises(HTTPException):
-        JWTAuthManager.get_team_id_from_header(
-            request_headers={"x-litellm-team-id": "team-from-db"},
-            allowed_team_ids=set(),
-            fallback_to_db_teams=False,
-        )
+        await _resolve_header("team-from-db", set(), False, _teams_by_id(known_ids), _team_alias_lookup_404)
 
 
 @pytest.mark.asyncio
@@ -5677,6 +5793,7 @@ def test_validate_header_team_in_db_membership_does_not_leak_team_ids():
         JWTAuthManager._validate_header_team_in_db_membership(
             team_id="outsider_team",
             user_object=user_object,
+            header_value="outsider_team",
         )
 
     detail = exc_info.value.detail
@@ -5686,6 +5803,43 @@ def test_validate_header_team_in_db_membership_does_not_leak_team_ids():
     assert "outsider_team" in detail
 
 
+async def _team_lookup_404(team_id, **kwargs):
+    raise HTTPException(
+        status_code=404,
+        detail=f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call.",
+    )
+
+
+async def _team_alias_lookup_404(team_alias, **kwargs):
+    raise HTTPException(
+        status_code=404,
+        detail={"error": f"Team with alias '{team_alias}' doesn't exist in db. Create team via `/team/new` call."},
+    )
+
+
+def _teams_by_alias(aliases: Mapping[str, str]):
+    """An alias lookup over `aliases` (alias -> team_id) that 404s like the real one otherwise."""
+
+    async def lookup(team_alias, **kwargs):
+        if team_alias not in aliases:
+            return await _team_alias_lookup_404(team_alias)
+        return LiteLLM_TeamTable(team_id=aliases[team_alias], team_alias=team_alias)
+
+    return lookup
+
+
+def _teams_by_id(team_ids: frozenset[str]):
+    """A team lookup that knows exactly `team_ids` and, like the real one, reports
+    any other id as provably absent."""
+
+    async def lookup(team_id, **kwargs):
+        if team_id not in team_ids:
+            raise TeamNotFoundError(team_id=team_id)
+        return LiteLLM_TeamTable(team_id=team_id)
+
+    return lookup
+
+
 async def _run_auth_builder_with_header_team(
     jwt_auth_config: LiteLLM_JWTAuth,
     token: dict,
@@ -5693,6 +5847,8 @@ async def _run_auth_builder_with_header_team(
     user_object: LiteLLM_UserTable,
     fake_get_team,
     allowed_team_ids: set,
+    fake_get_team_by_alias=_team_alias_lookup_404,
+    route: str = "/chat/completions",
 ):
     jwt_handler = JWTHandler()
     jwt_handler.litellm_jwtauth = jwt_auth_config
@@ -5737,26 +5893,24 @@ async def _run_auth_builder_with_header_team(
             new_callable=AsyncMock,
             side_effect=fake_get_team,
         ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object_by_alias",
+            new_callable=AsyncMock,
+            side_effect=fake_get_team_by_alias,
+        ),
     ):
         return await JWTAuthManager.auth_builder(
             api_key="test_jwt_token",
             jwt_handler=jwt_handler,
             request_data={"model": "gpt-4"},
             general_settings={"enforce_rbac": False},
-            route="/chat/completions",
-            prisma_client=None,
+            route=route,
+            prisma_client=MagicMock(),
             user_api_key_cache=None,
             parent_otel_span=None,
             proxy_logging_obj=None,
             request_headers={"x-litellm-team-id": header_team_id},
         )
-
-
-async def _team_lookup_404(team_id, **kwargs):
-    raise HTTPException(
-        status_code=404,
-        detail=f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call.",
-    )
 
 
 @pytest.mark.asyncio
@@ -6456,6 +6610,90 @@ async def test_auth_builder_db_fallback_enforces_passthrough_route_access():
     assert "passthrough route" in exc_info.value.detail
 
 
+async def _auth_builder_via_db_team_fallback(team_allowed_routes: list[str]):
+    user_id = "u_passthrough"
+    user_object = LiteLLM_UserTable(
+        user_id=user_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_no_passthrough"],
+    )
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(fallback_to_db_teams=True, team_allowed_routes=team_allowed_routes)
+
+    async def fake_get_team(team_id, **kwargs):
+        return LiteLLM_TeamTable(team_id=team_id, metadata={})
+
+    with (
+        patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock, return_value={"sub": user_id, "scope": ""}),
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
+        patch.object(jwt_handler, "get_rbac_role", return_value=None),
+        patch.object(jwt_handler, "get_scopes", return_value=[]),
+        patch.object(jwt_handler, "get_object_id", return_value=None),
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=(user_id, "u@example.com", True),
+        ),
+        patch.object(jwt_handler, "get_org_id", return_value=None),
+        patch.object(jwt_handler, "get_end_user_id", return_value=None),
+        patch.object(JWTAuthManager, "check_admin_access", new_callable=AsyncMock, return_value=None),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None, user_id),
+        ),
+        patch.object(JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock),
+        patch.object(JWTAuthManager, "validate_object_id", return_value=True),
+        patch.object(JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=fake_get_team,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            _AUTH_ENFORCED_MODEL_HOST_ROUTES,
+        ),
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+    ):
+        return await JWTAuthManager.auth_builder(
+            api_key="test_jwt_token",
+            jwt_handler=jwt_handler,
+            request_data={},
+            general_settings={"enforce_rbac": False},
+            route="/model-host/v1/extractor/predict",
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+            request_headers=None,
+            request_method="POST",
+        )
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_db_fallback_team_allowed_routes_wildcard_grants_auth_passthrough():
+    result = await _auth_builder_via_db_team_fallback(team_allowed_routes=["openai_routes", "/model-host/*"])
+
+    assert result["team_id"] == "team_no_passthrough"
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_db_fallback_route_groups_alone_do_not_grant_auth_passthrough():
+    with pytest.raises(HTTPException) as exc_info:
+        await _auth_builder_via_db_team_fallback(team_allowed_routes=["openai_routes", "mapped_pass_through_routes"])
+
+    assert exc_info.value.status_code == 403, exc_info.value.detail
+    assert "allowed_passthrough_routes" in exc_info.value.detail
+
+
 @pytest.mark.asyncio
 async def test_sync_user_role_and_teams_singular_claim_reconciles_memberships():
     """When fallback_to_db_teams is on but the JWT carries a singular team claim
@@ -6747,6 +6985,304 @@ async def test_auth_builder_header_team_enforces_team_allowed_routes_under_db_fa
     assert result["team_id"] == header_team
 
 
+async def _resolve_header(
+    header_value: str,
+    allowed_team_ids: set[str],
+    fallback_to_db_teams: bool,
+    fake_get_team,
+    fake_get_team_by_alias,
+) -> tuple[HeaderTeam | None, AsyncMock, AsyncMock]:
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=fake_get_team,
+        ) as by_id,
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object_by_alias",
+            new_callable=AsyncMock,
+            side_effect=fake_get_team_by_alias,
+        ) as by_alias,
+    ):
+        resolved = await JWTAuthManager.resolve_team_from_header(
+            request_headers={"X-LiteLLM-Team-Id": header_value},
+            allowed_team_ids=allowed_team_ids,
+            fallback_to_db_teams=fallback_to_db_teams,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+    return resolved, by_id, by_alias
+
+
+@pytest.mark.asyncio
+async def test_resolve_team_from_header_accepts_the_alias_of_an_allowed_team():
+    """x-litellm-team-id may carry the team alias instead of the team id (LIT-7181).
+    The alias resolves to its team id before the allowed-teams check, so a
+    caller whose JWT grants team_a gets team_a whether it sends the id or the
+    alias, and the id path never pays for an alias lookup."""
+    aliases = {"alias_a": "team_a", "alias_b": "team_b"}
+
+    by_alias_value, lookups_by_id, lookups_by_alias = await _resolve_header(
+        "alias_a", {"team_a"}, False, _team_lookup_404, _teams_by_alias(aliases)
+    )
+    assert by_alias_value == HeaderTeam(header_value="alias_a", team_id="team_a")
+    lookups_by_alias.assert_awaited_once()
+    assert lookups_by_alias.await_args.kwargs["team_alias"] == "alias_a"
+    lookups_by_id.assert_not_awaited()
+
+    by_id_value, lookups_by_id, lookups_by_alias = await _resolve_header(
+        "team_a", {"team_a"}, False, _team_lookup_404, _teams_by_alias(aliases)
+    )
+    assert by_id_value == HeaderTeam(header_value="team_a", team_id="team_a")
+    lookups_by_alias.assert_not_awaited()
+    lookups_by_id.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_team_from_header_denies_aliases_of_teams_the_jwt_does_not_grant():
+    """An alias that exists but names a team outside the JWT's allowed teams is
+    refused with the same 403 as an unknown value, and the detail names only
+    what the caller sent, so the response reveals neither that the alias exists
+    nor which team id it maps to. Because the id and the alias lookups both ran
+    before the denial, the detail says the value resolved to neither form and
+    lists the team ids the JWT does allow."""
+    aliases = {"alias_a": "team_a", "alias_b": "team_b"}
+
+    with pytest.raises(HTTPException) as other_team:
+        await _resolve_header("alias_b", {"team_a"}, False, _team_lookup_404, _teams_by_alias(aliases))
+    with pytest.raises(HTTPException) as unknown:
+        await _resolve_header("no_such", {"team_a"}, False, _team_lookup_404, _teams_by_alias(aliases))
+
+    assert other_team.value.status_code == 403
+    assert unknown.value.status_code == 403
+    assert "team_b" not in other_team.value.detail
+    assert other_team.value.detail.replace("alias_b", "<value>") == unknown.value.detail.replace("no_such", "<value>")
+    assert unknown.value.detail == (
+        "x-litellm-team-id 'no_such' does not resolve to a team id or a unique team alias in your JWT's allowed "
+        "teams. Allowed team ids: ['team_a']"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_team_from_header_under_db_fallback_tries_the_id_before_the_alias():
+    """Under fallback_to_db_teams a claimless JWT's header is provisional: a value
+    that is an existing team id resolves to itself without an alias lookup, a
+    value that is only an alias resolves to that team's id, and a value that is
+    neither gets the membership denial the id path already uses."""
+    known_ids = frozenset({"team_a"})
+    aliases = {"alias_a": "team_a"}
+
+    as_id, _, lookups_by_alias = await _resolve_header(
+        "team_a", set(), True, _teams_by_id(known_ids), _teams_by_alias(aliases)
+    )
+    assert as_id == HeaderTeam(header_value="team_a", team_id="team_a")
+    lookups_by_alias.assert_not_awaited()
+
+    as_alias, _, _ = await _resolve_header("alias_a", set(), True, _teams_by_id(known_ids), _teams_by_alias(aliases))
+    assert as_alias == HeaderTeam(header_value="alias_a", team_id="team_a")
+
+    with pytest.raises(HTTPException) as neither:
+        await _resolve_header("ghost", set(), True, _teams_by_id(known_ids), _teams_by_alias(aliases))
+    assert neither.value.status_code == 403
+    assert neither.value.detail == (
+        "x-litellm-team-id 'ghost' does not resolve to a team id or a unique team alias among your team memberships."
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_team_from_header_under_db_fallback_never_aliases_a_team_id_it_could_not_read():
+    """Only a team row the database provably lacks falls through to the alias
+    lookup. When the id read fails for any other reason (the generic 404 the
+    team lookup uses for an unreadable database) the value keeps the id path's
+    membership denial, so an outage can never turn a team id into the team
+    that happens to carry it as an alias."""
+    aliases = {"team_a": "team_b"}
+
+    with (
+        patch("litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock, side_effect=_team_lookup_404),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object_by_alias",
+            new_callable=AsyncMock,
+            side_effect=_teams_by_alias(aliases),
+        ) as lookups_by_alias,
+        pytest.raises(HTTPException) as unreadable,
+    ):
+        await JWTAuthManager.resolve_team_from_header(
+            request_headers={"x-litellm-team-id": "team_a"},
+            allowed_team_ids=set(),
+            fallback_to_db_teams=True,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert unreadable.value.status_code == 403
+    assert unreadable.value.detail == (
+        "x-litellm-team-id 'team_a' does not resolve to a team id or a unique team alias among your team memberships."
+    )
+    lookups_by_alias.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_team_from_header_denies_a_duplicate_alias_like_an_unknown_value_but_surfaces_lookup_errors():
+    """An alias two teams share resolves to no single team, so it is denied with
+    the very 403 an unknown value gets, under claims and under the DB fallback
+    alike: the caller cannot be checked against either team, so telling it the
+    alias is shared would let any JWT probe which aliases exist. The detail says
+    the value resolved to no team id or unique alias, which is true for both.
+    A lookup failure (5xx) is not disguised as a denial and propagates as is."""
+
+    async def duplicate_alias(team_alias, **kwargs):
+        raise HTTPException(status_code=400, detail={"error": f"Multiple teams found with alias '{team_alias}'."})
+
+    async def db_down(team_alias, **kwargs):
+        raise HTTPException(status_code=500, detail={"error": f"Error looking up team by alias '{team_alias}'"})
+
+    with pytest.raises(HTTPException) as duplicate:
+        await _resolve_header("shared_alias", {"team_a"}, False, _team_lookup_404, duplicate_alias)
+    with pytest.raises(HTTPException) as unknown:
+        await _resolve_header("shared_alias", {"team_a"}, False, _team_lookup_404, _team_alias_lookup_404)
+    assert duplicate.value.status_code == 403
+    assert duplicate.value.detail == unknown.value.detail
+    assert duplicate.value.detail == (
+        "x-litellm-team-id 'shared_alias' does not resolve to a team id or a unique team alias in your JWT's "
+        "allowed teams. Allowed team ids: ['team_a']"
+    )
+
+    known_ids = frozenset({"team_a"})
+    with pytest.raises(HTTPException) as duplicate_under_fallback:
+        await _resolve_header("shared_alias", set(), True, _teams_by_id(known_ids), duplicate_alias)
+    with pytest.raises(HTTPException) as unknown_under_fallback:
+        await _resolve_header("shared_alias", set(), True, _teams_by_id(known_ids), _team_alias_lookup_404)
+    assert duplicate_under_fallback.value.status_code == 403
+    assert duplicate_under_fallback.value.detail == unknown_under_fallback.value.detail
+    assert duplicate_under_fallback.value.detail == (
+        "x-litellm-team-id 'shared_alias' does not resolve to a team id or a unique team alias among your team "
+        "memberships."
+    )
+
+    with pytest.raises(HTTPException) as failure:
+        await _resolve_header("alias_a", {"team_a"}, False, _team_lookup_404, db_down)
+    assert failure.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_header_alias_binds_the_aliased_team_under_claims_and_db_fallback():
+    """End to end through auth_builder, x-litellm-team-id carrying a team alias
+    binds the request to the aliased team (result team_id is the canonical id)
+    both when the JWT grants that team by claim and when a claimless JWT relies
+    on fallback_to_db_teams and DB membership."""
+    aliases = {"alias_member": "team_member"}
+    user_object = LiteLLM_UserTable(
+        user_id="u_alias",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_member"],
+    )
+
+    claims_config = LiteLLM_JWTAuth(team_ids_jwt_field="team_ids")
+    by_claim = await _run_auth_builder_with_header_team(
+        claims_config,
+        {"sub": "u_alias", "scope": "", "team_ids": ["team_member"]},
+        "alias_member",
+        user_object,
+        _teams_by_id(frozenset({"team_member"})),
+        {"team_member"},
+        _teams_by_alias(aliases),
+    )
+    assert by_claim["team_id"] == "team_member"
+    assert by_claim["team_object"].team_id == "team_member"
+
+    fallback_config = LiteLLM_JWTAuth(fallback_to_db_teams=True)
+    by_membership = await _run_auth_builder_with_header_team(
+        fallback_config,
+        {"sub": "u_alias", "scope": ""},
+        "alias_member",
+        user_object,
+        _teams_by_id(frozenset({"team_member"})),
+        set(),
+        _teams_by_alias(aliases),
+    )
+    assert by_membership["team_id"] == "team_member"
+    assert by_membership["team_object"].team_id == "team_member"
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_header_alias_of_a_non_member_team_is_denied_like_an_unknown_value_under_db_fallback():
+    """Under fallback_to_db_teams, an alias naming a team the user is not a member
+    of is denied with the exact same 403 as an unknown value, naming the alias
+    the caller sent rather than the team id it resolved to."""
+    aliases = {"alias_other": "team_other"}
+    known_ids = frozenset({"team_member", "team_other"})
+    user_object = LiteLLM_UserTable(
+        user_id="u_alias_outsider",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_member"],
+    )
+    config = LiteLLM_JWTAuth(fallback_to_db_teams=True)
+    token = {"sub": "u_alias_outsider", "scope": ""}
+
+    with pytest.raises(HTTPException) as outsider_alias:
+        await _run_auth_builder_with_header_team(
+            config, token, "alias_other", user_object, _teams_by_id(known_ids), set(), _teams_by_alias(aliases)
+        )
+    with pytest.raises(HTTPException) as unknown:
+        await _run_auth_builder_with_header_team(
+            config, token, "alias_ghost", user_object, _teams_by_id(known_ids), set(), _teams_by_alias(aliases)
+        )
+
+    assert outsider_alias.value.status_code == 403
+    assert unknown.value.status_code == 403
+    assert "team_other" not in outsider_alias.value.detail
+    assert outsider_alias.value.detail.replace("alias_other", "<value>") == unknown.value.detail.replace(
+        "alias_ghost", "<value>"
+    )
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_header_alias_under_db_fallback_keeps_the_team_allowed_routes_gate():
+    """Under fallback_to_db_teams, a member team selected by alias is still held
+    to team_allowed_routes, and the denial names the alias the caller sent."""
+    aliases = {"alias_member": "team_member"}
+    user_object = LiteLLM_UserTable(
+        user_id="u_alias_routes",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_member"],
+    )
+    config = LiteLLM_JWTAuth(fallback_to_db_teams=True, team_allowed_routes=["openai_routes"])
+    token = {"sub": "u_alias_routes", "scope": ""}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _run_auth_builder_with_header_team(
+            config,
+            token,
+            "alias_member",
+            user_object,
+            _teams_by_id(frozenset({"team_member"})),
+            set(),
+            _teams_by_alias(aliases),
+            route="/key/info",
+        )
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == (
+        "Team 'alias_member' (from x-litellm-team-id header) is not allowed to access route '/key/info'."
+    )
+
+    allowed = await _run_auth_builder_with_header_team(
+        config,
+        token,
+        "alias_member",
+        user_object,
+        _teams_by_id(frozenset({"team_member"})),
+        set(),
+        _teams_by_alias(aliases),
+        route="/chat/completions",
+    )
+    assert allowed["team_id"] == "team_member"
+
+
 @pytest.mark.asyncio
 async def test_sync_user_role_and_teams_singular_claim_only_recognized_under_flag():
     """Reading the singular team claim during sync is scoped to fallback_to_db_teams.
@@ -6786,3 +7322,403 @@ async def test_sync_user_role_and_teams_singular_claim_only_recognized_under_fla
     }
     assert mock_patch.call_args.kwargs["teams_ids_to_add_user_to"] == []
     assert user.teams == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["identity", "authorize", "admit"])
+@pytest.mark.parametrize("existing_user", [False, True])
+@pytest.mark.parametrize("model_allowed", [False, True])
+async def test_jwt_identity_and_authorization_keep_provisioning_in_admission(
+    monkeypatch: pytest.MonkeyPatch, operation: str, existing_user: bool, model_allowed: bool
+) -> None:
+    from litellm.proxy._types import ScopeMapping
+    from litellm.proxy.auth.auth_checks import UserNotFoundError
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    private_key, jwk = _get_rsa_key_and_jwk("identity-mode")
+    cache: Final = UserApiKeyCache()
+    cache.set_cache("litellm_jwt_auth_keys_https://identity.example/jwks", [jwk])
+    user_id: Final = f"identity-mode-{operation}-{existing_user}-{model_allowed}"
+    user: Final = LiteLLM_UserTable(user_id=user_id, organization_memberships=[])
+    if existing_user:
+        cache.set_cache(user_id, user)
+    database: Final = MagicMock()
+    users: Final = database.db.litellm_usertable
+    users.find_unique = AsyncMock(return_value=None)
+    users.find_first = AsyncMock(return_value=None)
+    users.create = AsyncMock(return_value=user)
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        prisma_client=database,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            user_id_jwt_field="sub",
+            user_id_upsert=True,
+            enforce_scope_based_access=True,
+            scope_mappings=[ScopeMapping(scope="allowed", models=["allowed-model"])],
+        ),
+    )
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://identity.example/jwks")
+    monkeypatch.setenv("JWT_ISSUER", "https://identity.example")
+    monkeypatch.setenv("JWT_AUDIENCE", "gateway")
+    token: Final = _encode_rsa_jwt(
+        private_key, "https://identity.example", "gateway", "identity-mode", {"sub": user_id, "scope": "allowed"}
+    )
+    common: Final = {
+        "api_key": token,
+        "jwt_handler": handler,
+        "prisma_client": database,
+        "user_api_key_cache": cache,
+        "parent_otel_span": None,
+        "proxy_logging_obj": MagicMock(),
+    }
+    if operation == "identity":
+        if not existing_user:
+            with pytest.raises(UserNotFoundError):
+                await JWTAuthManager.resolve_identity(**common)
+        else:
+            identity: Final = await JWTAuthManager.resolve_identity(**common)
+            assert identity.user_id == user_id
+            assert identity.user_object is not None and identity.user_object.user_id == user_id
+        users.create.assert_not_awaited()
+        return
+    authorize: Final = JWTAuthManager.auth_builder if operation == "admit" else JWTAuthManager.authorize_jwt
+    pending: Final = authorize(
+        **common,
+        request_data={"model": "allowed-model" if model_allowed else "forbidden-model"},
+        general_settings={},
+        route="/mcp/example",
+    )
+    if not model_allowed:
+        with pytest.raises(HTTPException) as denial:
+            await pending
+        assert denial.value.status_code == 403
+        users.create.assert_not_awaited()
+        return
+    if operation == "authorize" and not existing_user:
+        with pytest.raises(UserNotFoundError):
+            await pending
+    else:
+        result: Final = await pending
+        assert result["user_id"] == user_id
+        assert result["user_object"] is not None
+        assert result["user_object"].user_id == user_id
+    assert users.create.await_count == (0 if operation == "authorize" or existing_user else 1)
+
+
+def _entra_agent_registry() -> AgentRegistry:
+    registry = AgentRegistry()
+    registry.register_agent(
+        AgentResponse(
+            agent_id="canonical-agent-id",
+            agent_name="2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21",
+            agent_card_params={"name": "research-agent", "url": "http://localhost:9999/a2a", "version": "1.0.0"},
+            litellm_params={"require_trace_id_on_calls_by_agent": True},
+        )
+    )
+    return registry
+
+
+def _entra_agent_jwt_handler(agent_id_jwt_field: str | None) -> JWTHandler:
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(user_id_jwt_field="sub", agent_id_jwt_field=agent_id_jwt_field),
+    )
+    return jwt_handler
+
+
+@pytest.mark.parametrize(
+    "claim_value",
+    ["canonical-agent-id", "2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21"],
+    ids=["matches_agent_id", "matches_agent_name"],
+)
+def test_resolve_agent_id_returns_canonical_agent_id(claim_value: str):
+    """An Entra app token's azp claim binds to the registered agent by id or by name and yields its canonical id."""
+    jwt_handler = _entra_agent_jwt_handler(agent_id_jwt_field="azp")
+
+    resolved = JWTAuthManager.resolve_agent_id(
+        jwt_handler=jwt_handler,
+        jwt_valid_token={"sub": "sp-object-id-1234", "azp": claim_value},
+        agent_registry=_entra_agent_registry(),
+    )
+
+    assert resolved == "canonical-agent-id"
+
+
+def test_resolve_agent_id_reads_nested_claim():
+    jwt_handler = _entra_agent_jwt_handler(agent_id_jwt_field="entra.client_id")
+
+    resolved = JWTAuthManager.resolve_agent_id(
+        jwt_handler=jwt_handler,
+        jwt_valid_token={"sub": "sp-object-id-1234", "entra": {"client_id": "canonical-agent-id"}},
+        agent_registry=_entra_agent_registry(),
+    )
+
+    assert resolved == "canonical-agent-id"
+
+
+def test_resolve_agent_id_rejects_claim_for_unregistered_agent():
+    """A configured agent claim naming no registered agent fails closed with 403 instead of falling back to an unbound identity."""
+    jwt_handler = _entra_agent_jwt_handler(agent_id_jwt_field="azp")
+
+    with pytest.raises(HTTPException) as exc_info:
+        JWTAuthManager.resolve_agent_id(
+            jwt_handler=jwt_handler,
+            jwt_valid_token={"sub": "sp-object-id-1234", "azp": "00000000-0000-0000-0000-000000000000"},
+            agent_registry=_entra_agent_registry(),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        {"sub": "sp-object-id-1234"},
+        {"sub": "sp-object-id-1234", "azp": ""},
+        {"sub": "sp-object-id-1234", "azp": ["canonical-agent-id"]},
+    ],
+    ids=["claim_absent", "claim_empty", "claim_not_a_string"],
+)
+def test_resolve_agent_id_returns_none_when_claim_unusable(token: dict):
+    jwt_handler = _entra_agent_jwt_handler(agent_id_jwt_field="azp")
+
+    assert (
+        JWTAuthManager.resolve_agent_id(
+            jwt_handler=jwt_handler, jwt_valid_token=token, agent_registry=_entra_agent_registry()
+        )
+        is None
+    )
+
+
+def test_resolve_agent_id_ignores_claim_when_field_not_configured():
+    """Without agent_id_jwt_field an azp claim (even an unknown one) leaves JWT auth behaviour unchanged."""
+    jwt_handler = _entra_agent_jwt_handler(agent_id_jwt_field=None)
+
+    resolved = JWTAuthManager.resolve_agent_id(
+        jwt_handler=jwt_handler,
+        jwt_valid_token={"sub": "sp-object-id-1234", "azp": "00000000-0000-0000-0000-000000000000"},
+        agent_registry=_entra_agent_registry(),
+    )
+
+    assert resolved is None
+
+
+def _entra_signed_app_token(monkeypatch, azp: str, scope: str) -> tuple[JWTHandler, str]:
+    """A JWTHandler that verifies RS256 tokens against a pre-cached JWKS, plus a signed Entra-style app token."""
+    jwks_url = "https://login.microsoftonline.test/discovery/v2.0/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    private_key, jwk = _get_rsa_key_and_jwk(kid="entra-kid")
+    cache = DualCache()
+    cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(agent_id_jwt_field="azp"),
+    )
+    token = _encode_rsa_jwt(
+        private_key,
+        issuer="https://login.microsoftonline.test/lit7664-tenant/v2.0",
+        audience="api://litellm",
+        kid="entra-kid",
+        extra_claims={"sub": "sp-object-id-1234", "azp": azp, "scope": scope},
+    )
+    return jwt_handler, token
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_admin_token", [False, True], ids=["standard_jwt", "proxy_admin_jwt"])
+@pytest.mark.parametrize("identity_only", [False, True])
+async def test_auth_builder_propagates_agent_id_from_jwt_claim(monkeypatch, is_admin_token: bool, identity_only: bool):
+    """auth_builder carries the resolved agent id into JWTAuthBuilderResult on both the admin and standard paths."""
+    jwt_handler, token = _entra_signed_app_token(
+        monkeypatch,
+        azp="2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21",
+        scope=LiteLLM_JWTAuth().admin_jwt_scope if is_admin_token else "",
+    )
+    jwt_handler.bind_agent_lookup(_entra_agent_registry())
+
+    if identity_only:
+        identity = await JWTAuthManager.resolve_identity(
+            api_key=token, jwt_handler=jwt_handler, prisma_client=None,
+            user_api_key_cache=None, parent_otel_span=None, proxy_logging_obj=None,
+        )
+        assert identity.agent_id == "canonical-agent-id"
+        return
+
+    result = await JWTAuthManager.auth_builder(
+        api_key=token,
+        jwt_handler=jwt_handler,
+        request_data={"model": "gpt-5.6"},
+        general_settings={"enforce_rbac": False},
+        route="/key/info" if is_admin_token else "/chat/completions",
+        prisma_client=None,
+        user_api_key_cache=None,
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+    )
+
+    assert result["is_proxy_admin"] is is_admin_token
+    assert result["agent_id"] == "canonical-agent-id"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity_only", [False, True])
+async def test_auth_builder_denies_jwt_naming_unregistered_agent_before_admin_check(monkeypatch, identity_only: bool):
+    """An unknown agent claim is rejected even when the token would otherwise be a proxy admin."""
+    jwt_handler, token = _entra_signed_app_token(
+        monkeypatch,
+        azp="00000000-0000-0000-0000-000000000000",
+        scope=LiteLLM_JWTAuth().admin_jwt_scope,
+    )
+    jwt_handler.bind_agent_lookup(_entra_agent_registry())
+
+    if identity_only:
+        with pytest.raises(HTTPException) as denial:
+            await JWTAuthManager.resolve_identity(
+                api_key=token, jwt_handler=jwt_handler, prisma_client=None,
+                user_api_key_cache=None, parent_otel_span=None, proxy_logging_obj=None,
+            )
+        assert denial.value.status_code == 403
+        return
+    with pytest.raises(HTTPException) as exc_info:
+        await JWTAuthManager.auth_builder(
+            api_key=token,
+            jwt_handler=jwt_handler,
+            request_data={"model": "gpt-5.6"},
+            general_settings={"enforce_rbac": False},
+            route="/key/info",
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+_JWT_DENIED_CLIENT_MESSAGE = (
+    "The requested model 'gpt-5.6' is not available for this API key, or the model name is invalid. "
+    "Check the models available to you and try again."
+)
+
+
+def test_can_rbac_role_call_model_denial_hides_role_allowlist_from_client():
+    general_settings = {
+        "role_permissions": [
+            RoleBasedPermissions(role=LitellmUserRoles.INTERNAL_USER, models=["gpt-5.6-mini"]),
+        ]
+    }
+
+    with pytest.raises(ModelAccessDeniedHTTPException) as exc_info:
+        JWTAuthManager.can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.INTERNAL_USER,
+            general_settings=general_settings,
+            model="gpt-5.6",
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == _JWT_DENIED_CLIENT_MESSAGE
+    assert exc_info.value.internal_message == (
+        "Role=internal_user not allowed to call model=gpt-5.6. Allowed models=['gpt-5.6-mini']"
+    )
+
+
+def test_check_scope_based_access_denial_hides_scope_allowlist_from_client():
+    with pytest.raises(ModelAccessDeniedHTTPException) as exc_info:
+        JWTAuthManager.check_scope_based_access(
+            scope_mappings=[ScopeMapping(scope="litellm.api.consumer", models=["gpt-5.6-mini"])],
+            scopes=["litellm.api.consumer"],
+            request_data={"model": "gpt-5.6"},
+            general_settings={},
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == {"error": _JWT_DENIED_CLIENT_MESSAGE}
+    assert exc_info.value.internal_message == "model=gpt-5.6 not allowed. Allowed_models=['gpt-5.6-mini']"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admission", [False, True])
+async def test_admin_jwt_team_header_only_provisions_during_admission(monkeypatch, admission: bool):
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    handler, token = _entra_signed_app_token(
+        monkeypatch, azp="canonical-agent-id", scope=LiteLLM_JWTAuth().admin_jwt_scope,
+    )
+    handler.bind_agent_lookup(_entra_agent_registry())
+    handler.litellm_jwtauth.team_id_upsert = True
+    handler.litellm_jwtauth.admin_allowed_routes = ["openai_routes"]
+    database = MagicMock()
+    database.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    create_team = AsyncMock(return_value=LiteLLM_TeamTable(team_id="new-team").model_dump())
+    monkeypatch.setattr(team_endpoints, "new_team", create_team)
+    resolve = JWTAuthManager.auth_builder if admission else JWTAuthManager.authorize_jwt
+
+    result = await resolve(
+        api_key=token, jwt_handler=handler, request_data={}, general_settings={},
+        route="/chat/completions", prisma_client=database,
+        user_api_key_cache=handler.user_api_key_cache, parent_otel_span=None,
+        proxy_logging_obj=MagicMock(), request_headers={"x-litellm-team-id": "new-team"},
+    )
+
+    assert result["is_proxy_admin"] is True
+    if admission:
+        create_team.assert_awaited_once()
+        assert result["team_id"] == "new-team"
+    else:
+        create_team.assert_not_awaited()
+        assert result["team_id"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing_user", [False, True])
+@pytest.mark.parametrize("warm_cache", [False, True])
+@pytest.mark.parametrize("email", [None, "admin@external.example", "admin@allowed.example"])
+async def test_scope_admin_admission_resolves_existing_user_without_provisioning(
+    monkeypatch: pytest.MonkeyPatch, existing_user: bool, warm_cache: bool, email: str | None
+) -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    private_key, jwk = _get_rsa_key_and_jwk("admin-status")
+    cache: Final = UserApiKeyCache()
+    cache.set_cache("litellm_jwt_auth_keys_https://admin.example/jwks", [jwk])
+    user_id: Final = f"admin-status-{existing_user}-{warm_cache}-{email}"
+    user: Final = LiteLLM_UserTable(user_id=user_id, user_email="admin@allowed.example", metadata={"scim_active": False}, organization_memberships=[])
+    if existing_user and warm_cache:
+        cache.set_cache(user_id, user)
+    database: Final = MagicMock()
+    users: Final = database.db.litellm_usertable
+    users.find_unique = AsyncMock(return_value=user if existing_user else None)
+    users.find_first = AsyncMock(return_value=None)
+    users.create = AsyncMock()
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        prisma_client=database,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            user_id_jwt_field="sub", user_id_upsert=True, user_email_jwt_field="email",
+            user_allowed_email_domain="allowed.example",
+        ),
+    )
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://admin.example/jwks")
+    monkeypatch.setenv("JWT_ISSUER", "https://admin.example")
+    monkeypatch.setenv("JWT_AUDIENCE", "gateway")
+    token: Final = _encode_rsa_jwt(
+        private_key, "https://admin.example", "gateway", "admin-status",
+        {"sub": user_id, "scope": "litellm_proxy_admin", **({"email": email} if email else {})},
+    )
+    result: Final = await JWTAuthManager.auth_builder(
+        api_key=token, jwt_handler=handler, prisma_client=database, user_api_key_cache=cache,
+        parent_otel_span=None, proxy_logging_obj=MagicMock(), request_data={}, general_settings={}, route="/user/info",
+    )
+    assert result["is_proxy_admin"] is True
+    assert result["user_id"] == user_id
+    assert result["user_object"] == (user if existing_user else None)
+    users.create.assert_not_awaited()
+    if existing_user:
+        assert users.find_unique.await_count == (0 if warm_cache else 1)

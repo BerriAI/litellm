@@ -20,7 +20,10 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
     LiteLLMCompletionStreamingIterator,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.llms.openai import ResponsesAPIStreamEvents
+from litellm.types.llms.openai import (
+    BaseLiteLLMOpenAIResponseObject,
+    ResponsesAPIStreamEvents,
+)
 from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import (
     Delta,
@@ -752,6 +755,49 @@ def test_completed_event_restores_usage_hidden_by_stream_options_none():
     assert completed.response.usage.output_tokens == 5
 
 
+def _empty_choices_chunk(usage: Usage | None = None) -> ModelResponseStream:
+    return ModelResponseStream(id=CHAT_COMPLETION_ID, model="claude-haiku-4-5", choices=[], usage=usage)
+
+
+@pytest.mark.asyncio
+async def test_leading_empty_choices_chunk_does_not_kill_the_stream():
+    """
+    Azure leads some streams with a `prompt_filter_results` chunk whose `choices` is empty.
+    The bridge used to index `choices[0]` on it and die before the first token.
+    """
+    iterator = _build_iterator([_empty_choices_chunk(), _chunk("Hello"), _chunk("!", finish_reason="stop")])
+
+    events = [event async for event in iterator]
+
+    event_types = [getattr(event, "type", None) for event in events]
+    assert event_types.count(ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED) == 1
+    assert "".join(event.delta for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA) == "Hello!"
+    assert event_types[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_trailing_empty_choices_usage_chunk_reaches_response_completed():
+    """
+    With `stream_options.include_usage` (which the bridge always sets) the last upstream chunk
+    carries only usage and an empty `choices`. It must not crash the stream, and its usage must
+    still land on `response.completed`.
+    """
+    usage: Final = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    iterator = _build_iterator([_chunk("Hello"), _chunk("", finish_reason="stop"), _empty_choices_chunk(usage)])
+
+    events = [event async for event in iterator]
+
+    completed = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert completed.response.usage.input_tokens == 10
+    assert completed.response.usage.output_tokens == 5
+
+
+def test_is_reasoning_end_ignores_empty_choices_chunk():
+    assert _build_iterator([])._is_reasoning_end(_empty_choices_chunk()) is False
+
+
 def test_object_tool_call_arguments_stream_as_valid_json():
     """A provider that sends decoded object arguments must still stream valid JSON.
 
@@ -914,3 +960,174 @@ def test_streamed_unrecognized_tool_choice_is_echoed_as_auto() -> None:
     ]
 
     assert [event.response.tool_choice for event in response_events] == ["auto", "auto", "auto"]
+
+
+def _reasoning_chunk(reasoning: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-4-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", reasoning_content=reasoning),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+async def _collect_events(
+    iterator: LiteLLMCompletionStreamingIterator, sync_mode: bool
+) -> list[BaseLiteLLMOpenAIResponseObject]:
+    if sync_mode:
+        return list(iterator)
+    return [event async for event in iterator]
+
+
+def _is_message_item(event: BaseLiteLLMOpenAIResponseObject) -> bool:
+    return getattr(getattr(event, "item", None), "type", None) == "message"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_tool_only_stream_emits_no_message_item_events(sync_mode: bool):
+    iterator: Final = _build_iterator([_tool_call_chunk(), _chunk("", finish_reason="tool_calls")])
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    message_item_events = [
+        event
+        for event in events
+        if getattr(event, "type", None)
+        in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+        and _is_message_item(event)
+    ]
+    assert message_item_events == []
+    assert [
+        event
+        for event in events
+        if str(getattr(event, "type", "")).startswith("response.output_text")
+        or getattr(event, "type", None)
+        in (ResponsesAPIStreamEvents.CONTENT_PART_ADDED, ResponsesAPIStreamEvents.CONTENT_PART_DONE)
+    ] == []
+    assert any(getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED for event in events)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_then_text_announces_message_item_before_text_events(sync_mode: bool):
+    iterator: Final = _build_iterator(
+        [
+            _reasoning_chunk("let me think"),
+            _chunk("Hello"),
+            _chunk("!", finish_reason="stop"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    announced_message_ids: set[str] = set()
+    announced_indexes_by_item_type: dict[str, int] = {}
+    content_part_added_seen = False
+    saw_text_delta = False
+    for event in events:
+        event_type = getattr(event, "type", None)
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
+            announced_indexes_by_item_type[event.item.type] = event.output_index
+            if _is_message_item(event):
+                announced_message_ids.add(event.item.id)
+        elif event_type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED:
+            content_part_added_seen = True
+        elif event_type in (
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+        ):
+            assert event.item_id in announced_message_ids
+            if event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA:
+                assert content_part_added_seen
+                saw_text_delta = True
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _is_message_item(event):
+            assert event.item.id in announced_message_ids
+    assert saw_text_delta
+    assert "".join(
+        event.delta for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+    ) == "Hello!"
+    assert announced_indexes_by_item_type["message"] != announced_indexes_by_item_type["reasoning"]
+
+
+@pytest.mark.asyncio
+async def test_reasoning_item_closes_before_message_item_opens():
+    iterator: Final = _build_iterator(
+        [
+            _reasoning_chunk("let me think"),
+            _chunk("Hello"),
+            _chunk("!", finish_reason="stop"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode=False)
+
+    item_lifecycle: Final = [
+        (event.type, event.item.type)
+        for event in events
+        if getattr(event, "type", None)
+        in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    ]
+    assert item_lifecycle == [
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "reasoning"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "reasoning"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "message"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "message"),
+    ]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_tool_then_reasoning_then_text_gives_message_its_own_output_index(sync_mode: bool):
+    iterator: Final = _build_iterator(
+        [
+            _tool_call_chunk(),
+            _reasoning_chunk("thinking"),
+            _chunk("Hello"),
+            _chunk("!", finish_reason="stop"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+    output_item_added_events: Final = [
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    ]
+    message_item_adds: Final = [event for event in output_item_added_events if _is_message_item(event)]
+    function_call_adds: Final = [
+        event for event in output_item_added_events if getattr(event.item, "type", None) == "function_call"
+    ]
+
+    assert len(message_item_adds) == 1
+    assert all(message_item_adds[0].output_index != event.output_index for event in function_call_adds)
+
+    output_indexes_by_item_id: Final = {event.item.id: event.output_index for event in output_item_added_events}
+    assert len(output_indexes_by_item_id) == len(set(output_indexes_by_item_id.values()))
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_plain_text_stream_announces_exactly_one_message_item(sync_mode: bool):
+    iterator: Final = _build_iterator([_chunk("Hel"), _chunk("lo", finish_reason="stop")])
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    message_item_adds = [
+        event
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and _is_message_item(event)
+    ]
+    assert len(message_item_adds) == 1
+    for event in events:
+        if getattr(event, "type", None) in (
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+        ):
+            assert event.item_id == message_item_adds[0].item.id

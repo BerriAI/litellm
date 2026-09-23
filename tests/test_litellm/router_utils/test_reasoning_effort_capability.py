@@ -4,6 +4,7 @@ import litellm
 from litellm.router_utils.reasoning_effort_capability import (
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
+    nearest_declared_reasoning_effort,
     resolve_supported_reasoning_efforts,
 )
 
@@ -415,3 +416,45 @@ class TestGpt6AstraAdvertisesItsDocumentedLevels:
             "high",
             "xhigh",
         )
+
+
+class TestGpt6SolAndLunaAdvertiseNoneThroughMax:
+    @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna"])
+    def test_the_entry_advertises_none_through_max(self, local_model_cost_map, model):
+        """OpenAI documents none, low, medium (default), high, xhigh and max for both. Unlike
+        gpt-6-astra they take none."""
+        from litellm.utils import _get_model_info_helper
+
+        model_info = dict(_get_model_info_helper(model=model, custom_llm_provider="openai"))
+
+        assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        )
+
+
+class TestNearestDeclaredReasoningEffort:
+    def test_a_declared_level_is_kept(self):
+        assert nearest_declared_reasoning_effort("high", ("none", "high")) == "high"
+        assert nearest_declared_reasoning_effort("none", ("none", "high")) == "none"
+
+    def test_an_undeclared_level_rounds_up_to_the_next_declared_one(self):
+        assert nearest_declared_reasoning_effort("medium", ("none", "high")) == "high"
+        assert nearest_declared_reasoning_effort("minimal", ("low", "high", "max")) == "low"
+        assert nearest_declared_reasoning_effort("xhigh", ("low", "high", "max")) == "max"
+
+    def test_none_is_a_switch_that_is_never_rounded_in_either_direction(self):
+        assert nearest_declared_reasoning_effort("none", ("low", "high", "max")) == "none"
+        assert nearest_declared_reasoning_effort("medium", ("none",)) == "medium"
+
+    def test_a_level_above_the_ceiling_takes_the_strongest_declared_one(self):
+        assert nearest_declared_reasoning_effort("max", ("none", "high")) == "high"
+        assert nearest_declared_reasoning_effort("xhigh", ("none", "low", "medium", "high")) == "high"
+
+    def test_a_level_outside_the_strength_order_is_left_for_upstream(self):
+        assert nearest_declared_reasoning_effort("turbo", ("none", "high")) == "turbo"
+        assert nearest_declared_reasoning_effort("medium", ()) == "medium"

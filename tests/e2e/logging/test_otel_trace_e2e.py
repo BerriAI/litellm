@@ -12,21 +12,24 @@ commit 1bd603d1ac).
 Both halves of the contract are asserted: the recorded state (the proxy reports
 the OTEL v2 logger active via /health/readiness/details) and the enforced
 behavior (the complete span tree at the destination, read back through the
-destination's own query API - never proxy-side "export succeeded" logs).
+destination's own query API - never proxy-side "export succeeded" logs). The
+TLS coverage requires the stack to export OTLP over HTTPS with a certificate
+signed by the CA in SSL_CERT_FILE, and treats a missing or plaintext endpoint
+as a stack misconfiguration rather than skipping the test.
 """
 
 from __future__ import annotations
 
 import time
+from typing import Final
 
 import pytest
-from pydantic import BaseModel, ConfigDict, ValidationError
-
-from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
+from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, OTEL_EXPORTER_ENDPOINT, unique_marker
 from lifecycle import ResourceManager
 from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok, readiness_details_body
 from models import LiteLLMParamsBody
 from otel_client import JaegerSpan, JaegerTrace, OtelReader
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 pytestmark = pytest.mark.e2e
 
@@ -306,6 +309,35 @@ class TestOtelTraceCompleteness:
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
 
         hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            settled_names=_settled_names(route=route, genai_span=f"chat {MODEL}"),
+            settled_prefixes={DB_SPAN_PREFIX},
+        )
+        _assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")
+
+    @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["chat_completions"])
+    @pytest.mark.otel_tls
+    def test_otel_export_over_tls_with_internal_ca_reaches_destination(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        _assert_otel_destination_configured(client)
+        assert OTEL_EXPORTER_ENDPOINT.startswith("https://"), (
+            "the stack must export OTLP over TLS signed by the CA in SSL_CERT_FILE "
+            "(E2E_OTEL_EXPORTER_ENDPOINT) for this test to prove anything; a "
+            "missing or plaintext value is a stack misconfiguration"
+        )
+
+        route: Final = "/chat/completions"
+        key: Final = client.key_with_alias(f"otel-trace-tls-{unique_marker()}", models=[MODEL])
+        resources.defer(lambda: client.delete_key(key))
+
+        marker: Final = unique_marker()
+        outcome: Final = first_ok(
+            client, lambda: client.chat_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16)
+        )
+        assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
+
+        hits: Final = otel_reader.poll_traces_for_call(
             call_id=outcome.call_id,
             settled_names=_settled_names(route=route, genai_span=f"chat {MODEL}"),
             settled_prefixes={DB_SPAN_PREFIX},
