@@ -25,10 +25,10 @@ def is_undiscoverable_deployment(deployment: Mapping[str, object]) -> bool:
     return "discoverable" in model_info and model_info["discoverable"] is False
 
 
-def is_undiscoverable_model_name(model_name: str, llm_router: Router | None) -> bool:
+def is_undiscoverable_model_name(model_name: str, llm_router: Router | None, team_id: str | None) -> bool:
     if llm_router is None:
         return False
-    deployments: Final = llm_router.get_model_list(model_name=model_name)
+    deployments: Final = llm_router.get_model_list(model_name=model_name, team_id=team_id)
     if not deployments:
         return False
     return all(is_undiscoverable_deployment(deployment) for deployment in deployments)
@@ -38,12 +38,13 @@ def undiscoverable_model_names(
     model_names: Iterable[str],
     llm_router: Router | None,
     user_api_key_dict: UserAPIKeyAuth,
+    team_id: str | None,
 ) -> frozenset[str]:
     if llm_router is None or user_api_key_has_admin_view(user_api_key_dict):
         return frozenset()
     if not any(is_undiscoverable_deployment(deployment) for deployment in llm_router.get_model_list() or ()):
         return frozenset()
-    return frozenset(name for name in model_names if is_undiscoverable_model_name(name, llm_router))
+    return frozenset(name for name in model_names if is_undiscoverable_model_name(name, llm_router, team_id))
 
 
 def discoverable_rows(

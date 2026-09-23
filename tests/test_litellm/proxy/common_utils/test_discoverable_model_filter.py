@@ -37,7 +37,7 @@ def _admin(role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN) -> UserAPIKeyA
 def test_flagged_model_is_undiscoverable_for_non_admin():
     router = _router(_deployment("gpt-4"), _deployment("internal-evaluator", discoverable=False))
 
-    assert undiscoverable_model_names(["gpt-4", "internal-evaluator"], router, _non_admin()) == {
+    assert undiscoverable_model_names(["gpt-4", "internal-evaluator"], router, _non_admin(), None) == {
         "internal-evaluator"
     }
 
@@ -45,14 +45,14 @@ def test_flagged_model_is_undiscoverable_for_non_admin():
 def test_missing_flag_and_explicit_true_are_discoverable():
     router = _router(_deployment("gpt-4"), _deployment("public-eval", discoverable=True))
 
-    assert undiscoverable_model_names(["gpt-4", "public-eval"], router, _non_admin()) == frozenset()
+    assert undiscoverable_model_names(["gpt-4", "public-eval"], router, _non_admin(), None) == frozenset()
 
 
 @pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
 def test_admin_view_sees_flagged_models(role):
     router = _router(_deployment("internal-evaluator", discoverable=False))
 
-    assert undiscoverable_model_names(["internal-evaluator"], router, _admin(role)) == frozenset()
+    assert undiscoverable_model_names(["internal-evaluator"], router, _admin(role), None) == frozenset()
 
 
 def test_group_with_one_discoverable_deployment_stays_listed():
@@ -65,14 +65,14 @@ def test_group_with_one_discoverable_deployment_stays_listed():
         },
     )
 
-    assert undiscoverable_model_names(["shared"], router, _non_admin()) == frozenset()
+    assert undiscoverable_model_names(["shared"], router, _non_admin(), None) == frozenset()
 
 
 def test_unknown_name_and_missing_router_fail_open():
     router = _router(_deployment("internal-evaluator", discoverable=False))
 
-    assert undiscoverable_model_names(["not-configured"], router, _non_admin()) == frozenset()
-    assert undiscoverable_model_names(["internal-evaluator"], None, _non_admin()) == frozenset()
+    assert undiscoverable_model_names(["not-configured"], router, _non_admin(), None) == frozenset()
+    assert undiscoverable_model_names(["internal-evaluator"], None, _non_admin(), None) == frozenset()
 
 
 def test_alias_follows_its_target_deployments():
@@ -82,23 +82,37 @@ def test_alias_follows_its_target_deployments():
         model_group_alias={"eval": "internal-evaluator", "chat": "gpt-4"},
     )
 
-    assert undiscoverable_model_names(["eval", "chat"], router, _non_admin()) == {"eval"}
+    assert undiscoverable_model_names(["eval", "chat"], router, _non_admin(), None) == {"eval"}
 
 
 def test_wildcard_expansions_follow_the_wildcard_entry():
     router = _router(_deployment("gpt-4"), _deployment("anthropic/*", model="anthropic/*", discoverable=False))
 
     hidden = undiscoverable_model_names(
-        ["gpt-4", "anthropic/*", "anthropic/claude-opus-5"], router, _non_admin()
+        ["gpt-4", "anthropic/*", "anthropic/claude-opus-5"], router, _non_admin(), None
     )
 
     assert hidden == {"anthropic/*", "anthropic/claude-opus-5"}
 
 
+def test_flagged_team_model_is_undiscoverable_for_its_team_member():
+    router = _router(
+        _deployment("gpt-4"),
+        _deployment(
+            "model_name_team1_abc", team_id="team1", team_public_model_name="team-gpt", discoverable=False
+        ),
+    )
+    member = UserAPIKeyAuth(
+        api_key="sk-test", user_role=LitellmUserRoles.INTERNAL_USER, team_id="team1", team_models=["team-gpt"]
+    )
+
+    assert undiscoverable_model_names(["gpt-4", "team-gpt"], router, member, "team1") == {"team-gpt"}
+
+
 def test_hidden_model_still_routes_for_direct_requests():
     router = _router(_deployment("gpt-4"), _deployment("internal-evaluator", discoverable=False))
 
-    assert "internal-evaluator" in undiscoverable_model_names(["internal-evaluator"], router, _non_admin())
+    assert "internal-evaluator" in undiscoverable_model_names(["internal-evaluator"], router, _non_admin(), None)
     deployment = router.get_available_deployment(
         model="internal-evaluator", messages=[{"role": "user", "content": "hi"}]
     )

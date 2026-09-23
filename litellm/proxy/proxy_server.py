@@ -11245,7 +11245,9 @@ async def model_list(
         )
 
         # Hide paused, unhealthy and undiscoverable models from the public listing
-        expanded_undiscoverable_names: Final = undiscoverable_model_names(all_models, llm_router, user_api_key_dict)
+        expanded_undiscoverable_names: Final = undiscoverable_model_names(
+            all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
+        )
         if hidden_names or expanded_undiscoverable_names:
             all_models = [m for m in all_models if m not in hidden_names and m not in expanded_undiscoverable_names]
 
@@ -11299,7 +11301,9 @@ async def model_list(
     )
 
     # Hide paused, unhealthy and undiscoverable models from the public listing
-    undiscoverable_names: Final = undiscoverable_model_names(all_models, llm_router, user_api_key_dict)
+    undiscoverable_names: Final = undiscoverable_model_names(
+        all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
+    )
     if hidden_names or undiscoverable_names:
         all_models = [m for m in all_models if m not in hidden_names and m not in undiscoverable_names]
 
@@ -16080,7 +16084,9 @@ async def model_group_info(
             user_api_key_cache=user_api_key_cache,
         )
     )
-    undiscoverable_group_names: Final = undiscoverable_model_names(all_models_str, llm_router, user_api_key_dict)
+    undiscoverable_group_names: Final = undiscoverable_model_names(
+        all_models_str, llm_router, user_api_key_dict, user_api_key_dict.team_id
+    )
     model_groups: list[ModelGroupInfoProxy] = _get_model_group_info(
         llm_router=llm_router,
         all_models_str=[name for name in all_models_str if name not in undiscoverable_group_names],

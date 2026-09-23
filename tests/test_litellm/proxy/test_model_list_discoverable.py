@@ -52,8 +52,36 @@ def flagged_wildcard_router(monkeypatch) -> Router:
     )
 
 
+@pytest.fixture
+def flagged_team_router(monkeypatch) -> Router:
+    return _install_router(
+        monkeypatch,
+        _deployment("gpt-4"),
+        _deployment(
+            "model_name_team1_abc", team_id="team1", team_public_model_name="team-gpt", discoverable=False
+        ),
+        _deployment("model_name_team1_def", team_id="team1", team_public_model_name="team-chat"),
+    )
+
+
+@pytest.fixture
+def team_admin_privileges(monkeypatch) -> None:
+    from litellm.proxy.management_endpoints import common_utils
+
+    async def _is_team_admin(**kwargs) -> bool:
+        return True
+
+    monkeypatch.setattr(common_utils, "_user_has_admin_privileges", _is_team_admin)
+
+
 def _non_admin() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.INTERNAL_USER)
+
+
+def _team_member(role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="sk-test", user_id="u", user_role=role, team_id="team1", team_models=["team-gpt", "team-chat"]
+    )
 
 
 def _admin() -> UserAPIKeyAuth:
@@ -100,7 +128,7 @@ async def test_v1_models_anthropic_shape_hides_flagged_model_from_non_admin_only
 
 
 @pytest.mark.asyncio
-async def test_v1_models_scope_expand_hides_flagged_model_from_non_admin_only(flagged_router):
+async def test_v1_models_scope_expand_hides_flagged_model_from_team_admin_only(flagged_router, team_admin_privileges):
     assert await _v1_models(_non_admin(), scope="expand") == ["gpt-4"]
     assert await _v1_models(_admin(), scope="expand") == ["gpt-4", "internal-evaluator"]
 
@@ -160,6 +188,17 @@ async def test_v1_model_info_by_id_still_serves_the_hidden_row_to_non_admin(flag
 async def test_model_group_info_hides_flagged_group_from_non_admin_only(flagged_router):
     assert await _model_groups(_non_admin()) == ["gpt-4"]
     assert await _model_groups(_admin()) == ["gpt-4", "internal-evaluator"]
+
+
+@pytest.mark.asyncio
+async def test_v1_models_hides_flagged_team_model_from_its_team_member_only(flagged_team_router):
+    assert await _v1_models(_team_member()) == ["team-chat"]
+    assert set(await _v1_models(_team_member(LitellmUserRoles.PROXY_ADMIN))) >= {"team-gpt", "team-chat"}
+
+
+@pytest.mark.asyncio
+async def test_model_group_info_hides_flagged_team_model_from_its_team_member(flagged_team_router):
+    assert await _model_groups(_team_member()) == ["team-chat"]
 
 
 @pytest.mark.asyncio
