@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use litellm_cost::batch::{
     BatchCostRates, BatchPricing, BatchUsage, ModalityRates, batch_cost_calculator,
@@ -8,6 +8,7 @@ use litellm_cost::custom_pricing::{
     CustomPricing, CustomTokenRates, RawUsage, cost_per_token_custom_pricing_helper,
     normalize_cache_usage,
 };
+use litellm_cost::guardrail_cost::bedrock_guardrail_cost;
 use litellm_cost::non_token::{
     ImageRates, ImageUsage, OcrBatchRates, OcrRates, OcrUsage, VideoRates, calculate_image,
     calculate_ocr, calculate_ocr_batch, calculate_video,
@@ -279,4 +280,13 @@ fn main() {
             .unwrap(),
         transcription_usage.completion_tokens
     );
+    let guardrail = bedrock_guardrail_cost(
+        &BTreeMap::from([("contentPolicyUnits".to_owned(), 2)]),
+        Some("us-east-1"),
+        &BTreeMap::from([(
+            "bedrock/guardrails".to_owned(),
+            json!({"guardrail_cost_per_unit": {"contentPolicyUnits": 0.00015}}),
+        )]),
+    );
+    println!("guardrail={guardrail:.5}");
 }
