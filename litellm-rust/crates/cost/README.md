@@ -80,12 +80,16 @@ Call `compile(&pricing)` once for an immutable plan, then `plan.calculate(&reque
 
 `model_selection` applies Python's request, base-model, response-model, router-price, provider-prefix, and regional-alias precedence to a caller-supplied catalog. The caller supplies known provider names because this standalone crate does not import Python's provider registry
 
+`completion_input` prepares serialized responses for pricing. It selects the response kind's call type, model candidates, normalized usage, and the billable service tier from the request, response, usage, or provider traffic type. The caller supplies the response kind because JSON does not preserve Python class identity
+
 ## Python function map
 
 The Rust module tree does not mirror Python's overall cost module tree. The Python entry points also look up models, normalize responses, and choose providers, while this crate starts with caller-supplied prices and usage. These mappings cover the calculation portions of the functions:
 
 | Python function | Rust function | Python tests | Rust tests |
 | --- | --- | --- | --- |
+| `litellm.cost_calculator._infer_call_type` | `litellm_cost::completion_input::infer_call_type` | `test_cost_calculator.py` call-type cases | `python_completion_input.rs::call_type_prefers_explicit_value` |
+| `litellm.cost_calculator._map_traffic_type_to_service_tier`, `_normalize_service_tier`, `_extract_service_tier` | Matching functions in `litellm_cost::completion_input`, `select_service_tier` | `test_cost_calculator.py::test_completion_cost_anthropic_auto_tier_uses_served_priority_rate`, `test_completion_cost_vertex_ai_gemini_flex_traffic_type`, non-string tier cases | `python_completion_input.rs::traffic_type_maps_only_billable_tiers`, `request_auto_defers_to_served_usage_tier`, `request_tier_precedes_response_when_billable`, `traffic_type_is_last_tier_fallback`, `prepared_input_prices_served_priority_rate` |
 | `litellm.cost_calculator._select_model_name_for_cost_calc` | `litellm_cost::model_selection::select_model_name_for_cost_calc`, `ModelInfoCatalog::select_model_name_for_cost_calc` | `test_cost_calculator.py` response model, router custom pricing, and regional alias cases | `python_model_selection.rs::custom_pricing_selects_only_a_priced_router_id`, `explicit_base_model_ignores_private_response_model_and_region`, `private_response_model_uses_its_region_and_resolves_alias`, `response_alias_strips_unregistered_segment_only_when_a_price_resolves` |
 | `litellm.cost_calculator._get_response_model`, `_get_hidden_str_for_cost_calc`, `_model_contains_known_llm_provider`, `_strip_unregistered_leading_segments` | Matching functions in `litellm_cost::model_selection` | `test_cost_calculator.py` response and alias cases | `python_model_selection.rs::model_selection_helpers_ignore_invalid_hidden_values_and_stop_at_provider_segments` |
 | `litellm.litellm_core_utils.llm_cost_calc.utils.generic_cost_per_token` flat token pricing subset | `litellm_cost::calculate` | `test_llm_cost_calc_utils.py` | `calculation.rs`, `python_reference.tsv` |

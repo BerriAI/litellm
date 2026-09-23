@@ -8,6 +8,9 @@ use litellm_cost::catalog::{
     AzureAiImageCatalogRequest, BuiltInToolCharge, CompletionCostRequest, CostCall, CostCatalog,
     ModelCostRequest, ModelInfoCatalog, ResponseCostRequest,
 };
+use litellm_cost::completion_input::{
+    CompletionInputRequest, ResponseKind as CompletionResponseKind,
+};
 use litellm_cost::custom_pricing::{
     CustomPricing, CustomTokenRates, RawUsage, cost_per_token_custom_pricing_helper,
     normalize_cache_usage,
@@ -26,6 +29,7 @@ use litellm_cost::guardrail_cost::bedrock_guardrail_cost;
 use litellm_cost::image_cost_router::{
     ImageCostRouteRequest, route_image_generation_cost_calculator,
 };
+use litellm_cost::model_selection::ModelSelectionRequest;
 use litellm_cost::non_token::{
     ImageRates, ImageUsage, OcrBatchRates, OcrRates, OcrUsage, VideoRates, calculate_image,
     calculate_ocr, calculate_ocr_batch, calculate_video,
@@ -1222,4 +1226,33 @@ fn main() {
     )
     .unwrap();
     println!("bedrock_image_generation={bedrock_image:.3}");
+    let response = json!({
+        "model": "served",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "service_tier": "priority"}
+    });
+    let request_tier = json!("auto");
+    let prepared = ModelInfoCatalog::new(HashMap::new())
+        .prepare_completion_input(CompletionInputRequest {
+            model_selection: ModelSelectionRequest {
+                model: Some("requested"),
+                response: Some(&response),
+                hidden_params: None,
+                base_model: None,
+                custom_pricing: false,
+                provider: Some("anthropic"),
+                router_model_id: None,
+                region_name: None,
+                known_providers: &["anthropic"],
+            },
+            call_type: None,
+            response_kind: Some(CompletionResponseKind::Completion),
+            service_tier: Some(&request_tier),
+            optional_params: None,
+        })
+        .unwrap();
+    println!(
+        "prepared_model={} prepared_tier={}",
+        prepared.model_candidates[0].as_deref().unwrap(),
+        prepared.service_tier.as_deref().unwrap()
+    );
 }

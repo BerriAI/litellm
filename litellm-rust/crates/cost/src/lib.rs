@@ -9,6 +9,7 @@ pub mod bedrock_image_cost;
 pub mod billed_token_rates;
 pub mod catalog;
 pub mod completion_cost;
+pub mod completion_input;
 pub mod custom_pricing;
 pub mod dashscope_cost;
 pub mod databricks_cost;

@@ -22,6 +22,9 @@ use crate::billed_token_rates::{
 use crate::completion_cost::{
     CompletionCost, ResponseCostError, completion_cost, get_response_cost_from_hidden_params,
 };
+use crate::completion_input::{
+    CompletionInputRequest, PreparedCompletionInput, prepare_completion_input,
+};
 use crate::custom_pricing::CustomTokenRates;
 use crate::dashscope_cost::cost_per_token as dashscope_cost_per_token;
 use crate::databricks_cost::registry_key as databricks_registry_key;
@@ -396,6 +399,13 @@ impl ModelInfoCatalog {
         request: ModelSelectionRequest<'_>,
     ) -> Option<String> {
         select_model_name_for_cost_calc(request, &self.entries)
+    }
+
+    pub fn prepare_completion_input(
+        &self,
+        request: CompletionInputRequest<'_>,
+    ) -> Result<PreparedCompletionInput, UsageError> {
+        prepare_completion_input(request, &self.entries)
     }
 
     pub fn cost_per_token_for_call(
