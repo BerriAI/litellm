@@ -2028,6 +2028,9 @@
         ],
         "tests/integration/providers/test_bedrock_mantle_codex_input_wire.py::test_codex_additional_tools_input_item_reaches_mantle_as_top_level_tools": [
             "providers.bedrock_mantle.codex_additional_tools_input_item_is_hoisted_to_top_level_tools"
+        ],
+        "tests/integration/providers/test_rerank_latency_headers_wire.py::test_rerank_response_carries_call_id_latency_and_cost_headers_like_chat_completions": [
+            "providers.rerank.response_carries_latency_and_cost_headers"
         ]
     },
     "browser": {
