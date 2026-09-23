@@ -2416,8 +2416,10 @@ class ProxyLogging:
             # CustomGuardrail is configured. Saves the loop overhead +
             # ``time.time()`` x2 per registered callback for the common
             # "callbacks=[]" case on small / dev deployments.
-            if (skip_guardrails or (not caps.has_guardrail and not caps.has_content_enforcer)) and (
-                guardrails_only or not caps.has_pre_call_override
+            if (
+                (skip_guardrails or not caps.has_guardrail)
+                and not caps.has_content_enforcer
+                and (guardrails_only or not caps.has_pre_call_override)
             ):
                 if data is not None:
                     self._process_guardrail_metadata(data)
