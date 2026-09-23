@@ -352,6 +352,22 @@ def _assert_blocked_message_item(item: dict[str, object], response: dict[str, ob
     assert (usage["input_tokens"], usage["output_tokens"], usage["total_tokens"]) == (0, 0, 0), usage
 
 
+def _response_id(index: int, response: httpx.Response) -> str:
+    assert response.status_code == 200, (index, response.text)
+    if index % 3 == 0:
+        assert response.headers["content-type"].startswith("text/event-stream"), response.text
+        return str(_blocked_stream_events(response.text)[-1]["response"]["id"])
+    if index % 3 == 1:
+        assert response.headers["content-type"].startswith("text/event-stream"), response.text
+        blocked: Final = _blocked_stream_events(response.text)[-1]["response"]
+        _assert_blocked_message_item(blocked["output"][0], blocked)
+        return str(blocked["id"])
+    assert response.headers["content-type"].startswith("application/json"), response.text
+    body: Final = response.json()
+    _assert_blocked_message_item(body["output"][0], body)
+    return str(body["id"])
+
+
 @pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_streams_typed_message")
 def test_responses_pre_call_denial_streams_sse_with_typed_message_item(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
@@ -532,8 +548,8 @@ def test_responses_pre_call_denial_openai_sdk_returns_typed_message(gateway: Gat
         assert body.usage is not None and body.usage.total_tokens == 0, body.usage
 
 
-@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_reports_zero_usage")
-def test_responses_pre_call_denial_reports_zero_usage(gateway: Gateway, tmp_path: Path) -> None:
+@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_stream_false_returns_json")
+def test_responses_pre_call_denial_stream_false_returns_json(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
     config: Final = _responses_denial_config(tmp_path, identity)
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
@@ -567,8 +583,6 @@ def test_responses_pre_call_denial_stream_string_true_returns_json(gateway: Gate
 
 @pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_stream_event_vocabulary")
 def test_responses_pre_call_denial_stream_event_vocabulary(gateway: Gateway, tmp_path: Path) -> None:
-    identity: Final = "guardrail" + uuid.uuid4().hex
-    config: Final = _responses_denial_config(tmp_path, identity)
     identity: Final = "guardrail" + uuid.uuid4().hex
     second: Final = "guardrail-2-" + uuid.uuid4().hex
     config: Final = _responses_denial_config(tmp_path, identity)
@@ -779,15 +793,13 @@ def test_responses_unguarded_stream_reaches_upstream(gateway: Gateway, tmp_path:
             assert response.status_code == 200, response.text
             assert response.headers["content-type"].startswith("text/event-stream"), response.text
             assert "response.completed" in response.text, response.text
-            batches: Final[list[dict[str, object]]] = []
-
-            def _drain() -> list[dict[str, object]]:
-                batches.extend(observed.get("/__observations").json()["requests"])
-                return batches
-
-            eventually(_drain, lambda values: len(values) >= 1, seconds=30, return_last_on_timeout=True)
-            assert len(batches) == 1, batches
-            assert batches[0]["path"] == "/v1/chat/completions", batches
+            requests: Final = eventually(
+                lambda: observed.get("/__observations").json()["requests"],
+                lambda values: len(values) >= 1,
+                seconds=30,
+            )
+            assert len(requests) == 1, requests
+            assert requests[0]["path"] == "/v1/chat/completions", requests
 
 
 @pytest.mark.covers("other.observability.guardrails.chat_pre_call_denial_streams_content_filter")
@@ -940,24 +952,7 @@ def test_responses_pre_call_denial_stream_survives_worker_burst(gateway: Gateway
 
             with ThreadPoolExecutor(max_workers=8) as pool:
                 responses: Final = tuple(pool.map(burst, range(30)))
-            assert {response.status_code for response in responses} == {200}
-            response_ids: Final = set()
-            for index, response in enumerate(responses):
-                assert response.status_code == 200, (index, response.text)
-                if index % 3 == 0:
-                    assert response.headers["content-type"].startswith("text/event-stream"), response.text
-                    completed: Final = _blocked_stream_events(response.text)[-1]["response"]
-                    response_ids.add(completed["id"])
-                elif index % 3 == 1:
-                    assert response.headers["content-type"].startswith("text/event-stream"), response.text
-                    blocked: Final = _blocked_stream_events(response.text)[-1]["response"]
-                    _assert_blocked_message_item(blocked["output"][0], blocked)
-                    response_ids.add(blocked["id"])
-                else:
-                    assert response.headers["content-type"].startswith("application/json"), response.text
-                    body: Final = response.json()
-                    _assert_blocked_message_item(body["output"][0], body)
-                    response_ids.add(body["id"])
+            response_ids: Final = frozenset(_response_id(index, response) for index, response in enumerate(responses))
             assert len(response_ids) == 30, response_ids
             assert len(observed.get("/__observations").json()["requests"]) == 10
 

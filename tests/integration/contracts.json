@@ -2043,8 +2043,8 @@
     "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_openai_sdk_returns_typed_message": [
       "other.observability.guardrails.responses_pre_call_denial_openai_sdk_returns_typed_message"
     ],
-    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_reports_zero_usage": [
-      "other.observability.guardrails.responses_pre_call_denial_reports_zero_usage"
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_stream_false_returns_json": [
+      "other.observability.guardrails.responses_pre_call_denial_stream_false_returns_json"
     ],
     "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_stream_string_true_returns_json": [
       "other.observability.guardrails.responses_pre_call_denial_stream_string_true_returns_json"
