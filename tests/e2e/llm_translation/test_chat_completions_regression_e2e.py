@@ -106,10 +106,11 @@ def _vision_messages() -> list[ChatMessage]:
 
 def _assert_describes_cat(response: ChatResponse) -> None:
     assert response.choices, f"vision returned no choices: {response}"
-    message = response.choices[0].message
-    content = (message.content if message else None) or ""
-    assert "cat" in content.lower() or "feline" in content.lower(), (
-        f"vision response did not describe the image: {content[:200]}"
+    choice = response.choices[0]
+    content = (choice.message.content if choice.message else None) or ""
+    assert any(term in content.lower() for term in ("cat", "feline", "kitten", "kitty")), (
+        f"vision response did not describe the image: {content[:200]!r} "
+        f"(finish_reason={choice.finish_reason!r}, usage={response.usage})"
     )
 
 
