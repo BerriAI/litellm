@@ -6,6 +6,7 @@ to detect and block/mask sensitive content.
 """
 
 import asyncio
+import functools
 import json
 import os
 import re
@@ -67,6 +68,10 @@ from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 GAP_WORD_TOKENIZER: Final = re.compile(r"\b\w+\b")
 SENTENCE_TERMINATORS: Final = re.compile(r"[.!?]+")
+# MySQL/MariaDB executable comments: /*!50000UNION*/ runs as UNION. The "!"
+# would be taken as a sentence break and the version number glues onto the
+# keyword, so whole-word matching would miss it.
+EXECUTABLE_COMMENT_PREFIX: Final = re.compile(r"/\*M?!\d*")
 
 
 WORD_NUMBER_MAP: Final = {
@@ -91,11 +96,34 @@ WORD_NUMBER_SEQUENCE_PATTERN: Final = re.compile(
 WORD_NUMBER_TOKEN_FINDER: Final = re.compile(rf"(?:{WORD_NUMBER_TOKEN_REGEX})", re.IGNORECASE)
 
 
+@functools.cache
+def _whole_word_regex(term: str) -> Pattern[str]:
+    """
+    Match `term` as a whole word, e.g. "exec" but not "executive".
+
+    A plain \\b on both ends never matches a term that starts or ends with
+    punctuation ("--", "@@version", "<script>"): there's no word boundary
+    between a space and a symbol. So only anchor the ends that are word chars.
+
+    A term ending in a digit ("OR 1") only refuses a following digit, so
+    "or 15" stays clean but "OR 1e0" (scientific notation for 1) still matches.
+    """
+    start: Final = r"\b" if re.match(r"\w", term[:1]) else ""
+    if term[-1:].isdigit():
+        end = r"(?!\d)"
+    elif re.match(r"\w", term[-1:]):
+        end = r"\b"
+    else:
+        end = ""
+    return re.compile(start + re.escape(term) + end)
+
+
 class ConditionalCategoryConfig(TypedDict):
     identifier_words: Sequence[str]
     block_words: Sequence[str]
     action: ContentFilterAction
     severity: str
+    match_whole_words: bool
 
 
 class CompiledPatternEntry(TypedDict):
@@ -145,6 +173,7 @@ class CategoryFileData(TypedDict, total=False):
     inherit_from: str
     additional_block_words: Sequence[str]
     phrase_patterns: Sequence[str]
+    match_whole_words: bool
 
 
 # Helper data structure for category-based detection
@@ -163,6 +192,7 @@ class CategoryConfig:
         inherit_from: str | None = None,
         additional_block_words: Sequence[str] | None = None,
         phrase_patterns: Sequence[str] | None = None,
+        match_whole_words: bool = False,
     ):
         self.category_name = category_name
         self.description = description
@@ -174,6 +204,9 @@ class CategoryConfig:
         self.always_block_keywords = always_block_keywords or []
         self.inherit_from = inherit_from
         self.additional_block_words = [w.lower() for w in additional_block_words] if additional_block_words else []
+        # Match identifier and block words as whole words only. Off by default because
+        # most categories rely on prefix matches ("stupid" -> "stupidest").
+        self.match_whole_words = match_whole_words
         # Phrase patterns: regex patterns for catching paraphrases
         self.phrase_patterns: list[tuple[str, Pattern]] = []
         for p in phrase_patterns or []:
@@ -636,6 +669,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 "block_words": block_words,
                 "action": category_action,
                 "severity": "high",  # Combinations are always high severity
+                "match_whole_words": category_config_obj.match_whole_words,
             }
 
             # Build log message
@@ -665,7 +699,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         YAML format: category_name, description, default_action, keywords (list of
         {keyword, severity}), exceptions.
-        Optional: identifier_words, always_block_keywords, inherit_from.
+        Optional: identifier_words, always_block_keywords, inherit_from, match_whole_words.
         JSON format: list of {id, match, tags, severity}; match is pipe-separated
         phrases; severity 1-4 mapped to low/medium/high. Used for harm_toxic_abuse.
 
@@ -690,6 +724,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             inherit_from=data.get("inherit_from"),
             additional_block_words=data.get("additional_block_words"),
             phrase_patterns=data.get("phrase_patterns"),
+            match_whole_words=bool(data.get("match_whole_words", False)),
         )
 
     @staticmethod
@@ -999,12 +1034,14 @@ class ContentFilterGuardrail(CustomGuardrail):
         # Split text into sentences for more precise matching
         # Simple sentence splitting on common terminators
         sentences: Final = SENTENCE_TERMINATORS.split(text)
+        whole_word_sentences: Final = SENTENCE_TERMINATORS.split(EXECUTABLE_COMMENT_PREFIX.sub("/* ", text))
 
         for category_name, config in self.conditional_categories.items():
             identifier_words = config["identifier_words"]
             block_words = config["block_words"]
             action = config["action"]
             severity = config["severity"]
+            whole_words = config["match_whole_words"]
 
             # Check category-specific exceptions
             category_obj = self.loaded_categories.get(category_name)
@@ -1021,7 +1058,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     continue
 
             # Check each sentence for identifier + block word combination
-            for sentence in sentences:
+            for sentence in whole_word_sentences if whole_words else sentences:
                 sentence_lower = sentence.lower().strip()
                 if not sentence_lower:
                     continue
@@ -1029,7 +1066,11 @@ class ContentFilterGuardrail(CustomGuardrail):
                 # Check if sentence contains ANY identifier word
                 identifier_found = None
                 for identifier in identifier_words:
-                    if identifier in sentence_lower:
+                    if whole_words:
+                        found = _whole_word_regex(identifier).search(sentence_lower) is not None
+                    else:
+                        found = identifier in sentence_lower
+                    if found:
                         identifier_found = identifier
                         break
 
@@ -1039,18 +1080,15 @@ class ContentFilterGuardrail(CustomGuardrail):
                 # Check if sentence also contains ANY block word
                 block_word_found = None
                 for block_word in block_words:
-                    # Use word boundary for single words to avoid false positives
-                    if " " in block_word:
-                        # Multi-word phrase
-                        if block_word in sentence_lower:
-                            block_word_found = block_word
-                            break
+                    # Single words always need a word boundary; phrases only when the
+                    # category asks for whole words
+                    if whole_words or " " not in block_word:
+                        found = _whole_word_regex(block_word).search(sentence_lower) is not None
                     else:
-                        # Single word - use word boundary
-                        pattern = r"\b" + re.escape(block_word) + r"\b"
-                        if re.search(pattern, sentence_lower):
-                            block_word_found = block_word
-                            break
+                        found = block_word in sentence_lower
+                    if found:
+                        block_word_found = block_word
+                        break
 
                 if block_word_found:
                     matched_phrase = f"{identifier_found} + {block_word_found}"
