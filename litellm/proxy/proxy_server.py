@@ -5035,6 +5035,7 @@ class _ConfigWithBaseline(dict[str, object]):
 
 
 _EMPTY_SETTINGS_MAPPING: Final[Mapping[str, SettingsJsonValue]] = MappingProxyType({})
+_DB_GENERAL_SETTINGS_KEYS: Final[frozenset[str]] = frozenset(ConfigGeneralSettings.model_fields)
 _SETTINGS_MAPPING: Final = TypeAdapter(dict[str, SettingsJsonValue])
 
 
@@ -7494,10 +7495,13 @@ class ProxyConfig:
         cache_size_was_db: Final = self.settings.source("user_api_key_cache_max_size") == "db"
         previous_retention_values: Final = self._resolved_retention_values()
         previous_pass_through_endpoints: Final = self.settings.get("pass_through_endpoints")
-        self.settings.apply_db_row("general_settings", db_general_settings)
+        db_values: Final = MappingProxyType(
+            {key: value for key, value in dict(db_general_settings).items() if key in _DB_GENERAL_SETTINGS_KEYS}
+        )
+        self.settings.apply_db_row("general_settings", db_values)
         _bind_general_settings_store(self.settings)
         await self._apply_general_settings_side_effects(
-            db_general_settings,
+            db_values,
             cache_size_was_db,
             previous_retention_values,
             previous_pass_through_endpoints,

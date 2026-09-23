@@ -4820,3 +4820,20 @@ async def test_model_refresh_updates_availability_catalog_and_retains_it_on_db_f
     assert await pc._get_models_from_db(client) == []
     assert pc.auto_router_db_catalog == ()
     assert find_many.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_ignores_keys_no_write_api_can_produce(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    pc = ProxyConfig()
+    await pc._update_general_settings(
+        {
+            "max_parallel_requests": 7,
+            "role_permissions": [{"role": "proxy_admin", "models": ["x"]}],
+        }
+    )
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings["max_parallel_requests"] == 7
+    assert ps.general_settings.get("role_permissions") is None
+    assert "role_permissions" not in ps.general_settings

@@ -128,6 +128,11 @@ def test_db_general_settings_row_cannot_rebind_role_permissions(gateway: Gateway
             },
         ),
     )
+    passthrough_path: Final = f"/atomicity-passthrough-{uuid.uuid4().hex}"
+    passthrough: Final = register_scenario(
+        f"integration-passthrough-{uuid.uuid4().hex}",
+        JsonResponse(content_type="application/json", body={"atomicity": "reconciled"}),
+    )
     def mint_admin_token() -> str:
         return jwt.encode(
             {
@@ -174,6 +179,8 @@ def test_db_general_settings_row_cannot_rebind_role_permissions(gateway: Gateway
             body: Final = {"model": model, "messages": [{"role": "user", "content": "atomicity control"}]}
             first: Final = candidate.request("POST", "/v1/chat/completions", body, key=mint_admin_token())
             assert first.status_code == 200, first.text
+            unregistered: Final = candidate.request("GET", passthrough_path)
+            assert unregistered.status_code == 404, unregistered.text
             with psycopg.connect(database_url, autocommit=True) as connection:
                 connection.execute(
                     'INSERT INTO "LiteLLM_Config" (param_name, param_value) VALUES (%s, %s::jsonb) '
@@ -182,7 +189,9 @@ def test_db_general_settings_row_cannot_rebind_role_permissions(gateway: Gateway
                         "general_settings",
                         json.dumps(
                             {
-                                "max_parallel_requests": 12345,
+                                "pass_through_endpoints": [
+                                    {"path": passthrough_path, "target": passthrough.api_base(), "headers": {}}
+                                ],
                                 "role_permissions": [
                                     {"role": "proxy_admin", "models": ["not-the-model"], "routes": ["/nowhere"]}
                                 ],
@@ -191,46 +200,11 @@ def test_db_general_settings_row_cannot_rebind_role_permissions(gateway: Gateway
                     ),
                 )
 
-            applied_at: dict[str, float] = {}
+            def passthrough_body() -> dict | None:
+                response: Final = candidate.request("GET", passthrough_path)
+                return response.json() if response.status_code == 200 else None
 
-            def observed_max_parallel_requests() -> int | None:
-                response: Final = candidate.request(
-                    "GET", "/config/list", params={"config_type": "general_settings"}
-                )
-                assert response.status_code == 200, response.text
-                entries: Final = response.json()
-                assert isinstance(entries, list)
-                values: Final = {
-                    object_value(entry)["field_name"]: object_value(entry)["field_value"]
-                    for entry in entries
-                }
-                observed: Final = values.get("max_parallel_requests")
-                if observed is not None:
-                    applied_at.setdefault(str(int(observed)), time.monotonic())
-                return int(observed) if observed is not None else None
-
-            eventually(observed_max_parallel_requests, lambda value: value == 12345, seconds=30)
-            with psycopg.connect(database_url, autocommit=True) as connection:
-                connection.execute(
-                    'UPDATE "LiteLLM_Config" SET param_value = %s::jsonb WHERE param_name = %s',
-                    (
-                        json.dumps(
-                            {
-                                "max_parallel_requests": 54321,
-                                "role_permissions": [
-                                    {"role": "proxy_admin", "models": ["not-the-model"], "routes": ["/nowhere"]}
-                                ],
-                            }
-                        ),
-                        "general_settings",
-                    ),
-                )
-            eventually(observed_max_parallel_requests, lambda value: value == 54321, seconds=30)
-            eventually(
-                lambda: time.monotonic() - applied_at["54321"],
-                lambda age: age >= 3.0,
-                seconds=30,
-            )
+            eventually(passthrough_body, lambda value: value == {"atomicity": "reconciled"}, seconds=30)
             second: Final = candidate.request("POST", "/v1/chat/completions", body, key=mint_admin_token())
             assert second.status_code == 200, second.text
             assert second.json()["usage"]["total_tokens"] == 40, second.text

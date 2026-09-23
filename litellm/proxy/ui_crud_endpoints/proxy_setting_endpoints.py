@@ -1039,9 +1039,6 @@ async def _update_litellm_setting(
     config: Final = await proxy_config.get_config()
     before_value: Final = config.get("litellm_settings", {}).get(settings_key)
 
-    # Update the in-memory settings (after get_config to avoid stale override)
-    setattr(litellm, settings_key, in_memory_var)
-
     # Update config with new settings
     if "litellm_settings" not in config:
         config["litellm_settings"] = {}
@@ -1050,6 +1047,8 @@ async def _update_litellm_setting(
 
     # Save the updated config
     await proxy_config.save_config(new_config=config)
+
+    setattr(litellm, settings_key, in_memory_var)
 
     # Fire-and-forget so an audit-log failure (transient DB blip, etc.)
     # never surfaces as a 500 after save_config has already committed,
