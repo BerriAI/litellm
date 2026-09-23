@@ -12,7 +12,6 @@ from typing import Final
 
 import httpx
 import psutil
-import pytest
 import yaml
 from anthropic import Anthropic, AsyncAnthropic
 from integration._support.client import Gateway, Scenario, eventually
@@ -376,7 +375,6 @@ def _chat_identity_fields(identity: Mapping[str, str | None]) -> dict[str, objec
     }
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.request_metadata_on_langfuse_keys")
 def test_langfuse_otel_emits_request_metadata_under_langfuse_observation_and_trace_keys(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -404,7 +402,6 @@ def test_langfuse_otel_emits_request_metadata_under_langfuse_observation_and_tra
         _assert_identity(attrs, _chat_identity_fields(identity), spend_logs_metadata={"ticket": "LIT-8283"})
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.request_metadata_redaction_matches_vanilla")
 def test_langfuse_otel_metadata_redacts_user_api_key_fields_like_vanilla_langfuse(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -439,7 +436,6 @@ def test_langfuse_otel_metadata_redacts_user_api_key_fields_like_vanilla_langfus
         assert not [name for name in attrs if name.startswith("langfuse.trace.metadata.")], sorted(attrs)
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.request_metadata_openai_sdk_stream")
 def test_langfuse_otel_metadata_reaches_langfuse_for_openai_sdk_stream(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-sdkstream-" + uuid.uuid4().hex
     with (
@@ -467,7 +463,6 @@ def test_langfuse_otel_metadata_reaches_langfuse_for_openai_sdk_stream(gateway: 
         _assert_identity(attrs, _chat_identity_fields(identity), spend_logs_metadata={"ticket": "LIT-8283"})
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.request_metadata_openai_sdk_async")
 async def test_langfuse_otel_metadata_reaches_langfuse_for_openai_sdk_async(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-sdkasync-" + uuid.uuid4().hex
     with (
@@ -490,7 +485,6 @@ async def test_langfuse_otel_metadata_reaches_langfuse_for_openai_sdk_async(gate
         _assert_identity(attrs, _chat_identity_fields(identity), spend_logs_metadata={"ticket": "LIT-8283"})
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.request_metadata_anthropic_sdk_messages")
 def test_langfuse_otel_metadata_reaches_langfuse_for_anthropic_sdk_messages(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-anthropic-" + uuid.uuid4().hex
     with (
@@ -514,7 +508,6 @@ def test_langfuse_otel_metadata_reaches_langfuse_for_anthropic_sdk_messages(gate
         _assert_identity(attrs, _chat_identity_fields(identity), spend_logs_metadata={"ticket": "LIT-8283"})
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.request_metadata_anthropic_sdk_stream")
 async def test_langfuse_otel_metadata_reaches_langfuse_for_anthropic_sdk_stream(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -543,7 +536,6 @@ async def test_langfuse_otel_metadata_reaches_langfuse_for_anthropic_sdk_stream(
         _assert_identity(attrs, _chat_identity_fields(identity), spend_logs_metadata={"ticket": "LIT-8283"})
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.request_metadata_responses_api")
 def test_langfuse_otel_metadata_reaches_langfuse_for_responses_api(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-responses-" + uuid.uuid4().hex
     with (
@@ -566,7 +558,6 @@ def test_langfuse_otel_metadata_reaches_langfuse_for_responses_api(gateway: Gate
         _assert_identity(attrs, _chat_identity_fields(identity), spend_logs_metadata={"ticket": "LIT-8283"})
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.request_metadata_responses_stream_sse")
 def test_langfuse_otel_metadata_reaches_langfuse_for_responses_sse_stream(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-respstream-" + uuid.uuid4().hex
     with (
@@ -598,7 +589,6 @@ def test_langfuse_otel_metadata_reaches_langfuse_for_responses_sse_stream(gatewa
         _assert_identity(attrs, _chat_identity_fields(identity), spend_logs_metadata={"ticket": "LIT-8283"})
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.caller_trace_metadata_preserved_with_flattened_identity")
 def test_langfuse_otel_caller_trace_metadata_survives_flattened_identity(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-deploy-" + uuid.uuid4().hex
     with (
@@ -624,7 +614,6 @@ def test_langfuse_otel_caller_trace_metadata_survives_flattened_identity(gateway
         _assert_identity(attrs, _chat_identity_fields(identity), spend_logs_metadata={"ticket": "LIT-8283"})
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.failure_span_carries_request_metadata")
 def test_langfuse_otel_failure_span_carries_request_metadata(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-fail-" + uuid.uuid4().hex
     with (
@@ -648,7 +637,6 @@ def test_langfuse_otel_failure_span_carries_request_metadata(gateway: Gateway, t
         _assert_identity(attrs, _chat_identity_fields(identity), spend_logs_metadata={"ticket": "LIT-8283"})
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.teamless_key_omits_team_identity")
 def test_langfuse_otel_teamless_key_emits_no_team_identity(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-noteam-" + uuid.uuid4().hex
     with (
@@ -680,7 +668,6 @@ def test_langfuse_otel_teamless_key_emits_no_team_identity(gateway: Gateway, tmp
         } == {"langfuse.trace.metadata.user_api_key_alias": identity["key_alias"]}, attrs
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.teamless_key_keeps_caller_trace_metadata")
 def test_langfuse_otel_teamless_key_keeps_caller_trace_metadata(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-noteam-meta-" + uuid.uuid4().hex
     with (
@@ -707,7 +694,6 @@ def test_langfuse_otel_teamless_key_keeps_caller_trace_metadata(gateway: Gateway
         assert attrs.get("langfuse.trace.metadata.user_api_key_alias") == identity["key_alias"], attrs
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.spend_logs_metadata_roundtrips_nonstring_values")
 def test_langfuse_otel_spend_logs_metadata_roundtrips_oversized_and_nonstring_values(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -741,7 +727,6 @@ def test_langfuse_otel_spend_logs_metadata_roundtrips_oversized_and_nonstring_va
         _assert_identity(attrs, _chat_identity_fields(identity))
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.unauthenticated_request_leaks_no_identity")
 def test_langfuse_otel_unauthenticated_request_leaks_no_identity(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-unauth-" + uuid.uuid4().hex
     with (
@@ -803,7 +788,6 @@ def test_langfuse_otel_unauthenticated_request_leaks_no_identity(gateway: Gatewa
             assert field not in leaked, leaked
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.repeated_requests_each_emit_one_span")
 def test_langfuse_otel_repeated_identical_requests_emit_one_span_each(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-repeat-" + uuid.uuid4().hex
     with (
@@ -837,7 +821,6 @@ def test_langfuse_otel_repeated_identical_requests_emit_one_span_each(gateway: G
             assert sum(_span_response_id(s) == rid for s in settled) == 1
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.sink_outage_burst_lands_each_id_once")
 def test_langfuse_otel_sink_outage_mid_burst_lands_every_response_id_once(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-chaos-outage-" + uuid.uuid4().hex
     outage: Final = threading.Event()
@@ -920,7 +903,6 @@ def test_langfuse_otel_sink_outage_mid_burst_lands_every_response_id_once(gatewa
         assert len(rejected) >= 1, "sink outage never served a 503"
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.worker_kill_burst_keeps_serving")
 def test_langfuse_otel_worker_kill_mid_burst_keeps_serving_and_exports(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-chaos-kill-" + uuid.uuid4().hex
     with (
@@ -974,7 +956,6 @@ def test_langfuse_otel_worker_kill_mid_burst_keeps_serving_and_exports(gateway: 
             assert sum(_span_response_id(s) == rid for s in settled) <= 1, rid
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.slow_sink_does_not_deadlock_exports")
 def test_langfuse_otel_slow_sink_does_not_deadlock_exports(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-chaos-slow-" + uuid.uuid4().hex
 
