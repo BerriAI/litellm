@@ -487,20 +487,26 @@ fn main() {
         at,
     );
     println!("regional_prompt={regional_prompt:.5} regional_output={regional_output:.5}");
-    let model_info_catalog = ModelInfoCatalog::new(HashMap::from([(
-        "openai/model".to_owned(),
-        json!({
-            "input_cost_per_token": 2e-6,
-            "output_cost_per_token": 4e-6,
-            "regional_processing_uplift_multiplier_eu": 1.2,
-            "off_peak_pricing": {
-                "hours_utc": "16:30-00:30",
-                "input_cost_per_token": 1e-6,
-                "output_cost_per_token": 2e-6,
-                "output_cost_per_reasoning_token": 3e-6
-            }
-        }),
-    )]));
+    let model_info_catalog = ModelInfoCatalog::new(HashMap::from([
+        (
+            "openai/model".to_owned(),
+            json!({
+                "input_cost_per_token": 2e-6,
+                "output_cost_per_token": 4e-6,
+                "regional_processing_uplift_multiplier_eu": 1.2,
+                "off_peak_pricing": {
+                    "hours_utc": "16:30-00:30",
+                    "input_cost_per_token": 1e-6,
+                    "output_cost_per_token": 2e-6,
+                    "output_cost_per_reasoning_token": 3e-6
+                }
+            }),
+        ),
+        (
+            "provider/duration".to_owned(),
+            json!({"mode": "responses", "input_cost_per_second": 0.5, "output_cost_per_second": 1.0}),
+        ),
+    ]));
     let (catalog_prompt, catalog_output) = model_info_catalog
         .cost_per_token(ModelCostRequest {
             model: "openai/model",
@@ -511,7 +517,22 @@ fn main() {
             data_residency: Some("eu"),
             vertex_location: None,
             at,
+            response_time_ms: None,
         })
         .unwrap();
     println!("catalog_prompt={catalog_prompt:.6} catalog_output={catalog_output:.6}");
+    let (duration_prompt, duration_output) = model_info_catalog
+        .cost_per_token(ModelCostRequest {
+            model: "duration",
+            provider: Some("provider"),
+            region: None,
+            usage: &off_peak_usage,
+            service_tier: None,
+            data_residency: None,
+            vertex_location: None,
+            at,
+            response_time_ms: Some(2000.0),
+        })
+        .unwrap();
+    println!("duration_prompt={duration_prompt:.1} duration_output={duration_output:.1}");
 }

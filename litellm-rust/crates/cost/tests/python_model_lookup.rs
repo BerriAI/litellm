@@ -144,6 +144,7 @@ fn model_info_catalog_prices_selected_model_with_off_peak_and_region() {
             data_residency: Some("eu"),
             vertex_location: None,
             at,
+            response_time_ms: None,
         })
         .unwrap();
     assert!((actual.0 - (80.0 * 1e-6 + 20.0 * 0.25e-6) * 1.2).abs() < 1e-12);
@@ -179,6 +180,7 @@ fn model_info_catalog_applies_xai_inclusive_threshold_policy() {
             data_residency: None,
             vertex_location: None,
             at,
+            response_time_ms: None,
         })
         .unwrap();
     assert!((actual.0 - 128_000.0 * 5e-6).abs() < 1e-12);

@@ -4,6 +4,7 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
+use crate::per_second::per_second_pricing_cost;
 use crate::responses_usage::ChatUsage;
 use crate::{Cost, Pricing, PricingError, Rates, Request, calculate};
 
@@ -27,6 +28,7 @@ pub struct ModelCostRequest<'a> {
     pub data_residency: Option<&'a str>,
     pub vertex_location: Option<&'a str>,
     pub at: Timestamp,
+    pub response_time_ms: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -143,9 +145,13 @@ impl ModelInfoCatalog {
         let key = self
             .select_model_key(request.model, request.provider, request.region)
             .ok_or(CatalogError::ModelNotFound)?;
+        let model_info = &self.entries[key];
+        if let Some(cost) = per_second_pricing_cost(model_info, request.response_time_ms) {
+            return Ok(cost);
+        }
         Ok(calculate_generic_cost_from_model_info_with_region(
             request.usage,
-            &self.entries[key],
+            model_info,
             request.service_tier,
             request.provider == Some("xai"),
             request.data_residency,
