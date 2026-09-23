@@ -1746,7 +1746,11 @@
     ],
     "tests/integration/management/test_user_updates_wedged_coordination_redis.py::test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged": [
       "mgmt.user.update.budget_change_returns_promptly_with_wedged_coordination_redis",
-      "mgmt.user.bulk_update.budget_change_returns_promptly_with_wedged_coordination_redis"
+      "mgmt.user.bulk_update.budget_change_returns_promptly_with_wedged_coordination_redis",
+      "mgmt.customer.update.budget_change_returns_promptly_with_wedged_coordination_redis",
+      "mgmt.key.reset_spend.returns_promptly_with_wedged_coordination_redis",
+      "mgmt.auth_cache_invalidation.publish_parked_by_short_redis_wedge_lands_after_recovery",
+      "mgmt.auth_cache_invalidation.burst_with_worker_kill_keeps_serving_while_redis_wedged"
     ]
   },
   "browser": {

@@ -1,8 +1,8 @@
 import asyncio
 import json
-from collections.abc import Awaitable, Sequence
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.config_sync_pubsub import (
@@ -18,7 +18,8 @@ if TYPE_CHECKING:
 
 AUTH_CACHE_INVALIDATION_CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 _POLL_TIMEOUT_SECONDS: Final = 1.0
-_PUBLISH_TIMEOUT_SECONDS: Final = 1.0
+_MAX_PENDING_PUBLISHES: Final = 1024
+_pending_publishes: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep background publishes alive
 _BACKOFF_INITIAL_SECONDS: Final = 5.0
 _BACKOFF_MAX_SECONDS: Final = 60.0
 
@@ -68,6 +69,20 @@ def _message_from_data(data: object) -> _CacheInvalidationMessage | None:
     )
 
 
+async def _publish_to_redis(redis_cache: "RedisCache", cache_key: str, message: str) -> None:
+    try:
+        client: Final = _pubsub_capable_client(redis_cache)
+        if client is None:
+            verbose_proxy_logger.debug(
+                "auth cache invalidation publish for %s skipped: cluster redis client has no pub/sub support",
+                cache_key,
+            )
+            return
+        await client.publish(auth_cache_invalidation_channel(redis_cache), message)
+    except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
+        verbose_proxy_logger.warning("auth cache invalidation publish for %s failed: %s", cache_key, e)
+
+
 async def publish_auth_cache_invalidation(
     cache_key: str, new_value: float | None = None, ttl: float | None = None
 ) -> None:
@@ -81,47 +96,43 @@ async def publish_auth_cache_invalidation(
     writes the value into its additional in-memory caches rather than deleting
     the key. A spend reset uses this so the handler's self-delivered message
     cannot erase the freshly-written post-reset counter or floor marker.
+
+    The Redis round trip runs as a background task: this call returns once the
+    publish has been handed to the event loop, so a Redis that accepts
+    connections but never replies costs the caller nothing. The DB write has
+    already committed and the local eviction already happened, so the caller
+    has nothing to do with the publish result.
     """
     redis_cache: Final = coordination_redis_cache()
     if redis_cache is None:
         return
-    try:
-        client: Final = _pubsub_capable_client(redis_cache)
-        if client is None:
-            verbose_proxy_logger.debug(
-                "auth cache invalidation publish for %s skipped: cluster redis client has no pub/sub support",
-                cache_key,
-            )
-            return
-        await client.publish(
-            auth_cache_invalidation_channel(redis_cache),
-            _cache_invalidation_message_json(cache_key, new_value=new_value, ttl=ttl),
+    _pending_publishes.difference_update({task for task in _pending_publishes if task.done()})
+    if len(_pending_publishes) >= _MAX_PENDING_PUBLISHES:
+        verbose_proxy_logger.warning(
+            "auth cache invalidation publish for %s dropped: %d publishes already waiting on redis; "
+            "other workers keep their cached copy until its TTL expires",
+            cache_key,
+            len(_pending_publishes),
         )
-    except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
-        verbose_proxy_logger.warning("auth cache invalidation publish for %s failed: %s", cache_key, e)
+        return
+    task: Final = asyncio.create_task(
+        _publish_to_redis(
+            redis_cache, cache_key, _cache_invalidation_message_json(cache_key, new_value=new_value, ttl=ttl)
+        )
+    )
+    _pending_publishes.add(task)
+    await asyncio.sleep(0)
 
 
-class _PublishInvalidation(Protocol):
-    def __call__(self, cache_key: str) -> Awaitable[None]: ...
-
-
-async def evict_and_broadcast(
-    cache_keys: Sequence[str],
-    user_api_key_cache: "UserApiKeyCache",
-    *,
-    publish: _PublishInvalidation | None = None,
-) -> None:
+async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
     """
     Drop cached management objects here and on every other worker.
 
     Every endpoint that mutates a cached object must call this: auth serves those objects
     cache-first with no freshness check, so a mutation that leaves the entry in place keeps the
-    stale object enforced until its TTL expires (LIT-3803). Best-effort on both steps: the DB write
-    has already committed, so a cache backend error must not fail the endpoint, and the broadcast is
-    bounded by ``_PUBLISH_TIMEOUT_SECONDS`` so a Redis that accepts connections but never replies
-    cannot hold the request handler.
+    stale object enforced until its TTL expires (LIT-3803). Best-effort: the DB write has already
+    committed, so a cache backend error must not fail the endpoint.
     """
-    broadcaster: Final = publish_auth_cache_invalidation if publish is None else publish
     for cache_key in cache_keys:
         try:
             await user_api_key_cache.async_delete_cache(key=cache_key)
@@ -131,15 +142,7 @@ async def evict_and_broadcast(
                 cache_key,
                 e,
             )
-        try:
-            await asyncio.wait_for(broadcaster(cache_key=cache_key), timeout=_PUBLISH_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError:
-            verbose_proxy_logger.warning(
-                "auth cache invalidation publish for %s timed out after %.1fs; "
-                "other workers keep their cached copy until its TTL expires",
-                cache_key,
-                _PUBLISH_TIMEOUT_SECONDS,
-            )
+        await publish_auth_cache_invalidation(cache_key=cache_key)
 
 
 class AuthCacheInvalidationSubscriber:

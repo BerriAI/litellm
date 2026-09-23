@@ -1,6 +1,6 @@
 import os
-import socket
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -12,7 +12,6 @@ from typing import Final
 
 import httpx
 import psutil
-
 from integration._support.client import Gateway
 
 
@@ -46,7 +45,15 @@ def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
 
 
 @contextmanager
-def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str], *, config: Path | None = None, remove_environment: tuple[str, ...] = ()) -> Iterator[Gateway]:
+def owned_proxy(
+    gateway: Gateway,
+    directory: Path,
+    overrides: Mapping[str, str],
+    *,
+    config: Path | None = None,
+    remove_environment: tuple[str, ...] = (),
+    workers: int = 1,
+) -> Iterator[Gateway]:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         port: Final = reserve.getsockname()[1]
@@ -73,7 +80,7 @@ def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str],
                 "--port",
                 str(port),
                 "--num_workers",
-                "1",
+                str(workers),
                 "--use_prisma_db_push",
                 "--enforce_prisma_migration_check",
             ],

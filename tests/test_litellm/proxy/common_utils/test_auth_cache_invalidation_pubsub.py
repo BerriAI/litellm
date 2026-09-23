@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import json
 import time
-from typing import Iterable, List, Optional, Tuple
+from collections.abc import Iterable
 from unittest.mock import patch
 
 import pytest
@@ -21,10 +21,21 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
 class _RecordingRedisClient(Redis):
     def __init__(self) -> None:
-        self.published: List[Tuple[str, str]] = []
+        self.published: list[tuple[str, str]] = []
 
     async def publish(self, channel: str, message: str) -> int:
         self.published.append((channel, message))
+        return 1
+
+
+class _WedgedPublishRedisClient(Redis):
+    def __init__(self) -> None:
+        self.attempted: list[str] = []
+        self.release = asyncio.Event()
+
+    async def publish(self, channel: str, message: str) -> int:
+        self.attempted.append(message)
+        await self.release.wait()
         return 1
 
 
@@ -38,16 +49,16 @@ class _FailingPublishRedisClient(Redis):
 
 class _QueuePubSub:
     def __init__(self, initial_messages: Iterable[object] = ()) -> None:
-        self.queue: "asyncio.Queue[object]" = asyncio.Queue()
+        self.queue: asyncio.Queue[object] = asyncio.Queue()
         for message in initial_messages:
             self.queue.put_nowait(message)
-        self.subscribed_channels: List[str] = []
+        self.subscribed_channels: list[str] = []
         self.closed = False
 
     async def subscribe(self, *channels: str) -> None:
         self.subscribed_channels.extend(channels)
 
-    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Optional[object]:
+    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> object | None:
         try:
             return await asyncio.wait_for(self.queue.get(), timeout)
         except asyncio.TimeoutError:
@@ -66,7 +77,7 @@ class _ScriptedPubSubRedisClient(Redis):
 
 
 class _FakeRedisCache:
-    def __init__(self, client: object, namespace: Optional[str] = None) -> None:
+    def __init__(self, client: object, namespace: str | None = None) -> None:
         self._client = client
         self.namespace = namespace
 
@@ -227,14 +238,21 @@ async def test_subscriber_ignores_malformed_messages() -> None:
 
 
 @pytest.mark.asyncio
-async def test_evict_and_broadcast_evicts_locally_and_returns_when_publish_never_completes() -> None:
+async def test_evict_and_broadcast_evicts_locally_and_returns_while_redis_publish_never_answers() -> None:
     cache = UserApiKeyCache()
     cache.set_cache("user-wedged", UserAPIKeyAuth(user_id="user-wedged"), model_type=UserAPIKeyAuth)
+    client = _WedgedPublishRedisClient()
 
-    async def hanging_publish(cache_key: str) -> None:
-        await asyncio.Event().wait()
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_FakeRedisCache(client=client),
+    ):
+        started = time.monotonic()
+        await evict_and_broadcast(cache_keys=("user-wedged",), user_api_key_cache=cache)
+        elapsed = time.monotonic() - started
 
-    started = time.monotonic()
-    await evict_and_broadcast(cache_keys=("user-wedged",), user_api_key_cache=cache, publish=hanging_publish)
-    assert time.monotonic() - started < 2.0
+    assert elapsed < 0.1, f"handler waited {elapsed:.3f}s on a publish that never answers"
     assert cache.get_cache("user-wedged", model_type=UserAPIKeyAuth) is None
+    assert client.attempted == [json.dumps({"cache_key": "user-wedged"})], "publish was not handed to redis"
+    client.release.set()
+    await asyncio.sleep(0)
