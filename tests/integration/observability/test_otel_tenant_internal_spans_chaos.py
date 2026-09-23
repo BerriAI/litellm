@@ -124,6 +124,41 @@ def test_frozen_tenant_sink_receives_every_span_after_resume(gateway: Gateway, a
             assert _classes(group)["internal"] == 0, f"internal spans leaked for {call_id}"
 
 
+def test_sink_outage_keeps_diagnostics_green_and_recovers(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
+    pid: Final = sink_pid(audit_sinks.tenant)
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(model="openai/audit-chat", api_base=f"{gateway.upstream_url}/v1")
+        team_id: Final = scenario.team()
+        callback: Final = gateway.request(
+            "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": {**langfuse_vars, INTERNAL_SPANS_VAR: "exclude"}}
+        )
+        assert callback.status_code == 200, callback.text
+        key: Final = scenario.key(team_id=team_id)
+        os.kill(pid, signal.SIGSTOP)
+        try:
+            responses: Final = _send_burst(gateway, key, model, 20)
+            readiness: Final = gateway.request("GET", "/health/readiness")
+            assert readiness.status_code == 200, readiness.text
+            details: Final = gateway.request("GET", "/health/readiness/details")
+            assert details.status_code == 200, details.text
+            success_callbacks: Final = details.json().get("success_callbacks", [])
+            assert "OpenTelemetryV2" in success_callbacks, f"otel callback missing during outage: {details.json()}"
+            liveliness: Final = gateway.request("GET", "/health/liveliness")
+            assert liveliness.status_code == 200, liveliness.text
+        finally:
+            os.kill(pid, signal.SIGCONT)
+        assert all(response.status_code == 200 for response in responses), [r.status_code for r in responses]
+        call_ids: Final = [response.headers.get("x-litellm-call-id") for response in responses]
+        spans: Final = _wait_trace_count(audit_sinks.tenant, call_ids, seconds=120)
+        for call_id in call_ids:
+            group: Final = tuple(
+                span for span in spans if span["attributes"].get("litellm.call_id") == call_id
+            )
+            assert group, f"call {call_id} never reached the tenant sink"
+            model_spans: Final = tuple(span for span in group if "gen_ai.operation.name" in span["attributes"])
+            assert len(model_spans) == 1, f"call {call_id} exported {len(model_spans)} times"
+
+
 def test_slow_tenant_sink_exports_each_span_once(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     configure_sink(audit_sinks.tenant, delay_seconds=2.0)
     try:

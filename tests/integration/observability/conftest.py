@@ -8,7 +8,14 @@ from urllib.parse import urlparse
 
 import pytest
 import yaml
-from integration._support.otlp_sink import SpanSinks, owned_sinks
+from integration._support.otlp_sink import (
+    ConnectSink,
+    GrpcSink,
+    SpanSinks,
+    owned_connect_sink,
+    owned_grpc_sink,
+    owned_sinks,
+)
 from pydantic import JsonValue
 
 AuditConfigWriter = Callable[[Path, Mapping[str, JsonValue]], Path]
@@ -19,6 +26,20 @@ def audit_sinks(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SpanSinks]
     directory: Final = tmp_path_factory.mktemp("otel-audit-sinks")
     with owned_sinks(directory) as sinks:
         yield sinks
+
+
+@pytest.fixture(scope="module")
+def newrelic_sink(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ConnectSink]:
+    directory: Final = tmp_path_factory.mktemp("otel-audit-connect")
+    with owned_connect_sink(directory) as sink:
+        yield sink
+
+
+@pytest.fixture(scope="module")
+def arize_grpc_sink(tmp_path_factory: pytest.TempPathFactory) -> Iterator[GrpcSink]:
+    directory: Final = tmp_path_factory.mktemp("otel-audit-grpc")
+    with owned_grpc_sink(directory) as sink:
+        yield sink
 
 
 @pytest.fixture(scope="module")

@@ -21,9 +21,12 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows
 from integration._support.otlp_sink import (
+    ConnectSink,
+    GrpcSink,
     Span,
     SpanSinks,
     configure_sink,
+    recorded_requests,
     recorded_spans,
     span_class,
     spans_for_trace,
@@ -850,6 +853,122 @@ def test_internal_spans_on_newrelic_accepted(gateway: Gateway) -> None:
         assert "newrelic" in data.get("success_callbacks", []) or "newrelic" in data.get("failure_callbacks", []), data
 
 
+def test_newrelic_exclude_over_connect(
+    gateway: Gateway, audit_sinks: SpanSinks, newrelic_sink: ConnectSink, otel_audit_config: AuditConfigWriter, tmp_path: Path
+) -> None:
+    _newrelic_flow(gateway, audit_sinks, newrelic_sink, otel_audit_config, tmp_path, internal_spans="exclude")
+
+
+def test_newrelic_include_over_connect(
+    gateway: Gateway, audit_sinks: SpanSinks, newrelic_sink: ConnectSink, otel_audit_config: AuditConfigWriter, tmp_path: Path
+) -> None:
+    _newrelic_flow(gateway, audit_sinks, newrelic_sink, otel_audit_config, tmp_path, internal_spans="include")
+
+
+def _newrelic_flow(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    newrelic_sink: ConnectSink,
+    otel_audit_config: AuditConfigWriter,
+    tmp_path: Path,
+    *,
+    internal_spans: str,
+) -> None:
+    overrides: Final = {
+        "LITELLM_OTEL_V2": "1",
+        "ARIZE_HTTP_ENDPOINT": audit_sinks.arize,
+        "HTTPS_PROXY": newrelic_sink.proxy_url,
+        "NO_PROXY": "127.0.0.1,localhost",
+        "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE": newrelic_sink.ca_pem,
+    }
+    with owned_proxy(gateway, tmp_path, overrides, config=otel_audit_config(tmp_path, {}), workers=2) as candidate:
+        with candidate.scenario() as scenario:
+            model: Final = _audit_model(scenario, candidate.upstream_url)
+            team_id: Final = scenario.team()
+            callback: Final = _add_callback(
+                candidate,
+                team_id,
+                {"newrelic_api_key": "nr-synthetic-audit", INTERNAL_SPANS_VAR: internal_spans},
+                callback_name="newrelic",
+            )
+            assert callback.status_code == 200, callback.text
+            key: Final = _key_on_team(scenario, team_id)
+            response: Final = _chat(candidate, key, model, _nonce())
+            assert response.status_code == 200, response.text
+            call_id: Final = _call_id(response)
+            trace: Final = _trace_id(newrelic_sink.control_url, call_id=call_id)
+            group: Final = _trace_spans(newrelic_sink.control_url, trace)
+            if internal_spans == "exclude":
+                _assert_excluded(group)
+            else:
+                _assert_full(group)
+            requests: Final = recorded_requests(newrelic_sink.control_url)
+            assert any(entry.get("connect") == "otlp.nr-data.net:443" for entry in requests), requests
+            posted: Final = tuple(entry for entry in requests if entry.get("path") == "/v1/traces")
+            assert posted, f"tunnel saw no /v1/traces posts: {requests}"
+            for entry in posted:
+                assert entry.get("host") == "otlp.nr-data.net", entry
+                headers: Final = entry.get("headers")
+                assert isinstance(headers, Mapping) and headers.get("api-key") == "nr-synthetic-audit", entry
+
+
+def test_arize_grpc_exclude(
+    gateway: Gateway, audit_sinks: SpanSinks, arize_grpc_sink: GrpcSink, otel_audit_config: AuditConfigWriter, tmp_path: Path
+) -> None:
+    _arize_grpc_flow(gateway, audit_sinks, arize_grpc_sink, otel_audit_config, tmp_path, internal_spans="exclude")
+
+
+def test_arize_grpc_include(
+    gateway: Gateway, audit_sinks: SpanSinks, arize_grpc_sink: GrpcSink, otel_audit_config: AuditConfigWriter, tmp_path: Path
+) -> None:
+    _arize_grpc_flow(gateway, audit_sinks, arize_grpc_sink, otel_audit_config, tmp_path, internal_spans="include")
+
+
+def _arize_grpc_flow(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    arize_grpc_sink: GrpcSink,
+    otel_audit_config: AuditConfigWriter,
+    tmp_path: Path,
+    *,
+    internal_spans: str,
+) -> None:
+    overrides: Final = {
+        "LITELLM_OTEL_V2": "1",
+        "ARIZE_ENDPOINT": arize_grpc_sink.url,
+        "ARIZE_HTTP_ENDPOINT": audit_sinks.arize,
+    }
+    with owned_proxy(gateway, tmp_path, overrides, config=otel_audit_config(tmp_path, {}), workers=2) as candidate:
+        with candidate.scenario() as scenario:
+            model: Final = _audit_model(scenario, candidate.upstream_url)
+            team_id: Final = scenario.team()
+            callback: Final = _add_callback(
+                candidate,
+                team_id,
+                {**ARIZE_VARS, INTERNAL_SPANS_VAR: internal_spans},
+                callback_name="arize",
+            )
+            assert callback.status_code == 200, callback.text
+            key: Final = _key_on_team(scenario, team_id)
+            response: Final = _chat(candidate, key, model, _nonce())
+            assert response.status_code == 200, response.text
+            call_id: Final = _call_id(response)
+            trace: Final = _trace_id(arize_grpc_sink.control_url, call_id=call_id)
+            group: Final = _trace_spans(arize_grpc_sink.control_url, trace)
+            if internal_spans == "exclude":
+                _assert_excluded(group)
+            else:
+                _assert_full(group)
+            requests: Final = recorded_requests(arize_grpc_sink.control_url)
+            exports: Final = tuple(entry for entry in requests if entry.get("grpc") == "Export")
+            assert exports, f"grpc sink saw no Export calls: {requests}"
+            for entry in exports:
+                metadata: Final = entry.get("metadata")
+                assert isinstance(metadata, Mapping), entry
+                assert metadata.get("arize-space-id") == ARIZE_VARS["arize_space_id"], entry
+                assert metadata.get("api_key") == ARIZE_VARS["arize_api_key"], entry
+
+
 def test_unauthenticated_callback_post_rejected(gateway: Gateway, langfuse_vars: dict[str, JsonValue]) -> None:
     with httpx.Client(base_url=str(gateway.client.base_url), timeout=15, trust_env=False) as client:
         response: Final = client.post(
@@ -876,27 +995,32 @@ def test_key_update_bogus_internal_spans_rejected(gateway: Gateway, langfuse_var
         assert response.status_code == 400, f"expected 400, got {response.status_code}: {response.text}"
 
 
-def test_team_update_bogus_internal_spans_drops_destination(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
+def test_team_logging_metadata_rejects_bogus_internal_spans(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue]) -> None:
     with gateway.scenario() as scenario:
         model: Final = _audit_model(scenario, gateway.upstream_url)
         team_id: Final = scenario.team()
+        registered: Final = _add_callback(gateway, team_id, langfuse_vars)
+        assert registered.status_code == 200, registered.text
+        bogus_metadata: Final[Mapping[str, JsonValue]] = {
+            "logging": _key_logging_entry({**langfuse_vars, INTERNAL_SPANS_VAR: "bogus"})
+        }
         update: Final = gateway.request(
-            "POST",
-            "/team/update",
-            {"team_id": team_id, "metadata": {"logging": _key_logging_entry({**langfuse_vars, INTERNAL_SPANS_VAR: "bogus"})}},
+            "POST", "/team/update", {"team_id": team_id, "metadata": bogus_metadata}
         )
-        assert update.status_code == 200, update.text
+        assert update.status_code == 400, update.text
+        assert "otel_internal_spans" in update.text, update.text
+        created: Final = gateway.request("POST", "/team/new", {"metadata": bogus_metadata})
+        assert created.status_code == 400, created.text
+        assert "otel_internal_spans" in created.text, created.text
         key: Final = _key_on_team(scenario, team_id)
         response: Final = _chat(gateway, key, model, _nonce())
         assert response.status_code == 200, response.text
         call_id: Final = _call_id(response)
-        operator_trace: Final = _trace_id(audit_sinks.operator, call_id=call_id)
-        _assert_full(_trace_spans(audit_sinks.operator, operator_trace))
-        _, observed = recorded_spans(audit_sinks.tenant, since=0)
-        leaked: Final = tuple(
-            span for span in observed if span["attributes"].get("litellm.call_id") == call_id
-        )
-        assert not leaked, f"bogus metadata.logging still reached the tenant sink: {leaked}"
+        tenant_trace: Final = _trace_id(audit_sinks.tenant, call_id=call_id)
+        _assert_full(_trace_spans(audit_sinks.tenant, tenant_trace))
+        unrelated_key: Final = scenario.key()
+        unrelated: Final = _chat(gateway, unrelated_key, model, _nonce())
+        assert unrelated.status_code == 200, unrelated.text
 
 
 def _sink_status_flow(
