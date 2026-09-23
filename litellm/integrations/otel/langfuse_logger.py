@@ -18,9 +18,8 @@ if TYPE_CHECKING:
 
 
 class LangfuseOpenTelemetryV2(OpenTelemetryV2):
-    """Stamps the caller's trace controls (name, user, session, tags) on the request, falling back to the
-    proxy's end user when the caller names no trace user. Langfuse reads them off the root observation,
-    and the proxy's root span is still recording when the LLM call starts."""
+    """Stamps the caller's trace controls (name, user, session, tags) on the request. Langfuse reads them off
+    the root observation, and the proxy's root span is still recording when the LLM call starts."""
 
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         root: Final = request_root_span()

@@ -71,6 +71,14 @@ def _generation_span_attributes(sink: Wire, batches: list[bytes], marker: str) -
     )
 
 
+def _span_attributes_containing_marker(sink: Wire, batches: list[bytes], marker: str) -> tuple[dict[str, object], ...]:
+    return tuple(
+        attributes
+        for _trace_id, attributes in _drained_spans(sink, batches)
+        if any(isinstance(value, str) and marker in value for value in attributes.values())
+    )
+
+
 def _trace_user_span_attributes(sink: Wire, batches: list[bytes], marker: str) -> tuple[dict[str, object], ...]:
     spans: Final = _drained_spans(sink, batches)
     generation_trace: Final = next(
@@ -353,3 +361,47 @@ def test_langfuse_otel_v2_header_end_user_lands_in_user_id(gateway: Gateway, tmp
             "user.id": f"end-user-{marker}",
             "session.id": None,
         }, user_spans[0]
+
+
+@pytest.mark.covers("other.observability.langfuse_otel.messages_caller_trace_user_id_under_litellm_metadata")
+def test_langfuse_otel_messages_caller_trace_user_id_under_litellm_metadata_wins_over_the_end_user(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    upstream_bodies: Final[list[bytes]] = []
+
+    def upstream(request: Request) -> Reply:
+        upstream_bodies.append(request.body)
+        return _upstream_reply(marker)
+
+    with (
+        wire_server(upstream) as provider,
+        wire_server(_sink) as collector,
+        _langfuse_proxy(gateway, tmp_path, collector.url) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=provider.url + "/v1")
+        response: Final = candidate.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": marker}],
+                "max_tokens": 5,
+                "litellm_metadata": {"trace_user_id": f"caller-{marker}"},
+                "cache": {"no-cache": True},
+            },
+            headers={"x-litellm-end-user-id": f"end-user-{marker}"},
+        )
+        assert response.status_code == 200, response.text
+        assert any(marker.encode() in body for body in upstream_bodies), upstream_bodies
+        batches: Final[list[bytes]] = []
+        attributes: Final = eventually(
+            lambda: _span_attributes_containing_marker(collector, batches, marker),
+            lambda spans: len(spans) == 1,
+            seconds=30,
+        )[0]
+        assert {key: attributes.get(key) for key in ("user.id", "session.id")} == {
+            "user.id": f"caller-{marker}",
+            "session.id": None,
+        }, attributes

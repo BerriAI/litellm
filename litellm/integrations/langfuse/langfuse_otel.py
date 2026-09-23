@@ -11,6 +11,7 @@ from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.integrations.otel.model.trace_controls import metadata_bodies
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.integrations.langfuse_otel import (
@@ -267,12 +268,18 @@ class LangfuseOtelLogger(OpenTelemetry):
         metadata: Final = as_str_mapping(
             LangfuseOtelLogger._extract_langfuse_metadata(kwargs)  # pyright: ignore[reportUnknownArgumentType,reportUnknownMemberType]  # helper returns a loosely typed dict
         )
-        if metadata is None or as_str(metadata.get("trace_user_id")):
+        litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
+        bodies: Final = metadata_bodies(litellm_params)
+        caller: Final = (as_str(metadata.get("trace_user_id")) if metadata is not None else None) or next(
+            (value for body in bodies if (value := as_str(body.get("trace_user_id")))), None
+        )
+        if caller is not None:
+            safe_set_attribute(span, LangfuseSpanAttributes.TRACE_USER_ID.value, caller)
             return
         end_user: Final = (
             slp_metadata.get("user_api_key_end_user_id")
             or slp.get("end_user")
-            or as_str(metadata.get("user_api_key_end_user_id"))
+            or next((value for body in bodies if (value := as_str(body.get("user_api_key_end_user_id")))), None)
         )
         if end_user:
             safe_set_attribute(span, LangfuseSpanAttributes.TRACE_USER_ID.value, str(end_user))

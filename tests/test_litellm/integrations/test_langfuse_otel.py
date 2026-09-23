@@ -1073,6 +1073,18 @@ class TestLangfuseOtelTraceIdentity:
         )
         assert identity == {"user.id": "caller-1", "session.id": None}
 
+    def test_caller_trace_user_id_under_litellm_metadata_wins_over_the_end_user(self):
+        kwargs = self._kwargs(slp_metadata={"user_api_key_end_user_id": "end-1"})
+        kwargs["litellm_params"]["litellm_metadata"] = {"trace_user_id": "caller-1"}
+        identity, _ = self._identity(kwargs)
+        assert identity == {"user.id": "caller-1", "session.id": None}
+
+    def test_end_user_only_under_litellm_metadata_lands_in_user_id(self):
+        kwargs = self._kwargs()
+        kwargs["litellm_params"]["litellm_metadata"] = {"user_api_key_end_user_id": "end-1"}
+        identity, _ = self._identity(kwargs)
+        assert identity == {"user.id": "end-1", "session.id": None}
+
     def test_caller_session_id_stays_the_session_beside_the_end_user(self):
         identity, _ = self._identity(
             self._kwargs(

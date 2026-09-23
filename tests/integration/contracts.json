@@ -275,6 +275,9 @@
     "tests/integration/observability/test_langfuse_otel_identity.py::test_langfuse_otel_v2_header_end_user_lands_in_user_id": [
       "other.observability.langfuse_otel.v2_header_end_user_in_user_id"
     ],
+    "tests/integration/observability/test_langfuse_otel_identity.py::test_langfuse_otel_messages_caller_trace_user_id_under_litellm_metadata_wins_over_the_end_user": [
+      "other.observability.langfuse_otel.messages_caller_trace_user_id_under_litellm_metadata"
+    ],
     "tests/integration/observability/test_guardrail_effects.py::test_guardrail_rewrites_system_and_user_in_actual_anthropic_request": [
       "other.observability.guardrails.rewrite_reaches_correct_anthropic_positions"
     ],

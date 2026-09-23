@@ -878,7 +878,6 @@ def _set_session_and_user_attrs(span: "Span", kwargs: dict, standard_logging_pay
 
 
 def _set_request_context_attrs(span: "Span", standard_logging_payload: object) -> None:
-    """Emit `litellm.trace_id` / team / key context when source data exists."""
     payload: Final = as_str_mapping(standard_logging_payload)
     if payload is None:
         return
