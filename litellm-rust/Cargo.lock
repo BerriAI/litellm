@@ -3175,6 +3175,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "url",
+ "veil",
  "wiremock",
 ]
 

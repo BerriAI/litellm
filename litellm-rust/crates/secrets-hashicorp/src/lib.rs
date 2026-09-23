@@ -7,6 +7,4 @@ pub mod secret_manager;
 
 pub use config::{AppRoleAuth, HashicorpVaultConfig, TlsCertAuth};
 pub use error::Error;
-pub use secret_manager::{
-    HashicorpVault, PythonFailure, PythonFailureKind, PythonFailureStage, SecretLocation,
-};
+pub use secret_manager::{HashicorpVault, RawOperationError, SecretLocation};

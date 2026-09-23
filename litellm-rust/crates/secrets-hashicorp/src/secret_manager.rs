@@ -1,5 +1,5 @@
 mod client;
-mod python;
+mod raw;
 mod read;
 mod write;
 
@@ -31,7 +31,7 @@ use vaultrs::{
 
 use crate::{Error, HashicorpVaultConfig, TlsCertAuth, cert_login::CertLoginRequest};
 
-pub use python::{PythonFailure, PythonFailureKind, PythonFailureStage};
+pub use raw::RawOperationError;
 
 const CACHE_CAPACITY: u64 = 200;
 

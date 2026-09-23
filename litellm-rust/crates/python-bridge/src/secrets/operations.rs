@@ -63,7 +63,7 @@ pub(super) async fn read_python_provider(
 #[derive(Debug)]
 pub(super) enum PythonMutationError {
     Unsupported,
-    Vault(Box<litellm_secrets::hashicorp::PythonFailure>),
+    Vault(Box<super::vault::Failure>),
     CyberarkWrite {
         name: String,
         failure: Box<litellm_secrets::cyberark::WriteFailure>,
@@ -187,19 +187,19 @@ pub(super) async fn write_python_provider_with_context(
     if let (SecretManager::HashicorpVault(client), SecretOperationContext::Hashicorp(operation)) =
         (manager, &context.operation)
     {
-        return client
-            .write_for_python(
-                name,
-                value,
-                &litellm_secrets_types::SecretWriteContext {
-                    description: context.description.clone(),
-                    tags: context.tags.clone(),
-                    operation: operation.clone(),
-                },
-            )
-            .await
-            .map(PythonMutationResponse::Json)
-            .map_err(|failure| PythonMutationError::Vault(Box::new(failure)));
+        return super::vault::write(
+            client,
+            name,
+            value,
+            &litellm_secrets_types::SecretWriteContext {
+                description: context.description.clone(),
+                tags: context.tags.clone(),
+                operation: operation.clone(),
+            },
+        )
+        .await
+        .map(PythonMutationResponse::Json)
+        .map_err(|failure| PythonMutationError::Vault(Box::new(failure)));
     }
     write_python_provider(manager, name, value)
         .await
@@ -214,8 +214,7 @@ pub(super) async fn delete_python_provider_with_context(
     if let (SecretManager::HashicorpVault(client), SecretOperationContext::Hashicorp(context)) =
         (manager, context)
     {
-        client
-            .delete_for_python(name, context)
+        super::vault::delete(client, name, context)
             .await
             .map_err(|failure| PythonMutationError::Vault(Box::new(failure)))?;
         return Ok(PythonMutationResponse::Value(serde_json::json!({
@@ -237,8 +236,7 @@ pub(super) async fn rotate_python_provider_with_context(
     if let (SecretManager::HashicorpVault(client), SecretOperationContext::Hashicorp(context)) =
         (manager, context)
     {
-        return client
-            .rotate_for_python(current_name, new_name, value, context)
+        return super::vault::rotate(client, current_name, new_name, value, context)
             .await
             .map(PythonMutationResponse::Json)
             .map_err(|failure| PythonMutationError::Vault(Box::new(failure)));

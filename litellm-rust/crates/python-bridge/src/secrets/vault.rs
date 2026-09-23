@@ -1,37 +1,41 @@
-use litellm_secrets::hashicorp::{Error, PythonFailure, PythonFailureKind, PythonFailureStage};
+mod operation;
+
+pub(super) use operation::{Failure, FailureKind, FailureStage, delete, rotate, write};
+
+use litellm_secrets::hashicorp::{Error, RawOperationError};
 use pyo3::prelude::*;
 
 use super::mutation::{error_value, http_message, json_value};
 
 pub(super) fn failure_value(
     py: Python<'_>,
-    failure: PythonFailure,
+    failure: Failure,
     context: &ErrorContext,
 ) -> PyResult<Py<PyAny>> {
     let message = match *failure.kind {
-        PythonFailureKind::Http {
+        FailureKind::Native(RawOperationError::Http {
             method,
             url,
             status,
             body,
-        } => match failure.stage {
-            PythonFailureStage::Current(name) if status == 404 => {
+        }) => match failure.stage {
+            FailureStage::Current(name) if status == 404 => {
                 format!("Current secret {name} not found")
             }
-            PythonFailureStage::Replacement(name) if status == 404 => {
+            FailureStage::Replacement(name) if status == 404 => {
                 format!("Failed to verify new secret {name}")
             }
-            PythonFailureStage::Current(_) => format!(
+            FailureStage::Current(_) => format!(
                 "HTTP error occurred while checking current secret: {}",
                 response_text(py, &body)?
             ),
-            PythonFailureStage::Replacement(_) => format!(
+            FailureStage::Replacement(_) => format!(
                 "HTTP error occurred while verifying new secret: {}",
                 response_text(py, &body)?
             ),
-            PythonFailureStage::Mutation => http_message(py, &method, &url, status)?,
+            FailureStage::Mutation => http_message(py, &method, &url, status)?,
         },
-        PythonFailureKind::ValueMismatch { expected, actual } => {
+        FailureKind::ValueMismatch { expected, actual } => {
             let actual = json_value(py, &actual)?;
             format!(
                 "New secret value mismatch. Expected: {}, Got: {}",
@@ -42,30 +46,26 @@ pub(super) fn failure_value(
         kind => {
             let message = cause_message(py, kind, context)?;
             match failure.stage {
-                PythonFailureStage::Current(_) => {
+                FailureStage::Current(_) => {
                     format!("Error checking current secret: {message}")
                 }
-                PythonFailureStage::Replacement(_) => {
+                FailureStage::Replacement(_) => {
                     format!("Error verifying new secret: {message}")
                 }
-                PythonFailureStage::Mutation => message,
+                FailureStage::Mutation => message,
             }
         }
     };
     error_value(py, message)
 }
 
-fn cause_message(
-    py: Python<'_>,
-    kind: PythonFailureKind,
-    context: &ErrorContext,
-) -> PyResult<String> {
+fn cause_message(py: Python<'_>, kind: FailureKind, context: &ErrorContext) -> PyResult<String> {
     Ok(match kind {
-        PythonFailureKind::Local(error) => error.to_string(),
-        PythonFailureKind::UnsafeName(name) => {
+        FailureKind::Native(RawOperationError::Local(error)) => error.to_string(),
+        FailureKind::UnsafeName(name) => {
             format!("Invalid secret_name {}", name.into_pyobject(py)?.repr()?)
         }
-        PythonFailureKind::Timeout { method, elapsed } => {
+        FailureKind::Native(RawOperationError::Timeout { method, elapsed }) => {
             if method == "POST" {
                 let elapsed = py
                     .import("builtins")?
@@ -93,7 +93,7 @@ fn cause_message(
                 String::new()
             }
         }
-        PythonFailureKind::Transport(source) => {
+        FailureKind::Native(RawOperationError::Transport(source)) => {
             if let Some(error) = request_error(&source) {
                 if error.is_timeout() {
                     String::new()
@@ -106,22 +106,22 @@ fn cause_message(
                 "HashiCorp Vault request failed".to_owned()
             }
         }
-        PythonFailureKind::MissingGet(value) => {
+        FailureKind::MissingGet(value) => {
             let value = json_value(py, &value)?;
             match value.bind(py).getattr("get") {
                 Err(error) => error.value(py).str()?.extract()?,
                 Ok(_) => "HashiCorp Vault response payload is malformed".to_owned(),
             }
         }
-        PythonFailureKind::Json(body) => match json_value(py, &body) {
+        FailureKind::Json(body) => match json_value(py, &body) {
             Err(error) => error.value(py).str()?.extract()?,
             Ok(_) => "HashiCorp Vault response payload is malformed".to_owned(),
         },
-        PythonFailureKind::Authentication {
+        FailureKind::Native(RawOperationError::Authentication {
             source,
             url,
             certificate,
-        } => {
+        }) => {
             let message = match source {
                 Error::LoginStatus { status } => http_message(py, "POST", &url, status)?,
                 error => error.to_string(),
@@ -129,13 +129,13 @@ fn cause_message(
             let mechanism = if certificate { "TLS cert" } else { "AppRole" };
             format!("Could not authenticate to Vault via {mechanism}: {message}")
         }
-        PythonFailureKind::Http {
+        FailureKind::Native(RawOperationError::Http {
             method,
             url,
             status,
             ..
-        } => http_message(py, &method, &url, status)?,
-        PythonFailureKind::ValueMismatch { .. } => "New secret value mismatch".to_owned(),
+        }) => http_message(py, &method, &url, status)?,
+        FailureKind::ValueMismatch { .. } => "New secret value mismatch".to_owned(),
     })
 }
 
