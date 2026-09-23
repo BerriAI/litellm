@@ -62,3 +62,55 @@ def test_chat_over_responses_deployment_returns_length_when_output_tokens_run_ou
         assert body["choices"][0]["message"]["role"] == "assistant", response.text
         assert body["usage"]["prompt_tokens"] == 12 and body["usage"]["completion_tokens"] == 16, response.text
         assert body["usage"]["total_tokens"] == 28, response.text
+
+
+@pytest.mark.covers("providers.responses_bridge.sub_minimum_max_tokens_is_raised_to_the_openai_floor")
+def test_messages_over_responses_deployment_with_max_tokens_one_reaches_openai_as_sixteen(gateway: Gateway) -> None:
+    identity: Final = "responses-min-tokens-" + uuid.uuid4().hex
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/responses", request.target
+        assert request.headers["authorization"] == "Bearer synthetic-openai-key"
+        body: Final = json.loads(request.body)
+        assert body["model"] == "gpt-5.6-sol"
+        assert body["max_output_tokens"] == 16, body
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": f"resp_{identity}",
+                    "object": "response",
+                    "created_at": 1789788253,
+                    "status": "completed",
+                    "model": "gpt-5.6-sol",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": f"msg_{identity}",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 9, "output_tokens": 1, "total_tokens": 10},
+                }
+            ).encode()
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/responses/gpt-5.6-sol", api_base=wire.url, api_key="synthetic-openai-key"
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": f"warmup {identity}"}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = response.json()
+        assert len(wire.drain()) == 1
+        assert body["content"] == [{"type": "text", "text": "ok"}], response.text
+        assert body["usage"]["input_tokens"] == 9 and body["usage"]["output_tokens"] == 1, response.text
