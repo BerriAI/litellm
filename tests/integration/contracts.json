@@ -2023,6 +2023,93 @@
         "tests/integration/providers/test_anthropic_legacy_thinking_budget_wire.py::test_claude_4_6_thinking_budget_tokens_on_messages_is_forwarded_instead_of_rewritten_to_adaptive": [
             "providers.anthropic_messages.claude_4_6_legacy_thinking_budget_reaches_the_wire_unchanged"
         ],
+        "tests/integration/providers/test_bedrock_invoke_cache_usage_wire.py::test_nova_invoke_count_suffixed_cache_usage_fields_are_reported_and_charged": [
+            "providers.bedrock_invoke.count_suffixed_cache_usage_fields_are_reported_and_charged"
+        ],
+        "tests/integration/providers/test_bedrock_role_configuration.py::test_repeat_requests_under_one_session_name_assume_role_once_per_session_name": [
+            "providers.bedrock_assume_role.repeat_requests_reuse_cached_sts_session_per_session_name"
+        ],
+        "tests/integration/providers/test_bedrock_converse_client_metadata_wire.py::test_client_metadata_is_dropped_from_converse_body_while_anthropic_beta_is_kept": [
+            "providers.bedrock_converse.client_metadata_is_not_forwarded_in_additional_model_request_fields"
+        ],
+        "tests/integration/providers/test_anthropic_messages_openai_tools_wire.py::test_messages_tool_with_optional_properties_reaches_openai_responses_non_strict": [
+            "providers.anthropic_messages_bridge.optional_tool_properties_stay_optional_on_the_wire"
+        ],
+        "tests/integration/providers/test_responses_client_header_forwarding_wire.py::test_client_x_header_is_forwarded_to_the_provider_on_responses": [
+            "providers.responses_api.forwarded_client_headers_reach_the_provider"
+        ],
+        "tests/integration/providers/test_responses_bridge_incomplete.py::test_messages_over_responses_deployment_with_max_tokens_1_is_clamped_to_16_instead_of_400": [
+            "other.provider_wire.responses_bridge.sub_minimum_max_tokens_clamped_to_provider_floor"
+        ],
+        "tests/integration/providers/test_anthropic_messages_fireworks_stop_wire.py::test_messages_stop_sequences_to_fireworks_are_sent_as_stop_not_stop_sequences": [
+            "providers.anthropic_messages_adapter.stop_sequences_and_disabled_thinking_reach_openai_compatible_provider_as_stop_and_reasoning_effort"
+        ],
+        "tests/integration/providers/test_anthropic_wire.py::test_anthropic_messages_slow_upstream_is_cut_off_at_the_deployment_request_timeout": [
+            "other.provider_wire.anthropic.messages_request_timeout_reaches_transport"
+        ],
+        "tests/integration/providers/test_responses_bridge_stream_options.py::test_messages_stream_with_always_include_stream_usage_omits_include_usage_from_responses_request": [
+            "providers.responses_bridge.always_include_stream_usage_keeps_include_usage_off_the_responses_wire"
+        ],
+        "tests/integration/providers/test_anthropic_messages_openai_bridge_wire.py::test_midturn_system_correction_is_forwarded_to_openai_responses": [
+            "providers.anthropic_messages_openai_bridge.midturn_system_correction_reaches_the_wire"
+        ],
+        "tests/integration/providers/test_responses_bridge_namespace_tools.py::test_codex_namespace_tool_is_flattened_for_chat_upstream_and_restored_in_responses_output": [
+            "other.provider_wire.responses_bridge.codex_namespace_tools_reach_chat_upstream_and_round_trip"
+        ],
+        "tests/integration/providers/test_nvidia_nim_ranking_wire.py::test_nvidia_nim_ranking_keeps_image_passages_and_applies_top_n_without_sending_top_k": [
+            "providers.nvidia_nim_ranking.image_passages_reach_ranking_without_top_k_and_top_n_is_applied_locally"
+        ],
+        "tests/integration/sdk/test_aiohttp_session_rebuild_wire.py::test_rebuilt_shared_session_drops_idle_connection_after_configured_keepalive_timeout": [
+            "sdk.aiohttp_transport.rebuilt_shared_session_keeps_configured_keepalive_timeout"
+        ],
+        "tests/integration/providers/test_vertex_batch_output_info_wire.py::test_vertex_batch_create_survives_explicit_null_output_info": [
+            "other.provider_wire.vertex_ai.batch_create_with_null_output_info_returns_batch_instead_of_500"
+        ],
+        "tests/integration/routing/test_priority_model_tpm_enforcement.py::test_tpm_only_model_returns_429_to_priority_key_once_recorded_tokens_reach_model_tpm": [
+            "other.routing.priority_rate_limits.tpm_only_model_rejects_priority_traffic_at_capacity"
+        ],
+        "tests/integration/streaming/test_stream_contracts.py::test_messages_stream_opens_thinking_block_at_index_zero_for_reasoning_content_only_chunks": [
+            "streaming.messages_bridge.reasoning_content_only_chunks_open_a_thinking_block_first"
+        ],
+        "tests/integration/streaming/test_file_content_streaming.py::test_file_content_streams_the_first_megabyte_to_the_client_before_the_upstream_sends_the_rest": [
+            "streaming.file_content.body_reaches_client_before_upstream_finishes_sending"
+        ],
+        "tests/integration/providers/test_bedrock_mantle_responses_wire.py::test_max_output_tokens_below_mantle_minimum_is_raised_to_16_before_reaching_mantle": [
+            "providers.bedrock_mantle.max_output_tokens_below_minimum_is_clamped_to_16_on_the_wire"
+        ],
+        "tests/integration/compatibility/test_a2a_wire_versions.py::test_agent_serving_its_card_only_at_versioned_path_is_reached_with_bearer_and_answers": [
+            "compatibility.a2a.versioned_card_path_agent_is_reached_with_bearer_and_blocking_send"
+        ],
+        "tests/integration/providers/test_anthropic_thinking_signature_retry_wire.py::test_missing_thinking_signature_400_retries_once_without_thinking_blocks_and_returns_200": [
+            "providers.anthropic_messages.missing_thinking_signature_400_retries_without_thinking_blocks"
+        ],
+        "tests/integration/providers/test_gemini_messages_cache_control_wire.py::test_gemini_messages_cache_control_creates_cached_content_and_generates_from_it": [
+            "other.provider_wire.gemini.messages_cache_control_creates_cached_content_with_anthropic_ttl"
+        ],
+        "tests/integration/providers/test_anthropic_advisor_wire.py::test_advisor_api_base_without_api_key_is_rejected_before_the_proxy_anthropic_key_reaches_the_caller_host": [
+            "providers.anthropic_messages_advisor.caller_api_base_without_api_key_never_receives_the_proxy_key"
+        ],
+        "tests/integration/providers/test_fireworks_ai_session_affinity_wire.py::test_fireworks_session_id_sends_affinity_header_and_logs_cache_read_tokens": [
+            "other.provider_wire.fireworks_ai.session_id_sent_as_affinity_header_and_cached_tokens_logged"
+        ],
+        "tests/integration/routing/test_advisor_failure_cooldown.py::test_advisor_sub_call_401_leaves_the_executor_deployment_serving_the_next_request": [
+            "routing.cooldown.advisor_sub_call_failure_does_not_cool_down_the_executor_deployment"
+        ],
+        "tests/integration/providers/test_sagemaker_chat_wire.py::test_sagemaker_chat_signs_the_inference_component_header_and_sends_hf_model_name_as_the_body_model": [
+            "providers.sagemaker_chat_wire.inference_component_header_is_signed_and_hf_model_name_is_the_body_model"
+        ],
+        "tests/integration/providers/test_bedrock_deepseek_reasoning_wire.py::test_deepseek_r1_thinking_and_reasoning_effort_are_dropped_instead_of_leaking_into_converse": [
+            "providers.bedrock_converse.deepseek_r1_drops_thinking_and_reasoning_effort_before_provider"
+        ],
+        "tests/integration/providers/test_bedrock_deepseek_reasoning_wire.py::test_deepseek_v3_reasoning_effort_reaches_converse_raw_instead_of_as_anthropic_thinking": [
+            "providers.bedrock_converse.deepseek_v3_reasoning_effort_reaches_provider_raw"
+        ],
+        "tests/integration/routing/test_team_model_tpm_limit.py::test_concurrent_team_model_tpm_requests_reserve_tokens_before_reaching_the_provider": [
+            "routing.team_model_tpm.concurrent_requests_over_the_limit_are_rejected_before_the_provider_call"
+        ],
+        "tests/integration/providers/test_anthropic_messages_timeout_wire.py::test_messages_endpoint_honors_configured_timeout_against_stalled_upstream": [
+            "providers.anthropic_messages.configured_timeout_aborts_stalled_upstream"
+        ],
         "tests/integration/providers/test_responses_bridge_incomplete.py::test_messages_over_responses_deployment_with_max_tokens_one_reaches_openai_as_sixteen": [
             "providers.responses_bridge.sub_minimum_max_tokens_is_raised_to_the_openai_floor"
         ],
