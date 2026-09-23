@@ -770,9 +770,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         aws_decoder: Final = AmazonAnthropicClaudeMessagesStreamDecoder(
             model=model,
         )
-        completion_stream: Final = aws_decoder.aiter_bytes(
-            httpx_response.aiter_bytes(chunk_size=aws_decoder.DEFAULT_CHUNK_SIZE)
-        )
+        completion_stream: Final = aws_decoder.aiter_bytes(httpx_response.aiter_bytes())
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
         return self.bedrock_sse_wrapper(
             completion_stream=completion_stream,
@@ -919,16 +917,6 @@ class AmazonAnthropicClaudeMessagesConfig(
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
-    def __init__(
-        self,
-        model: str,
-    ) -> None:
-        """
-        Iterator to return Bedrock invoke response in anthropic /messages format
-        """
-        super().__init__(model=model)
-        self.DEFAULT_CHUNK_SIZE = 1024
-
     def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         """
         Parse the chunk data into anthropic /messages format
