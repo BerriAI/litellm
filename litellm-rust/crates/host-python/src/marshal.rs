@@ -4,6 +4,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use pyo3::exceptions::PyValueError;
 use pyo3::panic::PanicException;
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -36,6 +37,12 @@ pub fn json_object_field(py: Python<'_>, document: &str, name: &str) -> PyResult
     py.import("json")?
         .call_method1("loads", (document,))?
         .call_method1("get", (name,))
+        .map(Bound::unbind)
+}
+
+pub fn json_loads(py: Python<'_>, document: &[u8]) -> PyResult<Py<PyAny>> {
+    py.import("json")?
+        .call_method1("loads", (PyBytes::new(py, document),))
         .map(Bound::unbind)
 }
 

@@ -114,7 +114,7 @@ pub(crate) async fn rotate(
     let status = raw_object_field(parsed, "status")
         .ok()
         .flatten()
-        .and_then(|value| serde_json::from_str::<String>(value.get()).ok());
+        .and_then(|value| serde_json::from_slice::<String>(value.get().as_bytes()).ok());
     if status.as_deref() == Some("error") {
         return Ok(response);
     }
@@ -134,7 +134,7 @@ pub(crate) async fn rotate(
     let actual = verification_value(parsed, data_key).map_err(|failure| {
         Failure::from(failure).during(FailureStage::Replacement(new_name.to_owned()))
     })?;
-    let actual_string = serde_json::from_str::<String>(actual.get()).ok();
+    let actual_string = serde_json::from_slice::<String>(actual.get().as_bytes()).ok();
     if actual_string.as_deref() != Some(value.expose()) {
         return Err(FailureKind::ValueMismatch {
             expected: value.clone(),
@@ -162,7 +162,7 @@ fn raw_object_field<'a>(
     document: &'a RawValue,
     key: &str,
 ) -> Result<Option<&'a RawValue>, FailureKind> {
-    let object: HashMap<String, &RawValue> = serde_json::from_str(document.get())
+    let object: HashMap<String, &RawValue> = serde_json::from_slice(document.get().as_bytes())
         .map_err(|_| FailureKind::MissingGet(document.get().as_bytes().to_vec()))?;
     Ok(object.get(key).copied())
 }

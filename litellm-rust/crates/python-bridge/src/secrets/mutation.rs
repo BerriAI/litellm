@@ -1,5 +1,5 @@
 use super::operations::{PythonMutationError, PythonMutationResponse};
-use litellm_host_python::to_py;
+use litellm_host_python::{json_loads, to_py};
 use litellm_secrets::cyberark;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 
@@ -85,9 +85,7 @@ fn os_error_code(error: &(dyn std::error::Error + 'static)) -> Option<i32> {
 }
 
 pub(super) fn json_value(py: Python<'_>, body: &[u8]) -> PyResult<Py<PyAny>> {
-    py.import("json")?
-        .call_method1("loads", (pyo3::types::PyBytes::new(py, body),))
-        .map(Bound::unbind)
+    json_loads(py, body)
 }
 
 pub(super) fn error_value(py: Python<'_>, message: String) -> PyResult<Py<PyAny>> {
