@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -35,10 +36,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
+from litellm.proxy.spend_tracking.input_tokens import count_input_tokens, count_input_tokens_for_model
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, spend_counter_batch_scope
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
-from litellm.rust_bridge.token_counter import RustTokenizer, count_input_tokens, rust_tokenizer
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
 
@@ -103,6 +104,48 @@ def get_reserved_counter_keys(budget_reservation: dict | None) -> set:
     return {
         entry["counter_key"] for entry in entries if isinstance(entry, dict) and entry.get("counter_key") is not None
     }
+
+
+_lease_renewals: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: asyncio only weak-refs pending tasks
+
+
+def _start_reservation_lease_renewal(budget_reservation: Mapping[str, object], counter_keys: frozenset[str]) -> None:
+    """A reservation lives inside spend counter keys that expire on their Redis TTL. Renew the TTL
+    while the request is in flight so a request longer than the TTL does not drop its
+    reservation and admit concurrent requests against the DB floor on any worker."""
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    if spend_counter_cache.redis_cache is None or not counter_keys:
+        return
+    task: Final = asyncio.create_task(
+        _renew_reservation_lease(
+            budget_reservation=budget_reservation,
+            counter_keys=counter_keys,
+            interval=spend_counter_cache.redis_cache.default_ttl / 2,
+            request_task=asyncio.current_task(),
+        )
+    )
+    _lease_renewals.add(task)
+    task.add_done_callback(_lease_renewals.discard)
+
+
+async def _renew_reservation_lease(
+    budget_reservation: Mapping[str, object],
+    counter_keys: frozenset[str],
+    interval: float,
+    request_task: asyncio.Task[object] | None,
+) -> None:
+    """Stops on finalization or once the request task that took the reservation is gone, so a
+    disconnect path that skipped reconciliation falls back to the plain counter TTL."""
+    from litellm.proxy.proxy_server import refresh_spend_counter_ttl
+
+    deadline: Final = time.monotonic() + litellm.request_timeout
+    while time.monotonic() < deadline:
+        await asyncio.sleep(interval)
+        if budget_reservation.get("finalized") is True or (request_task is not None and request_task.done()):
+            return
+        for counter_key in counter_keys:
+            await refresh_spend_counter_ttl(counter_key=counter_key)
 
 
 def _key_reservation_should_release_for_throttle(counter_key: str, valid_token: UserAPIKeyAuth | None) -> bool:
@@ -319,13 +362,19 @@ async def reserve_budget_for_request(
         llm_router=llm_router,
         input_token_counts=input_token_counts,
     )
-    return {
+    budget_reservation: Final = {
         "reserved_cost": reservation_cost,
         "entries": applied_entries,
         "finalized": False,
+        "callback_bound": False,
         "input_cost": min(float(input_cost or 0.0), reservation_cost),
         "input_tokens": max(input_token_counts.values(), default=None),
     }
+    _start_reservation_lease_renewal(
+        budget_reservation=budget_reservation,
+        counter_keys=frozenset(get_reserved_counter_keys(budget_reservation=budget_reservation)),
+    )
+    return budget_reservation
 
 
 async def reconcile_budget_reservation(
@@ -424,6 +473,19 @@ async def release_or_invalidate_budget_reservation(
             verbose_proxy_logger.exception("Failed to invalidate budget reservation counters after release failed")
         finally:
             budget_reservation["finalized"] = True
+
+
+async def release_unbound_budget_reservation(budget_reservation: Mapping[str, object]) -> None:
+    """Release a reservation no logging callback took ownership of, once the request ended.
+
+    A handler whose litellm call never builds a logging object (batch cancel, file
+    content, anything without the client decorator) runs no cost callback, so nothing
+    else would ever reconcile its reservation. A bound reservation is left alone: its
+    success or failure handler settles it, possibly after the response has been sent.
+    """
+    if not isinstance(budget_reservation, dict) or budget_reservation.get("callback_bound") is True:
+        return
+    await release_or_invalidate_budget_reservation(budget_reservation=budget_reservation)
 
 
 async def _get_budget_counters(
@@ -1427,9 +1489,6 @@ def _get_request_models(
     return (model,) if isinstance(model, str) else tuple(model)
 
 
-TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
-
-
 async def count_request_input_tokens(
     request_body: dict,
     route: str,
@@ -1438,105 +1497,11 @@ async def count_request_input_tokens(
 ) -> Mapping[str, int]:
     """Input-token count per candidate model, counted once per request.
 
-    Tokenizing is the reservation path's dominant CPU cost and is O(prompt), so
-    counting a large prompt inline stalls every other request on the worker.
-    Models whose tokenizer the Rust bridge ports (Anthropic, tiktoken cl100k_base
-    and o200k_base) are counted from the raw body by the bridge when it is enabled, once per
-    distinct tokenizer, which parses and tokenizes with the GIL released.
-    Everything it declines is counted in Python, large prompts in a worker
-    thread. The counts are reused by both the max-cost and the input-cost
-    estimate.
-    """
+    The counts are reused by both the max-cost and the input-cost estimate."""
     models: Final = _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
     if not models:
         return MappingProxyType({})
-    tokenizers: Final[Mapping[str, RustTokenizer | None]] = MappingProxyType(
-        {model: rust_tokenizer(model) for model in models}
-    )
-    distinct_tokenizers: Final[tuple[RustTokenizer, ...]] = tuple(
-        dict.fromkeys(tokenizer for tokenizer in tokenizers.values() if tokenizer is not None)
-    )
-    rust_counts_by_tokenizer: Final[Mapping[RustTokenizer, int]] = MappingProxyType(
-        {
-            tokenizer: count.input_tokens
-            for tokenizer in distinct_tokenizers
-            if raw_body is not None and (count := await count_input_tokens(raw_body, tokenizer)) is not None
-        }
-    )
-    rust_counts: Final = MappingProxyType(
-        {
-            model: rust_counts_by_tokenizer[tokenizer]
-            for model, tokenizer in tokenizers.items()
-            if tokenizer is not None and tokenizer in rust_counts_by_tokenizer
-        }
-    )
-    python_models: Final = tuple(model for model in models if model not in rust_counts)
-    python_counts: Final = (
-        MappingProxyType({})
-        if not python_models
-        else _count_input_tokens_for_models(request_body=request_body, models=python_models)
-        if _approximate_input_size(request_body) < TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS
-        else await asyncio.to_thread(
-            _count_input_tokens_for_models,
-            request_body=request_body,
-            models=python_models,
-        )
-    )
-    verbose_proxy_logger.debug("input token counts: rust=%s python=%s", dict(rust_counts), dict(python_counts))
-    return MappingProxyType({**rust_counts, **python_counts})
-
-
-def _count_input_tokens_for_models(
-    request_body: dict,
-    models: Sequence[str],
-) -> Mapping[str, int]:
-    return MappingProxyType(
-        {
-            model: tokens
-            for model in models
-            if (tokens := _count_input_tokens(request_body=request_body, model=model)) is not None
-        }
-    )
-
-
-_INPUT_SIZE_FIELDS: Final = ("messages", "prompt", "input", "query", "documents", "tools", "tool_choice")
-
-
-def _approximate_input_size(request_body: Mapping[str, object]) -> int:
-    """Length of the request's input text, a cheap stand-in for tokenizing cost.
-
-    Every field _count_input_tokens hands the tokenizer is sized here, and
-    rendering rather than walking keeps mapping keys in the total, which a tool
-    schema's property names are."""
-    return sum(len(str(request_body.get(field, ""))) for field in _INPUT_SIZE_FIELDS)
-
-
-def _count_input_tokens(request_body: dict, model: str) -> int | None:
-    try:
-        if "messages" in request_body:
-            try:
-                return litellm.token_counter(
-                    model=model,
-                    messages=request_body.get("messages") or (),
-                    tools=request_body.get("tools"),
-                    tool_choice=request_body.get("tool_choice"),
-                )
-            except ValueError:
-                return _count_text_tokens(model=model, text=request_body.get("messages"))
-        if "prompt" in request_body:
-            return _count_text_tokens(model=model, text=request_body.get("prompt"))
-        if "input" in request_body:
-            return _count_text_tokens(model=model, text=request_body.get("input"))
-        if "query" in request_body or "documents" in request_body:
-            query_tokens: Final = _count_text_tokens(model=model, text=request_body.get("query"))
-            document_tokens: Final = _count_text_tokens(
-                model=model,
-                text=request_body.get("documents"),
-            )
-            return query_tokens + document_tokens
-    except Exception:
-        verbose_proxy_logger.debug("Unable to count input tokens for budget reservation", exc_info=True)
-    return None
+    return await count_input_tokens(request_body=request_body, raw_body=raw_body, models=models)
 
 
 def _estimate_input_tokens(
@@ -1547,7 +1512,9 @@ def _estimate_input_tokens(
     input_tokens: int | None = None,
 ) -> int | None:
     counted: Final = (
-        input_tokens if input_tokens is not None else _count_input_tokens(request_body=request_body, model=model)
+        input_tokens
+        if input_tokens is not None
+        else count_input_tokens_for_model(request_body=request_body, model=model)
     )
     if counted is not None:
         return counted
@@ -1594,26 +1561,6 @@ def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
         inference_config.get("maxTokens") if isinstance(inference_config, Mapping) else None,
     )
     return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
-
-
-def _count_text_tokens(model: str, text: object) -> int:
-    if text is None:
-        return 0
-
-    token_count = 0
-    stack: Final = [text]
-    while stack:
-        item = stack.pop()
-        if item is None:
-            continue
-        if isinstance(item, list):
-            stack.extend(item)
-            continue
-        if isinstance(item, dict):
-            token_count += litellm.token_counter(model=model, text=json.dumps(item))
-            continue
-        token_count += litellm.token_counter(model=model, text=str(item))
-    return token_count
 
 
 def _get_output_multiplier(request_body: dict) -> int:

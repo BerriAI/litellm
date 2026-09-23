@@ -15,7 +15,7 @@ import traceback
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, overload
 from urllib.parse import quote, unquote
 
 from pydantic import TypeAdapter
@@ -134,6 +134,25 @@ class _SpendBatch(Protocol):
     litellm_tagtable: BatchTable
     litellm_agentstable: BatchTable
     litellm_modelaccessgroupbudgettable: BatchTable
+
+
+_EntitySpendTable: TypeAlias = Literal[
+    "litellm_tagtable", "litellm_agentstable", "litellm_modelaccessgroupbudgettable", "litellm_projecttable"
+]
+
+
+_ENTITY_SPEND_TABLES: Final[Mapping[_EntitySpendTable, Callable[[_SpendBatch], BatchTable]]] = MappingProxyType(
+    {
+        "litellm_tagtable": lambda batcher: batcher.litellm_tagtable,
+        "litellm_agentstable": lambda batcher: batcher.litellm_agentstable,
+        "litellm_modelaccessgroupbudgettable": lambda batcher: batcher.litellm_modelaccessgroupbudgettable,
+        "litellm_projecttable": lambda batcher: batcher.litellm_projecttable,
+    }
+)
+
+
+def _entity_spend_table(batcher: _SpendBatch, table_accessor: _EntitySpendTable) -> BatchTable:
+    return _ENTITY_SPEND_TABLES[table_accessor](batcher)
 
 
 class _SpendBatchManager(Protocol):
@@ -1587,13 +1606,21 @@ class DBSpendUpdateWriter:
         proxy_logging_obj: ProxyLogging,
     ) -> None:
         transactions: Final = await queue.flush_and_get_aggregated_daily_spend_update_transactions()
-        try:
-            await commit(
+        commit_task: Final = asyncio.ensure_future(
+            commit(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
                 daily_spend_transactions=cast(dict[str, _DailySpendTransactionT], transactions),
             )
+        )
+        try:
+            await asyncio.shield(commit_task)
+        except asyncio.CancelledError:
+            commit_task.cancel()
+            if transactions:
+                await queue.add_update(transactions)
+            raise
         except Exception as e:  # noqa: BLE001  # whatever failed here, the other tables must still flush
             if not transactions:
                 return
@@ -1820,14 +1847,18 @@ class DBSpendUpdateWriter:
         if not daily_tag_spend_update_transactions:
             return
 
-        try:
-            await DBSpendUpdateWriter.update_daily_tag_spend(
+        commit_task: Final = asyncio.ensure_future(
+            DBSpendUpdateWriter.update_daily_tag_spend(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
                 daily_spend_transactions=daily_tag_spend_update_transactions,
             )
-        except Exception:
+        )
+        try:
+            await asyncio.shield(commit_task)
+        except BaseException:  # noqa: BLE001  # a cancel must restore the drained rows before its rollback returns
+            commit_task.cancel()
             await self.redis_update_buffer.restore_transactions_to_redis(
                 daily_tag_spend_update_transactions=daily_tag_spend_update_transactions,
             )
@@ -2159,9 +2190,7 @@ class DBSpendUpdateWriter:
     async def _update_entity_spend_in_db(
         entity_name: str,
         transactions: dict[str, float] | None,
-        table_accessor: Literal[
-            "litellm_tagtable", "litellm_agentstable", "litellm_modelaccessgroupbudgettable", "litellm_projecttable"
-        ],
+        table_accessor: _EntitySpendTable,
         where_field: str,
         n_retry_times: int,
         prisma_client: PrismaClient,
@@ -2195,7 +2224,7 @@ class DBSpendUpdateWriter:
                                     entity_id,
                                     response_cost,
                                 )
-                                getattr(batcher, table_accessor).update_many(
+                                _entity_spend_table(batcher, table_accessor).update_many(
                                     where={where_field: entity_id},
                                     data={"spend": {"increment": response_cost}},
                                 )
@@ -2351,7 +2380,8 @@ class DBSpendUpdateWriter:
                                 table=table, transactions=tuple(transactions_to_process.values())
                             )
                             sql, params = build_bulk_upsert(table=table, batch=merged_batch)
-                            await prisma_client.db.execute_raw(sql, *params)
+                            async with _spend_update_tx(prisma_client) as transaction:
+                                await transaction.execute_raw(sql, *params)
                         except Exception as batch_error:
                             if _spend_commit_failure_is_requeue_safe(batch_error):
                                 spend_log_error(

@@ -239,7 +239,6 @@ async def test_arerank_error_is_mapped_to_litellm_exception(respx_mock: respx.Mo
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(300)
 async def test_arerank_declared_authenticating_provider_skips_resolution(monkeypatch):
     """Regression for the event-loop hazard in arerank's provider pre-resolution:
     get_llm_provider runs the blocking OAuth device flow for github_copilot/chatgpt,
@@ -257,6 +256,9 @@ async def test_arerank_declared_authenticating_provider_skips_resolution(monkeyp
         raise BaseLLMException(status_code=401, message='{"error":"bad key"}')
 
     monkeypatch.setattr(litellm, "get_llm_provider", record_resolution)
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.llm_response_utils.get_api_base.get_llm_provider", record_resolution
+    )
     monkeypatch.setattr("litellm.rerank_api.main.rerank", rerank_raises_provider_error)
 
     with pytest.raises(litellm.AuthenticationError) as exc_info:

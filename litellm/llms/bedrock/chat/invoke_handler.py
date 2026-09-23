@@ -231,6 +231,12 @@ async def make_call(
                 sync_stream=False,
             )
             completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=stream_chunk_size))
+        elif bedrock_invoke_provider == "moonshot":
+            decoder = AmazonOpenAICompatibleStreamDecoder(
+                model=model,
+                sync_stream=False,
+            )
+            completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=stream_chunk_size))
         else:
             decoder = AWSEventStreamDecoder(model=model, json_mode=json_mode)
             completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=stream_chunk_size))
@@ -325,6 +331,12 @@ def make_sync_call(
             completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
         elif bedrock_invoke_provider == "deepseek_r1":
             decoder = AmazonDeepSeekR1StreamDecoder(
+                model=model,
+                sync_stream=True,
+            )
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
+        elif bedrock_invoke_provider == "moonshot":
+            decoder = AmazonOpenAICompatibleStreamDecoder(
                 model=model,
                 sync_stream=True,
             )
@@ -793,6 +805,24 @@ class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
 
     def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         return self.deepseek_model_response_iterator.chunk_parser(chunk=chunk_data)
+
+
+class AmazonOpenAICompatibleStreamDecoder(AWSEventStreamDecoder):
+    def __init__(
+        self,
+        model: str,
+        sync_stream: bool,
+    ) -> None:
+        super().__init__(model=model)
+        from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+
+        self.openai_model_response_iterator = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None,
+            sync_stream=sync_stream,
+        )
+
+    def _chunk_parser(self, chunk_data: dict[str, object]) -> ModelResponseStream:
+        return self.openai_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 
 class MockResponseIterator:  # for returning ai21 streaming responses

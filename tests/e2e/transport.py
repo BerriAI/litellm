@@ -13,6 +13,7 @@ from typing import Protocol
 import e2e_http
 from e2e_http import (
     URL,
+    AbandonedRequest,
     AuthHeaders,
     BinaryStream,
     NetworkError,
@@ -57,6 +58,10 @@ class Transport(Protocol):
         params: BaseModel | None = None,
         stream: bool = False,
     ) -> StreamingResponse: ...
+
+    def abandon(
+        self, path: str, *, headers: BaseModel, json: BaseModel, after: float
+    ) -> AbandonedRequest | StreamingResponse: ...
 
     def get[R: BaseModel](
         self,
@@ -243,6 +248,11 @@ class HttpTransport:
             timeout=self.request_timeout,
         )
 
+    def abandon(
+        self, path: str, *, headers: BaseModel, json: BaseModel, after: float
+    ) -> AbandonedRequest | StreamingResponse:
+        return e2e_http.abandon(self._url(path), headers=headers, json=json, after=after)
+
     def probe(self, path: str, *, params: BaseModel, headers: BaseModel | None = None) -> ProbeResult:
         return e2e_http.probe(
             self._url(path),
@@ -302,7 +312,11 @@ CONTROL_PLANE_PREFIXES: tuple[str, ...] = (
     "/global",
     "/config",
     "/guardrails",
+    "/credentials",
     "/router/settings",
+    "/audit",
+    "/public",
+    "/v2/login",
     "/openapi.json",
 )
 
@@ -419,6 +433,11 @@ class SplitTransport:
         stream: bool = False,
     ) -> StreamingResponse:
         return self._route(path).send(path, headers=headers, json=json, params=params, stream=stream)
+
+    def abandon(
+        self, path: str, *, headers: BaseModel, json: BaseModel, after: float
+    ) -> AbandonedRequest | StreamingResponse:
+        return self._route(path).abandon(path, headers=headers, json=json, after=after)
 
     def probe(self, path: str, *, params: BaseModel, headers: BaseModel | None = None) -> ProbeResult:
         return self._route(path).probe(path, params=params, headers=headers)

@@ -113,6 +113,148 @@ describe("RoutingDecisionCard", () => {
     },
   );
 
+  it.each(["capability_classifier", "modality_escalation"])(
+    "shows the recorded Capability forecast for %s",
+    (cause) => {
+      render(
+        <RoutingDecisionCard
+          decision={{
+            cause,
+            tier: "COMPLEX",
+            tier_label: "Deep",
+            classifier_p_solve: 0,
+            classifier_calibrated_p_solve: 0.864,
+            classifier_threshold: 0.82,
+            classifier_capability_boundary: "uncertain",
+            classifier_primary_rule: "UNC-2",
+            classifier_calibration_version: "calibration-1",
+          }}
+        />,
+      );
+
+      expect(screen.getByText("Capability estimates")).toBeInTheDocument();
+      expect(screen.getByText("Efficient model solve chance")).toBeInTheDocument();
+      expect(screen.getAllByText(/^\d+\.\d%$/).map((value) => value.textContent)).toEqual(["0.0%", "86.4%", "82.0%"]);
+      expect(screen.getByText("Raw")).toBeInTheDocument();
+      expect(screen.getByText("Calibrated")).toBeInTheDocument();
+      expect(screen.getByText("Threshold")).toBeInTheDocument();
+      expect(screen.getByText("uncertain")).toBeInTheDocument();
+      expect(screen.getByText("UNC-2")).toBeInTheDocument();
+      expect(screen.getByText("calibration-1")).toBeInTheDocument();
+      expect(screen.getByText("Deep")).toBeInTheDocument();
+      expect(screen.queryByText("FUSE v2 estimates")).not.toBeInTheDocument();
+    },
+  );
+
+  it("omits absent Capability fields while preserving a recorded zero threshold", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{ cause: "capability_classifier", classifier_p_solve: 0.25, classifier_threshold: 0 }}
+      />,
+    );
+
+    expect(screen.getAllByText(/^\d+\.\d%$/).map((value) => value.textContent)).toEqual(["25.0%", "0.0%"]);
+    for (const label of ["Calibrated", "Calibration", "Boundary", "Rule"]) {
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    }
+  });
+
+  it.each(["llm_v2_classifier", "default_fallback"])(
+    "shows the original calibrated FUSE v2 forecast for %s",
+    (cause) => {
+      render(
+        <RoutingDecisionCard
+          decision={{
+            cause,
+            routed_model: "fallback-model",
+            classifier_efficient_p_solve: 0.25,
+            classifier_capable_p_solve: 0.91,
+            classifier_calibrated_efficient_p_solve: 0.75,
+            classifier_calibrated_capable_p_solve: 0.8,
+            classifier_max_quality_gap: 0.1,
+            classifier_calibration_version: "calibration-2",
+            signals: ["llm-v2:verification=tests"],
+          }}
+        />,
+      );
+
+      expect(screen.getByText("FUSE v2 estimates")).toBeInTheDocument();
+      expect(screen.getAllByText(/^\d+\.\d%$/).map((value) => value.textContent)).toEqual([
+        "25.0%",
+        "91.0%",
+        "75.0%",
+        "80.0%",
+      ]);
+      expect(screen.getByText("Efficient (raw)")).toBeInTheDocument();
+      expect(screen.getByText("Capable (raw)")).toBeInTheDocument();
+      expect(screen.getByText("Efficient (calibrated)")).toBeInTheDocument();
+      expect(screen.getByText("Capable (calibrated)")).toBeInTheDocument();
+      expect(screen.getAllByText(/percentage points$/).map((value) => value.textContent)).toEqual([
+        "5.0 percentage points",
+        "10.0 percentage points",
+      ]);
+      expect(screen.getByText("Applied gap")).toBeInTheDocument();
+      expect(screen.getByText("Allowed gap")).toBeInTheDocument();
+      expect(screen.getByText("calibration-2")).toBeInTheDocument();
+      expect(screen.getByText("llm-v2:verification=tests")).toBeInTheDocument();
+      expect(screen.getByText("fallback-model")).toBeInTheDocument();
+      expect(screen.queryByText("Capability estimates")).not.toBeInTheDocument();
+    },
+  );
+
+  it("uses raw FUSE v2 probabilities without calibration and preserves negative and zero gaps", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          cause: "llm_v2_classifier",
+          classifier_efficient_p_solve: 0.5,
+          classifier_capable_p_solve: 0,
+          classifier_max_quality_gap: 0,
+        }}
+      />,
+    );
+
+    expect(screen.getAllByText(/^\d+\.\d%$/).map((value) => value.textContent)).toEqual(["50.0%", "0.0%"]);
+    expect(screen.getAllByText(/percentage points$/).map((value) => value.textContent)).toEqual([
+      "-50.0 percentage points",
+      "0.0 percentage points",
+    ]);
+    expect(screen.queryByText(/calibrated|Calibration/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { classifier_efficient_p_solve: 0, classifier_max_quality_gap: 0.2 },
+    {
+      classifier_efficient_p_solve: 0.4,
+      classifier_capable_p_solve: 0.9,
+      classifier_calibrated_efficient_p_solve: 0,
+      classifier_calibration_version: "partial-calibration",
+      classifier_max_quality_gap: 0.2,
+    },
+  ])("shows partial FUSE v2 estimates without inventing an applied gap: %j", (fields) => {
+    render(<RoutingDecisionCard decision={{ cause: "llm_v2_classifier", ...fields }} />);
+
+    expect(screen.getByText("FUSE v2 estimates")).toBeInTheDocument();
+    expect(screen.getByText("0.0%")).toBeInTheDocument();
+    expect(screen.getByText("20.0 percentage points")).toBeInTheDocument();
+    expect(screen.queryByText("Applied gap")).not.toBeInTheDocument();
+    expect(screen.queryByText("Capable (calibrated)")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["capability_classifier", "Capability"],
+    ["llm_v2_classifier", "FUSE v2"],
+    ["capability_classifier_fallback", "Capable tier, Capability classifier failed"],
+    ["llm_v2_fallback", "Capable tier, FUSE v2 classifier failed"],
+    ["session_affinity_pin", "Pinned to session"],
+  ])("labels %s without inventing a missing forecast", (cause, label) => {
+    render(<RoutingDecisionCard decision={{ cause, tier: "MEDIUM" }} />);
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.getByText("MEDIUM")).toBeInTheDocument();
+    expect(screen.queryByText(/estimates/)).not.toBeInTheDocument();
+  });
+
   it("uses the persisted boundary snapshot, not today's defaults", () => {
     // Same score, boundaries the operator had configured lower: it lands in a
     // different band, and the card must say so.
@@ -184,7 +326,7 @@ describe("RoutingDecisionCard", () => {
         }}
       />,
     );
-    expect(screen.getByText("Default model, LLM classifier failed")).toBeInTheDocument();
+    expect(screen.getByText("Default model, classifier failed")).toBeInTheDocument();
     expect(screen.queryByText("Tier")).not.toBeInTheDocument();
   });
 
@@ -201,7 +343,7 @@ describe("RoutingDecisionCard", () => {
         }}
       />,
     );
-    expect(screen.getByText("Fallback tier, LLM classifier failed")).toBeInTheDocument();
+    expect(screen.getByText("Fallback tier, classifier failed")).toBeInTheDocument();
     expect(screen.getByText("SECURITY_REVIEW")).toBeInTheDocument();
   });
 

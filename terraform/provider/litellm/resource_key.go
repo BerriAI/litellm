@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 
 	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
@@ -60,6 +61,12 @@ func resourceKey() *schema.Resource {
 				Type:     schema.TypeMap,
 				Optional: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"server_metadata": {
+				Type:        schema.TypeMap,
+				Computed:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString},
+				Description: "Every metadata entry the proxy stores for this key, including ones not declared in metadata. Read-only, so drift on undeclared entries shows up on refresh without Terraform taking ownership of them. Entries the provider already exposes as their own attributes (model_rpm_limit, model_tpm_limit, tags, guardrails, enforced_params, allowed_passthrough_routes, rpm_limit_type, tpm_limit_type, prompts) are omitted, and non-string values are JSON encoded",
 			},
 			"tpm_limit": {
 				Type:     schema.TypeInt,
@@ -304,6 +311,7 @@ func resourceKeyRead(ctx context.Context, d *schema.ResourceData, m interface{})
 		return nil
 	}
 
+	d.Set("server_metadata", serverKeyMetadata(key.Metadata))
 	key.Metadata = declaredKeyMetadata(key.Metadata, d.Get("metadata").(map[string]interface{}))
 	mapKeyToResourceData(d, key)
 	return nil
@@ -391,6 +399,25 @@ func declaredKeyMetadata(server, declared map[string]interface{}) map[string]int
 		if v, ok := server[k]; ok {
 			result[k] = v
 		}
+	}
+	return result
+}
+
+func serverKeyMetadata(server map[string]interface{}) map[string]string {
+	result := make(map[string]string, len(server))
+	for k, v := range server {
+		if slices.Contains(keyFieldsStoredInMetadata, k) {
+			continue
+		}
+		if s, ok := v.(string); ok {
+			result[k] = s
+			continue
+		}
+		encoded, err := json.Marshal(v)
+		if err != nil {
+			continue
+		}
+		result[k] = string(encoded)
 	}
 	return result
 }

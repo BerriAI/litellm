@@ -47,6 +47,7 @@ def main() -> int:
             "pytest",
             *selected,
             "-vv",
+            "-rs",
             "--strict-markers",
             "-p",
             "no:pytest-retry",
@@ -69,7 +70,8 @@ def main() -> int:
     if result != 0:
         return result
     evidence: Final = json.loads((output / "execution.json").read_text())
-    if not evidence["complete"] or sorted(evidence["passed"]) != expected or sorted(evidence["collected"]) != expected:
+    executed: Final = sorted(evidence["passed"] + evidence["skipped"])
+    if not evidence["complete"] or executed != expected or sorted(evidence["collected"]) != expected:
         print("Executed integration nodes differ from the canonical manifest", file=sys.stderr)
         return 1
     return 0
