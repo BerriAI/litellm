@@ -293,6 +293,12 @@
     "tests/integration/spend/test_vertex_context_cache.py::test_gemini_context_cache_creation_is_billed_once_at_its_own_rate": [
       "quota_management.spend_tracking.vertex_context_cache.creation_and_read_tokens_charged"
     ],
+    "tests/integration/spend/test_spend_calculate.py::test_live_preview_entry_charges_cached_tokens_at_the_fresh_rate[gemini-live-2.5-flash-preview-native-audio-09-2025]": [
+      "quota_management.spend_tracking.spend_calculate.live_preview_cached_tokens_cost_fresh_rate"
+    ],
+    "tests/integration/spend/test_spend_calculate.py::test_live_preview_entry_charges_cached_tokens_at_the_fresh_rate[gemini/gemini-live-2.5-flash-preview-native-audio-09-2025]": [
+      "quota_management.spend_tracking.spend_calculate.live_preview_cached_tokens_cost_fresh_rate"
+    ],
     "tests/integration/management/test_partial_update_sequences.py::test_restricted_actor_cannot_detach_key_from_project": [
       "mgmt.key.update.project_detach_denied_to_restricted_actor"
     ],
