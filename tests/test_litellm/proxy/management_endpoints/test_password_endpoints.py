@@ -381,6 +381,73 @@ async def test_change_password_failure_emits_no_audit_log():
 
 
 @pytest.mark.asyncio
+async def test_change_password_revokes_other_sessions_keeping_callers():
+    """A successful change revokes the user's other UI sessions (the old
+    password may be compromised) while keeping the session that just proved
+    it holds the current password."""
+    from litellm.proxy._types import ChangePasswordRequest
+
+    prisma = _make_prisma(_make_user_row(hash_password(CURRENT_PASSWORD)))
+    revoke_mock = AsyncMock(return_value=0)
+    caller = UserAPIKeyAuth(
+        user_id="user-123",
+        token="hashed-caller-token",
+        team_id=UI_TEAM_ID,
+        metadata=dict(PASSWORD_SESSION_METADATA),
+    )
+
+    with (
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.password_endpoints.revoke_ui_session_keys",
+            revoke_mock,
+        ),
+    ):
+        await change_password(
+            data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=NEW_PASSWORD),
+            user_api_key_dict=caller,
+        )
+
+    revoke_mock.assert_awaited_once()
+    revoke_kwargs = revoke_mock.await_args.kwargs
+    assert revoke_kwargs["user_id"] == "user-123"
+    assert revoke_kwargs["keep_hashed_token"] == "hashed-caller-token"
+
+
+@pytest.mark.asyncio
+async def test_change_password_failure_revokes_no_sessions():
+    from litellm.proxy._types import ChangePasswordRequest
+
+    prisma = _make_prisma(_make_user_row(hash_password(CURRENT_PASSWORD)))
+    revoke_mock = AsyncMock(return_value=0)
+
+    with (
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.password_endpoints.revoke_ui_session_keys",
+            revoke_mock,
+        ),
+    ):
+        with pytest.raises(HTTPException):
+            await change_password(
+                data=ChangePasswordRequest(current_password="not-the-password", new_password=NEW_PASSWORD),
+                user_api_key_dict=_caller(),
+            )
+
+    revoke_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_change_password_requires_db():
     from litellm.proxy._types import ChangePasswordRequest
 

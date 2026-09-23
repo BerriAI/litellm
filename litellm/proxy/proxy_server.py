@@ -630,6 +630,9 @@ from litellm.proxy.management_endpoints.prompt_caching_requests import (
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
+from litellm.proxy.management_endpoints.session_endpoints import (
+    router as session_management_router,
+)
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
 )
@@ -17012,6 +17015,19 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
     if user_obj and hasattr(user_obj, "__dict__"):
         user_obj.__dict__.pop("password", None)
 
+    # The password just changed via an invitation/reset link; any UI session
+    # minted under the old password may be in hostile hands. Revoke them all —
+    # the caller holds only the short-lived onboarding JWT, and the fresh
+    # session key is minted below, after this sweep.
+    from litellm.proxy.management_endpoints.session_endpoints import (
+        revoke_ui_session_keys,
+    )
+
+    await revoke_ui_session_keys(
+        user_id=invite_obj.user_id,
+        user_api_key_dict=UserAPIKeyAuth(user_id=invite_obj.user_id),
+    )
+
     try:
         jwt_token: Final = await _generate_onboarding_ui_session_token(user_obj=user_obj)
     except Exception as e:
@@ -19431,6 +19447,7 @@ app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
 app.include_router(password_management_router)
+app.include_router(session_management_router)
 app.include_router(team_router)
 app.include_router(ui_sso_router)
 app.include_router(organization_router)

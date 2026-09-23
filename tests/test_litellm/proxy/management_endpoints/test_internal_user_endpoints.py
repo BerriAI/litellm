@@ -4905,3 +4905,69 @@ async def test_delete_user_writes_deleted_audit_log_for_user_keys(mocker):
     assert audit_row.object_id == user_key.token
     assert audit_row.changed_by
     assert json.loads(audit_row.before_value)["token"] == user_key.token
+
+
+@pytest.mark.asyncio
+async def test_user_update_password_revokes_target_sessions(_admin_prisma, mocker):
+    """An admin-set password implies the old one may be compromised: every UI
+    session belonging to the target user must be revoked after the write."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.proxy_server.general_settings",
+        {"password_policy_check_breached_passwords": False},
+    )
+
+    mock_prisma_client = _admin_prisma
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {"user_id": "target-user"}
+    existing_user.user_id = "target-user"
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing_user)
+    mock_prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": "target-user"})
+    mock_prisma_client.jsonify_object = mocker.MagicMock(side_effect=lambda x: x)
+
+    revoke_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.session_endpoints.revoke_ui_session_keys",
+        new=mocker.AsyncMock(return_value=2),
+    )
+
+    user_request = UpdateUserRequest(user_id="target-user", password="Str0ng!Passw0rd")
+    admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
+
+    revoke_mock.assert_awaited_once()
+    revoke_kwargs = revoke_mock.await_args.kwargs
+    assert revoke_kwargs["user_id"] == "target-user"
+    # Revoke-all: the admin's own session is not among the target's sessions.
+    assert revoke_kwargs.get("keep_hashed_token") is None
+
+
+@pytest.mark.asyncio
+async def test_user_update_without_password_revokes_nothing(_admin_prisma, mocker):
+    """A non-password /user/update must not touch the target's sessions."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = _admin_prisma
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {"user_id": "target-user"}
+    existing_user.user_id = "target-user"
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing_user)
+    mock_prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": "target-user"})
+    mock_prisma_client.jsonify_object = mocker.MagicMock(side_effect=lambda x: x)
+
+    revoke_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.session_endpoints.revoke_ui_session_keys",
+        new=mocker.AsyncMock(return_value=0),
+    )
+
+    user_request = UpdateUserRequest(user_id="target-user", user_email="new@example.com")
+    admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
+
+    revoke_mock.assert_not_awaited()
