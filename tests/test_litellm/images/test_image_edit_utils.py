@@ -102,6 +102,9 @@ SEGMENTS_1030_JPEG: Final = (
     JPEG_SOI + _jpeg_segment(JPEG_APP0, bytes(4)) * 1030 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
 )
 FILL_BYTES_JPEG: Final = JPEG_SOI + b"\xff" * 1100 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
+FILL_BEFORE_LARGE_SEGMENT_JPEG: Final = (
+    JPEG_SOI + b"\xff" + _jpeg_segment(JPEG_APP2_MARKER, bytes(0xFEFE)) + _jpeg_sof_segment(JPEG_SOF0_MARKER, 640, 480)
+)
 OVERSIZED_HEADER_JPEG: Final = (
     JPEG_SOI + _jpeg_segment(JPEG_APP0, bytes(65533)) * 260 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
 )
@@ -133,6 +136,7 @@ def _bmp(width: int, height: int) -> bytes:
         pytest.param(SEGMENTS_300_JPEG, (320, 200), id="jpeg-300-app2-segments"),
         pytest.param(SEGMENTS_1030_JPEG, None, id="jpeg-more-than-1024-segments"),
         pytest.param(FILL_BYTES_JPEG, (320, 200), id="jpeg-1100-fill-bytes-before-sof"),
+        pytest.param(FILL_BEFORE_LARGE_SEGMENT_JPEG, (640, 480), id="jpeg-fill-before-large-segment"),
         pytest.param(OVERSIZED_HEADER_JPEG, None, id="jpeg-sof-beyond-16mib"),
         pytest.param(PROGRESSIVE_JPEG, (111, 55), id="jpeg-sof2-progressive"),
         pytest.param(DHT_JPEG, (400, 300), id="jpeg-dht-skipped-before-sof0"),

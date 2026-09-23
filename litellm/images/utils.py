@@ -85,7 +85,10 @@ def _jpeg_sof_dimensions(stream: IO[bytes], start: int, offset: int, segments_le
         if len(marker) < 4 or marker[0] != 0xFF:
             return None
         if marker[1] == 0xFF:
-            segment_offset += 1 + int(marker[2] == 0xFF) + int(marker[3] == 0xFF)
+            run = 1  # rebind-ok: consecutive fill bytes in this window
+            while run < 3 and marker[run + 1] == 0xFF:
+                run += 1
+            segment_offset += run
             continue
         if marker[1] in _JPEG_SOF_MARKERS:
             sof = stream.read(_JPEG_SOF_PAYLOAD_SIZE)
