@@ -5293,7 +5293,7 @@ async def test_wrapper_async_does_not_fire_failure_hook_for_post_success_error(
             self.failure_calls: tuple[Exception, ...] = ()
 
         async def async_post_call_success_deployment_hook(
-            self, request_data: dict, response: LLMResponseTypes, call_type: CallTypes | None
+            self, request_data: Mapping[str, object], response: LLMResponseTypes, call_type: CallTypes | None
         ) -> LLMResponseTypes | None:
             raise RuntimeError("boom in success hook, model call itself succeeded")
 
