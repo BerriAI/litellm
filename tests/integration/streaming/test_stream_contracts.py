@@ -589,3 +589,131 @@ def test_client_cancellation_releases_the_actual_provider_connection() -> None:
                 gate.set()
         assert wire.disconnected.get(timeout=5) == "/v1/chat/completions"
         assert len(wire.drain()) == 1
+
+
+def anthropic_event(event_type: str, payload: dict[str, object]) -> bytes:
+    return f"event: {event_type}\ndata: ".encode() + json.dumps({"type": event_type, **payload}).encode() + b"\n\n"
+
+
+def anthropic_one_hour_cache_write_stream(identity: str) -> tuple[bytes, ...]:
+    return (
+        anthropic_event(
+            "message_start",
+            {
+                "message": {
+                    "id": identity,
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-6",
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {
+                        "input_tokens": 10,
+                        "cache_creation_input_tokens": 1100,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 1100},
+                        "output_tokens": 1,
+                    },
+                }
+            },
+        ),
+        anthropic_event("content_block_start", {"index": 0, "content_block": {"type": "text", "text": ""}}),
+        anthropic_event("content_block_delta", {"index": 0, "delta": {"type": "text_delta", "text": "Hello cache"}}),
+        anthropic_event("content_block_stop", {"index": 0}),
+        anthropic_event(
+            "message_delta",
+            {
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {
+                    "input_tokens": 10,
+                    "cache_creation_input_tokens": 1100,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 4,
+                },
+            },
+        ),
+        anthropic_event("message_stop", {}),
+    )
+
+
+@pytest.mark.covers("streaming.anthropic_prompt_cache.one_hour_cache_write_is_billed_at_the_one_hour_rate")
+def test_anthropic_stream_one_hour_cache_write_is_billed_at_the_one_hour_rate(gateway: Gateway) -> None:
+    identity: Final = "stream-cache-1h-" + uuid.uuid4().hex
+    system_block: Final = {
+        "type": "text",
+        "text": "You are a patient reference desk. " * 200,
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+    }
+    with (
+        gateway.scenario() as scenario,
+        wire_server(
+            lambda request: Reply(
+                content_type="text/event-stream", chunks=anthropic_one_hour_cache_write_stream(identity)
+            )
+        ) as wire,
+    ):
+        model: Final = scenario.model(
+            model="anthropic/claude-sonnet-4-6",
+            api_base=wire.url,
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+            cache_creation_input_token_cost=0.00125,
+            cache_creation_input_token_cost_above_1hr=0.002,
+            cache_read_input_token_cost=0.0001,
+        )
+        with gateway.client.stream(
+            "POST",
+            "/v1/chat/completions",
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": [system_block]},
+                    {"role": "user", "content": identity},
+                ],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            },
+            headers={"Authorization": f"Bearer {gateway.key}"},
+        ) as response:
+            lines: Final = tuple(line for line in response.iter_lines() if line.startswith("data:"))
+        text: Final = "\n".join(lines)
+        assert response.status_code == 200, text
+        assert lines[-1] == "data: [DONE]", text
+        events: Final = tuple(json.loads(line.removeprefix("data:")) for line in lines[:-1])
+        assert all("error" not in event for event in events), text
+        assert (
+            "".join(choice["delta"].get("content") or "" for event in events for choice in event["choices"])
+            == "Hello cache"
+        ), text
+        usages: Final = tuple(event["usage"] for event in events if event.get("usage") is not None)
+        assert len(usages) == 1, text
+        assert (usages[0]["prompt_tokens"], usages[0]["completion_tokens"], usages[0]["total_tokens"]) == (
+            1110,
+            4,
+            1114,
+        ), text
+        assert usages[0]["prompt_tokens_details"]["cache_creation_tokens"] == 1100, text
+        assert usages[0]["prompt_tokens_details"]["cache_creation_token_details"] == {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 1100,
+        }, text
+        requests: Final = wire.drain()
+        assert len(requests) == 1
+        outbound: Final = json.loads(requests[0].body)
+        assert requests[0].target == "/v1/messages", requests[0].target
+        assert outbound["model"] == "claude-sonnet-4-6" and outbound["stream"] is True, outbound
+        assert outbound["system"] == [system_block], outbound
+        assert outbound["messages"] == [{"role": "user", "content": [{"type": "text", "text": identity}]}], outbound
+        request_ids: Final = frozenset(event["id"] for event in events)
+        assert len(request_ids) == 1, text
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
+                (next(iter(request_ids)),),
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        assert (rows[0]["prompt_tokens"], rows[0]["completion_tokens"]) == (1110, 4), rows
+        assert float(rows[0]["spend"]) == pytest.approx(10 * 0.001 + 1100 * 0.002 + 4 * 0.002), rows

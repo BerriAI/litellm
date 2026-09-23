@@ -2019,6 +2019,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/streaming/test_stream_contracts.py::test_anthropic_stream_one_hour_cache_write_is_billed_at_the_one_hour_rate": [
+      "streaming.anthropic_prompt_cache.one_hour_cache_write_is_billed_at_the_one_hour_rate"
     ]
   },
   "browser": {
