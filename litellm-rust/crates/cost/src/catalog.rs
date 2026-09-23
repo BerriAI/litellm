@@ -34,6 +34,10 @@ use crate::search_cost::{
     ParallelAiPricing, effective_mode, parallel_ai_search_cost, provider_usage,
     search_provider_cost_per_query,
 };
+use crate::speech_cost::{
+    SpeechCostError, SpeechCostMetric, cost_per_second, generic_cost_per_character,
+    lyria_generation_cost, select_cost_metric_for_model, transcription_usage_has_token_details,
+};
 use crate::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
 use crate::xai_cost::{cost_per_token as xai_cost_per_token, reported_cost as xai_reported_cost};
 use crate::{Cost, Pricing, PricingError, Rates, Request, calculate};
@@ -99,6 +103,24 @@ pub enum CatalogResponseError {
 pub enum RealtimeCostError {
     Catalog(CatalogError),
     Usage(UsageError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CatalogSpeechError {
+    Catalog(CatalogError),
+    Speech(SpeechCostError),
+}
+
+impl From<CatalogError> for CatalogSpeechError {
+    fn from(value: CatalogError) -> Self {
+        Self::Catalog(value)
+    }
+}
+
+impl From<SpeechCostError> for CatalogSpeechError {
+    fn from(value: SpeechCostError) -> Self {
+        Self::Speech(value)
+    }
 }
 
 impl From<CatalogError> for RealtimeCostError {
@@ -224,6 +246,58 @@ impl ModelInfoCatalog {
         region: Option<&str>,
     ) -> Option<&'a str> {
         select_model_key(&self.entries, model, provider, region)
+    }
+
+    pub fn speech_cost(
+        &self,
+        request: ModelCostRequest<'_>,
+        prompt_characters: Option<f64>,
+    ) -> Result<(f64, f64), CatalogSpeechError> {
+        let key = self
+            .select_model_key(request.model, request.provider, request.region)
+            .ok_or(CatalogError::ModelNotFound)?;
+        let model_info = &self.entries[key];
+        if matches!(request.provider, Some("vertex_ai" | "vertex_ai_beta"))
+            && let Some(cost) = lyria_generation_cost(model_info)
+        {
+            return Ok((0.0, cost));
+        }
+        match select_cost_metric_for_model(model_info)? {
+            SpeechCostMetric::PerCharacter => {
+                let characters =
+                    prompt_characters.ok_or(SpeechCostError::MissingPromptCharacters)?;
+                let (prompt, completion) =
+                    generic_cost_per_character(model_info, characters, 0.0, None, Some(0.0));
+                Ok((
+                    prompt.ok_or(SpeechCostError::MissingInputCharacterRate)?,
+                    completion.unwrap_or(0.0),
+                ))
+            }
+            SpeechCostMetric::PerToken => Ok(self.cost_per_token(request)?),
+        }
+    }
+
+    pub fn transcription_cost(
+        &self,
+        request: ModelCostRequest<'_>,
+        duration_seconds: f64,
+    ) -> Result<(f64, f64), CatalogError> {
+        let key = self
+            .select_model_key(request.model, request.provider, request.region)
+            .ok_or(CatalogError::ModelNotFound)?;
+        let model_info = &self.entries[key];
+        if transcription_usage_has_token_details(request.usage) {
+            return Ok(calculate_generic_cost_from_model_info_with_region(
+                request.usage,
+                model_info,
+                request.service_tier,
+                false,
+                request.data_residency,
+                request.vertex_location,
+                request.at,
+            ));
+        }
+        Ok(cost_per_second(model_info, duration_seconds))
     }
 
     pub fn handle_realtime_transcription_cost_calculation(

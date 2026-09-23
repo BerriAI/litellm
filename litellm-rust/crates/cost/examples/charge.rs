@@ -525,6 +525,14 @@ fn main() {
             json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003, "input_cost_per_token_priority": 0.005, "output_cost_per_token_priority": 0.007}),
         ),
         (
+            "openai/speech".to_owned(),
+            json!({"input_cost_per_character": 0.002}),
+        ),
+        (
+            "openai/transcribe".to_owned(),
+            json!({"input_cost_per_second": 0.01}),
+        ),
+        (
             "openai/cache_savings_model".to_owned(),
             json!({"input_cost_per_token": 2e-6, "output_cost_per_token": 4e-6, "cache_read_input_token_cost": 0.5e-6}),
         ),
@@ -818,4 +826,32 @@ fn main() {
         )
         .unwrap();
     println!("responses_ws_cost={websocket_cost:.3}");
+    let empty_usage = litellm_cost::responses_usage::ChatUsage::default();
+    let speech_request = ModelCostRequest {
+        model: "speech",
+        provider: Some("openai"),
+        region: None,
+        usage: &empty_usage,
+        service_tier: None,
+        data_residency: None,
+        vertex_location: None,
+        at,
+        response_time_ms: None,
+    };
+    let speech_cost = model_info_catalog
+        .speech_cost(speech_request, Some(15.0))
+        .unwrap();
+    let transcription_cost = model_info_catalog
+        .transcription_cost(
+            ModelCostRequest {
+                model: "transcribe",
+                ..speech_request
+            },
+            3.0,
+        )
+        .unwrap();
+    println!(
+        "speech_cost={:.3} transcription_cost={:.3}",
+        speech_cost.0, transcription_cost.0
+    );
 }

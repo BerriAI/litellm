@@ -26,6 +26,7 @@ pub mod regional_uplift;
 pub mod responses_usage;
 pub mod retrieval_cost;
 pub mod search_cost;
+pub mod speech_cost;
 pub mod tiered_pricing;
 pub mod tool_call_cost_tracking;
 pub mod tool_cost_dispatch;
