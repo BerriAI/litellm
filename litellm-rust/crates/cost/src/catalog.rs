@@ -426,6 +426,55 @@ impl ModelInfoCatalog {
         select_model_name_for_cost_calc(request, &self.entries)
     }
 
+    pub fn pricing_entry_for_cost_calc<'a>(
+        &'a self,
+        request: ModelSelectionRequest<'a>,
+        logging_details: Option<&'a Value>,
+    ) -> Option<(&'a str, &'a Value)> {
+        let deployment_info = if request.custom_pricing {
+            request
+                .router_model_id
+                .and_then(|id| self.entries.get(id))
+                .or_else(|| {
+                    logging_details
+                        .and_then(|details| details.get("litellm_params"))
+                        .and_then(|params| {
+                            params
+                                .pointer("/metadata/model_info")
+                                .or_else(|| params.pointer("/litellm_metadata/model_info"))
+                        })
+                })
+        } else {
+            None
+        };
+        if let (Some(key), Some(info)) =
+            (request.router_model_id.or(request.model), deployment_info)
+        {
+            return Some((key, info));
+        }
+        let selected = self.select_model_name_for_cost_calc(request);
+        let provider = get_provider_for_cost_calc(
+            request.model,
+            request.provider,
+            request.known_providers,
+            &self.entries,
+        );
+        [
+            selected.as_deref(),
+            request
+                .response
+                .and_then(|response| response.get("model"))
+                .and_then(Value::as_str),
+            request.model,
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(|model| {
+            self.select_model_key(model, provider.as_deref(), None)
+                .and_then(|key| self.entries.get(key).map(|info| (key, info)))
+        })
+    }
+
     pub fn prepare_completion_input(
         &self,
         request: CompletionInputRequest<'_>,

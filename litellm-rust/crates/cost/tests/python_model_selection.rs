@@ -190,3 +190,80 @@ fn provider_inference_uses_explicit_prefix_or_catalog_metadata(
         expected
     );
 }
+
+#[rstest]
+fn pricing_entry_prefers_registered_deployment_to_served_model() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        (
+            "router-id".to_owned(),
+            json!({"input_cost_per_token": 0.03}),
+        ),
+        (
+            "openai/served".to_owned(),
+            json!({"input_cost_per_token": 0.01}),
+        ),
+    ]));
+    let response = json!({"model": "served"});
+    let request = ModelSelectionRequest {
+        response: Some(&response),
+        custom_pricing: true,
+        router_model_id: Some("router-id"),
+        ..request(Some("requested"), Some("openai"))
+    };
+    assert_eq!(
+        catalog.pricing_entry_for_cost_calc(request, None),
+        Some(("router-id", &json!({"input_cost_per_token": 0.03})))
+    );
+}
+
+#[rstest]
+fn pricing_entry_reads_deployment_metadata_before_published_price() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/served".to_owned(),
+        json!({"input_cost_per_token": 0.01}),
+    )]));
+    let response = json!({"model": "served"});
+    let logging = json!({"litellm_params": {
+        "metadata": {"model_info": {"input_cost_per_token": 0.02}},
+        "litellm_metadata": {"model_info": {"input_cost_per_token": 0.03}}
+    }});
+    let selected = ModelSelectionRequest {
+        response: Some(&response),
+        custom_pricing: true,
+        ..request(Some("requested"), Some("openai"))
+    };
+    assert_eq!(
+        catalog.pricing_entry_for_cost_calc(selected, Some(&logging)),
+        Some(("requested", &json!({"input_cost_per_token": 0.02})))
+    );
+    assert_eq!(
+        catalog.pricing_entry_for_cost_calc(
+            ModelSelectionRequest {
+                custom_pricing: false,
+                ..selected
+            },
+            Some(&logging)
+        ),
+        Some(("openai/served", &json!({"input_cost_per_token": 0.01})))
+    );
+}
+
+#[rstest]
+fn pricing_entry_falls_back_from_unpriced_base_to_served_model() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/served".to_owned(),
+        json!({"input_cost_per_token": 0.01}),
+    )]));
+    let response = json!({"model": "served"});
+    assert_eq!(
+        catalog.pricing_entry_for_cost_calc(
+            ModelSelectionRequest {
+                response: Some(&response),
+                base_model: Some("unpriced"),
+                ..request(Some("requested"), Some("openai"))
+            },
+            None,
+        ),
+        Some(("openai/served", &json!({"input_cost_per_token": 0.01})))
+    );
+}
