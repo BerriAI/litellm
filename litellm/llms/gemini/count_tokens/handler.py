@@ -88,6 +88,7 @@ class GoogleAIStudioTokenCounter:
         timeout: float | httpx.Timeout | None = None,
         system_instruction: SystemInstructions | None = None,
         tools: list[Tools] | None = None,
+        client: httpx.AsyncClient | None = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         """
@@ -159,7 +160,7 @@ class GoogleAIStudioTokenCounter:
             }
         )
 
-        async_httpx_client: Final = get_async_httpx_client(
+        async_httpx_client: Final = client or get_async_httpx_client(
             llm_provider=LlmProviders.GEMINI,
         )
 
@@ -185,5 +186,9 @@ class GoogleAIStudioTokenCounter:
             error_msg = f"Request to Google Gen AI Studio failed: {e}"
             raise litellm.APIConnectionError(message=error_msg, llm_provider="gemini", model=model) from e
         except Exception as e:
-            error_msg = f"Unexpected error during token counting: {e}"
-            raise Exception(error_msg) from e
+            raise litellm.APIError(
+                message=f"Unexpected error during token counting: {e}",
+                llm_provider="gemini",
+                model=model,
+                status_code=500,
+            ) from e

@@ -9,17 +9,14 @@ COUNT_TOKENS_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemi
 
 
 @pytest.mark.asyncio
-async def test_acount_tokens_sends_generate_content_request_when_system_or_tools_present(monkeypatch):
+async def test_acount_tokens_sends_generate_content_request_when_system_or_tools_present():
     recorded: list[httpx.Request] = []
 
     def _handler(request: httpx.Request) -> httpx.Response:
         recorded.append(request)
         return httpx.Response(200, json={"totalTokens": 42})
 
-    monkeypatch.setattr(
-        "litellm.llms.gemini.count_tokens.handler.get_async_httpx_client",
-        lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
-    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
 
     result = await GoogleAIStudioTokenCounter().acount_tokens(
         model="gemini-2.5-flash",
@@ -27,6 +24,7 @@ async def test_acount_tokens_sends_generate_content_request_when_system_or_tools
         api_key="test-key",
         system_instruction={"parts": [{"text": "You are a helpful assistant"}]},
         tools=[{"function_declarations": [{"name": "get_weather"}]}],
+        client=client,
     )
 
     assert result == {"totalTokens": 42}
@@ -42,22 +40,20 @@ async def test_acount_tokens_sends_generate_content_request_when_system_or_tools
 
 
 @pytest.mark.asyncio
-async def test_acount_tokens_keeps_contents_body_without_system_or_tools(monkeypatch):
+async def test_acount_tokens_keeps_contents_body_without_system_or_tools():
     recorded: list[httpx.Request] = []
 
     def _handler(request: httpx.Request) -> httpx.Response:
         recorded.append(request)
         return httpx.Response(200, json={"totalTokens": 4})
 
-    monkeypatch.setattr(
-        "litellm.llms.gemini.count_tokens.handler.get_async_httpx_client",
-        lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
-    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
 
     await GoogleAIStudioTokenCounter().acount_tokens(
         model="gemini-2.5-flash",
         contents=[{"role": "user", "parts": [{"text": "hi"}]}],
         api_key="test-key",
+        client=client,
     )
 
     body = json.loads(recorded[-1].content)

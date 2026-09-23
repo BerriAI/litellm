@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -158,81 +159,114 @@ class TestGoogleAIStudioTokenCounter:
 
             # Verify the mock was called correctly
             mock_acount_tokens.assert_called_once_with(
-                model=model_to_use, contents=contents
+                model=model_to_use, contents=contents, client=None
             )
 
     @pytest.mark.asyncio
     async def test_count_tokens_translates_anthropic_messages_system_and_tools(self):
         """Anthropic-format messages are converted to gemini contents/system/tools
         before hitting the countTokens endpoint."""
+        import httpx
+
+        recorded: list = []
+
+        def _handler(request):
+            recorded.append(request)
+            return httpx.Response(200, json={"totalTokens": 12})
+
         token_counter = GoogleAIStudioTokenCounter()
 
-        with patch(
-            "litellm.llms.gemini.count_tokens.handler.GoogleAIStudioTokenCounter.acount_tokens",
-            new_callable=AsyncMock,
-        ) as mock_acount_tokens:
-            mock_acount_tokens.return_value = {"totalTokens": 12}
+        result = await token_counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hello world"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://gemini.example.test"}},
+            request_model="gemini/gemini-2.5-flash",
+            tools=[
+                {
+                    "name": "get_weather",
+                    "description": "Get the current weather for a city.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                }
+            ],
+            system="You are a helpful assistant",
+            client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+        )
 
-            result = await token_counter.count_tokens(
-                model_to_use="gemini-2.5-flash",
-                messages=[{"role": "user", "content": "hello world"}],
-                contents=None,
-                deployment=None,
-                request_model="gemini/gemini-2.5-flash",
-                tools=[
-                    {
-                        "name": "get_weather",
-                        "description": "Get the current weather for a city.",
-                        "input_schema": {
-                            "type": "object",
-                            "properties": {"city": {"type": "string"}},
-                            "required": ["city"],
-                        },
-                    }
-                ],
-                system="You are a helpful assistant",
-            )
+        assert result is not None
+        assert result.total_tokens == 12
+        body = json.loads(recorded[-1].content)
+        generate_content_request = body["generateContentRequest"]
+        assert generate_content_request["contents"]
+        assert generate_content_request["contents"][0]["parts"][0].get("text") == "hello world"
+        assert generate_content_request["systemInstruction"]["parts"][0].get("text") == "You are a helpful assistant"
+        assert generate_content_request["tools"][0]["function_declarations"][0]["name"] == "get_weather"
 
-            assert result is not None
-            assert result.total_tokens == 12
-            kwargs = mock_acount_tokens.call_args.kwargs
-            assert kwargs["contents"]
-            assert kwargs["contents"][0]["parts"][0].get("text") == "hello world"
-            assert kwargs["system_instruction"]["parts"][0].get("text") == "You are a helpful assistant"
-            assert kwargs["tools"][0]["function_declarations"][0]["name"] == "get_weather"
+    @pytest.mark.asyncio
+    async def test_count_tokens_passes_system_and_tools_with_native_contents(self):
+        """A request that already carries gemini contents still counts the
+        caller-supplied system instruction and tools."""
+        import httpx
+
+        recorded: list = []
+
+        def _handler(request):
+            recorded.append(request)
+            return httpx.Response(200, json={"totalTokens": 20})
+
+        token_counter = GoogleAIStudioTokenCounter()
+
+        result = await token_counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=None,
+            contents=[{"role": "user", "parts": [{"text": "hello world"}]}],
+            deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://gemini.example.test"}},
+            request_model="gemini/gemini-2.5-flash",
+            system={"parts": [{"text": "You are a helpful assistant"}]},
+            tools=[{"function_declarations": [{"name": "get_weather"}]}],
+            client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+        )
+
+        assert result is not None
+        assert result.total_tokens == 20
+        body = json.loads(recorded[-1].content)
+        generate_content_request = body["generateContentRequest"]
+        assert generate_content_request["contents"] == [{"role": "user", "parts": [{"text": "hello world"}]}]
+        assert generate_content_request["systemInstruction"] == {"parts": [{"text": "You are a helpful assistant"}]}
+        assert generate_content_request["tools"][0]["function_declarations"][0]["name"] == "get_weather"
 
     @pytest.mark.asyncio
     async def test_count_tokens_provider_error_returns_error_response(self):
         """A provider APIError must surface as an error TokenCountResponse so the
         proxy falls back to the local tokenizer instead of 500ing."""
-        import litellm
+        import httpx
+
+        def _handler(request):
+            return httpx.Response(
+                400,
+                json={"error": {"code": 400, "message": "bad request", "status": "INVALID_ARGUMENT"}},
+            )
 
         token_counter = GoogleAIStudioTokenCounter()
 
-        with patch(
-            "litellm.llms.gemini.count_tokens.handler.GoogleAIStudioTokenCounter.acount_tokens",
-            new_callable=AsyncMock,
-        ) as mock_acount_tokens:
-            mock_acount_tokens.side_effect = litellm.APIError(
-                status_code=400,
-                message="Google Gen AI Studio API error: 400",
-                llm_provider="gemini",
-                model="gemini-2.5-flash",
-            )
+        result = await token_counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hello world"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://gemini.example.test"}},
+            request_model="gemini/gemini-2.5-flash",
+            client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+        )
 
-            result = await token_counter.count_tokens(
-                model_to_use="gemini-2.5-flash",
-                messages=[{"role": "user", "content": "hello world"}],
-                contents=None,
-                deployment=None,
-                request_model="gemini/gemini-2.5-flash",
-            )
-
-            assert result is not None
-            assert result.error is True
-            assert result.status_code == 400
-            assert result.total_tokens == 0
-            assert result.error_message is not None
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 400
+        assert result.total_tokens == 0
+        assert result.error_message is not None
 
     @pytest.mark.asyncio
     async def test_count_tokens_returns_none_without_contents_or_messages(self):

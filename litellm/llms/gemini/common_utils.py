@@ -491,6 +491,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
+        client: httpx.AsyncClient | None = None,
     ) -> TokenCountResponse | None:
         import copy
 
@@ -507,23 +508,26 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
             if contents is None
             else None
         )
+        system_instruction: Final = payload.system_instruction if payload is not None else system
+        gemini_tools: Final = payload.tools if payload is not None else tools
         count_tokens_params: Final = {
             "model": model_to_use,
             "contents": payload.contents if payload is not None else contents,
             **(
-                {"system_instruction": payload.system_instruction}  # mutable-ok: kwargs dict for acount_tokens
-                if payload is not None and payload.system_instruction is not None
+                {"system_instruction": system_instruction}  # mutable-ok: kwargs dict for acount_tokens
+                if system_instruction is not None
                 else {}  # mutable-ok: kwargs dict for acount_tokens
             ),
             **(
-                {"tools": payload.tools}  # mutable-ok: kwargs dict for acount_tokens
-                if payload is not None and payload.tools is not None
+                {"tools": gemini_tools}  # mutable-ok: kwargs dict for acount_tokens
+                if gemini_tools is not None
                 else {}  # mutable-ok: kwargs dict for acount_tokens
             ),
         }
         count_tokens_params_request.update(count_tokens_params)
         try:
             result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
+                client=client,
                 **count_tokens_params_request,
             )
         except (litellm.APIError, litellm.APIConnectionError) as e:
