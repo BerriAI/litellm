@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 
 
 class S3BatchUploadError(Exception):
-    def __init__(self, failed: int, total: int):
+    def __init__(self, failed: int, total: int) -> None:
         self.failed = failed
         self.total = total
         super().__init__(f"{failed} of {total} S3 uploads failed; events kept in queue for the next flush")
@@ -249,8 +249,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             params.get("s3_sse_kms_key_id") or s3_sse_kms_key_id,
         )
 
+        configured_bound: Final = params.get("s3_max_concurrent_uploads")
         self.s3_max_concurrent_uploads = resolve_s3_max_concurrent_uploads(
-            params.get("s3_max_concurrent_uploads", s3_max_concurrent_uploads), DEFAULT_S3_MAX_CONCURRENT_UPLOADS
+            s3_max_concurrent_uploads if configured_bound is None or configured_bound == "" else configured_bound,
+            DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
         )
 
         self.s3_batch_file_upload = s3_batch_file_upload or resolve_s3_batch_file_upload(
@@ -466,10 +468,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         Raises S3BatchUploadError when any upload failed; CustomBatchLogger.flush_queue
         keeps the surviving queue entries for the next flush.
         """
-        verbose_logger.debug("s3_v2 logger - sending batch of %s", len(self.log_queue))
         batch: Final = tuple(self.log_queue)
         if not batch:
             return
+        verbose_logger.debug("s3_v2 logger - sending batch of %s", len(batch))
 
         #########################################################
         #  Flush the log queue to s3

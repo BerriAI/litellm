@@ -2470,9 +2470,7 @@ def test_prompts_only_toggle_is_exposed_to_admin_ui_for_both_s3_callbacks(callba
     assert "S3_LOG_PROMPTS_ONLY" in CustomLogger.get_callback_env_vars(callback_name)
 
 
-def _element(payload: dict, key_suffix: str):
-    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
-
+def _element(payload: dict[str, object], key_suffix: str) -> s3BatchLoggingElement:
     return s3BatchLoggingElement(
         s3_object_key=f"2025-09-14/test-{key_suffix}.json",
         payload=payload,
@@ -2480,9 +2478,7 @@ def _element(payload: dict, key_suffix: str):
     )
 
 
-def _ok_response():
-    from unittest.mock import MagicMock
-
+def _ok_response() -> MagicMock:
     response = MagicMock()
     response.status_code = 200
     response.raise_for_status = MagicMock()
@@ -2490,7 +2486,7 @@ def _ok_response():
 
 
 @pytest.mark.asyncio
-async def test_async_send_batch_bounds_concurrent_uploads():
+async def test_async_send_batch_bounds_concurrent_uploads() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -2503,7 +2499,7 @@ async def test_async_send_batch_bounds_concurrent_uploads():
     peak = 0
     put_calls = 0
 
-    async def fake_put(url, data=None, headers=None):
+    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
         nonlocal in_flight, peak, put_calls
         in_flight += 1
         peak = max(peak, in_flight)
@@ -2524,7 +2520,7 @@ async def test_async_send_batch_bounds_concurrent_uploads():
 
 
 @pytest.mark.asyncio
-async def test_async_send_batch_uploads_single_jsonl_file():
+async def test_async_send_batch_uploads_single_jsonl_file() -> None:
     import json
 
     logger = S3Logger(
@@ -2537,7 +2533,7 @@ async def test_async_send_batch_uploads_single_jsonl_file():
 
     calls = []
 
-    async def fake_put(url, data=None, headers=None):
+    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
         calls.append((url, data, headers))
         return _ok_response()
 
@@ -2557,7 +2553,7 @@ async def test_async_send_batch_uploads_single_jsonl_file():
 
 
 @pytest.mark.asyncio
-async def test_flush_queue_preserves_events_added_during_upload():
+async def test_flush_queue_preserves_events_added_during_upload() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -2568,7 +2564,7 @@ async def test_flush_queue_preserves_events_added_during_upload():
     late_element = _element({"id": "late"}, "late")
     appended = False
 
-    async def fake_put(url, data=None, headers=None):
+    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
         nonlocal appended
         if not appended:
             appended = True
@@ -2595,7 +2591,7 @@ def _override_logger(**overrides: object) -> S3Logger:
     )
 
 
-def test_env_backed_false_string_keeps_per_request_uploads():
+def test_env_backed_false_string_keeps_per_request_uploads() -> None:
     assert _override_logger(s3_batch_file_upload="false").s3_batch_file_upload is False
     assert _override_logger(s3_batch_file_upload="true").s3_batch_file_upload is True
     logger = S3Logger(
@@ -2610,7 +2606,7 @@ def test_env_backed_false_string_keeps_per_request_uploads():
 
 
 @pytest.mark.parametrize("bad", [0, -3, "0", "abc", ""])
-def test_invalid_concurrency_falls_back_to_default(bad: object):
+def test_invalid_concurrency_falls_back_to_default(bad: object) -> None:
     from litellm.constants import DEFAULT_S3_MAX_CONCURRENT_UPLOADS
 
     logger = _override_logger(s3_max_concurrent_uploads=bad)
@@ -2619,14 +2615,29 @@ def test_invalid_concurrency_falls_back_to_default(bad: object):
     assert logger._upload_semaphore._value == DEFAULT_S3_MAX_CONCURRENT_UPLOADS
 
 
-def test_env_backed_concurrency_string_is_parsed():
+def test_env_backed_concurrency_string_is_parsed() -> None:
     logger = _override_logger(s3_max_concurrent_uploads="4")
 
     assert logger.s3_max_concurrent_uploads == 4
     assert logger._upload_semaphore._value == 4
 
 
-def _failure_response():
+@pytest.mark.parametrize("empty", [None, ""])
+def test_empty_config_concurrency_falls_back_to_constructor_value(empty: object) -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_concurrent_uploads=4,
+        s3_callback_params_override={"s3_max_concurrent_uploads": empty},
+    )
+
+    assert logger.s3_max_concurrent_uploads == 4
+    assert logger._upload_semaphore._value == 4
+
+
+def _failure_response() -> MagicMock:
     response = MagicMock()
     response.status_code = 400
     response.raise_for_status = MagicMock(side_effect=Exception("s3 rejected the object"))
@@ -2634,7 +2645,7 @@ def _failure_response():
 
 
 @pytest.mark.asyncio
-async def test_failed_uploads_stay_queued_for_next_flush():
+async def test_failed_uploads_stay_queued_for_next_flush() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -2645,7 +2656,7 @@ async def test_failed_uploads_stay_queued_for_next_flush():
     elements = [_element({"i": i}, f"{i}") for i in range(5)]
     fail_next = True
 
-    async def fake_put(url, data=None, headers=None):
+    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
         nonlocal fail_next
         if fail_next and (url.endswith("test-2.json") or url.endswith("test-4.json")):
             return _failure_response()
@@ -2666,7 +2677,7 @@ async def test_failed_uploads_stay_queued_for_next_flush():
 
 
 @pytest.mark.asyncio
-async def test_batch_file_upload_failure_keeps_whole_batch():
+async def test_batch_file_upload_failure_keeps_whole_batch() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -2677,7 +2688,7 @@ async def test_batch_file_upload_failure_keeps_whole_batch():
 
     put_calls = 0
 
-    async def fake_put(url, data=None, headers=None):
+    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
         nonlocal put_calls
         put_calls += 1
         return _failure_response()
@@ -2695,7 +2706,7 @@ async def test_batch_file_upload_failure_keeps_whole_batch():
 
 
 @pytest.mark.asyncio
-async def test_events_appended_during_failed_flush_survive():
+async def test_events_appended_during_failed_flush_survive() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -2706,7 +2717,7 @@ async def test_events_appended_during_failed_flush_survive():
     late = _element({"id": "late"}, "late")
     appended = False
 
-    async def fake_put(url, data=None, headers=None):
+    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
         nonlocal appended
         if not appended:
             appended = True
@@ -2726,7 +2737,7 @@ async def test_events_appended_during_failed_flush_survive():
 
 
 @pytest.mark.asyncio
-async def test_batch_file_key_shape():
+async def test_batch_file_key_shape() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -2738,7 +2749,7 @@ async def test_batch_file_key_shape():
 
     calls = []
 
-    async def fake_put(url, data=None, headers=None):
+    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
         calls.append((url, headers))
         return _ok_response()
 
