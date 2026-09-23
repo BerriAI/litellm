@@ -1,11 +1,40 @@
 use litellm_core::responses::websocket::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
-use pyo3::prelude::*;
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
 use serde_json::Value;
 
 use crate::{
-    errors::responses_error_to_pyerr,
+    errors::{RustBridgeDeclined, responses_error_to_pyerr},
     marshal::{marshal_headers, optional_timeout},
 };
+
+#[pyfunction]
+#[pyo3(signature = (request, args, kwargs))]
+pub(crate) fn responses(
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    drop((request, args, kwargs));
+    Err(RustBridgeDeclined::new_err(
+        "native responses route is not implemented",
+    ))
+}
+
+#[pyfunction]
+#[pyo3(signature = (request, args, kwargs))]
+pub(crate) fn aresponses(
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    drop((request, args, kwargs));
+    Err(RustBridgeDeclined::new_err(
+        "native responses route is not implemented",
+    ))
+}
 
 #[pyclass]
 pub(crate) struct ResponsesWebSocketConnection {
@@ -63,7 +92,28 @@ mod tests {
     use std::{ffi::CString, time::Duration};
 
     use futures_util::{SinkExt, StreamExt};
-    use pyo3::{prelude::*, types::PyDict};
+    use pyo3::{
+        prelude::*,
+        types::{PyDict, PyTuple},
+    };
+
+    use crate::errors::RustBridgeDeclined;
+
+    #[test]
+    fn both_entrypoints_decline_before_provider_execution() {
+        Python::initialize();
+        Python::attach(|py| {
+            let request = PyDict::new(py);
+            let args = PyTuple::empty(py);
+            let kwargs = PyDict::new(py);
+
+            for entrypoint in [super::responses, super::aresponses] {
+                let error = entrypoint(request.clone().into_any(), args.clone(), kwargs.clone())
+                    .expect_err("native responses must decline until a route machine exists");
+                assert!(error.is_instance_of::<RustBridgeDeclined>(py));
+            }
+        });
+    }
     use tokio::net::TcpListener;
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
