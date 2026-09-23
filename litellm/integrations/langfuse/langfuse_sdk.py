@@ -22,6 +22,7 @@ import opentelemetry.trace as otel_trace
 from langfuse import LangfuseOtelSpanAttributes
 from langfuse.api import LangfuseAPI, Prompt, Prompt_Chat
 from langfuse.api.core.api_error import ApiError
+from langfuse.api.core.request_options import RequestOptions
 from langfuse.model import BasePromptClient, ChatPromptClient, PromptClient, TextPromptClient
 from opentelemetry.context import Context
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
@@ -73,6 +74,13 @@ _OBSERVATION_ID_PATTERN: Final = re.compile(r"^(?=.*[1-9a-f])[0-9a-f]{16}$")
 _TRACER_NAME: Final = "langfuse-sdk"
 _LANGFUSE_INGESTION_VERSION_HEADER: Final = "x-langfuse-ingestion-version"
 _LANGFUSE_INGESTION_VERSION: Final = "4"
+_NO_REST_RETRIES: Final = RequestOptions(max_retries=0)
+_TRUNCATION_MARKER: Final = "<truncated due to size exceeding limit>"
+_TRUNCATION_GROUPS: Final = (
+    (LangfuseOtelSpanAttributes.OBSERVATION_INPUT, LangfuseOtelSpanAttributes.TRACE_INPUT),
+    (LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT, LangfuseOtelSpanAttributes.TRACE_OUTPUT),
+    (LangfuseOtelSpanAttributes.OBSERVATION_METADATA, LangfuseOtelSpanAttributes.TRACE_METADATA),
+)
 _SERVER_FLOOR_HINT: Final = (
     "; the OTLP traces route needs a self-hosted Langfuse server on 3.63.0 or newer "
     "(https://langfuse.com/self-hosting/upgrade/versioning#sdk-server)"
@@ -577,8 +585,51 @@ class _Halving:
     settled: tuple[SpanExportResult, ...] = ()
 
 
-def _halves(batch: _Batch) -> tuple[_Batch, _Batch]:
-    return batch[: len(batch) // 2], batch[len(batch) // 2 :]
+def _smaller(batch: _Batch) -> tuple[_Batch, ...]:
+    """What to send after a 413: the two halves of a batch, or a single span with its largest field truncated."""
+    match batch:
+        case (only,):
+            truncated: Final = _truncated(only)
+            return () if truncated is None else ((truncated,),)
+        case _:
+            return batch[: len(batch) // 2], batch[len(batch) // 2 :]
+
+
+def _in_group(key: str, group: tuple[str, ...]) -> bool:
+    return any(key == prefix or key.startswith(prefix + ".") for prefix in group)
+
+
+def _group_size(attributes: Mapping[str, AttributeValue], group: tuple[str, ...]) -> int:
+    return sum(
+        len(str(value)) for key, value in attributes.items() if _in_group(key, group) and value != _TRUNCATION_MARKER
+    )
+
+
+def _truncated(span: ReadableSpan) -> ReadableSpan | None:
+    """The span with its largest remaining input, output or metadata replaced by the marker the v2 consumer wrote
+    when an event went over ``LANGFUSE_MAX_EVENT_SIZE_BYTES``, or ``None`` once all three are gone."""
+    attributes: Final = span.attributes or MappingProxyType({})
+    largest: Final = max(_TRUNCATION_GROUPS, key=lambda group: _group_size(attributes, group))
+    if _group_size(attributes, largest) == 0:
+        return None
+    kept: Final = {key: value for key, value in attributes.items() if not _in_group(key, largest)}
+    marked: Final = {
+        prefix: _TRUNCATION_MARKER for prefix in largest if any(_in_group(key, (prefix,)) for key in attributes)
+    }
+    return ReadableSpan(
+        name=span.name,
+        context=span.context,
+        parent=span.parent,
+        resource=span.resource,
+        attributes=MappingProxyType({**kept, **marked}),
+        events=span.events,
+        links=span.links,
+        kind=span.kind,
+        status=span.status,
+        start_time=span.start_time,
+        end_time=span.end_time,
+        instrumentation_scope=span.instrumentation_scope,
+    )
 
 
 def enable_langfuse_debug_logging() -> None:
@@ -600,7 +651,8 @@ class LangfuseSpanExporter(SpanExporter):
     as v2's injected httpx client did. A connect or read failure and a retryable status are re-sent after
     each delay, matching the v2 ingestion consumer; ``BatchSpanProcessor`` would otherwise drop the whole
     batch on the first exception. A 413 splits the batch in halves until each body fits or a single span
-    is left, which stands in for the byte ceiling the v2 consumer applied before posting.
+    is left; that span is re-sent with its input, output and metadata replaced by the v2 consumer's
+    truncation marker, largest first, and dropped only when the fully truncated span is still refused.
     """
 
     handler: HTTPHandler
@@ -610,9 +662,9 @@ class LangfuseSpanExporter(SpanExporter):
     delays: Sequence[float] = (1.0, 2.0, 4.0)
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        """Halving a batch of n spans settles every span within ``n.bit_length()`` rounds, so the rounds are a fixed
-        fold rather than a recursion."""
-        rounds: Final = range(len(spans).bit_length() + 1)
+        """Halving a batch of n spans settles every span within ``n.bit_length()`` rounds plus one per truncation
+        step, so the rounds are a fixed fold rather than a recursion."""
+        rounds: Final = range(len(spans).bit_length() + 1 + len(_TRUNCATION_GROUPS))
         final: Final = reduce(lambda halving, _: self._round(halving), rounds, _Halving(pending=(tuple(spans),)))
         return (
             SpanExportResult.SUCCESS
@@ -623,7 +675,7 @@ class LangfuseSpanExporter(SpanExporter):
     def _round(self, halving: _Halving) -> _Halving:
         sent: Final = tuple((batch, self._send_batch(batch)) for batch in halving.pending)
         return _Halving(
-            pending=tuple(half for batch, outcome in sent if outcome == "too_large" for half in _halves(batch)),
+            pending=tuple(part for batch, outcome in sent if outcome == "too_large" for part in _smaller(batch)),
             settled=halving.settled
             + tuple(
                 SpanExportResult.SUCCESS if outcome == "delivered" else SpanExportResult.FAILURE
@@ -633,24 +685,38 @@ class LangfuseSpanExporter(SpanExporter):
         )
 
     def _send_batch(self, batch: _Batch) -> _ExportOutcome:
-        """A 413 on more than one span asks for halves; on a single span the span is dropped and reported."""
+        """A 413 on more than one span asks for halves; on a single span it asks for a truncation, and the span is
+        dropped and reported once nothing is left to truncate."""
         body: Final = _encode(batch)
         if body is None:
             return "rejected"
         outcome: Final = self._send(body)
         if outcome != "too_large":
             return outcome
-        if len(batch) == 1:
-            verbose_logger.error(
-                "Langfuse rejected a single %d byte span export to %s as too large, dropping it",
-                len(body),
-                self.endpoint,
-            )
-            return "rejected"
-        verbose_logger.warning(
-            "Langfuse rejected a %d byte export of %d spans as too large, resending in halves", len(body), len(batch)
-        )
-        return "too_large"
+        match batch:
+            case (only,) if _truncated(only) is None:
+                verbose_logger.error(
+                    "Langfuse rejected a single %d byte span export to %s as too large, dropping it",
+                    len(body),
+                    self.endpoint,
+                )
+                return "rejected"
+            case (_,):
+                verbose_logger.warning(
+                    "Langfuse rejected a single %d byte span export to %s as too large, resending it with its "
+                    "largest field replaced by %r",
+                    len(body),
+                    self.endpoint,
+                    _TRUNCATION_MARKER,
+                )
+                return "too_large"
+            case _:
+                verbose_logger.warning(
+                    "Langfuse rejected a %d byte export of %d spans as too large, resending in halves",
+                    len(body),
+                    len(batch),
+                )
+                return "too_large"
 
     def _send(self, body: bytes) -> _ExportOutcome:
         for delay in self.delays:
@@ -1032,7 +1098,7 @@ class LangfuseApiClient:
         error or a transport failure is reported as itself rather than as bad credentials.
         """
         try:
-            projects: Final = self.api.projects.get().data
+            projects: Final = self.api.projects.get(request_options=_NO_REST_RETRIES).data
         except ApiError as error:
             return _auth_check_failure(_api_error_reason(error))
         except Exception as error:  # noqa: BLE001  # httpx transport errors or a body the response model rejects
@@ -1042,7 +1108,7 @@ class LangfuseApiClient:
         return None
 
     def project_id(self) -> str | None:
-        projects: Final = self.api.projects.get().data
+        projects: Final = self.api.projects.get(request_options=_NO_REST_RETRIES).data
         return projects[0].id if projects else None
 
     def get_prompt(self, name: str, *, label: str | None = None, version: int | None = None) -> PromptClient:

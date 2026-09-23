@@ -19,6 +19,8 @@ import httpx
 import opentelemetry.trace as otel_trace
 import pytest
 from langfuse import LangfuseOtelSpanAttributes as A
+from langfuse.api.core.api_error import ApiError
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -52,6 +54,7 @@ from litellm.integrations.langfuse.langfuse_sdk import (
     to_unix_nanos,
     trace_attributes,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 CALL_START = datetime(2024, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
 FIRST_TOKEN = CALL_START + timedelta(seconds=5)
@@ -1036,6 +1039,31 @@ def test_auth_check_fails_when_the_keys_reach_no_project():
     assert "no project" in failure.reason
 
 
+@pytest.mark.parametrize("status", [500, 503, 429], ids=["http-500", "http-503", "http-429"])
+def test_auth_check_and_project_id_make_one_round_trip_when_langfuse_is_down(status):
+    """Both run on the event loop; the generated client's default retries sleep for seconds, or for Retry-After."""
+    requests: list[httpx.Request] = []
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(status, request=request, headers={"retry-after": "20"}, json={"message": "down"})
+
+    client = build_langfuse_client(
+        public_key="pk",
+        secret_key="sk",
+        base_url="http://127.0.0.1:1",
+        httpx_client=httpx.Client(transport=httpx.MockTransport(fail)),
+    )
+
+    started = monotonic()
+    failure = client.auth_check()
+    with pytest.raises(ApiError):
+        client.project_id()
+    assert failure is not None and f"status_code: {status}" in failure.reason
+    assert len(requests) == 2
+    assert monotonic() - started < 0.5
+
+
 def test_rest_client_reports_the_project_id_and_a_passing_auth_check():
     requests: list[httpx.Request] = []
     client = build_langfuse_client(
@@ -1225,6 +1253,100 @@ def test_exporter_drops_only_the_single_span_that_alone_exceeds_the_cap(monkeypa
     assert result is SpanExportResult.FAILURE
     assert len(deliveries) >= 1 and all(size <= len(single_small) * 3 for size in deliveries)
     assert "single" in caplog.text and "too large" in caplog.text
+
+
+def _decoded_attributes(body: bytes) -> dict[str, str]:
+    decoded = ExportTraceServiceRequest()
+    decoded.ParseFromString(body)
+    return {
+        attribute.key: attribute.value.string_value
+        for attribute in decoded.resource_spans[0].scope_spans[0].spans[0].attributes
+    }
+
+
+def _generation_span(**attributes: str):
+    provider = TracerProvider()
+    span = provider.get_tracer("t").start_span("generation", attributes=attributes)
+    span.end()
+    return span
+
+
+def test_exporter_truncates_a_single_oversized_span_the_way_v2_did_instead_of_dropping_it(monkeypatch, caplog):
+    """v2 replaced the largest of input, output and metadata with a marker and still delivered the observation; a
+    vision request over a self-hosted ingress cap used to lose the whole generation, model and usage included."""
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", lambda _: None)
+    span = _generation_span(
+        **{
+            "langfuse.observation.input": "data:image/png;base64," + "A" * 6000,
+            "langfuse.trace.input": "data:image/png;base64," + "A" * 200,
+            "langfuse.observation.output": "o" * 1000,
+            "langfuse.observation.metadata.team": "m" * 100,
+            "langfuse.observation.model.name": "gpt-4o",
+        }
+    )
+    bodies: list[bytes] = []
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        if len(request.content) > 2000:
+            return httpx.Response(413, request=request)
+        bodies.append(request.content)
+        return httpx.Response(200, request=request)
+
+    exporter = LangfuseSpanExporter(
+        handler=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(transport))),
+        endpoint="https://lf.internal.example/api/public/otel/v1/traces",
+        headers=MappingProxyType({}),
+        timeout=5.0,
+        delays=(),
+    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result = exporter.export((span,))
+
+    assert result is SpanExportResult.SUCCESS
+    delivered = _decoded_attributes(bodies[-1])
+    assert delivered["langfuse.observation.input"] == "<truncated due to size exceeding limit>"
+    assert delivered["langfuse.trace.input"] == "<truncated due to size exceeding limit>"
+    assert delivered["langfuse.observation.output"] == "o" * 1000
+    assert delivered["langfuse.observation.metadata.team"] == "m" * 100
+    assert delivered["langfuse.observation.model.name"] == "gpt-4o"
+    assert "dropping it" not in caplog.text and "truncated" in caplog.text
+
+
+def test_exporter_truncates_largest_first_and_drops_only_when_nothing_is_left(monkeypatch, caplog):
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", lambda _: None)
+    span = _generation_span(
+        **{
+            "langfuse.observation.input": "i" * 3000,
+            "langfuse.observation.output": "o" * 2000,
+            "langfuse.observation.metadata.a": "m" * 500,
+            "langfuse.observation.metadata.b": "m" * 500,
+        }
+    )
+    posted: list[dict[str, str]] = []
+
+    def always_too_large(request: httpx.Request) -> httpx.Response:
+        posted.append(_decoded_attributes(request.content))
+        return httpx.Response(413, request=request)
+
+    exporter = LangfuseSpanExporter(
+        handler=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(always_too_large))),
+        endpoint="https://lf.internal.example/api/public/otel/v1/traces",
+        headers=MappingProxyType({}),
+        timeout=5.0,
+        delays=(),
+    )
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        assert exporter.export((span,)) is SpanExportResult.FAILURE
+
+    marker = "<truncated due to size exceeding limit>"
+    assert [sorted(key for key, value in body.items() if value == marker) for body in posted] == [
+        [],
+        ["langfuse.observation.input"],
+        ["langfuse.observation.input", "langfuse.observation.output"],
+        ["langfuse.observation.input", "langfuse.observation.metadata", "langfuse.observation.output"],
+    ]
+    assert "langfuse.observation.metadata.a" not in posted[-1]
+    assert "dropping it" in caplog.text
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 422, 499])
