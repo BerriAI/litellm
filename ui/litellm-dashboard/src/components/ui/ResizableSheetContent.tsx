@@ -41,12 +41,18 @@ function ResizableSheetContent({
 
   React.useEffect(() => () => cleanupRef.current?.(), []);
 
+  const applyWidth = (next: number, persist: boolean) => {
+    const clamped = clampWidth(next, minWidthPercent);
+    widthRef.current = clamped;
+    setWidth(clamped);
+    if (persist) setLocalStorageItem(storageKey, String(clamped));
+  };
+
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
+    cleanupRef.current?.();
     const onMove = (e: PointerEvent) => {
-      const next = clampWidth(((window.innerWidth - e.clientX) / window.innerWidth) * 100, minWidthPercent);
-      widthRef.current = next;
-      setWidth(next);
+      applyWidth(((window.innerWidth - e.clientX) / window.innerWidth) * 100, false);
     };
     const onUp = () => {
       cleanupRef.current?.();
@@ -63,16 +69,33 @@ function ResizableSheetContent({
 
   const toggle = () => {
     if (isFull) {
-      const next = clampWidth(lastNonFullWidthRef.current, minWidthPercent);
-      widthRef.current = next;
-      setWidth(next);
-      setLocalStorageItem(storageKey, String(next));
+      applyWidth(lastNonFullWidthRef.current, true);
       return;
     }
     lastNonFullWidthRef.current = width;
-    widthRef.current = 100;
-    setWidth(100);
-    setLocalStorageItem(storageKey, "100");
+    applyWidth(100, true);
+  };
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      applyWidth(widthRef.current + 5, true);
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      applyWidth(widthRef.current - 5, true);
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      applyWidth(100, true);
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      applyWidth(minWidthPercent, true);
+    }
   };
 
   return (
@@ -91,8 +114,13 @@ function ResizableSheetContent({
         aria-orientation="vertical"
         aria-label="Resize drawer"
         data-slot="sheet-resize-handle"
-        className="absolute inset-y-0 left-0 hidden w-1.5 cursor-col-resize touch-none select-none hover:bg-border sm:block"
+        className="absolute inset-y-0 left-0 hidden w-1.5 cursor-col-resize touch-none select-none hover:bg-border focus-visible:bg-border focus-visible:outline-none sm:block"
+        tabIndex={0}
+        aria-valuenow={Math.round(width)}
+        aria-valuemin={minWidthPercent}
+        aria-valuemax={100}
         onPointerDown={onPointerDown}
+        onKeyDown={onKeyDown}
       />
       <Button
         variant="ghost"
