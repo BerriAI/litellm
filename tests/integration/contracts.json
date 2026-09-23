@@ -1927,6 +1927,9 @@
     "tests/integration/providers/test_bedrock_mantle_responses_wire.py::test_codex_agent_message_compaction_and_local_shell_items_are_rewritten_for_mantle": [
       "providers.bedrock_mantle.codex_history_items_reach_the_wire_as_supported_input_items"
     ],
+    "tests/integration/providers/test_bedrock_mantle_responses_wire.py::test_max_output_tokens_below_mantle_minimum_is_raised_to_16_before_reaching_mantle": [
+      "providers.bedrock_mantle.max_output_tokens_below_minimum_is_clamped_to_16_on_the_wire"
+    ],
     "tests/integration/providers/test_bedrock_mantle_wire.py::test_bedrock_mantle_context_overflow_returns_400_saying_prompt_is_too_long": [
       "other.provider_wire.bedrock_mantle.context_overflow_is_reported_as_prompt_too_long"
     ],
