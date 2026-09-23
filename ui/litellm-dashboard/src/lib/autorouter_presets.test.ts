@@ -146,13 +146,13 @@ describe("autorouter_presets", () => {
     expect(config.classifier_context_window_size).toBe(0);
     expect(config.classifier_context_per_turn_chars).toBeUndefined();
     expect(getRequiredModelsInPreset(lite)).toEqual(
-      new Set(["deepseek-v4-flash", "muse-spark-1.2", "kimi-k3", "claude-opus-5"]),
+      new Set(["deepseek-v4-flash", "muse-spark-1.3", "kimi-k3", "claude-opus-5-5"]),
     );
   });
 
   it("pins the anthropic preset's reasoning tier to Fable 5.1 at high thinking", () => {
     const config = getPresetByKey("anthropic_family")!.complexity_router_config;
-    expect(config.tiers.COMPLEX).toEqual(["claude-opus-5"]);
+    expect(config.tiers.COMPLEX).toEqual(["claude-opus-5-5"]);
     expect(config.tiers.REASONING).toEqual(["claude-fable-5-1"]);
     expect(config.tier_model_configs).toEqual({
       REASONING: [{ model_name: "claude-fable-5-1", litellm_params: { reasoning_effort: "high" } }],
@@ -162,7 +162,7 @@ describe("autorouter_presets", () => {
   // Kimi K3 at max needs the map to declare max for kimi-k3, which is the commit below this one.
   it("pins the lite preset's per-tier reasoning efforts", () => {
     expect(getPresetByKey("lite")!.complexity_router_config.tier_model_configs).toEqual({
-      MEDIUM: [{ model_name: "muse-spark-1.2", litellm_params: { reasoning_effort: "xhigh" } }],
+      MEDIUM: [{ model_name: "muse-spark-1.3", litellm_params: { reasoning_effort: "xhigh" } }],
       COMPLEX: [{ model_name: "kimi-k3", litellm_params: { reasoning_effort: "max" } }],
     });
   });
@@ -222,7 +222,7 @@ describe("autorouter_presets", () => {
     const lite = getPresetByKey("lite")!;
     const prefill = buildPresetPrefill(lite.complexity_router_config, groupsOnly(getRequiredModelsInPreset(lite)));
     expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
-      MEDIUM: { "muse-spark-1.2": { reasoning_effort: "xhigh" } },
+      MEDIUM: { "muse-spark-1.3": { reasoning_effort: "xhigh" } },
       COMPLEX: { "kimi-k3": { reasoning_effort: "max" } },
     });
   });
@@ -230,9 +230,9 @@ describe("autorouter_presets", () => {
   it("pins the OpenAI preset to the Luna, Terra, Sol, and Astra progression", () => {
     const preset = getPresetByKey("openai_family")!;
     const expectedTiers = {
-      SIMPLE: ["gpt-5.6-luna"],
+      SIMPLE: ["gpt-6-luna"],
       MEDIUM: ["gpt-5.6-terra"],
-      COMPLEX: ["gpt-5.6-sol"],
+      COMPLEX: ["gpt-6-sol"],
       REASONING: ["gpt-6-astra"],
     };
     expect(preset.complexity_router_config.tiers).toEqual(expectedTiers);
@@ -248,19 +248,19 @@ describe("autorouter_presets", () => {
   it("pins the 1M context preset to Luna, Terra, Sol, and Opus at high thinking", () => {
     const preset = getPresetByKey("1m_context")!;
     const expectedTiers = {
-      SIMPLE: ["gpt-5.6-luna"],
+      SIMPLE: ["gpt-6-luna"],
       MEDIUM: ["gpt-5.6-terra"],
-      COMPLEX: ["gpt-5.6-sol"],
-      REASONING: ["claude-opus-5"],
+      COMPLEX: ["gpt-6-sol"],
+      REASONING: ["claude-opus-5-5"],
     };
     expect(preset.complexity_router_config.classifier_type).toBe("heuristic_v2");
     expect(preset.complexity_router_config.tiers).toEqual(expectedTiers);
     expect(preset.complexity_router_config.tier_model_configs).toEqual({
-      REASONING: [{ model_name: "claude-opus-5", litellm_params: { reasoning_effort: "high" } }],
+      REASONING: [{ model_name: "claude-opus-5-5", litellm_params: { reasoning_effort: "high" } }],
     });
     const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
     expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
-      REASONING: { "claude-opus-5": { reasoning_effort: "high" } },
+      REASONING: { "claude-opus-5-5": { reasoning_effort: "high" } },
     });
   });
 
@@ -270,15 +270,15 @@ describe("autorouter_presets", () => {
     expect(config.classifier_type).toBe("heuristic");
     expect(config.classifier_llm_config).toBeUndefined();
     const expectedTiers = {
-      SIMPLE: ["gemini-2.5-flash-lite"],
-      MEDIUM: ["gemini-3.1-flash-lite"],
-      COMPLEX: ["gemini-3.7-flash"],
+      SIMPLE: ["gemini-3.5-flash-lite"],
+      MEDIUM: ["gemini-3.8-flash"],
+      COMPLEX: ["gemini-3.8-flash"],
       REASONING: ["gemini-3.1-pro-preview"],
     };
     expect(config.tiers).toEqual(expectedTiers);
     const required = getRequiredModelsInPreset(gemini);
     for (const model of required) expect(model).not.toMatch(/-latest$/);
-    expect(required.size).toBe(4);
+    expect(required.size).toBe(new Set(Object.values(expectedTiers).flat()).size);
   });
 
   it("collects every tier model as a required model", () => {

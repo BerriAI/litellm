@@ -1,10 +1,9 @@
 import React, { useId } from "react";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { AutoRouterAllowanceNote } from "./AutoRouterAvailability";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { SimpleTooltip } from "@/components/ui/tooltip";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import { defaultJevClassifierConfig } from "./jev_classifier_config";
@@ -17,7 +16,6 @@ export default function JevClassifierConfig({
   onChange: (value: ComplexityRouterConfigValue) => void;
 }) {
   const id = useId();
-  const { premiumUser } = useAuthorized();
   const config = value.jev_classifier_config ?? defaultJevClassifierConfig();
   const update = (patch: Partial<typeof config>) =>
     onChange({ ...value, jev_classifier_config: { ...config, ...patch } });
@@ -28,11 +26,11 @@ export default function JevClassifierConfig({
         Uses TypeSafe System One Choice evaluation with your configured tiers
       </p>
       <div>
-        <Label htmlFor={`${id}-model`}>JEV Model</Label>
+        <Label htmlFor={`${id}-model`}>Jev Model</Label>
         <Input id={`${id}-model`} value={config.model} onChange={(event) => update({ model: event.target.value })} />
       </div>
       <div>
-        <Label htmlFor={`${id}-timeout`}>JEV Timeout (ms)</Label>
+        <Label htmlFor={`${id}-timeout`}>Jev Timeout (ms)</Label>
         <Input
           id={`${id}-timeout`}
           type="number"
@@ -52,35 +50,24 @@ export default function JevClassifierConfig({
         }
       />
       <div>
-        <Label htmlFor={`${id}-instructions`}>JEV Instructions</Label>
-        <SimpleTooltip
-          content={!premiumUser ? "Custom JEV instructions require a LiteLLM Enterprise license" : undefined}
-        >
-          <div>
-            <Textarea
-              id={`${id}-instructions`}
-              value={config.instructions ?? ""}
-              disabled={!premiumUser}
-              placeholder="Leave blank to use the built-in instructions"
-              onChange={(event) => update({ instructions: event.target.value || undefined })}
-            />
-          </div>
-        </SimpleTooltip>
+        <Label htmlFor={`${id}-instructions`}>Jev Instructions</Label>
+        <AutoRouterAllowanceNote
+          feature="tier_or_classifier_prompt"
+          label="Custom instructions share the custom-tier allowance"
+        />
+        <Textarea
+          id={`${id}-instructions`}
+          value={config.instructions ?? ""}
+          placeholder="Leave blank to use the built-in instructions"
+          onChange={(event) => update({ instructions: event.target.value || undefined })}
+        />
         {config.instructions && (
           <Button variant="outline" type="button" onClick={() => update({ instructions: undefined })}>
-            Restore built-in JEV instructions
+            Restore built-in Jev instructions
           </Button>
         )}
         <p className="text-xs text-muted-foreground">
-          Built-in JEV is available without a license and uses the shipped tier criteria
-          {!premiumUser && (
-            <>
-              . Custom instructions require LiteLLM Enterprise. Get a trial key{" "}
-              <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer" className="underline">
-                here
-              </a>
-            </>
-          )}
+          Built-in Jev is available without a license and uses the shipped tier criteria
         </p>
       </div>
     </div>

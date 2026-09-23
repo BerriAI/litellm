@@ -33,21 +33,6 @@ _HISTORICAL_FINGERPRINTS: Final = (
         {"custom_dimensions": [{"name": "sqlDdl", "weight": 0.4, "patterns": [r"\bCREATE\s{1,4}TABLE\b"]}]},
         "814ce0017fc7f60a160b262f658d910e9bdf784e6139a4ba4f1e2657aa203950",
     ),
-    (
-        {
-            "tiers": _TIERS,
-            "dimension_weights": {"codePresence": 0.3},
-            "custom_dimensions": [
-                {
-                    "name": "internalFrameworks",
-                    "weight": 0.2,
-                    "keywords": ["orbitmesh", "fluxgate"],
-                    "patterns": [r"\bALTER\s{1,4}TABLE\b"],
-                }
-            ],
-        },
-        "38970dc9224e265ab38c89674563d8d0537822591f9239b45251db6f5ca6cc39",
-    ),
 )
 
 
@@ -78,11 +63,9 @@ class TestTuningFingerprint:
             {"tiers": {"SIMPLE": "x"}}
         )
 
-    @pytest.mark.parametrize("field", sorted(set(HEURISTIC_V1_TUNING_FIELDS) - {"tier_model_configs"}))
+    @pytest.mark.parametrize("field", HEURISTIC_V1_TUNING_FIELDS)
     def test_every_tuning_field_changes_the_fingerprint(self, field: str) -> None:
         samples: dict[str, object] = {
-            "tiers": _ALT_TIERS,
-            "classifier_type": "heuristic_first",
             "tier_boundaries": {"simple_medium": 0.2, "medium_complex": 0.4, "complex_reasoning": 0.7},
             "reasoning_override_min_score": 0.05,
             "token_thresholds": {"simple": 20, "complex": 500},
@@ -97,9 +80,6 @@ class TestTuningFingerprint:
             "keyword_tier_rules": [{"keywords": ["urgent"], "tier": "COMPLEX"}],
         }
         config: dict[str, object] = {field: samples[field]}
-        if field == "classifier_type":
-            config["heuristic_first_max_tier"] = "MEDIUM"
-            config["classifier_llm_config"] = {"model": "judge"}
         assert tuning_fingerprint(config) != DEFAULT_TUNING_FINGERPRINT
 
     def test_explicit_empty_tier_model_configs_follow_omission(self) -> None:
@@ -126,12 +106,33 @@ class TestTuningFingerprint:
             != historical
         )
 
-    def test_tier_model_overrides_change_the_fingerprint(self) -> None:
+    def test_tier_model_overrides_do_not_change_the_fingerprint(self) -> None:
         plain = tuning_fingerprint({"tiers": {"SIMPLE": "x"}})
         with_override = tuning_fingerprint(
             {"tiers": {"SIMPLE": {"model_name": "x", "litellm_params": {"temperature": 0.1}}}}
         )
-        assert plain != with_override
+        assert plain == with_override == DEFAULT_TUNING_FINGERPRINT
+
+    @pytest.mark.parametrize("classifier_type", ("heuristic", "heuristic_first", "hybrid"))
+    def test_model_selection_and_classifier_switching_do_not_claim_tuning(self, classifier_type: str) -> None:
+        config: Final = {
+            "classifier_type": classifier_type,
+            **({"classifier_llm_config": {"model": "judge"}} if classifier_type != "heuristic" else {}),
+            **({"heuristic_first_max_tier": "MEDIUM"} if classifier_type == "heuristic_first" else {}),
+            **({"hybrid_boundary_margin": 0.1} if classifier_type == "hybrid" else {}),
+            "tiers": _ALT_TIERS,
+            "escalation_keywords": ["LITELLM ESCALATE"],
+            "tier_model_configs": {"COMPLEX": [{"model_name": "other-strong", "litellm_params": {"temperature": 0.1}}]},
+        }
+        tuned: Final = _router("tuned", {"dimension_weights": {"codePresence": 0.9}})
+        model_only: Final = _router("model-only", {"tiers": _TIERS})
+        candidate: Final = _router("another", config)
+        assert tuning_fingerprint(config) == DEFAULT_TUNING_FINGERPRINT
+        assert tuning_quota_violation(candidate=candidate, others=(tuned, model_only), baselines={}, limit=1) is None
+
+    def test_disabling_or_replacing_escalation_is_still_a_custom_rule(self) -> None:
+        assert tuning_fingerprint({"escalation_keywords": []}) != DEFAULT_TUNING_FINGERPRINT
+        assert tuning_fingerprint({"escalation_keywords": ["USE A STRONGER MODEL"]}) != DEFAULT_TUNING_FINGERPRINT
 
     def test_non_tuning_fields_do_not_change_the_fingerprint(self) -> None:
         assert (
@@ -230,17 +231,18 @@ class TestQuota:
     def test_router_added_after_snapshot_is_mutable_only_when_tuned(self) -> None:
         baselines = snapshot_tuning_baselines([_router("a", {"tiers": _TIERS})])
         assert mutable_tuned_identities([_router("new", {})], baselines) == frozenset()
-        assert mutable_tuned_identities([_router("new", {"tiers": _TIERS})], baselines) == {
-            router_identity(_router("new", {}))
-        }
+        assert mutable_tuned_identities([_router("new", {"tiers": _TIERS})], baselines) == frozenset()
+        assert mutable_tuned_identities(
+            [_router("new", {"tiers": _TIERS, "code_keywords": ["internal-api"]})], baselines
+        ) == {router_identity(_router("new", {}))}
 
     def test_quota_matrix(self) -> None:
         legacy_a = _router("a", {"tiers": _TIERS})
         legacy_b = _router("b", {"tiers": _ALT_TIERS})
         baselines = snapshot_tuning_baselines([legacy_a, legacy_b])
         edited_a = _router("a", {"tiers": _TIERS, "dimension_weights": {"codePresence": 0.9}})
-        edited_b = _router("b", {"tiers": _TIERS})
-        new_c = _router("c", {"tiers": _TIERS})
+        edited_b = _router("b", {"tiers": _TIERS, "code_keywords": ["internal-api"]})
+        new_c = _router("c", {"tiers": _TIERS, "code_keywords": ["internal-api"]})
 
         assert tuning_quota_violation(candidate=edited_a, others=[legacy_b], baselines=baselines, limit=1) is None
         assert (
@@ -260,7 +262,7 @@ class TestQuota:
         legacy_a = _router("a", {"tiers": _TIERS})
         legacy_b = _router("b", {"tiers": _ALT_TIERS})
         baselines = snapshot_tuning_baselines([legacy_a, legacy_b])
-        edited_b = _router("b", {"tiers": _TIERS})
+        edited_b = _router("b", {"tiers": _TIERS, "code_keywords": ["internal-api"]})
         assert tuning_quota_violation(candidate=edited_b, others=[legacy_a], baselines=baselines, limit=1) is None
         assert (
             tuning_quota_violation(candidate=edited_b, others=[legacy_a, edited_b], baselines=baselines, limit=1)
@@ -304,5 +306,6 @@ class TestQuota:
         assert message is not None
         assert "At most 1 auto-router(s)" in message
         assert "revert the other changed router to its baseline" in message
+        assert "Selecting models does not use this allowance" in message
         assert tuning_limit_violation(held=1, limit=1) is None
         assert tuning_limit_violation(held=5, limit=None) is None

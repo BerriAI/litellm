@@ -1,3 +1,4 @@
+import { openAutoRouterAdvanced } from "../../../tests/autoRouterSetup";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -215,7 +216,7 @@ it.each(["MEDIUM", "REASONING"])("clears a legacy Capability pool while reconcil
   const value = hydrateComplexityRouterConfig(stored, undefined);
   const onChange = vi.fn<(value: ComplexityRouterConfigValue) => void>();
   renderWithProviders(<ComplexityRouterConfig modelInfo={modelInfo} value={value} onChange={onChange} />);
-  await user.click(screen.getByRole("button", { name: "Advanced routing options" }));
+  openAutoRouterAdvanced("Keyword/Semantic Matching");
   expect(screen.getByRole("switch", { name: "Fast mode for secondary in the Medium routing pool tier" })).toBeChecked();
   expect(onChange).not.toHaveBeenCalled();
   await user.click(screen.getByRole("combobox", { name: "Select medium routing pool models" }));
@@ -245,7 +246,7 @@ it.each(["capability", "llm_v2"] as const)(
       <ComplexityRouterConfig modelInfo={modelInfo} value={value} onChange={onChange} />
     );
     const view = renderWithProviders(editor(hydrateComplexityRouterConfig(stored, undefined)));
-    await user.click(screen.getByRole("button", { name: "Advanced routing options" }));
+    openAutoRouterAdvanced("Keyword/Semantic Matching");
     const select = () => screen.getByRole("combobox", { name: "Default model" });
     expect(select()).toHaveValue("legacy-default");
     expect(onChange).not.toHaveBeenCalled();
@@ -284,8 +285,8 @@ it.each(["capability", "llm_v2"] as const)("offers only populated keyword target
     />
   );
   const view = renderWithProviders(editor([]));
-  await user.click(screen.getByRole("button", { name: "Advanced routing options" }));
-  await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+  openAutoRouterAdvanced("Keyword/Semantic Matching");
+  openAutoRouterAdvanced("Keyword/Semantic Matching");
   await user.click(screen.getByRole("button", { name: "Add keyword rule" }));
   const rules = onRulesChange.mock.lastCall![0];
   expect(rules[0].tier).toBe("SIMPLE");

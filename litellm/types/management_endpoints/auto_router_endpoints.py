@@ -44,6 +44,25 @@ class ComplexityRouterConfigValidationResponse(BaseModel):
     error: str | None = None
 
 
+class AutoRouterAvailabilityRequest(BaseModel):
+    team_id: str | None = None
+    saved_model_id: str | None = None
+    complexity_router_config: Mapping[str, object] | None = None
+
+
+class AutoRouterAllowance(BaseModel):
+    key: str
+    limit: int | None
+    remaining: int | None
+    used_by_this_router: bool = False
+    available: bool = True
+
+
+class AutoRouterAvailabilityResponse(BaseModel):
+    allowances: tuple[AutoRouterAllowance, ...]
+    error: str | None = None
+
+
 class AutoRouterRoutingTestRequest(BaseModel):
     """A single request to classify against a complexity-router config that need not be saved yet.
 

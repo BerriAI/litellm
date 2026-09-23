@@ -1,5 +1,5 @@
 {
-  "version": "2026-09-17-v1",
+  "version": "2026-09-22-v1",
   "models": [
     {
       "id": "gpt-6-astra-v1",
@@ -7,6 +7,20 @@
       "model": "gpt-6-astra",
       "text": "OpenAI model for demanding end-to-end work, including reasoning, coding, research, and document tasks",
       "sources": ["https://developers.openai.com/api/docs/models/gpt-6-astra"]
+    },
+    {
+      "id": "gpt-6-sol-v1",
+      "label": "GPT-6 Sol",
+      "model": "gpt-6-sol",
+      "text": "OpenAI model for complex coding and agentic workflows, supporting reasoning and tool calling through the Responses API",
+      "sources": ["https://developers.openai.com/api/docs/models/gpt-6-sol"]
+    },
+    {
+      "id": "gpt-6-luna-v1",
+      "label": "GPT-6 Luna",
+      "model": "gpt-6-luna",
+      "text": "OpenAI model for efficient, high-volume workloads, supporting reasoning and tool calling through the Responses API",
+      "sources": ["https://developers.openai.com/api/docs/models/gpt-6-luna"]
     },
     {
       "id": "gpt-5.6-sol-v1",
@@ -63,6 +77,13 @@
       "model": "claude-fable-5-1",
       "text": "Anthropic model for demanding reasoning, long-running agentic coding, and multistep research, with always-on adaptive thinking",
       "sources": ["https://platform.claude.com/docs/en/models/fable-5-1/overview"]
+    },
+    {
+      "id": "claude-opus-5-5-v1",
+      "label": "Claude Opus 5.5",
+      "model": "claude-opus-5-5",
+      "text": "Anthropic model for complex reasoning and agentic work, supporting adaptive thinking and tool use",
+      "sources": ["https://platform.claude.com/docs/en/models/opus-5-5/overview"]
     }
   ],
   "harnesses": [

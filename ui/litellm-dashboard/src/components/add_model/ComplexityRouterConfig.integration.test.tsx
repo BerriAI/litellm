@@ -1,8 +1,15 @@
+import { openAutoRouterAdvanced, selectAutoRouterOption } from "../../../tests/autoRouterSetup";
 import { fireEvent, renderWithProviders, screen, within } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import React from "react";
-import { vi, type Mock } from "vitest";
-import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
+import { describe, it, expect, vi, type Mock } from "vitest";
+import ComplexityRouterConfigView, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
+import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
+const ComplexityRouterConfig = (props: React.ComponentProps<typeof ComplexityRouterConfigView>) => (
+  <AutoRouterClassifierTabs value={props.value} onChange={props.onChange}>
+    <ComplexityRouterConfigView {...props} />
+  </AutoRouterClassifierTabs>
+);
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
@@ -45,12 +52,12 @@ const baseProps = {
 };
 
 describe("ComplexityRouterConfig", () => {
-  it("should render", () => {
+  it("should render", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
-    expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
+    expect(screen.getByText("Models by tier")).toBeInTheDocument();
   });
 
-  it("should display all four tier labels", () => {
+  it("should display all four tier labels", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     expect(screen.getByText("Simple Tier")).toBeInTheDocument();
     expect(screen.getByText("Medium Tier")).toBeInTheDocument();
@@ -58,7 +65,7 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.getByText("Reasoning Tier")).toBeInTheDocument();
   });
 
-  it("should show example queries for each tier", () => {
+  it("should show example queries for each tier", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     expect(screen.getByText(/Hello!/)).toBeInTheDocument();
     expect(screen.getByText(/Explain how REST APIs work/)).toBeInTheDocument();
@@ -66,46 +73,51 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.getByText(/Think step by step/)).toBeInTheDocument();
   });
 
-  it("should display the how classification works section", () => {
+  it("should display the how classification works section", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByText("How Classification Works")).toBeInTheDocument();
   });
 
-  it("should show score thresholds in the classification section", () => {
+  it("should show score thresholds in the classification section", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByText(/Score < 0.15/)).toBeInTheDocument();
     expect(screen.getByText(/Score 0.15 - 0.35/)).toBeInTheDocument();
     expect(screen.getByText(/Score 0.35 - 0.60/)).toBeInTheDocument();
     expect(screen.getByText(/Score > 0.60/)).toBeInTheDocument();
   });
 
-  it("leaves the score threshold list color to the theme instead of an inline style", () => {
+  it("leaves the score threshold list color to the theme instead of an inline style", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     const list = screen.getByText(/Score < 0.15/).closest<HTMLUListElement>("ul");
     expect(list).toBeInTheDocument();
     expect(list).toHaveClass("text-muted-foreground");
     expect(list?.style.color).toBe("");
   });
 
-  it("should default to heuristic and hide classifier model/timeout fields", () => {
+  it("should default to heuristic and hide classifier model/timeout fields", async () => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
-    expect(screen.getByText("Advanced: Classification Method")).toBeInTheDocument();
-    expect(screen.queryByText("Classifier Model")).not.toBeInTheDocument();
+    openAutoRouterAdvanced("Classification Method");
+    expect(screen.getByText("Classifier tuning")).toBeInTheDocument();
+    expect(screen.queryByText("Judge model")).not.toBeInTheDocument();
   });
 
-  it("shows heuristic advanced sections and hides keyword overrides for capability classifiers", () => {
+  it("shows heuristic advanced sections and hides keyword overrides for capability classifiers", async () => {
     const { rerender } = renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
 
-    expect(screen.getByText("Advanced: Heuristic Keyword Overrides")).toBeInTheDocument();
-    expect(screen.getByText("Advanced: Housekeeping Routing")).toBeInTheDocument();
-    expect(screen.getByText("Advanced: Ignore Custom Tags")).toBeInTheDocument();
+    openAutoRouterAdvanced("Heuristic Keyword Overrides");
+
+    expect(screen.getByText("Heuristic Keyword Overrides")).toBeInTheDocument();
+    openAutoRouterAdvanced("Housekeeping Routing");
+    expect(screen.getByText("Housekeeping Routing")).toBeInTheDocument();
+    openAutoRouterAdvanced("Ignore Custom Tags");
+    expect(screen.getByText("Ignore Custom Tags")).toBeInTheDocument();
 
     const capabilityValue = { ...defaultValue, classifier_type: "capability" as const };
     rerender(<ComplexityRouterConfig {...baseProps} value={capabilityValue} />);
-    expect(screen.queryByText("Advanced: Heuristic Keyword Overrides")).not.toBeInTheDocument();
+    expect(screen.queryByText("Heuristic Keyword Overrides")).not.toBeInTheDocument();
   });
 
   it.each([
@@ -115,7 +127,7 @@ describe("ComplexityRouterConfig", () => {
     renderWithProviders(
       <ComplexityRouterConfig {...baseProps} value={{ ...defaultValue, classifier_type: classifierType }} />,
     );
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     if (visible) {
       expect(screen.getByLabelText("Classifier plugin timeout (ms)")).toBeInTheDocument();
     } else {
@@ -128,7 +140,7 @@ describe("ComplexityRouterConfig", () => {
     renderWithProviders(
       <ComplexityRouterConfig {...baseProps} value={value} showValidationErrors={showValidationErrors} />,
     );
-    fireEvent.click(screen.getByText("Advanced: Ignore Custom Tags"));
+    openAutoRouterAdvanced("Ignore Custom Tags");
     const validation = screen.queryByText(/needs both/i);
     if (showValidationErrors) {
       expect(validation).toBeInTheDocument();
@@ -137,11 +149,11 @@ describe("ComplexityRouterConfig", () => {
     }
   });
 
-  it("disables housekeeping sentinels when cheapest-tier routing is off", () => {
+  it("disables housekeeping sentinels when cheapest-tier routing is off", async () => {
     renderWithProviders(
       <ComplexityRouterConfig {...baseProps} value={{ ...defaultValue, route_housekeeping_to_cheapest_tier: false }} />,
     );
-    fireEvent.click(screen.getByText("Advanced: Housekeeping Routing"));
+    openAutoRouterAdvanced("Housekeeping Routing");
     const sentinelInput = screen.getByRole("combobox", { name: "e.g., conversation title" });
     expect(sentinelInput).toBeDisabled();
   });
@@ -151,7 +163,7 @@ describe("ComplexityRouterConfig", () => {
     const onChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
 
-    await user.click(screen.getByText("Advanced: Response Format"));
+    openAutoRouterAdvanced("Response Format");
     await user.click(screen.getByRole("switch", { name: "Return raw model name" }));
 
     expect(onChange).toHaveBeenCalledWith({
@@ -160,13 +172,13 @@ describe("ComplexityRouterConfig", () => {
     });
   });
 
-  it("should reveal classifier model and timeout fields when llm is selected", () => {
+  it("should reveal classifier model and timeout fields when llm is selected", async () => {
     const onChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={onChange} />);
 
     // Collapse panel content isn't rendered until first expanded.
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    fireEvent.click(screen.getByText("LLM Classifier"));
+    openAutoRouterAdvanced("Classification Method");
+    fireEvent.click(screen.getByRole("radio", { name: /^LLM$/ }));
 
     const expectedValue: ComplexityRouterConfigValue = {
       ...defaultValue,
@@ -178,14 +190,14 @@ describe("ComplexityRouterConfig", () => {
     expect(onChange).toHaveBeenCalledWith(expectedValue);
   });
 
-  it("selects heuristic v2 without requiring a classifier model or showing weighted scoring", () => {
+  it("selects heuristic v2 without requiring a classifier model or showing weighted scoring", async () => {
     const onChange = vi.fn();
     const { rerender } = renderWithProviders(
       <ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={onChange} />,
     );
 
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    fireEvent.click(screen.getByText("Heuristic v2"));
+    openAutoRouterAdvanced("Classification Method");
+    await selectAutoRouterOption("Heuristic", "Heuristic v2");
 
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -197,7 +209,7 @@ describe("ComplexityRouterConfig", () => {
     const heuristicV2Value: ComplexityRouterConfigValue = { ...defaultValue, classifier_type: "heuristic_v2" };
     rerender(<ComplexityRouterConfig modelInfo={mockModelInfo} value={heuristicV2Value} onChange={onChange} />);
 
-    expect(screen.queryByText("Classifier Model")).not.toBeInTheDocument();
+    expect(screen.queryByText("Judge model")).not.toBeInTheDocument();
     expect(screen.queryByText("Advanced scoring")).not.toBeInTheDocument();
     expect(screen.getByText(/estimates success probability for all four tiers/)).toBeInTheDocument();
     expect(screen.queryByText(/Score < 0.15/)).not.toBeInTheDocument();
@@ -233,7 +245,7 @@ describe("ComplexityRouterConfig", () => {
     expect(onChange).toHaveBeenCalledWith({ ...value, heuristic_v2_success_threshold: undefined });
   });
 
-  it("shows an inactive zero threshold until explicitly cleared and hides the summary for active or absent values", () => {
+  it("shows an inactive zero threshold until explicitly cleared and hides the summary for active or absent values", async () => {
     const onChange = vi.fn();
     const value = { ...defaultValue, heuristic_v2_success_threshold: 0 };
     const { rerender } = renderWithProviders(
@@ -248,7 +260,7 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.queryByRole("region", { name: "Inactive Heuristic v2 threshold" })).not.toBeInTheDocument();
   });
 
-  it("should show classifier fields and use the configured values when classifier_type is llm", () => {
+  it("should show classifier fields and use the configured values when classifier_type is llm", async () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
@@ -258,9 +270,9 @@ describe("ComplexityRouterConfig", () => {
     };
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
 
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
 
-    expect(screen.getByText("Classifier Model")).toBeInTheDocument();
+    expect(screen.getByText("Judge model")).toBeInTheDocument();
     expect(screen.getByLabelText("Timeout (ms)")).toHaveValue("750");
     expect(screen.getByRole("switch", { name: "Classifier circuit breaker" })).toBeChecked();
     expect(screen.getByLabelText("Circuit breaker cooldown (seconds)")).toHaveValue("30");
@@ -268,7 +280,7 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
   });
 
-  it("should allow the default-on classifier circuit breaker to be disabled", () => {
+  it("should allow the default-on classifier circuit breaker to be disabled", async () => {
     const onChange = vi.fn();
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
@@ -276,7 +288,7 @@ describe("ComplexityRouterConfig", () => {
       classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
     };
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
 
     fireEvent.click(screen.getByRole("switch", { name: "Classifier circuit breaker" }));
 
@@ -287,7 +299,7 @@ describe("ComplexityRouterConfig", () => {
     );
   });
 
-  it("should default the context window and budget when llm is selected", () => {
+  it("should default the context window and budget when llm is selected", async () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
@@ -295,13 +307,13 @@ describe("ComplexityRouterConfig", () => {
     };
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
 
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
 
     expect(screen.getByLabelText("Context Window Size")).toHaveValue("3");
     expect(screen.getByLabelText("Context Character Budget")).toHaveValue("8000");
   });
 
-  it("should warn when the budget is too small to quote any turn that does not already fit", () => {
+  it("should warn when the budget is too small to quote any turn that does not already fit", async () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
@@ -310,12 +322,12 @@ describe("ComplexityRouterConfig", () => {
     };
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
 
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
 
     expect(screen.getByText(/no room to quote a turn/i)).toBeInTheDocument();
   });
 
-  it("should not warn on a budget large enough to quote a turn, nor on a deliberate zero", () => {
+  it("should not warn on a budget large enough to quote a turn, nor on a deliberate zero", async () => {
     for (const budget of [120, 8000, 0]) {
       const { unmount } = renderWithProviders(
         <ComplexityRouterConfig
@@ -329,13 +341,13 @@ describe("ComplexityRouterConfig", () => {
           onChange={vi.fn()}
         />,
       );
-      fireEvent.click(screen.getByText("Advanced: Classification Method"));
+      openAutoRouterAdvanced("Classification Method");
       expect(screen.queryByText(/no room to quote a turn/i)).not.toBeInTheDocument();
       unmount();
     }
   });
 
-  it("should show the assistant-turns switch with its configured value when classifier_type is llm", () => {
+  it("should show the assistant-turns switch with its configured value when classifier_type is llm", async () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
@@ -344,13 +356,13 @@ describe("ComplexityRouterConfig", () => {
     };
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
 
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
 
     expect(screen.getByText("Include Assistant Turns")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Include Assistant Turns" })).toBeChecked();
   });
 
-  it("should render the assistant-turns switch off when it is not set", () => {
+  it("should render the assistant-turns switch off when it is not set", async () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
@@ -358,18 +370,18 @@ describe("ComplexityRouterConfig", () => {
     };
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
 
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
 
     expect(screen.getByRole("switch", { name: "Include Assistant Turns" })).not.toBeChecked();
   });
 
-  it("should hide the assistant-turns switch when classifier_type is heuristic", () => {
+  it("should hide the assistant-turns switch when classifier_type is heuristic", async () => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.queryByText("Include Assistant Turns")).not.toBeInTheDocument();
   });
 
-  it("should call onChange when the assistant-turns switch is toggled", () => {
+  it("should call onChange when the assistant-turns switch is toggled", async () => {
     const onChange = vi.fn();
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
@@ -378,7 +390,7 @@ describe("ComplexityRouterConfig", () => {
     };
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
 
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     fireEvent.click(screen.getByRole("switch", { name: "Include Assistant Turns" }));
 
     expect(onChange).toHaveBeenCalledWith(
@@ -386,9 +398,9 @@ describe("ComplexityRouterConfig", () => {
     );
   });
 
-  it("should hide classifier context fields when classifier_type is heuristic", () => {
+  it("should hide classifier context fields when classifier_type is heuristic", async () => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.queryByText("Context Window Size")).not.toBeInTheDocument();
     expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
   });
@@ -416,7 +428,7 @@ describe("ComplexityRouterConfig", () => {
       classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
     };
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
 
     const input = screen.getByLabelText(label);
     fireEvent.change(input, { target: { value: "" } });
@@ -429,14 +441,14 @@ describe("ComplexityRouterConfig", () => {
     expect(onChange).toHaveBeenLastCalledWith({ ...llmValue, ...expected });
   });
 
-  it("restores the committed context window size after an empty field loses focus", () => {
+  it("restores the committed context window size after an empty field loses focus", async () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
       classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
     };
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
 
     const input = screen.getByLabelText("Context Window Size");
     fireEvent.change(input, { target: { value: "" } });
@@ -445,13 +457,13 @@ describe("ComplexityRouterConfig", () => {
     expect(input).toHaveValue("3");
   });
 
-  it("should render the custom technical keywords field", () => {
+  it("should render the custom technical keywords field", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByText("Custom Technical Keywords")).toBeInTheDocument();
   });
 
-  it("should display existing custom technical keywords as tags", () => {
+  it("should display existing custom technical keywords as tags", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -459,7 +471,7 @@ describe("ComplexityRouterConfig", () => {
         onCustomTechnicalKeywordsChange={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByText("udp")).toBeInTheDocument();
     expect(screen.getByText("kafka")).toBeInTheDocument();
   });
@@ -474,7 +486,7 @@ describe("ComplexityRouterConfig", () => {
         onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     const keywordsSection = screen.getByText("Custom Technical Keywords").closest("div")?.parentElement as HTMLElement;
     await user.type(within(keywordsSection).getByRole("combobox"), "udp");
     await user.click(await screen.findByText('Create "udp"'));
@@ -491,35 +503,35 @@ describe("ComplexityRouterConfig", () => {
         onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     const keywordsSection = screen.getByText("Custom Technical Keywords").closest("div")?.parentElement as HTMLElement;
     await user.type(within(keywordsSection).getByRole("combobox"), "udp, kafka ,terraform");
     await user.click(await screen.findByText('Create "udp, kafka ,terraform"'));
     expect(onCustomTechnicalKeywordsChange).toHaveBeenCalledWith(["udp", "kafka", "terraform"]);
   });
 
-  it("should render an empty state when no keyword tier rules exist", () => {
+  it("should render an empty state when no keyword tier rules exist", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
-    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+    openAutoRouterAdvanced("Keyword/Semantic Matching");
     expect(screen.getByText("Keyword Tier Overrides")).toBeInTheDocument();
     expect(screen.getByText("No keyword tier overrides configured")).toBeInTheDocument();
   });
 
-  it("hides the keyword-tier and semantic sections when their change handlers are absent (edit modal)", () => {
+  it("hides the keyword-tier and semantic sections when their change handlers are absent (edit modal)", async () => {
     // The edit-auto-router modal renders ComplexityRouterConfig without these handlers;
     // the sections must stay hidden rather than render interactive-but-dead controls.
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
     expect(screen.queryByText("Keyword Tier Overrides")).not.toBeInTheDocument();
     expect(screen.queryByText("Semantic keyword matching")).not.toBeInTheDocument();
     // Core tier config still renders.
-    expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
+    expect(screen.getByText("Models by tier")).toBeInTheDocument();
   });
 
   it("should call onKeywordTierRulesChange with a new rule when 'Add keyword rule' is clicked", async () => {
     const user = userEvent.setup();
     const onKeywordTierRulesChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onKeywordTierRulesChange={onKeywordTierRulesChange} />);
-    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+    openAutoRouterAdvanced("Keyword/Semantic Matching");
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
     expect(onKeywordTierRulesChange).toHaveBeenCalledTimes(1);
     const newRules = onKeywordTierRulesChange.mock.calls[0][0];
@@ -537,7 +549,7 @@ describe("ComplexityRouterConfig", () => {
         onKeywordTierRulesChange={onKeywordTierRulesChange}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+    openAutoRouterAdvanced("Keyword/Semantic Matching");
 
     const field = screen.getByText("Keywords 1").closest("div") as HTMLElement;
     await user.type(within(field).getByRole("combobox"), "invoice");
@@ -556,7 +568,7 @@ describe("ComplexityRouterConfig", () => {
         onKeywordTierRulesChange={onKeywordTierRulesChange}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+    openAutoRouterAdvanced("Keyword/Semantic Matching");
     expect(screen.getByText("invoice")).toBeInTheDocument();
     expect(screen.getByText("refund")).toBeInTheDocument();
 
@@ -564,17 +576,17 @@ describe("ComplexityRouterConfig", () => {
     expect(onKeywordTierRulesChange).toHaveBeenCalledWith([]);
   });
 
-  it("should not show embedding model or match score fields when semantic matching is disabled", () => {
+  it("should not show embedding model or match score fields when semantic matching is disabled", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} semanticMatchingEnabled={false} />);
-    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+    openAutoRouterAdvanced("Keyword/Semantic Matching");
     expect(screen.getByText("Semantic keyword matching")).toBeInTheDocument();
     expect(screen.queryByText("Embedding model")).not.toBeInTheDocument();
     expect(screen.queryByText("Minimum match score")).not.toBeInTheDocument();
   });
 
-  it("should show embedding model and match score fields when semantic matching is enabled", () => {
+  it("should show embedding model and match score fields when semantic matching is enabled", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} semanticMatchingEnabled={true} />);
-    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+    openAutoRouterAdvanced("Keyword/Semantic Matching");
     expect(screen.getByText("Embedding model")).toBeInTheDocument();
     expect(screen.getByText("Minimum match score")).toBeInTheDocument();
   });
@@ -589,7 +601,7 @@ describe("ComplexityRouterConfig", () => {
         onSemanticMatchingEnabledChange={onSemanticMatchingEnabledChange}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+    openAutoRouterAdvanced("Keyword/Semantic Matching");
     await user.click(screen.getByRole("switch", { name: "Semantic keyword matching" }));
     expect(onSemanticMatchingEnabledChange).toHaveBeenCalledWith(true, expect.anything());
   });
@@ -606,34 +618,34 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.queryAllByText("text-embedding-3-small")).toHaveLength(0);
   });
 
-  it("does not show tier validation errors by default", () => {
+  it("does not show tier validation errors by default", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     expect(screen.queryByText("This tier is required")).not.toBeInTheDocument();
   });
 
-  it("shows an inline error on the classifier model select when llm is selected without a model", () => {
+  it("shows an inline error on the classifier model select when llm is selected without a model", async () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
       classifier_llm_config: { model: "", timeout_ms: 3000 },
     };
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={llmValue} showValidationErrors={true} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    expect(screen.getByText("A classifier model is required")).toBeInTheDocument();
+    openAutoRouterAdvanced("Classification Method");
+    expect(screen.getByText("A judge model is required")).toBeInTheDocument();
   });
 
-  it("does not show the classifier model error once a classifier model is set", () => {
+  it("does not show the classifier model error once a classifier model is set", async () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
       classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
     };
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={llmValue} showValidationErrors={true} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    expect(screen.queryByText("A classifier model is required")).not.toBeInTheDocument();
+    openAutoRouterAdvanced("Classification Method");
+    expect(screen.queryByText("A judge model is required")).not.toBeInTheDocument();
   });
 
-  it("shows a validation error only under unfilled tiers when showValidationErrors is true", () => {
+  it("shows a validation error only under unfilled tiers when showValidationErrors is true", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -645,7 +657,7 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.getAllByText(/tier is required/)).toHaveLength(1);
   });
 
-  it("renders the escalation keywords section with current keywords when the handler is provided", () => {
+  it("renders the escalation keywords section with current keywords when the handler is provided", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -653,14 +665,14 @@ describe("ComplexityRouterConfig", () => {
         onEscalationKeywordsChange={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Escalation Keywords"));
-    expect(screen.getByText("Escalation Keywords")).toBeInTheDocument();
+    openAutoRouterAdvanced("Escalation Keywords");
+    expect(screen.getAllByText("Escalation Keywords")).not.toHaveLength(0);
     expect(screen.getByText("LITELLM ESCALATE")).toBeInTheDocument();
   });
 
-  it("hides the escalation keywords section when no handler is provided", () => {
+  it("hides the escalation keywords section when no handler is provided", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
-    expect(screen.queryByText("Advanced: Escalation Keywords")).not.toBeInTheDocument();
+    expect(screen.queryByText("Escalation Keywords")).not.toBeInTheDocument();
   });
 });
 
@@ -671,21 +683,21 @@ describe("ComplexityRouterConfig classifier fallback", () => {
     classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
   };
 
-  it("defaults the fallback to the heuristic, matching the backend field default", () => {
+  it("defaults the fallback to the heuristic, matching the backend field default", async () => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByRole("radio", { name: /Score with the heuristic/ })).toBeChecked();
   });
 
-  it("records a switch to the default model fallback", () => {
+  it("records a switch to the default model fallback", async () => {
     const onChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     fireEvent.click(screen.getByRole("radio", { name: /Route to the default model/ }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ classifier_fallback: "default_model" }));
   });
 
-  it("disables the default model fallback when no tier would produce one", () => {
+  it("disables the default model fallback when no tier would produce one", async () => {
     // The deployment's default model is derived from the tiers on submit, so offering the option
     // with no tiers picked would save a config the backend rejects at startup.
     const noTiers: ComplexityRouterConfigValue = {
@@ -693,17 +705,17 @@ describe("ComplexityRouterConfig classifier fallback", () => {
       tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
     };
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={noTiers} onChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByRole("radio", { name: /Route to the default model/ })).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("hides the fallback choice for the heuristic classifier, which has nothing to fall back from", () => {
+  it("hides the fallback choice for the heuristic classifier, which has nothing to fall back from", async () => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.queryByText("If the classifier fails")).not.toBeInTheDocument();
   });
 
-  it("stops describing the heuristic as the fallback once a custom prompt routes failures to the default model", () => {
+  it("stops describing the heuristic as the fallback once a custom prompt routes failures to the default model", async () => {
     // With both set, the heuristic scorer never runs, so the panel must not keep implying a
     // score decides anything on this router.
     renderWithProviders(
@@ -717,11 +729,11 @@ describe("ComplexityRouterConfig classifier fallback", () => {
         onChange={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByText(/no longer runs at all/)).toBeInTheDocument();
   });
 
-  it("still describes the heuristic as the fallback when a custom prompt keeps heuristic fallback", () => {
+  it("still describes the heuristic as the fallback when a custom prompt keeps heuristic fallback", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         modelInfo={mockModelInfo}
@@ -732,11 +744,11 @@ describe("ComplexityRouterConfig classifier fallback", () => {
         onChange={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByText(/only when the classifier call fails/)).toBeInTheDocument();
   });
 
-  it("clears a stored fallback when switching back to the heuristic classifier", () => {
+  it("clears a stored fallback when switching back to the heuristic classifier", async () => {
     const onChange = vi.fn();
     renderWithProviders(
       <ComplexityRouterConfig
@@ -745,8 +757,8 @@ describe("ComplexityRouterConfig classifier fallback", () => {
         onChange={onChange}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    fireEvent.click(screen.getByRole("radio", { name: /rule-based scoring/ }));
+    openAutoRouterAdvanced("Classification Method");
+    fireEvent.click(screen.getByRole("radio", { name: /^Heuristics$/ }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ classifier_fallback: undefined }));
   });
 });
@@ -758,19 +770,21 @@ describe("ComplexityRouterConfig classification frequency", () => {
     classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
   };
 
-  it("defaults to every request, matching both backend field defaults", () => {
+  it("defaults to every request, matching both backend field defaults", async () => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    expect(screen.getByRole("radio", { name: /Every request/ })).toBeChecked();
-    expect(screen.getByRole("radio", { name: /Every new user message/ })).not.toBeChecked();
-    expect(screen.getByRole("radio", { name: /Once per session/ })).not.toBeChecked();
+    openAutoRouterAdvanced("Classification Method");
+    expect(screen.getByRole("combobox", { name: "How often to classify" })).toHaveTextContent("Every request");
+    expect(screen.getByRole("combobox", { name: "How often to classify" })).not.toHaveTextContent(
+      "Every new user message",
+    );
+    expect(screen.getByRole("combobox", { name: "How often to classify" })).not.toHaveTextContent("Once per session");
   });
 
-  it("writes both wire fields when the frequency moves to every new user message", () => {
+  it("writes both wire fields when the frequency moves to every new user message", async () => {
     const onChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    fireEvent.click(screen.getByRole("radio", { name: /Every new user message/ }));
+    openAutoRouterAdvanced("Classification Method");
+    await selectAutoRouterOption("How often to classify", "Every new user message");
     expect(onChange).toHaveBeenCalledWith({
       ...llmValue,
       classification_mode: "user_turn",
@@ -778,11 +792,11 @@ describe("ComplexityRouterConfig classification frequency", () => {
     });
   });
 
-  it("writes session affinity, not a classification mode, when the frequency moves to once per session", () => {
+  it("writes session affinity, not a classification mode, when the frequency moves to once per session", async () => {
     const onChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    fireEvent.click(screen.getByRole("radio", { name: /Once per session/ }));
+    openAutoRouterAdvanced("Classification Method");
+    await selectAutoRouterOption("How often to classify", "Once per session");
     expect(onChange).toHaveBeenCalledWith({
       ...llmValue,
       classification_mode: "every_request",
@@ -790,7 +804,7 @@ describe("ComplexityRouterConfig classification frequency", () => {
     });
   });
 
-  it("shows a hand-authored config that sets both fields as once per session, matching the backend", () => {
+  it("shows a hand-authored config that sets both fields as once per session, matching the backend", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         modelInfo={mockModelInfo}
@@ -798,12 +812,14 @@ describe("ComplexityRouterConfig classification frequency", () => {
         onChange={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    expect(screen.getByRole("radio", { name: /Once per session/ })).toBeChecked();
-    expect(screen.getByRole("radio", { name: /Every new user message/ })).not.toBeChecked();
+    openAutoRouterAdvanced("Classification Method");
+    expect(screen.getByRole("combobox", { name: "How often to classify" })).toHaveTextContent("Once per session");
+    expect(screen.getByRole("combobox", { name: "How often to classify" })).not.toHaveTextContent(
+      "Every new user message",
+    );
   });
 
-  it("records a switch back to every request", () => {
+  it("records a switch back to every request", async () => {
     const onChange = vi.fn();
     renderWithProviders(
       <ComplexityRouterConfig
@@ -812,18 +828,18 @@ describe("ComplexityRouterConfig classification frequency", () => {
         onChange={onChange}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    expect(screen.getByRole("radio", { name: /Every new user message/ })).toBeChecked();
-    fireEvent.click(screen.getByRole("radio", { name: /Every request/ }));
+    openAutoRouterAdvanced("Classification Method");
+    expect(screen.getByRole("combobox", { name: "How often to classify" })).toHaveTextContent("Every new user message");
+    await selectAutoRouterOption("How often to classify", "Every request");
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ classification_mode: "every_request" }));
   });
 
-  it("offers the frequency on a heuristic router, where holding the tier still pins the model", () => {
+  it("offers the frequency on a heuristic router, where holding the tier still pins the model", async () => {
     // The backend pin is gated on the two fields alone, so a heuristic router that switches models
     // mid tool loop is fixed by this control too.
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    expect(screen.getByRole("radio", { name: /Every new user message/ })).toBeInTheDocument();
+    openAutoRouterAdvanced("Classification Method");
+    expect(screen.getByRole("combobox", { name: "How often to classify" })).toBeVisible();
   });
 });
 
@@ -836,11 +852,11 @@ describe("ComplexityRouterConfig classifier rubric", () => {
 
   const openClassificationPanel = (value: ComplexityRouterConfigValue, onChange = vi.fn()) => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={value} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     return onChange;
   };
 
-  it("shows an existing router with no stored preset as legacy in the prompt control", () => {
+  it("shows an existing router with no stored preset as legacy in the prompt control", async () => {
     // This router predates the setting. Displaying a calibrated preset it does not have would tell the
     // operator their traffic is graded by examples the classifier never receives, and saving the form
     // unchanged would then move its tier decisions.
@@ -849,19 +865,19 @@ describe("ComplexityRouterConfig classifier rubric", () => {
     expect(screen.getByRole("button", { name: "Customize prompt" })).toBeInTheDocument();
   });
 
-  it("stamps the calibrated preset on a classifier being switched on for the first time", () => {
+  it("stamps the calibrated preset on a classifier being switched on for the first time", async () => {
     // A heuristic router turning on the LLM classifier has no prior tier behaviour to preserve, so a
     // newly configured classifier starts on the calibrated rubric rather than the legacy one.
     const onChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    fireEvent.click(screen.getByText("LLM Classifier"));
+    openAutoRouterAdvanced("Classification Method");
+    fireEvent.click(screen.getByRole("radio", { name: /^LLM$/ }));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ classifier_llm_config: expect.objectContaining({ classification_rubric: "agentic" }) }),
     );
   });
 
-  it("shows the calibrated preset when a router stores one", () => {
+  it("shows the calibrated preset when a router stores one", async () => {
     openClassificationPanel({
       ...llmValue,
       classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, classification_rubric: "agentic" },
@@ -906,7 +922,7 @@ describe("ComplexityRouterConfig classifier rubric", () => {
     );
   });
 
-  it("keeps the rubric out of the legacy whole-prompt editor, which replaces it entirely", () => {
+  it("keeps the rubric out of the legacy whole-prompt editor, which replaces it entirely", async () => {
     // The backend rejects both together, so the legacy editor must not offer a rubric to pick.
     openClassificationPanel({
       ...llmValue,
@@ -916,7 +932,7 @@ describe("ComplexityRouterConfig classifier rubric", () => {
     expect(screen.queryByRole("button", { name: "Customize prompt" })).not.toBeInTheDocument();
   });
 
-  it("hides the prompt control for the heuristic classifier, which sends no prompt at all", () => {
+  it("hides the prompt control for the heuristic classifier, which sends no prompt at all", async () => {
     openClassificationPanel(defaultValue);
     expect(screen.queryByRole("button", { name: "Customize prompt" })).not.toBeInTheDocument();
   });
@@ -928,7 +944,7 @@ describe("ComplexityRouterConfig tier labels", () => {
     tier_labels: { SIMPLE: "Cheap", MEDIUM: "Standard", COMPLEX: "Premium", REASONING: "Deep" },
   };
 
-  it("shows the operator's names in the tier headers instead of the defaults", () => {
+  it("shows the operator's names in the tier headers instead of the defaults", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={renamedValue} />);
     expect(screen.getByText("Cheap Tier")).toBeInTheDocument();
     expect(screen.getByText("Deep Tier")).toBeInTheDocument();
@@ -936,13 +952,13 @@ describe("ComplexityRouterConfig tier labels", () => {
     expect(screen.queryByText("Reasoning Tier")).not.toBeInTheDocument();
   });
 
-  it("keeps the rung ordinal and canonical name visible under a rename", () => {
+  it("keeps the rung ordinal and canonical name visible under a rename", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={renamedValue} />);
     expect(screen.getByText(/Tier 1 of 4/)).toHaveTextContent("Tier 1 of 4 · SIMPLE");
     expect(screen.getByText(/Tier 4 of 4/)).toHaveTextContent("Tier 4 of 4 · REASONING");
   });
 
-  it("names the renamed tier in the required-field error", () => {
+  it("names the renamed tier in the required-field error", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -953,31 +969,31 @@ describe("ComplexityRouterConfig tier labels", () => {
     expect(screen.getByText("The Deep tier is required")).toBeInTheDocument();
   });
 
-  it("reports a typed label back to the caller under its canonical tier key", () => {
+  it("reports a typed label back to the caller under its canonical tier key", async () => {
     const onChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
     fireEvent.change(screen.getByLabelText("Display name for the Simple tier"), { target: { value: "Cheap" } });
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ tier_labels: { SIMPLE: "Cheap" } }));
   });
 
-  it("shows a stored label in its input so an edit round-trips", () => {
+  it("shows a stored label in its input so an edit round-trips", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={renamedValue} />);
     expect(screen.getByLabelText("Display name for the Reasoning tier")).toHaveValue("Deep");
   });
 
-  it("leaves the label inputs empty when nothing was renamed", () => {
+  it("leaves the label inputs empty when nothing was renamed", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     expect(screen.getByLabelText("Display name for the Simple tier")).toHaveValue("");
   });
 
-  it("uses the operator's names in the classification score table", () => {
+  it("uses the operator's names in the classification score table", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={renamedValue} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByText("Cheap")).toBeInTheDocument();
     expect(screen.getByText("Deep")).toBeInTheDocument();
   });
 
-  it("uses the operator's names in the keyword rule tier picker", () => {
+  it("uses the operator's names in the keyword rule tier picker", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -985,16 +1001,16 @@ describe("ComplexityRouterConfig tier labels", () => {
         keywordTierRules={[{ id: "r1", keywords: ["invoice"], tier: "REASONING" }]}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+    openAutoRouterAdvanced("Keyword/Semantic Matching");
     expect(screen.getByRole("combobox", { name: "Route keyword rule 1 to tier" })).toHaveTextContent("Deep");
   });
 });
 
 describe("ComplexityRouterConfig modality panel", () => {
-  it("defaults the image-routing switch off and writes modality_routing through onChange", () => {
+  it("defaults the image-routing switch off and writes modality_routing through onChange", async () => {
     const onChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+    openAutoRouterAdvanced("Modality Routing");
 
     const toggle = screen.getByRole("switch", { name: "Route image requests to vision-capable models" });
     expect(toggle).not.toBeChecked();
@@ -1003,19 +1019,19 @@ describe("ComplexityRouterConfig modality panel", () => {
     expect(onChange).toHaveBeenCalledWith({ ...defaultValue, modality_routing: true });
   });
 
-  it("renders a stored modality_routing=true as on", () => {
+  it("renders a stored modality_routing=true as on", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={{ ...defaultValue, modality_routing: true }} />);
-    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+    openAutoRouterAdvanced("Modality Routing");
 
     expect(screen.getByRole("switch", { name: "Route image requests to vision-capable models" })).toBeChecked();
   });
 
   // The backend ignores modality_pin_override unless modality_routing is on, so offering it while
   // image routing is off would let an operator save a flag that does nothing.
-  it("disables the pin-override switch while image routing is off", () => {
+  it("disables the pin-override switch while image routing is off", async () => {
     const onChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+    openAutoRouterAdvanced("Modality Routing");
 
     const override = screen.getByRole("switch", { name: "Override session pin for image requests" });
     expect(override).toHaveAttribute("aria-disabled", "true");
@@ -1023,11 +1039,11 @@ describe("ComplexityRouterConfig modality panel", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("writes modality_pin_override through onChange once image routing is on", () => {
+  it("writes modality_pin_override through onChange once image routing is on", async () => {
     const onChange = vi.fn();
     const value = { ...defaultValue, modality_routing: true };
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={value} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+    openAutoRouterAdvanced("Modality Routing");
 
     const override = screen.getByRole("switch", { name: "Override session pin for image requests" });
     expect(override).not.toBeChecked();
@@ -1036,51 +1052,51 @@ describe("ComplexityRouterConfig modality panel", () => {
     expect(onChange).toHaveBeenCalledWith({ ...value, modality_pin_override: true });
   });
 
-  it("renders a stored modality_pin_override=true as on", () => {
+  it("renders a stored modality_pin_override=true as on", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
         value={{ ...defaultValue, modality_routing: true, modality_pin_override: true }}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+    openAutoRouterAdvanced("Modality Routing");
 
     expect(screen.getByRole("switch", { name: "Override session pin for image requests" })).toBeChecked();
   });
 });
 
 describe("ComplexityRouterConfig affinity panel", () => {
-  it("holds the deployment switch at its backend default, session pinning having moved to the frequency choice", () => {
+  it("holds the deployment switch at its backend default, session pinning having moved to the frequency choice", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
-    fireEvent.click(screen.getByText("Advanced: Affinity"));
+    openAutoRouterAdvanced("Affinity");
 
     expect(screen.getByRole("switch", { name: "Pin one model deployment per tier" })).toBeChecked();
     expect(screen.queryByRole("switch", { name: "Pin a session to its first model" })).not.toBeInTheDocument();
   });
 
-  it("writes deployment_affinity through onChange without touching other keys", () => {
+  it("writes deployment_affinity through onChange without touching other keys", async () => {
     const onChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Affinity"));
+    openAutoRouterAdvanced("Affinity");
 
     fireEvent.click(screen.getByRole("switch", { name: "Pin one model deployment per tier" }));
 
     expect(onChange).toHaveBeenCalledWith({ ...defaultValue, deployment_affinity: false });
   });
 
-  it("renders a stored deployment_affinity=false as off", () => {
+  it("renders a stored deployment_affinity=false as off", async () => {
     renderWithProviders(
       <ComplexityRouterConfig {...baseProps} value={{ ...defaultValue, deployment_affinity: false }} />,
     );
-    fireEvent.click(screen.getByText("Advanced: Affinity"));
+    openAutoRouterAdvanced("Affinity");
 
     expect(screen.getByRole("switch", { name: "Pin one model deployment per tier" })).not.toBeChecked();
   });
 
-  it("writes an idle TTL on blur and keeps the partial input as a draft while typing", () => {
+  it("writes an idle TTL on blur and keeps the partial input as a draft while typing", async () => {
     const onChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Affinity"));
+    openAutoRouterAdvanced("Affinity");
 
     const ttl = screen.getByLabelText("How long a pin survives idle (seconds)");
     expect(ttl).toHaveAttribute("placeholder", "3600");
@@ -1091,11 +1107,11 @@ describe("ComplexityRouterConfig affinity panel", () => {
     expect(onChange).toHaveBeenCalledWith({ ...defaultValue, session_affinity_ttl_seconds: 300 });
   });
 
-  it("clearing the idle TTL returns the router to its backend default", () => {
+  it("clearing the idle TTL returns the router to its backend default", async () => {
     const onChange = vi.fn();
     const value = { ...defaultValue, session_affinity_ttl_seconds: 300 };
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={value} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Affinity"));
+    openAutoRouterAdvanced("Affinity");
 
     const ttl = screen.getByLabelText("How long a pin survives idle (seconds)");
     expect(ttl).toHaveValue("300");
@@ -1105,10 +1121,10 @@ describe("ComplexityRouterConfig affinity panel", () => {
     expect(onChange).toHaveBeenCalledWith({ ...value, session_affinity_ttl_seconds: undefined });
   });
 
-  it("clamps a non-positive idle TTL to the backend's minimum", () => {
+  it("clamps a non-positive idle TTL to the backend's minimum", async () => {
     const onChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Affinity"));
+    openAutoRouterAdvanced("Affinity");
 
     const ttl = screen.getByLabelText("How long a pin survives idle (seconds)");
     fireEvent.change(ttl, { target: { value: "0" } });
@@ -1121,12 +1137,12 @@ describe("ComplexityRouterConfig affinity panel", () => {
 describe("ComplexityRouterConfig default model", () => {
   const getDefaultModelSelect = () => screen.getByRole("combobox", { name: "Default model" });
 
-  it("shows what the tiers currently imply, so an untouched router still names its default", () => {
+  it("shows what the tiers currently imply, so an untouched router still names its default", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     expect(getDefaultModelSelect()).toHaveAttribute("placeholder", "Derived from tiers: gpt-3.5-turbo");
   });
 
-  it("asks for a model rather than naming a derived one when no tier holds one", () => {
+  it("asks for a model rather than naming a derived one when no tier holds one", async () => {
     const noTiers: ComplexityRouterConfigValue = {
       ...defaultValue,
       tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
@@ -1157,13 +1173,13 @@ describe("ComplexityRouterConfig default model", () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ default_model: undefined }));
   });
 
-  it("shows a pinned model as the selection instead of the tier-derived one", () => {
+  it("shows a pinned model as the selection instead of the tier-derived one", async () => {
     const pinned: ComplexityRouterConfigValue = { ...defaultValue, default_model: "claude-3-opus" };
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinned} />);
     expect(getDefaultModelSelect()).toHaveValue("claude-3-opus");
   });
 
-  it("unlocks the default model fallback on a pin alone, with no tier to derive from", () => {
+  it("unlocks the default model fallback on a pin alone, with no tier to derive from", async () => {
     const pinnedNoTiers: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
@@ -1172,11 +1188,11 @@ describe("ComplexityRouterConfig default model", () => {
       default_model: "claude-3-opus",
     };
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinnedNoTiers} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByRole("radio", { name: /Route to the default model/ })).not.toHaveAttribute("aria-disabled");
   });
 
-  it("names the resolved default on the fallback option, so the destination is not a guess", () => {
+  it("names the resolved default on the fallback option, so the destination is not a guess", async () => {
     const pinned: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
@@ -1184,13 +1200,13 @@ describe("ComplexityRouterConfig default model", () => {
       default_model: "claude-3-opus",
     };
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinned} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByRole("radio", { name: /Route to the default model \(claude-3-opus\)/ })).toBeInTheDocument();
   });
 });
 
 describe("plan-mode override", () => {
-  const openPanel = () => fireEvent.click(screen.getByText("Advanced: Plan-Mode Override"));
+  const openPanel = () => openAutoRouterAdvanced("Plan-Mode Override");
   const switchName = "Route plan-mode requests to a minimum tier";
 
   it("toggling on floors at the highest tier that has models", async () => {
@@ -1248,13 +1264,13 @@ describe("plan-mode override", () => {
 });
 
 describe("ComplexityRouterConfig per-model reasoning effort", () => {
-  it("renders one effort select per selected model, defaulting to Default", () => {
+  it("renders one effort select per selected model, defaulting to Default", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     const select = screen.getByRole("combobox", { name: "Reasoning effort for gpt-4 in the Complex tier" });
     expect(select).toHaveTextContent("Default");
   });
 
-  it("shows the hydrated effort for a model that has one stored", () => {
+  it("shows the hydrated effort for a model that has one stored", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -1302,7 +1318,7 @@ describe("ComplexityRouterConfig classifier reasoning effort", () => {
 
   const renderClassifier = (value: ComplexityRouterConfigValue = llmValue, onChange = vi.fn()) => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={value} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     return onChange;
   };
 
@@ -1348,7 +1364,7 @@ describe("ComplexityRouterConfig classifier reasoning effort", () => {
       classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
     });
     const user = userEvent.setup();
-    await user.click(screen.getByRole("combobox", { name: "Classifier Model" }));
+    await user.click(screen.getByRole("combobox", { name: "Judge model" }));
     await user.click(await screen.findByRole("option", { name: "gpt-3.5-turbo" }));
     expect(onChange).toHaveBeenCalledWith({
       ...llmValue,
@@ -1364,7 +1380,7 @@ describe("ComplexityRouterConfig classifier reasoning effort", () => {
         classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
       });
       const user = userEvent.setup();
-      await user.click(screen.getByRole("combobox", { name: "Classifier Model" }));
+      await user.click(screen.getByRole("combobox", { name: "Judge model" }));
       if (action === "click") await user.click(await screen.findByRole("option", { name: "gpt-4" }));
       else await user.keyboard("{Enter}");
       expect(onChange).not.toHaveBeenCalled();
@@ -1397,7 +1413,7 @@ describe("ComplexityRouterConfig classifier reasoning effort", () => {
 });
 
 describe("ComplexityRouterConfig reasoning effort gating", () => {
-  it("offers no effort select for a model group without reasoning support", () => {
+  it("offers no effort select for a model group without reasoning support", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     expect(
       screen.queryByRole("combobox", { name: "Reasoning effort for gpt-3.5-turbo in the Simple tier" }),
@@ -1406,7 +1422,7 @@ describe("ComplexityRouterConfig reasoning effort gating", () => {
 
   // A stored effort on a model the group info calls non-reasoning must stay visible, or the
   // operator has no way to clear it.
-  it("keeps the select for a non-reasoning model that already has a stored effort", () => {
+  it("keeps the select for a non-reasoning model that already has a stored effort", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -1440,7 +1456,7 @@ describe("ComplexityRouterConfig per-model effort filtering", () => {
 
   // An empty list is the group's own answer that its deployments share no level, which is different
   // from the field being absent, so the control is dropped rather than falling back to every level.
-  it("offers no effort at all when the group intersects to nothing", () => {
+  it("offers no effort at all when the group intersects to nothing", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -1457,7 +1473,7 @@ describe("ComplexityRouterConfig per-model effort filtering", () => {
 
   // Hand-authored configs can carry a level outside the supported set (e.g. max); it must render
   // and stay clearable rather than being masked as Default.
-  it("keeps showing a stored effort outside the supported set", () => {
+  it("keeps showing a stored effort outside the supported set", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -1473,7 +1489,7 @@ describe("ComplexityRouterConfig per-model effort filtering", () => {
 describe("ComplexityRouterConfig custom technical keywords", () => {
   const openClassificationPanel = (value: ComplexityRouterConfigValue) => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={value} onChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
   };
 
   const llmConfig = { model: "gpt-3.5-turbo", timeout_ms: 3000 };
@@ -1503,7 +1519,7 @@ describe("ComplexityRouterConfig custom technical keywords", () => {
     expect(screen.getByText("Custom Technical Keywords")).toBeInTheDocument();
   });
 
-  it("hides the keywords when the scorer never runs, so they cannot imply an effect they have none", () => {
+  it("hides the keywords when the scorer never runs, so they cannot imply an effect they have none", async () => {
     const llmWithDefaultFallback = {
       ...defaultValue,
       classifier_type: "llm" as const,
@@ -1547,19 +1563,19 @@ describe("ComplexityRouterConfig tier editing", () => {
     },
   };
 
-  it("offers Edit tiers only when the parent owns the editor flag", () => {
+  it("offers Edit tiers only when the parent owns the editor flag", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     expect(screen.queryByRole("button", { name: "Edit tiers" })).not.toBeInTheDocument();
   });
 
-  it("surfaces the caller's orphaned-rule verdict while editing, so Done is not a silent exit", () => {
+  it("surfaces the caller's orphaned-rule verdict while editing, so Done is not a silent exit", async () => {
     renderEditor(customValue, { keywordRulesError: "Keyword rule(s) 1 route to a tier this router no longer has" });
     expect(
       screen.getByText("Keyword rule(s) 1 route to a tier this router no longer has", { exact: false }),
     ).toBeInTheDocument();
   });
 
-  it("keeps the orphaned-rule verdict out of the collapsed view, where the submit tooltip owns it", () => {
+  it("keeps the orphaned-rule verdict out of the collapsed view, where the submit tooltip owns it", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -1571,13 +1587,13 @@ describe("ComplexityRouterConfig tier editing", () => {
     expect(screen.queryByText("route to a tier this router no longer has", { exact: false })).not.toBeInTheDocument();
   });
 
-  it("renders the four built-in tiers before any edit, unchanged", () => {
+  it("renders the four built-in tiers before any edit, unchanged", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Edit tiers" })).toBeInTheDocument();
     expect(screen.getByText("Tier 1 of 4", { exact: false })).toHaveTextContent("SIMPLE");
   });
 
-  it("adds a row and moves the form into an edited tier set, which the built-in record never leaves", () => {
+  it("adds a row and moves the form into an edited tier set, which the built-in record never leaves", async () => {
     const { committed } = renderEditor();
     fireEvent.click(screen.getByRole("button", { name: "Add tier" }));
     const next = committed();
@@ -1585,7 +1601,7 @@ describe("ComplexityRouterConfig tier editing", () => {
     expect(next.tiers).toEqual(defaultValue.tiers);
   });
 
-  it("renames a built-in tier straight from the editor, which is what makes the set custom", () => {
+  it("renames a built-in tier straight from the editor, which is what makes the set custom", async () => {
     const { committed } = renderEditor();
     fireEvent.change(screen.getByLabelText("Name for tier 3"), { target: { value: "SECURITY_REVIEW" } });
     const next = committed();
@@ -1598,13 +1614,13 @@ describe("ComplexityRouterConfig tier editing", () => {
     expect(next.tiers).toEqual(defaultValue.tiers);
   });
 
-  it("opening the editor and changing nothing leaves the router on the built-in tiers", () => {
+  it("opening the editor and changing nothing leaves the router on the built-in tiers", async () => {
     const { onChange } = renderEditor();
     expect(screen.getByRole("button", { name: "Done" })).toBeEnabled();
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("swaps the display-name field for the tier-name field while the editor is open", () => {
+  it("swaps the display-name field for the tier-name field while the editor is open", async () => {
     const { rerender } = renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
     expect(screen.getByLabelText("Display name for the Simple tier")).toBeInTheDocument();
     rerender(<ComplexityRouterConfig {...baseProps} editingTiers onEditingTiersChange={vi.fn()} />);
@@ -1612,23 +1628,23 @@ describe("ComplexityRouterConfig tier editing", () => {
     expect(screen.getByLabelText("Name for tier 1")).toBeInTheDocument();
   });
 
-  it("drops the scorer card entirely once an edited tier set replaces the heuristic", () => {
+  it("drops the scorer card entirely once an edited tier set replaces the heuristic", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.queryByText("How Classification Works")).not.toBeInTheDocument();
     expect(
       screen.queryByText("scores each request across 7 built-in dimensions", { exact: false }),
     ).not.toBeInTheDocument();
   });
 
-  it("keeps the scorer card on a built-in router, whose tiers the score still decides", () => {
+  it("keeps the scorer card on a built-in router, whose tiers the score still decides", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByText("How Classification Works")).toBeInTheDocument();
     expect(screen.getByText("scores each request across 7 built-in dimensions", { exact: false })).toBeInTheDocument();
   });
 
-  it("says why a custom row is blocked instead of only reddening its border", () => {
+  it("says why a custom row is blocked instead of only reddening its border", async () => {
     const missingDefinition: ComplexityRouterConfigValue = {
       ...customValue,
       custom_tier_set: {
@@ -1652,24 +1668,24 @@ describe("ComplexityRouterConfig tier editing", () => {
     expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
   });
 
-  it("enables Done once every row carries a name, a definition and a model", () => {
+  it("enables Done once every row carries a name, a definition and a model", async () => {
     renderEditor(customValue);
     expect(screen.getByRole("button", { name: "Done" })).toBeEnabled();
   });
 
-  it("refuses to remove a row that would take the set below the backend's minimum", () => {
+  it("refuses to remove a row that would take the set below the backend's minimum", async () => {
     renderEditor(customValue);
     expect(screen.getByRole("button", { name: "Remove the CASUAL tier" })).toBeDisabled();
   });
 
-  it("keeps a definition on one line, because the backend rejects a newline in it", () => {
+  it("keeps a definition on one line, because the backend rejects a newline in it", async () => {
     const { committed } = renderEditor(customValue);
     fireEvent.change(screen.getByLabelText("Definition for tier 2"), { target: { value: "audits\nand reviews" } });
     const next = committed();
     expect(next.custom_tier_set?.tiers[1].definition).toBe("audits and reviews");
   });
 
-  it("moves a keyword rule with the tier it points at when that tier is renamed", () => {
+  it("moves a keyword rule with the tier it points at when that tier is renamed", async () => {
     const onKeywordTierRulesChange = vi.fn();
     renderWithProviders(
       <ComplexityRouterConfig
@@ -1685,7 +1701,7 @@ describe("ComplexityRouterConfig tier editing", () => {
     expect(onKeywordTierRulesChange).toHaveBeenCalledWith([{ id: "r1", keywords: ["audit"], tier: "AUDIT" }]);
   });
 
-  it("re-points the fallback tier when the row it named is removed, never leaving it dangling", () => {
+  it("re-points the fallback tier when the row it named is removed, never leaving it dangling", async () => {
     const threeRows: ComplexityRouterConfigValue = {
       ...customValue,
       custom_tier_set: {
@@ -1702,7 +1718,7 @@ describe("ComplexityRouterConfig tier editing", () => {
     expect(next.custom_tier_set?.tiers.some((row) => row.id === next.custom_tier_set?.fallback_tier_id)).toBe(true);
   });
 
-  it("turns off a plan-mode floor whose row was removed, rather than leaving it pointing at nothing", () => {
+  it("turns off a plan-mode floor whose row was removed, rather than leaving it pointing at nothing", async () => {
     const withFloor: ComplexityRouterConfigValue = {
       ...customValue,
       plan_mode_min_tier: "sec",
@@ -1719,14 +1735,14 @@ describe("ComplexityRouterConfig tier editing", () => {
     expect(committed().plan_mode_min_tier).toBeUndefined();
   });
 
-  it("replaces the display-name inputs with the reason an edited tier set forbids them", () => {
+  it("replaces the display-name inputs with the reason an edited tier set forbids them", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
     expect(screen.queryByLabelText("Display name for the Simple tier")).not.toBeInTheDocument();
     expect(screen.getByText("Display names rename the built-in tiers", { exact: false })).toBeInTheDocument();
     expect(screen.getByLabelText("Fallback tier")).toBeInTheDocument();
   });
 
-  it("disables the once-per-session frequency and says why, rather than letting a stripped value look saved", () => {
+  it("disables the once-per-session frequency and says why, rather than letting a stripped value look saved", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -1734,8 +1750,9 @@ describe("ComplexityRouterConfig tier editing", () => {
         onEditingTiersChange={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    const sessionOption = screen.getByRole("radio", { name: /Once per session/ });
+    openAutoRouterAdvanced("Classification Method");
+    fireEvent.click(screen.getByRole("combobox", { name: "How often to classify" }));
+    const sessionOption = screen.getByRole("option", { name: "Once per session" });
     expect(sessionOption).toHaveAttribute("aria-disabled", "true");
     expect(sessionOption).not.toBeChecked();
     expect(
@@ -1743,15 +1760,15 @@ describe("ComplexityRouterConfig tier editing", () => {
     ).toBeInTheDocument();
   });
 
-  it("lets an edited tier set write its own opening instructions instead of refusing a prompt outright", () => {
+  it("lets an edited tier set write its own opening instructions instead of refusing a prompt outright", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByText("your own calibration examples", { exact: false })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Customize prompt" })).toBeInTheDocument();
     expect(screen.queryByText("A replacement prompt drops the tier bullets", { exact: false })).not.toBeInTheDocument();
   });
 
-  it("gives built-in routers the opening-only editor, keeping the tier definitions derived", () => {
+  it("gives built-in routers the opening-only editor, keeping the tier definitions derived", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -1759,13 +1776,13 @@ describe("ComplexityRouterConfig tier editing", () => {
         onEditingTiersChange={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByText("The base rubric supplies", { exact: false })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Customize prompt" })).toBeInTheDocument();
     expect(screen.queryByText("Replace the built-in complexity rubric", { exact: false })).not.toBeInTheDocument();
   });
 
-  it("keeps the legacy whole-prompt editor only on a router that already stored a replacement prompt", () => {
+  it("keeps the legacy whole-prompt editor only on a router that already stored a replacement prompt", async () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
@@ -1777,12 +1794,12 @@ describe("ComplexityRouterConfig tier editing", () => {
         onEditingTiersChange={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     expect(screen.getByRole("button", { name: "Edit custom prompt" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Customize prompt" })).not.toBeInTheDocument();
   });
 
-  it("leaves built-in routers with their display-name inputs and no restriction copy", () => {
+  it("leaves built-in routers with their display-name inputs and no restriction copy", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
     expect(screen.getByLabelText("Display name for the Simple tier")).toBeInTheDocument();
     expect(screen.queryByText("Display names rename the built-in tiers", { exact: false })).not.toBeInTheDocument();
@@ -1810,9 +1827,9 @@ describe("classifier vision settings", () => {
     );
   };
 
-  it("starts off and reveals the default cap when enabled", () => {
+  it("starts off and reveals the default cap when enabled", async () => {
     renderWithProviders(<VisionFixture />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
 
     const vision = screen.getByRole("switch", { name: "Use images for classification" });
     expect(vision).not.toBeChecked();
@@ -1823,10 +1840,10 @@ describe("classifier vision settings", () => {
     expect(screen.getByLabelText("Maximum images per request")).toHaveValue("1");
   });
 
-  it("writes the switch and a clamped image cap into the classifier config", () => {
+  it("writes the switch and a clamped image cap into the classifier config", async () => {
     const onChange = vi.fn();
     renderWithProviders(<VisionFixture onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
 
     fireEvent.click(screen.getByRole("switch", { name: "Use images for classification" }));
     expect(onChange).toHaveBeenLastCalledWith({
@@ -1841,10 +1858,10 @@ describe("classifier vision settings", () => {
     });
   });
 
-  it("keeps the image cap draft empty until a valid value is entered", () => {
+  it("keeps the image cap draft empty until a valid value is entered", async () => {
     const onChange = vi.fn();
     renderWithProviders(<VisionFixture onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
     fireEvent.click(screen.getByRole("switch", { name: "Use images for classification" }));
     onChange.mockClear();
 
@@ -1861,9 +1878,9 @@ describe("classifier vision settings", () => {
     });
   });
 
-  it("is absent when the classifier is heuristic", () => {
+  it("is absent when the classifier is heuristic", async () => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    openAutoRouterAdvanced("Classification Method");
 
     expect(screen.queryByText("Use images for classification")).not.toBeInTheDocument();
   });
