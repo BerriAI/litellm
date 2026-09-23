@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 from litellm.proxy._types import (
+    LiteLLM_JWTAuth,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_UserTable,
     LiteLLMRoutes,
@@ -14,6 +15,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
+from litellm.proxy.auth.pass_through_access import PassThroughGrants
 from litellm.proxy.auth.route_checks import RouteChecks
 
 
@@ -1119,6 +1121,49 @@ def test_virtual_key_llm_api_routes_denies_auth_pass_through_without_allowlist()
         assert "allowed_passthrough_routes" in exc_info.value.detail
 
 
+def _openai_routes_key_calls_auth_pass_through_registered_on_chat_completions(
+    passthrough_allowlist: list[str] | None,
+) -> bool:
+    request: Final = MagicMock(spec=Request)
+    request.method = "POST"
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            {
+                "test-uuid-1:exact:/chat/completions:POST": {
+                    "endpoint_id": "test-uuid-1",
+                    "path": "/chat/completions",
+                    "type": "exact",
+                    "methods": ["POST"],
+                    "auth": True,
+                },
+            },
+        ),
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+    ):
+        return RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/chat/completions",
+            valid_token=UserAPIKeyAuth(
+                user_id="test_user",
+                allowed_routes=["openai_routes"],
+                metadata={"allowed_passthrough_routes": passthrough_allowlist},
+            ),
+            request=request,
+        )
+
+
+def test_virtual_key_openai_routes_reaches_an_auth_pass_through_in_that_group_with_an_allowlist():
+    assert _openai_routes_key_calls_auth_pass_through_registered_on_chat_completions(["/chat/completions"]) is True
+
+
+def test_virtual_key_openai_routes_denies_an_auth_pass_through_in_that_group_without_an_allowlist():
+    with pytest.raises(HTTPException) as exc_info:
+        _openai_routes_key_calls_auth_pass_through_registered_on_chat_completions(None)
+
+    assert exc_info.value.status_code == 403
+    assert "allowed_passthrough_routes" in exc_info.value.detail
+
+
 def test_virtual_key_llm_api_routes_uses_method_specific_auth_setting():
     """Same-path pass-through routes must be checked against the request method."""
 
@@ -1268,10 +1313,11 @@ def test_non_proxy_admin_allows_auth_pass_through_with_team_allowlist():
     ],
 )
 def test_jwt_team_routes_grant_pass_through_only_for_explicit_paths(route, team_allowed_routes, expected):
-    assert (
-        RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=team_allowed_routes)
-        is expected
+    grants: Final = PassThroughGrants.for_jwt_team(
+        team=None, jwt_auth=LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes)
     )
+
+    assert grants.covers(route) is expected
 
 
 _AUTH_ENFORCED_MODEL_HOST_ROUTES: Final = {
@@ -1284,15 +1330,6 @@ _AUTH_ENFORCED_MODEL_HOST_ROUTES: Final = {
 }
 
 
-def _jwt_handler_with_team_allowed_routes(team_allowed_routes: list[str]):
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
-
-    jwt_handler: Final = JWTHandler()
-    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes)
-    return jwt_handler
-
-
 def _check_model_host_route_as(valid_token: UserAPIKeyAuth, team_allowed_routes: list[str]) -> None:
     with (
         patch(
@@ -1300,10 +1337,6 @@ def _check_model_host_route_as(valid_token: UserAPIKeyAuth, team_allowed_routes:
             _AUTH_ENFORCED_MODEL_HOST_ROUTES,
         ),
         patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
-        patch(
-            "litellm.proxy.proxy_server.jwt_handler",
-            _jwt_handler_with_team_allowed_routes(team_allowed_routes),
-        ),
     ):
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=None,
@@ -1312,30 +1345,25 @@ def _check_model_host_route_as(valid_token: UserAPIKeyAuth, team_allowed_routes:
             request=MagicMock(spec=Request),
             valid_token=valid_token,
             request_data={},
+            jwt_auth=LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes),
         )
 
 
-def test_non_proxy_admin_allows_auth_pass_through_for_jwt_team_allowed_routes_wildcard():
-    jwt_token: Final = UserAPIKeyAuth(
-        user_id="test_user",
-        user_role=LitellmUserRoles.INTERNAL_USER.value,
-        team_id="team-a",
-        jwt_claims={"sub": "test_user"},
-    )
+_JWT_TEAM_TOKEN: Final = UserAPIKeyAuth(
+    user_id="test_user",
+    user_role=LitellmUserRoles.INTERNAL_USER.value,
+    team_id="team-a",
+    jwt_claims={"sub": "test_user"},
+).model_copy(update={"via_jwt_auth": True})
 
-    _check_model_host_route_as(jwt_token, team_allowed_routes=["openai_routes", "/model-host/*"])
+
+def test_non_proxy_admin_allows_auth_pass_through_for_jwt_team_allowed_routes_wildcard():
+    _check_model_host_route_as(_JWT_TEAM_TOKEN, team_allowed_routes=["openai_routes", "/model-host/*"])
 
 
 def test_non_proxy_admin_denies_auth_pass_through_for_jwt_when_only_route_groups_configured():
-    jwt_token: Final = UserAPIKeyAuth(
-        user_id="test_user",
-        user_role=LitellmUserRoles.INTERNAL_USER.value,
-        team_id="team-a",
-        jwt_claims={"sub": "test_user"},
-    )
-
     with pytest.raises(HTTPException) as exc_info:
-        _check_model_host_route_as(jwt_token, team_allowed_routes=["openai_routes", "mapped_pass_through_routes"])
+        _check_model_host_route_as(_JWT_TEAM_TOKEN, team_allowed_routes=["openai_routes", "mapped_pass_through_routes"])
 
     assert exc_info.value.status_code == 403, exc_info.value.detail
     assert "allowed_passthrough_routes" in exc_info.value.detail

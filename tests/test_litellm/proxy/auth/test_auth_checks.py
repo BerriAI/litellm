@@ -9314,3 +9314,71 @@ async def test_agent_key_without_an_echoed_caller_keeps_its_own_models():
     await _check_caller_models(agent_key, "claude-sonnet", load_team, load_user)
 
     assert asked == []
+
+
+async def _common_checks_for_jwt_caller_on_model_host_route(route: str, team_allowed_routes: list) -> bool:
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    mock_registered_routes = {
+        "test-uuid-1:subpath:/model-host/v1/demographics-extractor:POST": {
+            "endpoint_id": "test-uuid-1",
+            "path": "/model-host/v1/demographics-extractor",
+            "type": "subpath",
+            "methods": ["POST"],
+            "auth": True,
+        },
+    }
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            mock_registered_routes,
+        ),
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+    ):
+        return await common_checks(
+            request_body={},
+            team_object=LiteLLM_TeamTable(team_id="team-a", metadata={}),
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=UserAPIKeyAuth(team_id="team-a", jwt_claims={"sub": "user-1"}).model_copy(
+                update={"via_jwt_auth": True}
+            ),
+            request=request,
+            jwt_auth=LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes),
+        )
+
+
+@pytest.mark.asyncio
+async def test_common_checks_allows_auth_enforced_passthrough_granted_by_jwt_team_allowed_routes_path():
+    assert (
+        await _common_checks_for_jwt_caller_on_model_host_route(
+            route="/model-host/v1/demographics-extractor/predict",
+            team_allowed_routes=["openai_routes", "/model-host/*"],
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_common_checks_denies_auth_enforced_passthrough_when_jwt_config_has_only_route_groups():
+    from fastapi import HTTPException
+
+    route = "/model-host/v1/demographics-extractor/predict"
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _common_checks_for_jwt_caller_on_model_host_route(route=route, team_allowed_routes=["openai_routes"])
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == (
+        f"Key/team not allowed to access passthrough route {route}. "
+        "Configure `allowed_passthrough_routes` on the team or key."
+    )

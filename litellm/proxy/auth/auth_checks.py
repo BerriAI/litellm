@@ -892,6 +892,7 @@ async def common_checks(
     request: Request,
     skip_budget_checks: bool = False,
     project_object: LiteLLM_ProjectTableCachedObj | None = None,
+    jwt_auth: LiteLLM_JWTAuth | None = None,
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -1214,6 +1215,7 @@ async def common_checks(
         request_data=request_body_for_route_check,
         valid_token=valid_token,
         user_obj=user_object,
+        jwt_auth=jwt_auth,
     )
 
     # 11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
@@ -1257,6 +1259,7 @@ def _is_api_route_allowed(
     request_data: dict,
     valid_token: UserAPIKeyAuth | None,
     user_obj: LiteLLM_UserTable | None = None,
+    jwt_auth: LiteLLM_JWTAuth | None = None,
 ) -> bool:
     """
     - Route b/w api token check and normal token check
@@ -1274,6 +1277,7 @@ def _is_api_route_allowed(
             request=request,
             request_data=request_data,
             valid_token=valid_token,
+            jwt_auth=jwt_auth,
         )
     return True
 
