@@ -6,6 +6,7 @@ pub mod guardrail_cost;
 pub mod interactions_usage;
 pub mod non_token;
 pub mod responses_usage;
+pub mod tiered_pricing;
 pub mod transcription_usage;
 pub mod usage_dispatch;
 

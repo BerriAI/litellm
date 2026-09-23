@@ -14,6 +14,7 @@ use litellm_cost::non_token::{
     calculate_ocr, calculate_ocr_batch, calculate_video,
 };
 use litellm_cost::responses_usage::transform_response_api_usage_to_chat_usage;
+use litellm_cost::tiered_pricing::{select_tier_for_input, tier_rate};
 use litellm_cost::usage_dispatch::get_usage_object;
 use litellm_cost::{
     Pricing, PromptConvention, Rate, Rates, Request, ServiceTier, ThresholdPolicy, Usage,
@@ -289,4 +290,13 @@ fn main() {
         )]),
     );
     println!("guardrail={guardrail:.5}");
+    let tiers = [
+        json!({"range": [0, 32_000], "input_cost_per_token": "4e-07"}),
+        json!({"range": [32_000, 128_000], "input_cost_per_token": "8e-07"}),
+    ];
+    let tier = select_tier_for_input(&tiers, 32_001).unwrap();
+    println!(
+        "tier_input_rate={}",
+        tier_rate(tier, "input_cost_per_token", None)
+    );
 }
