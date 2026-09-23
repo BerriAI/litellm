@@ -1737,6 +1737,12 @@
     ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[bearer]": [
       "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_streams_sse_with_typed_message_item": [
+      "other.observability.guardrails.responses_pre_call_denial_streams_typed_message"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_returns_json_with_typed_message_item": [
+      "other.observability.guardrails.responses_pre_call_denial_returns_typed_message"
     ]
   },
   "browser": {
