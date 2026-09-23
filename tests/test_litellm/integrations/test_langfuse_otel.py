@@ -1012,15 +1012,40 @@ class TestDerivedTraceFields:
         )
         assert attributes["langfuse.trace.name"] == "caller-trace"
 
-    def test_existing_trace_id_without_trace_name_emits_no_name(self):
+    def test_existing_trace_id_leaves_derived_trace_fields_off(self, monkeypatch):
+        import litellm
+        from litellm.types.utils import Choices, ModelResponse
+
+        monkeypatch.setattr(litellm, "langfuse_default_tags", ["cache_hit"])
+        response_obj = ModelResponse(
+            id="chatcmpl-joined",
+            model="gpt-4o",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    message={"role": "assistant", "content": "hi"},
+                )
+            ],
+        )
         attributes = _emitted(
             {
                 "call_type": "acompletion",
-                "litellm_params": {"metadata": {"existing_trace_id": "abc123"}},
-            }
+                "messages": [{"role": "user", "content": "hi"}],
+                "cache_hit": True,
+                "litellm_params": {
+                    "metadata": {"existing_trace_id": "abc123", "tags": ["mine"]},
+                },
+                "standard_logging_object": {"request_tags": ["injected"]},
+            },
+            response_obj,
         )
         assert "langfuse.trace.name" not in attributes
         assert attributes["langfuse.trace.existing_id"] == "abc123"
+        assert "langfuse.trace.input" not in attributes
+        assert "langfuse.trace.output" not in attributes
+        assert "langfuse.observation.input" in attributes
+        assert "langfuse.observation.output" in attributes
+        assert json.loads(attributes["langfuse.trace.tags"]) == ["mine"]
 
     def test_responses_api_output_mirrors_observation_output_items(self):
         from openai.types.responses import ResponseFunctionToolCall
@@ -1097,6 +1122,20 @@ class TestDerivedTraceFields:
             }
         )
         assert "langfuse.trace.tags" not in attributes
+
+    def test_empty_string_role_is_omitted_from_output(self):
+        response_obj = {
+            "id": "chatcmpl-norole",
+            "choices": [{"message": {"role": "", "content": "hi"}}],
+        }
+        attributes = _emitted(
+            {
+                "call_type": "acompletion",
+                "litellm_params": {"metadata": {}},
+            },
+            response_obj,
+        )
+        assert json.loads(attributes["langfuse.observation.output"]) == {"content": "hi"}
 
     def test_no_messages_leaves_trace_input_unset_but_emits_output(self):
         from litellm.types.utils import Choices, ModelResponse

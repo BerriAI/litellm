@@ -132,7 +132,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         return _extract_output_items(response_obj) or _extract_choices_output(response_obj)
 
     @staticmethod
-    def _trace_tags(kwargs: dict, metadata: dict) -> tuple[str, ...]:
+    def _trace_tags(kwargs: dict, metadata: dict, derive_defaults: bool = True) -> tuple[str, ...]:
         """Order-preserving dedupe of caller tags, request tags and langfuse_default_tags expansions."""
         import litellm
 
@@ -155,15 +155,16 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         expanded: Final = tuple(_default_tag(key) for key in default_tags) if isinstance(default_tags, list) else ()
         candidates: Final = (
-            (
-                (caller_tags,)
-                if isinstance(caller_tags, str)
-                else tuple(tag for tag in caller_tags if isinstance(tag, str))
-                if isinstance(caller_tags, list)
-                else ()
-            )
-            + (tuple(tag for tag in request_tags if isinstance(tag, str)) if isinstance(request_tags, list) else ())
+            (caller_tags,)
+            if isinstance(caller_tags, str)
+            else tuple(tag for tag in caller_tags if isinstance(tag, str))
+            if isinstance(caller_tags, list)
+            else ()
+        ) + (
+            (tuple(tag for tag in request_tags if isinstance(tag, str)) if isinstance(request_tags, list) else ())
             + tuple(tag for tag in expanded if tag is not None)
+            if derive_defaults
+            else ()
         )
         return tuple(dict.fromkeys(candidates))
 
@@ -194,26 +195,29 @@ class LangfuseOtelLogger(OpenTelemetry):
         metadata: Final = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
         LangfuseOtelLogger._set_metadata_attributes(span=span, metadata=metadata)
 
-        if metadata.get("trace_name") is None and metadata.get("existing_trace_id") is None:
+        joins_existing_trace: Final = metadata.get("existing_trace_id") is not None
+        if metadata.get("trace_name") is None and not joins_existing_trace:
             safe_set_attribute(
                 span,
                 LangfuseSpanAttributes.TRACE_NAME.value,
                 f"litellm-{kwargs.get('call_type') or 'completion'}",
             )
 
-        tags: Final = LangfuseOtelLogger._trace_tags(kwargs, metadata)
+        tags: Final = LangfuseOtelLogger._trace_tags(kwargs, metadata, derive_defaults=not joins_existing_trace)
         if tags:
             safe_set_attribute(span, LangfuseSpanAttributes.TAGS.value, json.dumps(list(tags)))
 
         input_json: Final = safe_dumps(kwargs.get("messages")) if kwargs.get("messages") else None
         if input_json is not None:
             safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_INPUT.value, input_json)
-            safe_set_attribute(span, LangfuseSpanAttributes.TRACE_INPUT.value, input_json)
+            if not joins_existing_trace:
+                safe_set_attribute(span, LangfuseSpanAttributes.TRACE_INPUT.value, input_json)
 
         output_json: Final = LangfuseOtelLogger._observation_output(response_obj)
         if output_json is not None:
             safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_OUTPUT.value, output_json)
-            safe_set_attribute(span, LangfuseSpanAttributes.TRACE_OUTPUT.value, output_json)
+            if not joins_existing_trace:
+                safe_set_attribute(span, LangfuseSpanAttributes.TRACE_OUTPUT.value, output_json)
 
     @staticmethod
     def _get_langfuse_otel_host() -> str | None:
@@ -430,7 +434,7 @@ def _extract_choices_output(response_obj) -> str | None:
     output_data: Final = {
         key: value
         for key, value in (
-            ("role", message.get("role")),
+            ("role", message.get("role") or None),
             ("content", message.get("content")),
         )
         if value is not None
