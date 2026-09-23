@@ -174,6 +174,7 @@ def test_completed_batch_emits_paired_request_response_callback_events_per_jsonl
 ) -> None:
     marker: Final = "batch-line-items-" + uuid.uuid4().hex[:12]
     sink_secret: Final = "synthetic-sink-secret-" + marker
+    provider_secret: Final = "synthetic-provider-secret-" + marker
 
     def sink(request: Request) -> Reply:
         assert request.headers["authorization"] == f"Bearer {sink_secret}"
@@ -189,7 +190,7 @@ def test_completed_batch_emits_paired_request_response_callback_events_per_jsonl
         ) as candidate,
         candidate.scenario() as scenario,
     ):
-        routed_model: Final = scenario.model(api_base=f"{gateway.upstream_url}/{marker}")
+        routed_model: Final = scenario.model(api_base=f"{gateway.upstream_url}/{marker}", api_key=provider_secret)
         input_lines: Final = _input_lines(routed_model, marker)
         handle: Final = register_scenario(marker, _provider_routes(input_lines))
         scenario.cleanups.callback(delete_scenario, handle)
@@ -239,6 +240,9 @@ def test_completed_batch_emits_paired_request_response_callback_events_per_jsonl
             and len([e for e in values if _hidden(e).get("batch_custom_id") is not None]) >= len(ALL_CUSTOM_IDS),
             seconds=40,
         )
+        for batch in batches:
+            for credential in (provider_secret, sink_secret, key):
+                assert credential.encode() not in batch.body
         aggregate_events: Final = tuple(event for event in events if event["call_type"] == "aretrieve_batch")
         line_events: Final = tuple(event for event in events if _hidden(event).get("batch_custom_id") is not None)
         assert len(aggregate_events) == 1, [event["call_type"] for event in events]
