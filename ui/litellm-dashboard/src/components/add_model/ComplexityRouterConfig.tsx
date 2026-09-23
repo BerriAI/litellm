@@ -1,6 +1,6 @@
+import type { JevClassifierConfig } from "./jev_classifier_config";
 import { type ClassifierType, usesLlmClassifier } from "./classifier_types";
 export { type ClassifierType, usesLlmClassifier, usesClassifierContext } from "./classifier_types";
-import type { JevClassifierConfig } from "./jev_classifier_config";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
@@ -34,6 +34,7 @@ export type { DimensionWeights, TierBoundaries, TokenThresholds };
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
 export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
 export const DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE = 3;
+export const DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS = 8000;
 export const DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS = 200;
 export const DEFAULT_SESSION_AFFINITY = false;
 export const DEFAULT_DEPLOYMENT_AFFINITY = true;
@@ -143,10 +144,14 @@ export interface ComplexityRouterConfigValue {
   default_model?: string;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  jev_classifier_config?: JevClassifierConfig;
   classifier_context_window_size?: number;
+  classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
+  /** Opening instructions only; the router appends the tier bullets and the injection guard after them. */
+  classification_prompt?: string;
   session_affinity?: boolean;
   deployment_affinity?: boolean;
   /** Tier floor for coding-agent plan-mode requests. Unset means detection is off, matching the backend. */
@@ -227,6 +232,8 @@ export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof Complexit
 
 export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
   tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
+
+
 
 /** Tiers the plan-mode floor may name: the backend rejects a floor whose tier has no models. */
 export const planModeEligibleTiers = (tiers: ComplexityTiers): Array<keyof ComplexityTiers> =>
@@ -595,5 +602,3 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
 };
 
 export default ComplexityRouterConfig;
-
-  jev_classifier_config?: JevClassifierConfig;

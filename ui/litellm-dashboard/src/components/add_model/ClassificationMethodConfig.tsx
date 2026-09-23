@@ -1,3 +1,5 @@
+import { transitionClassifierType } from "./classifier_type_transition";
+import JevClassifierConfig from "./JevClassifierConfig";
 import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
@@ -27,6 +29,8 @@ import {
   CLASSIFICATION_RUBRIC_KEYS,
   ClassificationRubric,
   effectiveTierLabel,
+  usesLlmClassifier,
+  usesClassifierContext,
 } from "./ComplexityRouterConfig";
 
 const DEFAULT_SCORING_EXPLANATION =
@@ -153,30 +157,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const classificationRubric = value.classifier_llm_config?.classification_rubric ?? DEFAULT_CLASSIFICATION_RUBRIC;
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
-    const nextValue: ComplexityRouterConfigValue = {
-      ...value,
-      classifier_type: classifierType,
-      classifier_llm_config:
-        classifierType === "llm"
-          ? value.classifier_llm_config ?? {
-              model: "",
-              timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS,
-              classification_rubric: NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
-            }
-          : undefined,
-      classifier_context_window_size:
-        classifierType === "llm"
-          ? value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
-          : undefined,
-      classifier_context_per_turn_chars:
-        classifierType === "llm"
-          ? value.classifier_context_per_turn_chars ?? DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS
-          : undefined,
-      classifier_context_include_assistant_turns:
-        classifierType === "llm" ? value.classifier_context_include_assistant_turns : undefined,
-      classifier_fallback: classifierType === "llm" ? value.classifier_fallback : undefined,
-    };
-    onChange(nextValue);
+    onChange(transitionClassifierType(value, classifierType));
   };
 
   const handleClassifierModelChange = (model: string) => {
@@ -274,14 +255,24 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               <span className="text-muted-foreground">— use a model to decide the tier (e.g. a small/fast model)</span>
             </span>
           </Label>
+          <Label className="items-start font-normal leading-normal">
+            <RadioGroupItem value="jev" className="mt-0.5" />
+            <span>
+              <strong className="font-semibold">JEV Classifier</strong>{" "}
+              <span className="text-muted-foreground">uses TypeSafe System One Choice to decide the tier</span>
+            </span>
+          </Label>
         </div>
       </RadioGroup>
+
+      {value.classifier_type === "jev" && <JevClassifierConfig value={value} onChange={onChange} />}
 
       {value.classifier_type === "llm" && (
         <div className="mt-4 space-y-3">
           <div>
             <strong className="block mb-1 font-semibold">Classifier Model</strong>
             <SearchSelect
+              aria-label="Classifier Model"
               options={modelOptions}
               value={value.classifier_llm_config?.model ?? ""}
               onValueChange={handleClassifierModelChange}
@@ -361,6 +352,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               classificationRubric={classificationRubric}
             />
           </div>
+        </div>
+      )}
+      {usesClassifierContext(value.classifier_type) && (
+        <div className="mt-4 space-y-3">
           <div>
             <strong className="block mb-1 font-semibold">If the classifier fails</strong>
             <RadioGroup
@@ -401,6 +396,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           <div>
             <strong className="block mb-1 font-semibold">Context Window Size</strong>
             <Input
+              aria-label="Context Window Size"
               type="number"
               value={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
               onChange={(event) =>
@@ -489,18 +485,3 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
 };
 
 export default ClassificationMethodConfig;
-
-import JevClassifierConfig from "./JevClassifierConfig";
-  usesClassifierContext,
-        <Label className="items-start font-normal leading-normal">
-          <RadioGroupItem value="jev" className="mt-0.5" />
-          <span>
-            <strong className="font-semibold">JEV Classifier</strong>{" "}
-            <span className="text-muted-foreground">uses TypeSafe System One Choice to decide the tier</span>
-          </span>
-        </Label>
-      {classifierType === "jev" && <JevClassifierConfig value={value} onChange={onChange} />}
-        </div>
-      )}
-      {usesClassifierContext(classifierType) && (
-        <div className="mt-4 space-y-3">

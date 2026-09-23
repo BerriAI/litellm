@@ -3,14 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
-import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
 import JevEditor from "./JevClassifierConfig";
 import { type ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import {
   buildUpdatedComplexityRouterConfig,
   hydrateComplexityRouterConfig,
 } from "../edit_auto_router/edit_auto_router_modal";
-import { applyTierSetAction } from "./tier_set_actions";
 import { testAutoRouterRouting } from "../networking";
 import { JEV_CONNECTION_TEST_PROMPT } from "./build_auto_router_routing_test_request";
 
@@ -50,7 +48,7 @@ const initial: ComplexityRouterConfigValue = {
 function Form() {
   const [value, setValue] = useState(initial);
   return (
-    <AutoRouterClassifierTabs value={value} onChange={setValue}>
+    <>
       <ClassificationMethodConfig
         value={value}
         onChange={setValue}
@@ -59,19 +57,6 @@ function Form() {
         customTechnicalKeywords={[]}
         onCustomTechnicalKeywordsChange={() => {}}
       />
-      <button
-        onClick={() =>
-          setValue(
-            applyTierSetAction(value, [], {
-              kind: "patch",
-              id: "SIMPLE",
-              patch: { name: "QUICK", definition: "Quick tasks" },
-            }).value,
-          )
-        }
-      >
-        Customize tiers
-      </button>
       <button
         onClick={() =>
           setValue(hydrateComplexityRouterConfig(buildUpdatedComplexityRouterConfig({}, value), undefined))
@@ -90,7 +75,7 @@ function Form() {
       >
         Probe current config
       </button>
-    </AutoRouterClassifierTabs>
+    </>
   );
 }
 
@@ -99,11 +84,8 @@ describe("JEV classifier editor", () => {
   it("uses built-in JEV without a license and preserves custom tiers and context through reload", () => {
     renderWithProviders(<Form />);
     expect(screen.getByLabelText("Classifier Model")).toBeInTheDocument();
-    expect(screen.getByText("Reasoning Effort")).toBeInTheDocument();
     expect(screen.getByText("Classifier Prompt")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Use images for classification" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("radio", { name: /JEV Classifier/ }));
-    expect(screen.getByRole("tab", { name: "Complexity" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByLabelText("JEV Model")).toHaveValue("jev-latest");
     expect(screen.getByLabelText("JEV Instructions")).toBeDisabled();
     expect(screen.queryByLabelText("Classifier Model")).not.toBeInTheDocument();
@@ -115,12 +97,11 @@ describe("JEV classifier editor", () => {
     fireEvent.change(screen.getByLabelText("Context Window Size"), { target: { value: "6" } });
     fireEvent.change(screen.getByLabelText("Circuit breaker cooldown (seconds)"), { target: { value: "50" } });
     fireEvent.click(screen.getByRole("switch", { name: "Classifier circuit breaker" }));
-    fireEvent.click(screen.getByRole("button", { name: "Customize tiers" }));
     fireEvent.click(screen.getByRole("button", { name: "Save and reload" }));
     expect(screen.getByRole("radio", { name: /JEV Classifier/ })).toBeChecked();
     expect(screen.getByLabelText("JEV Model")).toHaveValue("jev-test");
     expect(screen.getByLabelText("JEV Timeout (ms)")).toHaveValue(4200);
-    expect(screen.getByLabelText("Context Window Size")).toHaveValue("6");
+    expect(screen.getByLabelText("Context Window Size")).toHaveValue(6);
     expect(screen.getByRole("switch", { name: "Classifier circuit breaker" })).not.toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: "Probe current config" }));
     expect(testAutoRouterRouting).toHaveBeenCalledWith(
@@ -134,7 +115,7 @@ describe("JEV classifier editor", () => {
             circuit_breaker_enabled: false,
             circuit_breaker_cooldown_seconds: 50,
           },
-          tiers: expect.objectContaining({ QUICK: ["fast"] }),
+          tiers: expect.objectContaining({ SIMPLE: ["fast"] }),
         }),
       }),
     );

@@ -79,6 +79,15 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
       <p className="text-sm text-muted-foreground">
         No complexity tiers are configured yet, so there is nothing to test.
       </p>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="mb-2 text-sm text-muted-foreground">
+        Each configured tier routes to a saved model group. Test Connection sends a minimal request through the proxy to
+        each one, exactly as the auto router would.
+      </p>
       {jevRequest && (
         <div role="status" aria-label="JEV connection" className="rounded-lg border p-3 text-sm">
           <strong>JEV Classifier</strong>
@@ -89,38 +98,6 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
           </p>
         </div>
       )}
-    );
-  }
-
-export function AutoRouterConnectionTestDialog({
-  open,
-  onClose,
-  testId,
-  ...props
-}: AutoRouterConnectionTestProps & { open: boolean; onClose: () => void; testId: number }) {
-  return (
-    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
-        <DialogHeader>
-          <DialogTitle>Connection Test Results</DialogTitle>
-        </DialogHeader>
-        {open && <AutoRouterConnectionTest key={testId} {...props} />}
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Close
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-  return (
-    <div className="space-y-3">
-      <p className="mb-2 text-sm text-muted-foreground">
-        Each configured tier routes to a saved model group. Test Connection sends a minimal request through the proxy to
-        each one, exactly as the auto router would.
-      </p>
       {targets.map((target, index) => {
         const result = results[index] ?? { status: "pending" };
         return (
@@ -160,3 +137,26 @@ export function AutoRouterConnectionTestDialog({
 };
 
 export default AutoRouterConnectionTest;
+
+export function AutoRouterConnectionTestDialog({
+  open,
+  onClose,
+  testId,
+  ...props
+}: AutoRouterConnectionTestProps & { open: boolean; onClose: () => void; testId: number }) {
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
+        <DialogHeader>
+          <DialogTitle>Connection Test Results</DialogTitle>
+        </DialogHeader>
+        {open && <AutoRouterConnectionTest key={testId} {...props} />}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
