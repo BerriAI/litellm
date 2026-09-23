@@ -523,3 +523,28 @@ fn a_config_error_names_the_model_when_supplied() {
         error.starts_with("PTU configuration on model 'azure-ptu' is invalid: team_id is required")
     );
 }
+
+#[test]
+fn the_zeroed_pricing_map_carries_exactly_the_python_fields() {
+    let override_pricing = zeroed_with_flag(&valid_model_info(), &json!({}), true).expect("pricing");
+
+    let mut names: Vec<&str> = override_pricing.keys().map(String::as_str).collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        [
+            "cache_creation_input_token_cost",
+            "cache_creation_input_token_cost_above_1hr",
+            "cache_creation_input_token_cost_above_200k_tokens",
+            "cache_read_input_token_cost",
+            "cache_read_input_token_cost_above_200k_tokens",
+            "google_maps_grounding_cost_per_query",
+            "input_cost_per_character",
+            "input_cost_per_token",
+            "output_cost_per_character",
+            "output_cost_per_token",
+            "search_context_cost_per_query",
+            "tiered_pricing",
+        ]
+    );
+}
