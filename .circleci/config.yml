@@ -3183,14 +3183,16 @@ jobs:
     steps:
       - setup_litellm_test_deps
       - run:
-          name: Check out base litellm
+          name: Check out base product code
           environment:
             ROUTING_PARITY_BASE: << pipeline.parameters.routing_parity_base >>
           command: |
             [[ "$ROUTING_PARITY_BASE" =~ ^[0-9a-f]{40}$ ]] || exit 1
             git fetch --depth 1 origin "$ROUTING_PARITY_BASE"
-            rm -rf litellm
-            git checkout "$ROUTING_PARITY_BASE" -- litellm
+            git rm -r --quiet litellm enterprise litellm-proxy-extras
+            git checkout "$ROUTING_PARITY_BASE" -- litellm enterprise litellm-proxy-extras
+            git reset --quiet
+            test -f litellm/rust_bridge/_native.abi3.so
       - start_postgres:
           image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
           server_args: "-c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000"
@@ -3209,10 +3211,12 @@ jobs:
             docker rm -f postgres-db redis-cache
             test -z "$(docker ps -aq --filter name=postgres-db --filter name=redis-cache)"
       - run:
-          name: Check out head litellm
+          name: Check out head product code
           command: |
-            rm -rf litellm
-            git checkout "$CIRCLE_SHA1" -- litellm
+            git rm -r --quiet litellm enterprise litellm-proxy-extras
+            git checkout "$CIRCLE_SHA1" -- litellm enterprise litellm-proxy-extras
+            git reset --quiet
+            test -f litellm/rust_bridge/_native.abi3.so
       - start_postgres:
           image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
           server_args: "-c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000"

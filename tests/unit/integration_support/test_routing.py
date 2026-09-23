@@ -129,6 +129,34 @@ def test_compare_reports_per_test_shrink_mismatch() -> None:
     )
 
 
+def test_compare_reports_global_gain_mismatch() -> None:
+    base: Final = _observation({TOKEN_QUERY: ("litellm_reader",)})
+    head: Final = _observation({TOKEN_QUERY: ("litellm_reader", "litellm_writer")})
+    report: Final = compare(base, head)
+    assert report.mismatches == (
+        Mismatch(None, TOKEN_QUERY, ("litellm_reader",), ("litellm_reader", "litellm_writer")),
+    )
+    assert report.failures() == (f"global: {TOKEN_QUERY}: base [litellm_reader] head [litellm_reader, litellm_writer]",)
+
+
+def test_compare_reports_per_test_gain_mismatch() -> None:
+    base: Final = _observation(
+        {TOKEN_QUERY: ("litellm_reader",)},
+        {NODE_ID: {TOKEN_QUERY: ("litellm_reader",)}},
+    )
+    head: Final = _observation(
+        {TOKEN_QUERY: ("litellm_reader",)},
+        {NODE_ID: {TOKEN_QUERY: ("litellm_reader", "litellm_writer")}},
+    )
+    report: Final = compare(base, head)
+    assert report.mismatches == (
+        Mismatch(NODE_ID, TOKEN_QUERY, ("litellm_reader",), ("litellm_reader", "litellm_writer")),
+    )
+    assert report.failures() == (
+        f"{NODE_ID}: {TOKEN_QUERY}: base [litellm_reader] head [litellm_reader, litellm_writer]",
+    )
+
+
 def test_compare_either_role_suppresses_and_reports_variance() -> None:
     base: Final = _observation(
         {TOKEN_QUERY: ("litellm_reader", "litellm_writer"), "SELECT quiet": ("litellm_reader",)},
