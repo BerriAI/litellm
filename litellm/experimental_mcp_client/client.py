@@ -1190,6 +1190,7 @@ class MCPClient:
 
 
 _PendingOperation: TypeAlias = tuple[Callable[[ClientSession], Awaitable[object]], "asyncio.Future[object]"]
+_MAX_PENDING_OPERATIONS: Final = 64
 
 
 class PersistentMCPSession:
@@ -1202,7 +1203,7 @@ class PersistentMCPSession:
     def __init__(self, client: MCPClient) -> None:
         loop: Final = asyncio.get_running_loop()
         self._client: Final = client
-        self._queue: Final[asyncio.Queue[_PendingOperation | None]] = asyncio.Queue()
+        self._queue: Final[asyncio.Queue[_PendingOperation]] = asyncio.Queue(maxsize=_MAX_PENDING_OPERATIONS)
         self._ready: Final[asyncio.Future[None]] = loop.create_future()
         self._task: Final = loop.create_task(self._serve())
 
@@ -1213,8 +1214,8 @@ class PersistentMCPSession:
     async def _serve(self) -> None:
         async def drain(session: ClientSession) -> None:
             self._ready.set_result(None)
-            while (pending := await self._queue.get()) is not None:
-                operation, future = pending
+            while True:
+                operation, future = await self._queue.get()
                 try:
                     future.set_result(await operation(session))
                 except Exception as e:
@@ -1231,9 +1232,9 @@ class PersistentMCPSession:
                 raise
         finally:
             while not self._queue.empty():
-                pending = self._queue.get_nowait()
-                if pending is not None and not pending[1].done():
-                    pending[1].set_exception(RuntimeError("upstream MCP session closed"))
+                _, future = self._queue.get_nowait()
+                if not future.done():
+                    future.set_exception(RuntimeError("upstream MCP session closed"))
 
     async def run(
         self,
@@ -1246,11 +1247,11 @@ class PersistentMCPSession:
         if self.closed:
             raise RuntimeError("upstream MCP session closed")
         future: Final[asyncio.Future[object]] = asyncio.get_running_loop().create_future()
-        self._queue.put_nowait((operation, future))
+        await self._queue.put((operation, future))
         return cast(TSessionResult, await future)
 
     def close(self) -> None:
-        self._queue.put_nowait(None)
+        _ = self._task.cancel()
 
     async def wait_closed(self) -> None:
         await asyncio.gather(self._task, return_exceptions=True)
