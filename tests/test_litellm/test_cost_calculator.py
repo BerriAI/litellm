@@ -38,6 +38,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.videos.main import VideoObject
+from litellm.utils import supports_prompt_caching
 
 
 @pytest.fixture
@@ -157,10 +158,6 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     )
 
     assert result == 1000
-
-
-
-
 
 
 def test_realtime_stream_combines_text_and_audio_token_details():
@@ -872,6 +869,40 @@ def test_default_image_cost_calculator(monkeypatch):
     assert cost == 10485760
 
 
+@pytest.mark.parametrize(
+    ("model", "quality", "size", "priced_key", "pixels"),
+    [
+        ("azure/dall-e-3", "standard", "1024x1024", "azure/standard/1024-x-1024/dall-e-3", 1024 * 1024),
+        ("azure/dall-e-3", "hd", "1024x1792", "azure/hd/1024-x-1792/dall-e-3", 1024 * 1792),
+        ("dall-e-3", "hd", "1024x1792", "azure/hd/1024-x-1792/dall-e-3", 1024 * 1792),
+    ],
+)
+def test_default_image_cost_calculator_matches_provider_first_quality_key(
+    monkeypatch, model: str, quality: str, size: str, priced_key: str, pixels: int
+):
+    from litellm.cost_calculator import default_image_cost_calculator
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "azure/standard/1024-x-1024/dall-e-3": {"litellm_provider": "azure", "input_cost_per_pixel": 1e-08},
+            "azure/hd/1024-x-1792/dall-e-3": {"litellm_provider": "azure", "input_cost_per_pixel": 3e-08},
+        },
+    )
+
+    cost = default_image_cost_calculator(
+        model=model,
+        custom_llm_provider="azure",
+        quality=quality,
+        n=1,
+        size=size,
+        optional_params={},
+    )
+
+    assert cost == litellm.model_cost[priced_key]["input_cost_per_pixel"] * pixels
+
+
 def test_cost_calculator_with_cache_creation():
     from litellm import completion_cost
     from litellm.types.utils import Choices, Message, Usage
@@ -1004,8 +1035,6 @@ def test_bedrock_cost_calculator_comparison_with_without_cache():
     assert cost_with_cache < cost_no_cache
     print(f"Cost without cache: {cost_no_cache}")
     print(f"Cost with cache: {cost_with_cache}")
-
-
 
 
 def test_gemini_25_explicit_caching_cost_direct_usage():
@@ -1574,8 +1603,6 @@ def test_cost_margin_with_discount(monkeypatch):
     print(f"  - Base cost: ${base_cost:.6f}")
     print(f"  - Cost with 5% discount + 10% margin: ${cost_with_both:.6f}")
     print(f"  - Expected: ${expected_cost:.6f}")
-
-
 
 
 def test_completion_cost_extracts_service_tier_from_response(_local_model_cost_map):
@@ -2332,8 +2359,6 @@ def test_gemini_without_cache_tokens_details():
     assert usage.prompt_tokens_details.text_tokens >= 0
 
     print("✅ Gemini without cacheTokensDetails works correctly")
-
-
 
 
 def test_additional_costs_only_for_azure_ai(_local_model_cost_map):
@@ -4545,3 +4570,99 @@ def test_completion_cost_response_service_tier_beats_requested(_local_model_cost
     response.service_tier = "priority"
     priority: Final = completion_cost(completion_response=response, model=model, custom_llm_provider="databricks")
     assert priority == pytest.approx(standard * 2)
+
+
+GPT_REALTIME_2_FAMILY: Final = (
+    "azure/gpt-realtime-2.1",
+    "azure/gpt-realtime-2.1-mini",
+    "gpt-realtime-2",
+    "gpt-realtime-2.1",
+    "gpt-realtime-2.1-mini",
+)
+
+
+def test_gpt_realtime_2_family_prices_audio_cache_writes_and_reads_alike(_local_model_cost_map: None) -> None:
+    audio_cache_rates: Final = {
+        model: (
+            litellm.model_cost[model].get("cache_read_input_audio_token_cost"),
+            litellm.model_cost[model].get("cache_creation_input_audio_token_cost"),
+        )
+        for model in GPT_REALTIME_2_FAMILY
+    }
+
+    # Azure publishes one cached-audio meter per gpt-realtime-2 deployment,
+    # https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/, checked 2026-09-23
+    assert all(read is not None and write == read for read, write in audio_cache_rates.values()), audio_cache_rates
+    assert len(audio_cache_rates) == len(GPT_REALTIME_2_FAMILY)
+
+
+GEMINI_LIVE_NATIVE_AUDIO_CASES: Final = (
+    ("gemini-live-2.5-flash-native-audio", "vertex_ai"),
+    ("gemini-live-2.5-flash-preview-native-audio-09-2025", "vertex_ai"),
+    ("gemini/gemini-live-2.5-flash-preview-native-audio-09-2025", "gemini"),
+)
+
+
+@pytest.mark.parametrize(("model", "provider"), GEMINI_LIVE_NATIVE_AUDIO_CASES)
+def test_gemini_live_native_audio_carries_no_cached_input_rate(
+    _local_model_cost_map: None, model: str, provider: str
+) -> None:
+    # the Vertex pricing table prints N/A for cached input on every Live row,
+    # https://cloud.google.com/vertex-ai/generative-ai/pricing, checked 2026-09-23
+    assert litellm.get_model_info(model, custom_llm_provider=provider)["cache_read_input_token_cost"] is None
+
+    prompt_usd, _ = cost_per_token(
+        model=model,
+        prompt_tokens=101_000,
+        completion_tokens=0,
+        custom_llm_provider=provider,
+        usage_object=Usage(
+            prompt_tokens=101_000,
+            completion_tokens=0,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100_000),
+        ),
+    )
+    fresh_usd, _ = cost_per_token(
+        model=model,
+        prompt_tokens=101_000,
+        completion_tokens=0,
+        custom_llm_provider=provider,
+        usage_object=Usage(prompt_tokens=101_000, completion_tokens=0),
+    )
+
+    assert prompt_usd == pytest.approx(fresh_usd), (
+        "with no cached rate the cached tokens bill at the input rate, so a phantom discount cannot appear"
+    )
+    assert prompt_usd > 0
+
+
+@pytest.mark.parametrize(("model", "provider"), GEMINI_LIVE_NATIVE_AUDIO_CASES)
+def test_gemini_live_native_audio_declares_prompt_caching_unsupported(
+    _local_model_cost_map: None, model: str, provider: str
+) -> None:
+    # the Vertex context-caching supported-model lists contain no Live model while 2.5 Flash is listed,
+    # https://cloud.google.com/vertex-ai/generative-ai/docs/context-cache/context-cache-overview, checked 2026-09-23
+    assert litellm.get_model_info(model, custom_llm_provider=provider)["supports_prompt_caching"] is False
+    assert supports_prompt_caching(model=model, custom_llm_provider=provider) is False
+    assert supports_prompt_caching(model="gemini-2.5-flash", custom_llm_provider="vertex_ai") is True, (
+        "control: the helper swallows a lookup error into False, so without this a broken lookup reads as a pass"
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["gemini-live-2.5-flash-native-audio", "vertex_ai/gemini-live-2.5-flash-native-audio"],
+)
+def test_gemini_live_native_audio_limits_and_capabilities_match_vendor_model_card(
+    _local_model_cost_map: None, model: str
+) -> None:
+    info = litellm.get_model_info(model)
+
+    # the Vertex model card for gemini-live-2.5-flash-native-audio publishes these limits and flags,
+    # https://cloud.google.com/vertex-ai/generative-ai/docs/models, checked 2026-09-23
+    assert info["max_input_tokens"] == 131072
+    assert info["max_output_tokens"] == 65536
+    assert info["max_tokens"] == 65536
+    assert info["supports_response_schema"] is False
+    assert info["supports_url_context"] is False
+    assert info["supports_pdf_input"] is False

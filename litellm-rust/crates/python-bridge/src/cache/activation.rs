@@ -1,6 +1,7 @@
+use crate::logger::run_sync_value;
 use litellm_cache_gcs::{DEFAULT_ENDPOINT, GcsConfig};
 use litellm_cache_redis_semantic::RedisSemanticConfig;
-use litellm_host_python::{release_gil, run_sync_value};
+use litellm_host_python::release_gil;
 use litellm_http::ClientVariant;
 use pyo3::prelude::*;
 

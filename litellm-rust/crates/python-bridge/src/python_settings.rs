@@ -44,11 +44,6 @@ impl PythonSettings {
     pub(crate) fn snapshot(self, value: Bound<'_, PyAny>) -> Snapshot<'_> {
         Snapshot { group: self, value }
     }
-
-    pub(crate) fn warn(py: Python<'_>, message: &str) -> PyResult<()> {
-        py.import(MODULE)?.getattr("warn")?.call1((message,))?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
