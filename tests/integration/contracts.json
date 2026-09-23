@@ -1813,20 +1813,11 @@
         "tests/integration/pricing/test_configured_prices.py::test_saving_echoed_model_info_does_not_freeze_cost_map_price_into_deployment": [
             "pricing.model_update.echoed_cost_map_price_is_not_persisted_as_override"
         ],
-        "tests/integration/pricing/test_configured_prices.py::test_saving_echoed_model_info_does_not_persist_cost_map_metadata_as_overrides": [
-            "pricing.model_update.echoed_cost_map_metadata_is_not_persisted_as_override"
-        ],
-        "tests/integration/pricing/test_configured_prices.py::test_saving_the_cost_map_value_back_over_a_stored_override_clears_it": [
-            "pricing.model_update.echoing_cost_map_value_back_clears_stored_override"
-        ],
         "tests/integration/pricing/test_databricks_cache_pricing.py::test_databricks_cached_prompt_tokens_bill_at_cache_rates_not_input_rate": [
             "pricing.databricks.cached_prompt_tokens_bill_at_cache_rates"
         ],
         "tests/integration/pricing/test_ocr_page_pricing.py::test_ocr_annotation_pages_are_billed_at_annotation_cost_per_page": [
             "pricing.ocr.annotation_pages_billed_at_annotation_rate"
-        ],
-        "tests/integration/pricing/test_realtime_cached_audio_pricing.py::test_realtime_cached_audio_tokens_bill_at_audio_cache_read_rate_not_full_audio_rate": [
-            "pricing.realtime.cached_audio_tokens_bill_at_audio_cache_read_rate"
         ],
         "tests/integration/pricing/test_service_tier_pricing.py::test_ultrafast_service_tier_bills_ultrafast_rates_and_keeps_pricing_off_the_wire": [
             "quota_management.spend_tracking.service_tier_pricing.ultrafast_bills_ultrafast_rates"
@@ -1852,9 +1843,6 @@
         "tests/integration/spend/test_disconnected_bedrock_messages_stream_billing.py::test_client_disconnect_mid_bedrock_messages_stream_still_bills_terminal_usage": [
             "spend.anthropic_messages_stream.client_disconnect_bills_terminal_bedrock_usage"
         ],
-        "tests/integration/spend/test_messages_stream_usage_cost.py::test_bedrock_messages_stream_usage_cost_matches_recorded_spend_with_custom_cache_rates": [
-            "spend.anthropic_messages_stream.streamed_usage_cost_equals_recorded_spend"
-        ],
         "tests/integration/spend/test_failed_dispatch_tokens.py::test_provider_500_after_dispatch_records_estimated_prompt_tokens_on_failure_row": [
             "spend.failed_dispatch.failure_row_records_estimated_input_tokens"
         ],
@@ -1872,9 +1860,6 @@
         ],
         "tests/integration/spend/test_team_member_spend.py::test_member_added_without_any_budget_is_charged_on_its_membership_row": [
             "spend.team_member.member_without_budget_gets_membership_row_and_spend"
-        ],
-        "tests/integration/spend/test_legacy_spend_logs_row_cap.py::test_legacy_spend_logs_returns_only_the_cap_of_most_recent_rows_and_flags_truncation": [
-            "spend.legacy_spend_logs.row_count_is_capped_at_the_most_recent_rows_and_flagged_truncated"
         ],
         "tests/integration/management/test_vector_store_config_ownership.py::test_config_store_is_listed_beside_db_store_and_survives_listing": [
             "mgmt.vector_store.list.keeps_config_store_beside_db_stores"
@@ -2034,6 +2019,21 @@
         ],
         "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
             "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+        ],
+        "tests/integration/pricing/test_configured_prices.py::test_saving_echoed_model_info_does_not_persist_cost_map_metadata_as_overrides": [
+            "pricing.model_update.echoed_cost_map_metadata_is_not_persisted_as_override"
+        ],
+        "tests/integration/pricing/test_configured_prices.py::test_saving_the_cost_map_value_back_over_a_stored_override_clears_it": [
+            "pricing.model_update.echoing_cost_map_value_back_clears_stored_override"
+        ],
+        "tests/integration/spend/test_legacy_spend_logs_row_cap.py::test_legacy_spend_logs_returns_only_the_cap_of_most_recent_rows_and_flags_truncation": [
+            "spend.legacy_spend_logs.row_count_is_capped_at_the_most_recent_rows_and_flagged_truncated"
+        ],
+        "tests/integration/pricing/test_realtime_cached_audio_pricing.py::test_realtime_cached_audio_tokens_bill_at_audio_cache_read_rate_not_full_audio_rate": [
+            "pricing.realtime.cached_audio_tokens_bill_at_audio_cache_read_rate"
+        ],
+        "tests/integration/spend/test_messages_stream_usage_cost.py::test_bedrock_messages_stream_usage_cost_matches_recorded_spend_with_custom_cache_rates": [
+            "spend.anthropic_messages_stream.streamed_usage_cost_equals_recorded_spend"
         ],
         "tests/integration/database/test_migration_entrypoint.py::test_migration_entrypoint_upgrades_an_older_schema_so_the_proxy_serves_mcp_tools": [
             "other.database.migrations.entrypoint_deploys_pending_migrations_before_startup"
