@@ -1,3 +1,6 @@
+use litellm_cost::batch::{
+    BatchCostRates, BatchPricing, BatchUsage, ModalityRates, batch_cost_calculator,
+};
 use litellm_cost::non_token::{
     ImageRates, ImageUsage, OcrBatchRates, OcrRates, OcrUsage, VideoRates, calculate_image,
     calculate_ocr, calculate_ocr_batch, calculate_video,
@@ -91,4 +94,37 @@ fn main() {
     )
     .unwrap();
     println!("video={} ocr_batch={}", video.total, ocr_batch.total);
+    let batch = batch_cost_calculator(
+        &BatchPricing {
+            batch: BatchCostRates {
+                input: Rate::Value(0.000001),
+                output: Rate::Value(0.000004),
+                cache_read: Rate::Missing,
+                cache_creation: Rate::Missing,
+            },
+            regular: BatchCostRates::EMPTY,
+            modalities: ModalityRates {
+                audio: Rate::Missing,
+                image: Rate::Missing,
+                video: Rate::Missing,
+            },
+            tiers: &[],
+            threshold_policy: ThresholdPolicy::Exclusive,
+            regional_uplift: 1.0,
+        },
+        BatchUsage {
+            prompt_tokens: 1000,
+            completion_tokens: 500,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            audio_tokens: 0,
+            image_tokens: 0,
+            video_tokens: 0,
+        },
+    )
+    .unwrap();
+    println!(
+        "batch_input={} batch_output={}",
+        batch.prompt, batch.completion
+    );
 }

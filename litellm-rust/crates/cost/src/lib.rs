@@ -1,3 +1,4 @@
+pub mod batch;
 pub mod non_token;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
