@@ -165,6 +165,7 @@ class KeyInfo(BaseModel):
     key_alias: str | None = None
     status: str | None = None
     deleted_by: str | None = None
+    deleted_by_api_key: str | None = None
     metadata: KeyMetadata | None = None
     models: list[str] = []
     tpm_limit: int | None = None
@@ -1359,7 +1360,7 @@ class ScimPatchOperationBody(BaseModel):
 
 
 class ScimGroupPatchBody(BaseModel):
-    schemas: list[str] = ["urn:ietf:params:scim:api:messages:2.0:PatchOp"]
+    schemas: tuple[str, ...] = ("urn:ietf:params:scim:api:messages:2.0:PatchOp",)
     Operations: list[ScimPatchOperationBody]
 
 

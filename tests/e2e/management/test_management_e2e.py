@@ -919,8 +919,11 @@ class TestKeyDeletionAuditLog:
         _assert_key_deleted(client, created.key)
         info = unwrap(client.key_info_as(created.key)).info
         assert info.status == "deleted", info
-        assert isinstance(info.deleted_by, str) and info.deleted_by, info
-        _assert_single_deleted_row(_await_deleted_audit_rows(client, token), token)
+        assert info.deleted_by == "litellm_scim", info
+        assert info.deleted_by_api_key == "litellm_scim", info
+        audit_page = _await_deleted_audit_rows(client, token)
+        _assert_single_deleted_row(audit_page, token)
+        assert audit_page.audit_logs[0].changed_by == "litellm_scim", audit_page
 
     @pytest.mark.covers("mgmt.team.delete.audit_logs_keys")
     def test_team_delete_writes_audit_row_for_team_keys(
