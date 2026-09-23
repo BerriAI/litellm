@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -78,8 +78,8 @@ class AnthropicPassthroughGuardrailHandler(BaseTranslation):
     @staticmethod
     async def de_anonymize_event_stream(
         body_bytes: bytes,
-        proxy_logging_obj: "ProxyLogging",
-        user_api_key_dict: "UserAPIKeyAuth",
+        proxy_logging_obj: ProxyLogging,
+        user_api_key_dict: UserAPIKeyAuth,
         data: dict,
     ) -> bytes:
         """
@@ -154,9 +154,7 @@ class AnthropicPassthroughGuardrailHandler(BaseTranslation):
             delta["text"] = new_text
             payload["delta"] = delta
             # Rebuild a minimal SSE block; preserve event name.
-            new_block = (
-                f"event: content_block_delta\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
-            ).encode("utf-8")
+            new_block = (f"event: content_block_delta\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n").encode()
             out[block_idx] = new_block
 
         return b"".join(out)
@@ -164,8 +162,8 @@ class AnthropicPassthroughGuardrailHandler(BaseTranslation):
     async def process_input_messages(
         self,
         data: dict,
-        guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        guardrail_to_apply: CustomGuardrail,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
     ) -> Mapping[str, object]:
         from litellm.llms.pass_through.guardrail_translation.handler import (
             PassThroughEndpointHandler,
@@ -180,9 +178,9 @@ class AnthropicPassthroughGuardrailHandler(BaseTranslation):
     async def process_output_response(
         self,
         response: object,
-        guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+        guardrail_to_apply: CustomGuardrail,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
+        user_api_key_dict: UserAPIKeyAuth | None = None,
         request_data: dict | None = None,
     ) -> object:
         from litellm.llms.pass_through.guardrail_translation.handler import (
