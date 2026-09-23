@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Any, Final, Protocol
 
 from fastapi import HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -35,7 +35,7 @@ from litellm.proxy._types import (  # key request types; user request types; tea
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-from litellm.proxy.utils import PrismaClient, jsonify_object
+from litellm.proxy.utils import PrismaClient, hash_token, jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.repositories.user_repository import UserRepository
@@ -557,7 +557,7 @@ def _delete_customer_id_from_cache(kwargs):
 
 
 async def send_management_endpoint_alert(
-    request_kwargs: dict,
+    request_kwargs: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     function_name: str,
 ):
@@ -594,7 +594,7 @@ async def send_management_endpoint_alert(
                 created_by_user_id=user_api_key_dict.user_id or "Unknown",
                 created_by_user_role=user_api_key_dict.user_role or "Unknown",
                 created_by_key_alias=user_api_key_dict.key_alias,
-                request_kwargs=request_kwargs,
+                request_kwargs=redact_management_kwargs(request_kwargs),
             )
 
             # replace all "_" with " " and capitalize
@@ -604,6 +604,102 @@ async def send_management_endpoint_alert(
                 event_name=event_name,
                 alert_type=_event_name,
             )
+
+
+_CREDENTIAL_FIELDS: Final = frozenset(
+    {
+        "key",
+        "keys",
+        "token",
+        "api_key",
+        "secret",
+        "password",
+        "access_token",
+        "refresh_token",
+        "private_key",
+        "service_account_key",
+    }
+)
+
+
+_OBJECT_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_OBJECT_SEQ_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
+def _str_object_dict(value: object) -> dict[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return _OBJECT_DICT_ADAPTER.validate_python(value)
+
+
+def _redact_credential_value(value: object) -> object:
+    if isinstance(value, str):
+        return hash_token(value) if value.startswith("sk-") else "***"
+    mapping: Final = _str_object_dict(value)
+    if mapping is not None:
+        return {  # mutable-ok: rebuilt alert payload dict
+            str(k): _redact_credential_field(str(k), v) for k, v in mapping.items()
+        }
+    if isinstance(value, (list, tuple)):
+        items: Final = _OBJECT_SEQ_ADAPTER.validate_python(value)
+        return [_redact_credential_value(item) for item in items]  # mutable-ok: rebuilt alert payload list
+    if isinstance(value, BaseModel):
+        return _redact_management_kwargs_inner(value.model_dump(exclude_unset=True))
+    return "***"
+
+
+def _redact_credential_field(field_name: str, value: object) -> object:
+    if field_name in _CREDENTIAL_FIELDS:
+        return _redact_credential_value(value)
+    mapping: Final = _str_object_dict(value)
+    if mapping is not None:
+        return {  # mutable-ok: rebuilt alert payload dict
+            str(k): _redact_credential_field(str(k), v) for k, v in mapping.items()
+        }
+    if isinstance(value, (list, tuple)):
+        items: Final = _OBJECT_SEQ_ADAPTER.validate_python(value)
+        return [  # mutable-ok: rebuilt alert payload list
+            (
+                _redact_management_kwargs_inner(item.model_dump(exclude_unset=True))
+                if isinstance(item, BaseModel)
+                else (
+                    {  # mutable-ok: rebuilt alert payload dict
+                        str(k): _redact_credential_field(str(k), v) for k, v in nested.items()
+                    }
+                    if (nested := _str_object_dict(item)) is not None
+                    else item
+                )
+            )
+            for item in items
+        ]
+    if isinstance(value, BaseModel):
+        return _redact_management_kwargs_inner(value.model_dump(exclude_unset=True))
+    return value
+
+
+def _redact_management_kwargs_inner(mapping: Mapping[str, object]) -> dict[str, object]:
+    return {  # mutable-ok: rebuilt alert payload dict
+        str(k): _redact_credential_field(str(k), v) for k, v in mapping.items()
+    }
+
+
+def redact_management_kwargs(kwargs: Mapping[str, object]) -> dict[str, object]:
+    """Copy ``kwargs`` with credential fields hashed (``sk-`` values) or masked.
+
+    Management endpoint wrappers pass the call kwargs (which carry request
+    models like ``GenerateKeyRequest`` holding raw ``sk-`` key material) into
+    alerts and OTEL spans; this strips those values while keeping the audit
+    context. Pydantic models are dumped with ``exclude_unset=True`` so fields
+    the caller never sent do not appear in the alert payload.
+    """
+    return {  # mutable-ok: rebuilt alert payload dict
+        str(k): (
+            _redact_management_kwargs_inner(v.model_dump(exclude_unset=True))
+            if isinstance(v, BaseModel)
+            else _redact_credential_field(str(k), v)
+        )
+        for k, v in kwargs.items()
+    }
 
 
 def _object_mapping(value: object) -> Mapping[str, object] | None:
@@ -708,20 +804,6 @@ async def _emit_management_endpoint_otel_span(
         route = func.__name__
         request_body = {}
 
-    _CREDENTIAL_FIELDS: Final = frozenset(
-        {
-            "key",
-            "token",
-            "api_key",
-            "secret",
-            "password",
-            "access_token",
-            "refresh_token",
-            "private_key",
-            "service_account_key",
-        }
-    )
-
     _response: dict[str, object] | None = None
     if exception is None and result is not None:
         try:
@@ -761,13 +843,16 @@ def management_endpoint_wrapper(func):
     """
 
     @wraps(func)
-    async def wrapper(*args, **kwargs):
+    async def wrapper(*args: object, **kwargs: object):
         start_time: Final = datetime.now()
         try:
             result: Final = await func(*args, **kwargs)
             end_time = datetime.now()
             try:
-                user_api_key_dict: UserAPIKeyAuth = kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
+                caller_value: Final = kwargs.get("user_api_key_dict")
+                user_api_key_dict: Final[UserAPIKeyAuth] = (
+                    caller_value if isinstance(caller_value, UserAPIKeyAuth) else UserAPIKeyAuth()
+                )
 
                 await send_management_endpoint_alert(
                     request_kwargs=kwargs,
@@ -778,7 +863,7 @@ def management_endpoint_wrapper(func):
                 if parent_otel_span is not None:
                     await _emit_management_endpoint_otel_span(
                         func=func,
-                        kwargs=kwargs,
+                        kwargs=redact_management_kwargs(kwargs),
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,

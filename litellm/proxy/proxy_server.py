@@ -1516,8 +1516,21 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         if not model_info_scheduler.running:
             model_info_scheduler.start()
 
+    from litellm.proxy._experimental.mcp_server.management.server import (
+        start_management_mcp_server,
+    )
+
+    management_general_settings: Final[Mapping[str, object]] = general_settings
+    await start_management_mcp_server(management_general_settings)
+
     # End of startup event
     yield
+
+    from litellm.proxy._experimental.mcp_server.management.server import (
+        shutdown_management_mcp_server,
+    )
+
+    await shutdown_management_mcp_server()
 
     if model_info_scheduler is not None and model_info_scheduler.running:
         model_info_scheduler.remove_job("refresh_model_info")
@@ -19612,6 +19625,35 @@ async def aggregate_mcp_route(request: Request):
     scope["_original_path"] = scope.get("path", "")
     scope["path"] = BASE_MCP_ROUTE
     return await _stream_mcp_asgi_response(handle_streamable_http_mcp, scope, request.receive)
+
+
+# Built-in management MCP endpoint. Declared BEFORE /{mcp_server_name}/mcp so the
+# catchall can never serve the reserved "litellm-management" alias; when the flag
+# is off the handler returns 404 without reaching the dynamic alias path.
+@app.api_route(
+    "/litellm-management/mcp",
+    methods=["GET", "POST", "DELETE"],  # mutable-ok: api_route methods parameter is a list
+    include_in_schema=False,
+)
+async def management_mcp_route(request: Request) -> Response:
+    from litellm.proxy._experimental.mcp_server.management.server import (
+        handle_management_mcp_request,
+    )
+
+    return await handle_management_mcp_request(request)
+
+
+@app.api_route(
+    "/litellm-management/mcp/",
+    methods=["GET", "POST", "DELETE"],  # mutable-ok: api_route methods parameter is a list
+    include_in_schema=False,
+)
+async def management_mcp_route_trailing_slash(request: Request) -> Response:
+    from litellm.proxy._experimental.mcp_server.management.server import (
+        handle_management_mcp_request,
+    )
+
+    return await handle_management_mcp_request(request)
 
 
 # Toolset-namespaced MCP routes - handle /toolset/{toolset_name}/mcp
