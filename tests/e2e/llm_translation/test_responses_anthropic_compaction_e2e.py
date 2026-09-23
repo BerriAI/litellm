@@ -11,18 +11,17 @@ dropped, so the client replays the full transcript forever.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 from typing import Final
 
 import pytest
-from e2e_config import unique_marker
+from e2e_config import MASTER_KEY, PROXY_BASE_URL, unique_marker
 from e2e_http import StreamingResponse
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
 from pydantic import BaseModel, Field
-from transport import SplitTransport, Transport
+from transport import HttpTransport
 
 pytestmark = pytest.mark.e2e
 
@@ -75,14 +74,8 @@ class _StreamEvent(BaseModel):
     item: _StreamEventItem | None = None
 
 
-def _long_timeout_transport(transport: Transport) -> Transport:
-    if isinstance(transport, SplitTransport):
-        return dataclasses.replace(
-            transport,
-            data=dataclasses.replace(transport.data, request_timeout=600.0),
-            control=dataclasses.replace(transport.control, request_timeout=600.0),
-        )
-    return dataclasses.replace(transport, request_timeout=600.0)
+def _transport() -> HttpTransport:
+    return HttpTransport(base_url=PROXY_BASE_URL, master_key=MASTER_KEY, request_timeout=600.0)
 
 
 def _body(model: str, items: list[object], *, stream: bool | None = None) -> _ResponsesBody:
@@ -109,7 +102,7 @@ def _first_turn_items() -> list[object]:
     ]
 
 
-def _post_responses(transport: Transport, key: str, body: _ResponsesBody) -> StreamingResponse:
+def _post_responses(transport: HttpTransport, key: str, body: _ResponsesBody) -> StreamingResponse:
     return transport.send("/v1/responses", headers=transport.bearer(key), json=body, stream=body.stream is True)
 
 
@@ -137,7 +130,7 @@ class TestResponsesAnthropicCompaction:
     def test_nonstream_returns_compaction_output_item(
         self, proxy: ProxyClient, resources: ResourceManager, anthropic_model: str
     ) -> None:
-        transport = _long_timeout_transport(proxy.transport)
+        transport = _transport()
         result = _post_responses(transport, resources.key(), _body(anthropic_model, _first_turn_items()))
         assert result.ok, f"/v1/responses failed: {result.status_code} {result.body[:500]}"
         response = _ResponsesResult.model_validate_json(result.body)
@@ -149,7 +142,7 @@ class TestResponsesAnthropicCompaction:
     def test_stream_returns_compaction_item_events(
         self, proxy: ProxyClient, resources: ResourceManager, anthropic_model: str
     ) -> None:
-        transport = _long_timeout_transport(proxy.transport)
+        transport = _transport()
         result = _post_responses(
             transport, resources.key(), _body(anthropic_model, _first_turn_items(), stream=True)
         )
@@ -167,7 +160,7 @@ class TestResponsesAnthropicCompaction:
     def test_replaying_compaction_item_shrinks_next_input(
         self, proxy: ProxyClient, resources: ResourceManager, anthropic_model: str
     ) -> None:
-        transport = _long_timeout_transport(proxy.transport)
+        transport = _transport()
         key = resources.key()
         first = _post_responses(transport, key, _body(anthropic_model, _first_turn_items()))
         assert first.ok, f"first /v1/responses failed: {first.status_code} {first.body[:500]}"
