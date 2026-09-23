@@ -15,12 +15,16 @@ from tests.integration._support.routing import (
     Mismatch,
     Observation,
     compare,
+    delta,
     dump_expectation,
     dump_observation,
+    load_either_role,
     load_expectation,
     load_observation,
     main,
     normalize,
+    render,
+    role_calls,
 )
 
 TOKEN_QUERY: Final = 'UPDATE "LiteLLM_VerificationToken" SET token = $n WHERE token = $n'
@@ -80,12 +84,16 @@ def test_compare_reports_global_role_mismatch() -> None:
     assert report.failures() == (f"global: {TOKEN_QUERY}: expected [litellm_reader] observed [litellm_writer]",)
 
 
-def test_compare_allows_observed_roles_to_shrink() -> None:
+def test_compare_reports_global_shrink_mismatch() -> None:
     expected: Final = _expectation({TOKEN_QUERY: ("litellm_reader", "litellm_writer")})
-    observed: Final = _observation({TOKEN_QUERY: ("litellm_reader",)})
+    observed: Final = _observation({TOKEN_QUERY: ("litellm_writer",)})
     report: Final = compare(expected, observed)
-    assert report.mismatches == ()
-    assert report.failures() == ()
+    assert report.mismatches == (
+        Mismatch(None, TOKEN_QUERY, ("litellm_reader", "litellm_writer"), ("litellm_writer",)),
+    )
+    assert report.failures() == (
+        f"global: {TOKEN_QUERY}: expected [litellm_reader, litellm_writer] observed [litellm_writer]",
+    )
 
 
 def test_compare_reports_per_test_mismatch_with_nodeid() -> None:
@@ -102,7 +110,7 @@ def test_compare_reports_per_test_mismatch_with_nodeid() -> None:
     assert report.failures() == (f"{NODE_ID}: {TOKEN_QUERY}: expected [litellm_reader] observed [litellm_writer]",)
 
 
-def test_compare_per_test_allows_roles_in_global_expectation() -> None:
+def test_compare_per_test_mismatch_ignores_global_expectation() -> None:
     expected: Final = _expectation(
         {TOKEN_QUERY: ("litellm_reader", "litellm_writer")},
         {NODE_ID: {TOKEN_QUERY: ("litellm_reader",)}},
@@ -112,8 +120,42 @@ def test_compare_per_test_allows_roles_in_global_expectation() -> None:
         {NODE_ID: {TOKEN_QUERY: ("litellm_writer",)}},
     )
     report: Final = compare(expected, observed)
+    assert report.mismatches == (Mismatch(NODE_ID, TOKEN_QUERY, ("litellm_reader",), ("litellm_writer",)),)
+    assert report.failures() == (f"{NODE_ID}: {TOKEN_QUERY}: expected [litellm_reader] observed [litellm_writer]",)
+
+
+def test_compare_reports_per_test_shrink_mismatch() -> None:
+    expected: Final = _expectation(
+        {TOKEN_QUERY: ("litellm_reader", "litellm_writer")},
+        {NODE_ID: {TOKEN_QUERY: ("litellm_reader", "litellm_writer")}},
+    )
+    observed: Final = _observation(
+        {TOKEN_QUERY: ("litellm_reader", "litellm_writer")},
+        {NODE_ID: {TOKEN_QUERY: ("litellm_reader",)}},
+    )
+    report: Final = compare(expected, observed)
+    assert report.mismatches == (
+        Mismatch(NODE_ID, TOKEN_QUERY, ("litellm_reader", "litellm_writer"), ("litellm_reader",)),
+    )
+    assert report.failures() == (
+        f"{NODE_ID}: {TOKEN_QUERY}: expected [litellm_reader, litellm_writer] observed [litellm_reader]",
+    )
+
+
+def test_compare_either_role_suppresses_and_reports_variance() -> None:
+    expected: Final = _expectation(
+        {TOKEN_QUERY: ("litellm_reader", "litellm_writer"), "SELECT quiet": ("litellm_reader",)},
+        {NODE_ID: {TOKEN_QUERY: ("litellm_reader",)}},
+    )
+    observed: Final = _observation(
+        {TOKEN_QUERY: ("litellm_writer",), "SELECT quiet": ("litellm_reader",)},
+        {NODE_ID: {TOKEN_QUERY: ("litellm_writer",)}},
+    )
+    report: Final = compare(expected, observed, either_role=frozenset({TOKEN_QUERY, "SELECT quiet"}))
     assert report.mismatches == ()
     assert report.failures() == ()
+    assert report.either_role == (TOKEN_QUERY,)
+    assert "== either role ==\n" + TOKEN_QUERY + "\n" in render(report)
 
 
 def test_compare_one_sided_queries_are_listed_not_failed() -> None:
@@ -222,6 +264,9 @@ def test_main_check_returns_one_and_writes_exact_diff(tmp_path: Path) -> None:
         "pg_stat_statements evicted 2 entries (dealloc > 0)\n"
         "no litellm_reader calls observed\n"
         "\n"
+        "== either role ==\n"
+        "none\n"
+        "\n"
         "== queries only in expected ==\n"
         "SELECT absent\n"
         "\n"
@@ -239,6 +284,73 @@ def test_main_check_missing_expected_returns_one(tmp_path: Path, capsys: pytest.
     _write_observed(tmp_path, _observation({}))
     assert main(["check", "database", str(tmp_path), "--expected", str(tmp_path / "nope.json")]) == 1
     assert "expected routing file missing" in capsys.readouterr().err
+
+
+def test_main_check_either_role_suppresses_shrink(tmp_path: Path) -> None:
+    _write_observed(tmp_path, _observation({TOKEN_QUERY: ("litellm_writer",)}))
+    expected: Final = tmp_path / "expected.json"
+    expected.write_text(json.dumps({"queries": {TOKEN_QUERY: ["litellm_reader", "litellm_writer"]}, "tests": {}}))
+    argv: Final = ["check", "database", str(tmp_path), "--expected", str(expected)]
+    allowlist: Final = tmp_path / "either.json"
+    allowlist.write_text(json.dumps({TOKEN_QUERY: "timer probe may use either pool"}))
+    assert main([*argv, "--either-role", str(allowlist)]) == 0
+    assert "== either role ==\n" + TOKEN_QUERY + "\n" in (tmp_path / DIFF_FILE).read_text()
+    assert main(argv) == 1
+
+
+def test_delta_maps_positive_increases_per_role() -> None:
+    before: Final = MappingProxyType(
+        {
+            ("litellm_reader", "SELECT both"): 1,
+            ("litellm_writer", "SELECT both"): 2,
+            ("litellm_reader", "SELECT reader"): 3,
+            ("litellm_writer", "SELECT gone"): 4,
+            ("litellm_reader", "SELECT same"): 5,
+        }
+    )
+    after: Final = MappingProxyType(
+        {
+            ("litellm_reader", "SELECT both"): 2,
+            ("litellm_writer", "SELECT both"): 5,
+            ("litellm_reader", "SELECT reader"): 6,
+            ("litellm_reader", "SELECT same"): 5,
+            ("litellm_writer", "SELECT writer"): 7,
+        }
+    )
+    assert delta(before, after) == {
+        "SELECT both": frozenset({"litellm_reader", "litellm_writer"}),
+        "SELECT reader": frozenset({"litellm_reader"}),
+        "SELECT writer": frozenset({"litellm_writer"}),
+    }
+
+
+def test_role_calls_sums_positive_increases_per_role() -> None:
+    before: Final = MappingProxyType(
+        {
+            ("litellm_reader", "SELECT a"): 10,
+            ("litellm_reader", "SELECT b"): 4,
+            ("litellm_writer", "SELECT a"): 1,
+        }
+    )
+    after: Final = MappingProxyType(
+        {
+            ("litellm_reader", "SELECT a"): 11,
+            ("litellm_reader", "SELECT b"): 2,
+            ("litellm_writer", "SELECT a"): 1,
+            ("litellm_writer", "SELECT c"): 6,
+        }
+    )
+    assert role_calls(before, after) == {"litellm_reader": 1, "litellm_writer": 6}
+
+
+def test_load_either_role_missing_path_returns_empty(tmp_path: Path) -> None:
+    assert load_either_role(tmp_path / "absent.json") == frozenset()
+
+
+def test_load_either_role_reads_query_keys(tmp_path: Path) -> None:
+    path: Final = tmp_path / "either.json"
+    path.write_text(json.dumps({"SELECT $n": "probe", "SELECT now()": "clock"}))
+    assert load_either_role(path) == frozenset({"SELECT $n", "SELECT now()"})
 
 
 def test_load_observation_reads_calls_and_dealloc(tmp_path: Path) -> None:
