@@ -1229,12 +1229,9 @@ def test_bedrock_bare_claude_id_is_priced_in_region(local_model_cost_map, bare_k
     bare = litellm.model_cost[bare_key]
     us = litellm.model_cost[f"us.{bare_key}"]
     global_ = litellm.model_cost[f"global.{bare_key}"]
-    for field in (
-        "input_cost_per_token",
-        "output_cost_per_token",
-        "cache_creation_input_token_cost",
-        "cache_read_input_token_cost",
-    ):
+    cost_fields = [f for f in bare if "cost" in f]
+    assert cost_fields
+    for field in cost_fields:
         assert bare[field] == us[field], field
     assert bare["input_cost_per_token"] > global_["input_cost_per_token"]
 
