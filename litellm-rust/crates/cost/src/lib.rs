@@ -15,6 +15,7 @@ pub mod off_peak;
 pub mod per_second;
 pub mod regional_uplift;
 pub mod responses_usage;
+pub mod retrieval_cost;
 pub mod tiered_pricing;
 pub mod tool_call_cost_tracking;
 pub mod transcription_usage;

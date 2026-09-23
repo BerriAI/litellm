@@ -6,6 +6,7 @@ use serde_json::Value;
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::per_second::per_second_pricing_cost;
 use crate::responses_usage::ChatUsage;
+use crate::retrieval_cost::{rerank_cost, vector_store_search_cost};
 use crate::{Cost, Pricing, PricingError, Rates, Request, calculate};
 
 #[derive(Clone, Debug, Default)]
@@ -158,5 +159,22 @@ impl ModelInfoCatalog {
             request.vertex_location,
             request.at,
         ))
+    }
+
+    pub fn rerank_cost(
+        &self,
+        model: &str,
+        provider: &str,
+        region: Option<&str>,
+        billed_units: Option<&Value>,
+    ) -> (f64, f64) {
+        let model_info = self
+            .select_model_key(model, Some(provider), region)
+            .and_then(|key| self.entries.get(key));
+        rerank_cost(provider, model_info, billed_units)
+    }
+
+    pub fn vector_store_search_cost(&self, provider: &str, api_type: Option<&str>) -> (f64, f64) {
+        vector_store_search_cost(provider, api_type, self.entries.get("vertex_ai/search_api"))
     }
 }

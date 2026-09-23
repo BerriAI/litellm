@@ -506,6 +506,14 @@ fn main() {
             "provider/duration".to_owned(),
             json!({"mode": "responses", "input_cost_per_second": 0.5, "output_cost_per_second": 1.0}),
         ),
+        (
+            "vertex_ai/rerank".to_owned(),
+            json!({"input_cost_per_query": 0.25}),
+        ),
+        (
+            "vertex_ai/search_api".to_owned(),
+            json!({"input_cost_per_query": 0.4}),
+        ),
     ]));
     let (catalog_prompt, catalog_output) = model_info_catalog
         .cost_per_token(ModelCostRequest {
@@ -535,4 +543,12 @@ fn main() {
         })
         .unwrap();
     println!("duration_prompt={duration_prompt:.1} duration_output={duration_output:.1}");
+    let rerank = model_info_catalog.rerank_cost(
+        "rerank",
+        "vertex_ai",
+        None,
+        Some(&json!({"search_units": 3})),
+    );
+    let search = model_info_catalog.vector_store_search_cost("vertex_ai", Some("search_api"));
+    println!("rerank={} vector_search={}", rerank.0, search.0);
 }
