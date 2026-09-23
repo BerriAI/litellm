@@ -8,6 +8,7 @@ use litellm_cost::custom_pricing::{
     CustomPricing, CustomTokenRates, RawUsage, cost_per_token_custom_pricing_helper,
     normalize_cache_usage,
 };
+use litellm_cost::gemini_cost::cost_per_web_search_request;
 use litellm_cost::guardrail_cost::bedrock_guardrail_cost;
 use litellm_cost::non_token::{
     ImageRates, ImageUsage, OcrBatchRates, OcrRates, OcrUsage, VideoRates, calculate_image,
@@ -299,4 +300,22 @@ fn main() {
         "tier_input_rate={}",
         tier_rate(tier, "input_cost_per_token", None)
     );
+    let gemini_usage = get_usage_object(&json!({
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+            "prompt_tokens_details": {"web_search_requests": 3}
+        }
+    }))
+    .unwrap()
+    .unwrap();
+    let search_cost = cost_per_web_search_request(
+        &gemini_usage,
+        &json!({
+            "web_search_billing_unit": "per_query",
+            "search_context_cost_per_query": {"search_context_size_medium": 0.01}
+        }),
+    );
+    println!("gemini_search={search_cost:.2}");
 }

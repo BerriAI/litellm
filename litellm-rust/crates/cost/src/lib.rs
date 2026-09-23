@@ -2,6 +2,7 @@ pub mod anthropic_usage;
 pub mod batch;
 pub mod catalog;
 pub mod custom_pricing;
+pub mod gemini_cost;
 pub mod guardrail_cost;
 pub mod interactions_usage;
 pub mod non_token;

@@ -12,6 +12,8 @@ Call `compile(&pricing)` once for an immutable plan, then `plan.calculate(&reque
 
 `tiered_pricing::select_tier_for_input` chooses one rate tier for all tokens in a request with an inclusive upper bound and last-tier fallback. `tiered_pricing::tier_rate` reads numeric or YAML string rates, preserving an explicit zero ahead of a fallback
 
+`gemini_cost` prices search and Maps grounding with per-query or per-prompt billing, a configured price or the Python fallback, and server-tool usage fallback for search counts. Gemini's token-pricing wrapper still depends on the broader Python generic token calculator
+
 `custom_pricing::normalize_cache_usage` applies Python's cache field precedence and adjusts prompt tokens when cache counts use the Anthropic convention. `custom_pricing::cost_per_token_custom_pricing_helper` prices normalized usage with caller-supplied token or per-second rates. The module validates finite nonnegative quantities and rates before calculation
 
 `catalog::CostCatalog` accepts a caller-supplied map of model keys to token rates. Its `select_model_key` handles duplicate provider prefixes, optional region-specific keys, provider-prefixed keys, and bare-model fallback in the same order as Python's `cost_per_token`. Its `cost_per_token` method calculates generic token cost for the selected key. Catalog loading and provider-specific dispatch remain outside this method
@@ -53,6 +55,9 @@ The Rust module tree does not mirror Python's overall cost module tree. The Pyth
 | `litellm.litellm_core_utils.llm_cost_calc.guardrail_cost.cost_breakdown_with_guardrail` | `litellm_cost::guardrail_cost::cost_breakdown_with_guardrail` | `test_guardrail_cost.py::test_cost_breakdown_with_guardrail_merges_and_creates` | `python_guardrail_cost.rs::cost_breakdown_with_guardrail_*` |
 | `litellm.litellm_core_utils.llm_cost_calc.tiered_pricing.select_tier_for_input` | `litellm_cost::tiered_pricing::select_tier_for_input` | `test_llm_cost_calc_utils.py` tiered pricing cases | `python_tiered_pricing.rs::select_tier_for_input_*` |
 | `litellm.litellm_core_utils.llm_cost_calc.tiered_pricing.tier_rate` | `litellm_cost::tiered_pricing::tier_rate` | `test_llm_cost_calc_utils.py` tiered rate cases | `python_tiered_pricing.rs::tier_rate_*` |
+| `litellm.llms.gemini.cost_calculator.cost_per_web_search_request` | `litellm_cost::gemini_cost::cost_per_web_search_request` | `llms/gemini/test_cost_calculator.py::test_*billing*`, `test_server_tool_use_fallback_*` | `python_gemini_cost.rs::cost_per_web_search_request_*` |
+| `litellm.llms.gemini.cost_calculator.google_maps_grounding_requests` | `litellm_cost::gemini_cost::google_maps_grounding_requests` | `llms/gemini/test_cost_calculator.py::test_maps_*` | `python_gemini_cost.rs::google_maps_grounding_requests_*` |
+| `litellm.llms.gemini.cost_calculator.cost_per_google_maps_grounding_request` | `litellm_cost::gemini_cost::cost_per_google_maps_grounding_request` | `llms/gemini/test_cost_calculator.py::test_maps_*` | `python_gemini_cost.rs::cost_per_google_maps_grounding_request_*` |
 
 `cost_per_token`, `completion_cost`, `response_cost_calculator`, provider calculators, and Python's model lookup and response normalization have no Rust counterpart yet. The ported Rust cases use `rstest` and synthetic prices; they cover the corresponding Python tests' price selection and arithmetic, not their integration with Python model registration
 
