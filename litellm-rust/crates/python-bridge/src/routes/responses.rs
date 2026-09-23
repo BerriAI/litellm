@@ -11,22 +11,26 @@ use crate::{
 };
 
 #[pyfunction]
+#[pyo3(signature = (request, args, kwargs))]
 pub(crate) fn responses(
-    _request: Bound<'_, PyAny>,
-    _args: Bound<'_, PyTuple>,
-    _kwargs: Bound<'_, PyDict>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
 ) -> PyResult<Py<PyAny>> {
+    drop((request, args, kwargs));
     Err(RustBridgeDeclined::new_err(
         "native responses route is not implemented",
     ))
 }
 
 #[pyfunction]
+#[pyo3(signature = (request, args, kwargs))]
 pub(crate) fn aresponses(
-    _request: Bound<'_, PyAny>,
-    _args: Bound<'_, PyTuple>,
-    _kwargs: Bound<'_, PyDict>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
 ) -> PyResult<Py<PyAny>> {
+    drop((request, args, kwargs));
     Err(RustBridgeDeclined::new_err(
         "native responses route is not implemented",
     ))

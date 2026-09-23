@@ -127,22 +127,26 @@ pub(crate) fn achat_completions<'py>(
 }
 
 #[pyfunction]
+#[pyo3(signature = (request, args, kwargs))]
 pub(crate) fn completion(
-    _request: Bound<'_, PyAny>,
-    _args: Bound<'_, PyTuple>,
-    _kwargs: Bound<'_, PyDict>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
 ) -> PyResult<Py<PyAny>> {
+    drop((request, args, kwargs));
     Err(RustBridgeDeclined::new_err(
         "native chat completions route is not implemented",
     ))
 }
 
 #[pyfunction]
+#[pyo3(signature = (request, args, kwargs))]
 pub(crate) fn acompletion(
-    _request: Bound<'_, PyAny>,
-    _args: Bound<'_, PyTuple>,
-    _kwargs: Bound<'_, PyDict>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
 ) -> PyResult<Py<PyAny>> {
+    drop((request, args, kwargs));
     Err(RustBridgeDeclined::new_err(
         "native chat completions route is not implemented",
     ))

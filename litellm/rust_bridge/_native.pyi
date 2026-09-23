@@ -47,14 +47,14 @@ def aocr(
     kwargs: dict[str, object],
 ) -> Coroutine[object, object, OCRResponse]: ...
 def embedding(
-    _request: LiteLLMEmbeddingRequest,
-    _args: tuple[object, ...],
-    _kwargs: Mapping[str, object],
+    request: LiteLLMEmbeddingRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
 ) -> EmbeddingResponse: ...
 def aembedding(
-    _request: LiteLLMEmbeddingRequest,
-    _args: tuple[object, ...],
-    _kwargs: Mapping[str, object],
+    request: LiteLLMEmbeddingRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
 ) -> Coroutine[object, object, EmbeddingResponse]: ...
 def transcription(
     model: str,
@@ -77,24 +77,24 @@ def atranscription(
     timeout_seconds: float | None = None,
 ) -> Future[dict[str, object]]: ...
 def completion(
-    _request: LiteLLMChatCompletionsRequest,
-    _args: tuple[object, ...],
-    _kwargs: Mapping[str, object],
+    request: LiteLLMChatCompletionsRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
 ) -> ModelResponse: ...
 def acompletion(
-    _request: LiteLLMChatCompletionsRequest,
-    _args: tuple[object, ...],
-    _kwargs: Mapping[str, object],
+    request: LiteLLMChatCompletionsRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
 ) -> Coroutine[object, object, ModelResponse]: ...
 def responses(
-    _request: LiteLLMResponsesRequest,
-    _args: tuple[object, ...],
-    _kwargs: Mapping[str, object],
+    request: LiteLLMResponsesRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
 ) -> ResponsesAPIResponse: ...
 def aresponses(
-    _request: LiteLLMResponsesRequest,
-    _args: tuple[object, ...],
-    _kwargs: Mapping[str, object],
+    request: LiteLLMResponsesRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
 ) -> Coroutine[object, object, ResponsesAPIResponse]: ...
 def messages(
     request: LiteLLMMessagesRequest,
