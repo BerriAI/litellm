@@ -226,7 +226,11 @@ async def authorize_member_auto_router_dependencies(
         if objects.organization is not None:
             can_org_access_model(model=model, org_object=objects.organization, llm_router=llm_router)
         if objects.project is not None:
-            can_project_access_model(model=model, project_object=objects.project, llm_router=llm_router)
+            can_project_access_model(
+                model=model,
+                project_object=objects.project,  # pyright: ignore[reportArgumentType]  # the project row satisfies the cached-object shape the checker needs
+                llm_router=llm_router,
+            )
 
 
 async def _load_member_auto_router_dependency_objects(

@@ -4267,7 +4267,7 @@ async def can_key_call_model(
         if key_access_group_ids:
             models_from_groups: Final = await _get_models_from_access_groups(
                 access_group_ids=key_access_group_ids,
-                prisma_client=prisma_client,
+                prisma_client=prisma_client,  # pyright: ignore[reportArgumentType]  # DatabaseClient is the protocol this file passes everywhere
             )
             if models_from_groups:
                 return _can_object_call_model(
@@ -4419,7 +4419,7 @@ async def can_team_access_model(
         if team_access_group_ids:
             models_from_groups: Final = await _get_models_from_access_groups(
                 access_group_ids=team_access_group_ids,
-                prisma_client=prisma_client,
+                prisma_client=prisma_client,  # pyright: ignore[reportArgumentType]  # DatabaseClient is the protocol this file passes everywhere
             )
             if models_from_groups:
                 return _can_object_call_model(

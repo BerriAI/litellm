@@ -259,7 +259,7 @@ def _strategy_router_write_violation(
     if incoming_params is None:
         return None
     config_violation: Final = validate_complexity_router_config_write(
-        complexity_router_config=(
+        complexity_router_config=(  # pyright: ignore[reportArgumentType]  # _effective_* returns the stored Mapping or None
             _effective_complexity_router_config(incoming_params, existing_params)
             if incoming_params.complexity_router_config is not None
             else None

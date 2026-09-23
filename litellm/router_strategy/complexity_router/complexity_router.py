@@ -1655,7 +1655,11 @@ class ComplexityRouter(CustomLogger):
             None
             if any(
                 is_claude_code_user_agent(user_agent)
-                for metadata in (self._iter_metadata_dicts(request_kwargs) if request_kwargs is not None else ())
+                for metadata in (
+                    self._iter_metadata_dicts(dict(request_kwargs))  # mutable-ok: resolve expects a plain dict
+                    if request_kwargs is not None
+                    else ()
+                )
                 if isinstance(user_agent := metadata.get("user_agent"), str)
             )
             else system_prompt
@@ -1675,7 +1679,7 @@ class ComplexityRouter(CustomLogger):
         context_enabled: Final = bool(messages) and self.config.classifier_context_window_size > 0
         prior_turns: Final = (
             _extract_prior_turns(
-                messages,
+                messages or (),
                 current_ask=prompt,
                 window_size=self.config.classifier_context_window_size,
                 budget_chars=self.config.classifier_context_budget_chars,
@@ -1727,8 +1731,12 @@ class ComplexityRouter(CustomLogger):
             "ComplexityRouter: %s, falling back to %s", reason, self.config.classifier_fallback
         )
         if self.config.classifier_fallback == "default_model":
-            outcome = self._default_model_fallback_outcome()
-            return outcome if signal is None else outcome._replace(signals=(*outcome.signals, signal))
+            default_outcome: Final = self._default_model_fallback_outcome()
+            return (
+                default_outcome
+                if signal is None
+                else default_outcome._replace(signals=(*default_outcome.signals, signal))
+            )
         if scored is not None:
             return scored if signal is None else scored._replace(signals=(*scored.signals, signal))
         tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
@@ -1755,10 +1763,16 @@ class ComplexityRouter(CustomLogger):
         kwargs: Final = request_kwargs if request_kwargs is not None else EMPTY_MAPPING
         pools: Final = self._tier_pools()
         try:
+            messages_for_resolve: Final = (
+                list(raw_messages)  # mutable-ok: resolve_structured_messages expects a plain list
+                if raw_messages is not None
+                else None
+            )
             context: Final = RoutingContext(
                 raw_messages=raw_messages or (),
                 structured_messages=resolve_structured_messages(
-                    messages=raw_messages, request_kwargs=request_kwargs or EMPTY_MAPPING
+                    messages=messages_for_resolve,
+                    request_kwargs=dict(request_kwargs or EMPTY_MAPPING),  # mutable-ok: resolve expects a plain dict
                 )
                 or (),
                 candidate_models=tuple(model for pool in pools.values() for model in pool),
@@ -1859,7 +1873,7 @@ class ComplexityRouter(CustomLogger):
         context_enabled: Final = bool(messages) and self.config.classifier_context_window_size > 0
         prior_turns: Final = (
             _extract_prior_turns(
-                messages,
+                messages or (),
                 current_ask=prompt,
                 window_size=self.config.classifier_context_window_size,
                 budget_chars=self.config.classifier_context_budget_chars,

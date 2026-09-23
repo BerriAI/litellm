@@ -103,7 +103,12 @@ class HttpJevClassifierClient:
         )
         response.raise_for_status()
         try:
-            self._log_response(request, response, request_kwargs, start_time)
+            self._log_response(
+                request,
+                response,  # pyright: ignore[reportArgumentType]  # AsyncHTTPHandler.post returns Response | None and raise_for_status already ran
+                request_kwargs,
+                start_time,
+            )
         except Exception as exc:  # noqa: BLE001  # logging integrations must not discard a provider verdict
             verbose_router_logger.warning("JEV response logging failed (%s)", type(exc).__name__)
         return TypeAdapter(JevSystemOneResponse).validate_python(response.json())
