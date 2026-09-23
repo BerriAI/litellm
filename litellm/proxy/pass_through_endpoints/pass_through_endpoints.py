@@ -1788,17 +1788,18 @@ async def pass_through_request(
             )
 
 
-def _apply_key_team_project_controls(user_api_key_dict: UserAPIKeyAuth, metadata: dict) -> dict:
-    data: Final = LiteLLMProxyRequestSetup.add_team_and_project_level_controls(
-        user_api_key_dict=user_api_key_dict,
-        data=LiteLLMProxyRequestSetup.add_key_level_controls(
-            key_metadata=user_api_key_dict.metadata,
-            data={"metadata": metadata},
-            _metadata_variable_name="metadata",
-        ),
+def _apply_key_team_project_controls(
+    user_api_key_dict: UserAPIKeyAuth, metadata: dict[str, object]
+) -> dict[str, object]:
+    data: Final = LiteLLMProxyRequestSetup.add_key_level_controls(
+        key_metadata=user_api_key_dict.metadata,
+        data={"metadata": metadata},
         _metadata_variable_name="metadata",
     )
-    return data["metadata"]
+    return LiteLLMProxyRequestSetup.add_team_and_project_level_controls(
+        user_api_key_dict=user_api_key_dict,
+        metadata=data["metadata"],
+    )
 
 
 def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:
