@@ -14,10 +14,14 @@ Routes covered:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from .conftest import VOLATILE_KEYS, normalize
 
@@ -944,7 +948,14 @@ def test_config_callback_delete_not_found(client, auth_as, mock_prisma, monkeypa
     assert "langfuse" in str(response.json()).lower() or "not found" in str(response.json()).lower()
 
 
-def _delete_callback_roundtrip(client, auth_as, mock_prisma, monkeypatch, litellm_settings, callback_name):
+def _delete_callback_roundtrip(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_settings: dict[str, object],
+    callback_name: str,
+) -> tuple[httpx.Response, dict[str, object]]:
     """POST /config/callback/delete as admin against a stubbed config, and
     return (response, saved litellm_settings) so each case pins the full body
     plus the exact config persisted."""

@@ -495,11 +495,7 @@ class LoggingClient:
     def delete_model(self, model_id: str) -> None:
         self.proxy.delete_model(model_id)
 
-    # ---- global callback configuration (Admin UI Logging & Alerts surface) ----
-
     def set_litellm_callbacks(self, settings: LitellmCallbackSettings) -> ConfigUpdateResponse:
-        """POST /config/update, the route the Admin UI's Logging page uses to add
-        a callback."""
         return unwrap(
             self.proxy.transport.post(
                 "/config/update",
@@ -510,10 +506,6 @@ class LoggingClient:
         )
 
     def clear_litellm_callbacks(self, *keys: Literal["callbacks", "failure_callback"]) -> None:
-        """Empty the given litellm_settings callback lists so teardown leaves the
-        stored row as it was. success_callback is absent on purpose: /config/update
-        unions that key instead of replacing it, so entries there can only leave
-        through /config/callback/delete."""
         _ = self.set_litellm_callbacks(
             LitellmCallbackSettings(
                 callbacks=[] if "callbacks" in keys else None,
@@ -522,7 +514,6 @@ class LoggingClient:
         )
 
     def config_callback_names(self) -> set[str]:
-        """Names GET /get/config/callbacks lists as configured (runtime-only read_only rows excluded)."""
         return {
             entry.name
             for entry in unwrap(
@@ -537,8 +528,6 @@ class LoggingClient:
         }
 
     def delete_config_callback(self, callback_name: str) -> Result[CallbackDeleteResponse]:
-        """POST /config/callback/delete. Returns the raw Result so the caller can
-        unwrap for the success contract or ignore it for best-effort cleanup."""
         return self.proxy.transport.post(
             "/config/callback/delete",
             headers=self.proxy.transport.master,
