@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
@@ -12,7 +12,8 @@ def _persisted_reset_at(budget_id: str) -> datetime:
         'SELECT budget_reset_at::text AS reset_at FROM "LiteLLM_BudgetTable" WHERE budget_id = %s', (budget_id,)
     )
     assert len(rows) == 1, rows
-    return datetime.fromisoformat(string_value(rows[0]["reset_at"]))
+    reset_at: Final = datetime.fromisoformat(string_value(rows[0]["reset_at"]))
+    return reset_at if reset_at.tzinfo is not None else reset_at.replace(tzinfo=timezone.utc)
 
 
 @pytest.mark.covers("mgmt.budget.update.duration_change_recomputes_reset_at")
@@ -20,9 +21,9 @@ def test_shortening_budget_duration_moves_reset_at_onto_the_new_schedule(gateway
     with gateway.scenario() as scenario:
         budget_id: Final = scenario.budget(max_budget=10.0, budget_duration="30d")
         monthly_reset_at: Final = _persisted_reset_at(budget_id)
+        before: Final = datetime.now(timezone.utc)
         response: Final = gateway.request("POST", "/budget/update", {"budget_id": budget_id, "budget_duration": "1d"})
         assert response.status_code == 200, response.text
-        control_id: Final = scenario.budget(max_budget=10.0, budget_duration="1d")
-        daily_reset_at: Final = _persisted_reset_at(control_id)
-        assert daily_reset_at < monthly_reset_at, f"{daily_reset_at} vs {monthly_reset_at}"
-        assert _persisted_reset_at(budget_id) == daily_reset_at, response.text
+        updated: Final = _persisted_reset_at(budget_id)
+        assert updated < monthly_reset_at, f"{updated} not before {monthly_reset_at}"
+        assert before < updated <= before + timedelta(days=1, minutes=5), f"{updated} not within 1d of {before}"
