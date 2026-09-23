@@ -196,6 +196,23 @@ class TestVertexAITextToSpeechConfig:
         assert optional_params["audioEncoding"] == "LINEAR16"
         assert optional_params["vertex_voice_dict"] == expected_voice
 
+    def test_gemini_tts_nested_language_and_voice_alias_reach_cloud_tts(self):
+        config: Final = VertexAITextToSpeechConfig()
+        voice: Final = {"speech_config": {"language_code": "fr-FR"}, "voice": "Kore"}
+
+        voice_name, optional_params = config.map_openai_params(
+            model="gemini-3.1-flash-tts-preview",
+            optional_params={"response_format": "mp3"},
+            voice=voice,
+        )
+
+        assert voice_name is None
+        assert optional_params["vertex_voice_dict"] == {
+            "languageCode": "fr-FR",
+            "modelName": "gemini-3.1-flash-tts-preview",
+            "name": "Kore",
+        }
+
     @pytest.mark.parametrize(
         "voice",
         [
