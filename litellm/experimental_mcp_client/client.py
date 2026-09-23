@@ -1189,7 +1189,7 @@ class MCPClient:
             raise
 
 
-_PendingOperation: TypeAlias = tuple[Callable[[ClientSession], Awaitable[object]], "asyncio.Future[object]"]
+_PendingOperation: TypeAlias = "tuple[Callable[[ClientSession], Awaitable[object]], asyncio.Future[object]]"
 _MAX_PENDING_OPERATIONS: Final = 64
 
 

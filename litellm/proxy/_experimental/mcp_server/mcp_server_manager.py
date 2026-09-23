@@ -1868,10 +1868,7 @@ class MCPServerManager:
             discovery_ttl, discovery_clock, TypeAdapter(tuple[ResourceTemplate, ...])
         )
         self.registry: dict[str, MCPServer] = {}
-        # (gateway mcp-session-id, server_id, upstream auth fingerprint) -> the one upstream
-        # session every tool call of that gateway session reuses, so stateful upstreams keep
-        # their per-session state between calls. Released with the gateway session.
-        self._upstream_sessions: dict[tuple[str, str, str], PersistentMCPSession] = {}
+        self._upstream_sessions: dict[tuple[str, str, str], PersistentMCPSession] = {}  # mutable-ok: session registry
         self._openapi_health_probes: Callable[[str], _OpenAPIHealthProbe] = lru_cache(maxsize=128)(_OpenAPIHealthProbe)
         self.config_mcp_servers: dict[str, MCPServer] = {}
         """
@@ -5794,7 +5791,11 @@ class MCPServerManager:
         raw_headers: Mapping[str, str] | None,
     ) -> PersistentMCPSession | None:
         gateway_session_id: Final = next(
-            (value for key, value in (raw_headers or {}).items() if key.lower() == "mcp-session-id" and value),
+            (
+                value
+                for key, value in (raw_headers.items() if raw_headers else ())
+                if key.lower() == "mcp-session-id" and value
+            ),
             None,
         )
         if gateway_session_id is None or mcp_server.transport == MCPTransport.stdio:
