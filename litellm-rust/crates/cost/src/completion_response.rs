@@ -258,6 +258,7 @@ fn number_of_queries(optional_params: Option<&Value>) -> u64 {
 fn cost_call<'a>(
     call_type: &'a str,
     request: CompletionResponseCostRequest<'a>,
+    model: &'a str,
     request_model: Option<&'a str>,
     empty_params: &'a Value,
 ) -> Result<CostCall<'a>, CompletionResponseCostError> {
@@ -280,11 +281,9 @@ fn cost_call<'a>(
                 .and_then(|response| response.pointer("/meta/billed_units")),
         }),
         "vector_store_search" | "avector_store_search" => Ok(CostCall::VectorStoreSearch {
-            api_type: request
-                .input
-                .optional_params
-                .and_then(|params| params.get("api_type"))
-                .and_then(Value::as_str),
+            api_type: model
+                .split_once('/')
+                .and_then(|(prefix, api_type)| (prefix == "vertex_ai").then_some(api_type)),
         }),
         "search" | "asearch" => Ok(CostCall::Search {
             number_of_queries: Some(number_of_queries(request.input.optional_params)),
@@ -811,6 +810,7 @@ pub fn completion_cost_from_response(
             let call = cost_call(
                 &prepared.call_type,
                 request,
+                model,
                 token_request_model,
                 &empty_params,
             )?;

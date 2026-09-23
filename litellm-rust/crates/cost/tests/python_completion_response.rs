@@ -22,6 +22,7 @@ const PROVIDERS: &[&str] = &[
     "openai",
     "recraft",
     "replicate",
+    "vertex_ai",
     "xai",
 ];
 
@@ -928,6 +929,44 @@ fn search_response_uses_query_list_and_skips_tool_and_additional_charges() {
     assert_eq!(result.cost.built_in_tools, 0.0);
     assert_eq!(result.cost.additional, 0.0);
     assert!((result.cost.total - 0.0033).abs() < 1e-12);
+}
+
+#[rstest]
+#[case("vector_store_search", "vertex_ai/search_api", json!({}), 0.25)]
+#[case("avector_store_search", "vertex_ai/search_api", json!({}), 0.25)]
+#[case("vector_store_search", "vertex_ai/other", json!({"api_type": "search_api"}), 0.0)]
+fn vector_store_response_uses_model_api_type_for_pricing(
+    #[case] call_type: &str,
+    #[case] model: &str,
+    #[case] optional_params: Value,
+    #[case] expected: f64,
+) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "vertex_ai/search_api".to_owned(),
+        json!({"input_cost_per_query": 0.25}),
+    )]));
+    let response = json!({"model": model});
+    let empty = json!({});
+    let base = request(
+        Some(&response),
+        Some(model),
+        Some("vertex_ai"),
+        &empty,
+        &empty,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                call_type: Some(call_type),
+                optional_params: Some(&optional_params),
+                ..base.input
+            },
+            ..base
+        },
+    )
+    .unwrap();
+    assert_eq!(result.cost.total, expected);
 }
 
 #[rstest]
