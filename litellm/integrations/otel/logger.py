@@ -33,6 +33,7 @@ from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
     RequestIdentity,
     auth_metadata,
+    metadata_from_request_data,
     model_from_request_data,
 )
 from litellm.integrations.otel.model.payloads import (
@@ -679,7 +680,12 @@ class OpenTelemetryV2(CustomLogger):
     #  / errors are the FastAPI instrumentor's job, so we don't touch it here.
     # ====================================================================== #
 
-    def seed_request_identity(self, user_api_key_dict: object, model: str | None = None) -> None:
+    def seed_request_identity(
+        self,
+        user_api_key_dict: object,
+        model: str | None = None,
+        request_metadata: Mapping[str, object] | None = None,
+    ) -> None:
         """Attach request-identity Baggage to the current context + server span.
 
         Seeding identity into Baggage makes **every** span emitted afterwards for
@@ -691,7 +697,7 @@ class OpenTelemetryV2(CustomLogger):
         isn't determined yet, which is correct.
         """
         try:
-            identity: Final = RequestIdentity.from_user_api_key_auth(user_api_key_dict)
+            identity: Final = RequestIdentity.from_user_api_key_auth(user_api_key_dict, request_metadata)
             bag: Final = promoted_baggage(
                 identity,
                 model,
@@ -743,6 +749,7 @@ class OpenTelemetryV2(CustomLogger):
         self.seed_request_identity(
             user_api_key_dict,
             model=model_from_request_data(data),
+            request_metadata=metadata_from_request_data(data),
         )
         return data
 
