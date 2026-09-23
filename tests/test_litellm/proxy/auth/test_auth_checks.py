@@ -6184,9 +6184,7 @@ async def test_get_org_object_for_request_serves_last_known_org_through_db_outag
             proxy_logging_obj=None,
         )
 
-    with patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    ):  # test-quality-ok: the outage fallback reads this module global; no dependency injection seam exists
+    with patch("litellm.proxy.proxy_server.general_settings", {}):  # test-quality-ok: the outage fallback reads this module global; no dependency injection seam exists
         warm = await _lookup()
         assert warm is not None and warm.organization_alias == "platform-org"
         await user_api_key_cache.async_delete_cache("org_id:org-1:with_budget")
@@ -8935,34 +8933,20 @@ async def test_access_group_model_fallback_uses_the_injected_database(channel: s
     reader: Final = AsyncMock(return_value=group)
     client: Final = MagicMock(db=MagicMock(litellm_accessgrouptable=MagicMock(find_unique=reader)))
     with (
-        patch(
-            "litellm.proxy.proxy_server.prisma_client", None
-        ),  # test-quality-ok: [TQ008] prove reads stay on the injected connection
-        patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()
-        ),  # test-quality-ok: [TQ008] isolate the process cache
+        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: [TQ008] prove reads stay on the injected connection
+        patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),  # test-quality-ok: [TQ008] isolate the process cache
     ):
         if channel == "team":
-            assert (
-                await can_team_access_model(
-                    model="allowed",
-                    team_object=LiteLLM_TeamTable(team_id="team-a", models=["other"], access_group_ids=["group-a"]),
-                    llm_router=None,
-                    prisma_client=client,
-                )
-                is True
-            )
+            assert await can_team_access_model(
+                model="allowed", team_object=LiteLLM_TeamTable(team_id="team-a", models=["other"], access_group_ids=["group-a"]),
+                llm_router=None, prisma_client=client,
+            ) is True
         else:
-            assert (
-                await can_key_call_model(
-                    model="allowed",
-                    llm_model_list=None,
-                    valid_token=UserAPIKeyAuth(models=["other"], access_group_ids=["group-a"]),
-                    llm_router=None,
-                    prisma_client=client,
-                )
-                is True
-            )
+            assert await can_key_call_model(
+                model="allowed", llm_model_list=None,
+                valid_token=UserAPIKeyAuth(models=["other"], access_group_ids=["group-a"]),
+                llm_router=None, prisma_client=client,
+            ) is True
     reader.assert_awaited_once_with(where={"access_group_id": "group-a"})
 
 
@@ -8982,7 +8966,6 @@ def test_jwt_team_role_reaches_the_gateway_token_endpoint_by_default():
         user_route="/token",
         litellm_proxy_roles=LiteLLM_JWTAuth(team_allowed_routes=[]),
     )
-
 
 def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
     assert route_skips_budget_checks(route="/v1/models") is True
@@ -9100,9 +9083,7 @@ async def test_team_member_budget_check_temp_budget_increase_extends_cap():
         return fallback_spend
 
     with (
-        patch(
-            "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
-        ),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
         patch(  # test-quality-ok: [TQ008] isolates the check from the DB fetch
             "litellm.proxy.auth.auth_checks.get_team_membership",
             new_callable=AsyncMock,
@@ -9130,9 +9111,7 @@ async def test_team_member_budget_check_temp_budget_increase_extends_cap():
         ),
     )
     with (
-        patch(
-            "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
-        ),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
         patch(  # test-quality-ok: [TQ008] isolates the check from the DB fetch
             "litellm.proxy.auth.auth_checks.get_team_membership",
             new_callable=AsyncMock,
@@ -9194,9 +9173,7 @@ async def test_team_member_budget_check_adds_temp_increase_to_live_team_default(
         return fallback_spend
 
     with (
-        patch(
-            "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
-        ),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
         patch(  # test-quality-ok: [TQ008] isolates the check from the DB fetch
             "litellm.proxy.auth.auth_checks.get_team_membership",
             new_callable=AsyncMock,

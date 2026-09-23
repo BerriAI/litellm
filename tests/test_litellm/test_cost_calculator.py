@@ -160,6 +160,10 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
+
+
+
+
 def test_realtime_stream_combines_text_and_audio_token_details():
     """Realtime response.done usage with input_token_details / output_token_details."""
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
@@ -1037,6 +1041,8 @@ def test_bedrock_cost_calculator_comparison_with_without_cache():
     print(f"Cost with cache: {cost_with_cache}")
 
 
+
+
 def test_gemini_25_explicit_caching_cost_direct_usage():
     """
     Test that Gemini 2.5 models correctly calculate costs with explicit caching.
@@ -1603,6 +1609,8 @@ def test_cost_margin_with_discount(monkeypatch):
     print(f"  - Base cost: ${base_cost:.6f}")
     print(f"  - Cost with 5% discount + 10% margin: ${cost_with_both:.6f}")
     print(f"  - Expected: ${expected_cost:.6f}")
+
+
 
 
 def test_completion_cost_extracts_service_tier_from_response(_local_model_cost_map):
@@ -2353,6 +2361,8 @@ def test_gemini_without_cache_tokens_details():
     assert usage.prompt_tokens_details.text_tokens >= 0
 
     print("✅ Gemini without cacheTokensDetails works correctly")
+
+
 
 
 def test_additional_costs_only_for_azure_ai(_local_model_cost_map):

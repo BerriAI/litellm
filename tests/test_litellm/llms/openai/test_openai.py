@@ -1,7 +1,12 @@
+import asyncio
+import json
 from typing import Final
 
+import httpx
 import pytest
+from openai import AsyncOpenAI
 
+import litellm
 from litellm.llms.openai.openai import OpenAIChatCompletion
 
 
@@ -56,14 +61,6 @@ def test_get_stream_options_passes_caller_stream_options_through_on_any_host(api
 
 @pytest.mark.asyncio
 async def test_acompletion_returns_json_reply_over_injected_transport():
-    import asyncio
-    import json
-
-    import httpx
-    from openai import AsyncOpenAI
-
-    import litellm
-
     outbound: Final = asyncio.Queue()
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -111,14 +108,6 @@ async def test_acompletion_returns_json_reply_over_injected_transport():
 
 @pytest.mark.asyncio
 async def test_acompletion_streams_text_deltas_over_injected_transport():
-    import asyncio
-    import json
-
-    import httpx
-    from openai import AsyncOpenAI
-
-    import litellm
-
     outbound: Final = asyncio.Queue()
 
     def chunk(delta: dict, finish: str | None) -> bytes:
@@ -184,14 +173,6 @@ async def test_acompletion_streams_text_deltas_over_injected_transport():
 
 @pytest.mark.asyncio
 async def test_acompletion_streams_tool_call_arguments_over_injected_transport():
-    import asyncio
-    import json
-
-    import httpx
-    from openai import AsyncOpenAI
-
-    import litellm
-
     outbound: Final = asyncio.Queue()
     tools: Final = [
         {

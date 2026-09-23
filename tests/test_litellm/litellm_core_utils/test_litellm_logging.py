@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from mcp.types import AudioContent, CallToolResult, ImageContent, TextContent
+from openai import AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
 
 import litellm
@@ -278,16 +279,15 @@ async def test_mcp_native_structured_replacement_must_match_returned_content(
     )
     logging_obj.dynamic_success_callbacks = [NativeReplacement()]
     returned = await logging_obj.async_post_mcp_tool_call_hook(
-        kwargs={"original_response": result},
-        response_obj=result,
-        start_time=datetime.datetime.now(),
-        end_time=datetime.datetime.now(),
+        kwargs={"original_response": result}, response_obj=result,
+        start_time=datetime.datetime.now(), end_time=datetime.datetime.now(),
     )
     assert returned is result
     assert result.content == [TextContent(type="text", text="native-safe" if same_content else "final-safe")]
     assert result.structured_content == ({"result": "native-safe"} if replace_structured and same_content else None)
     assert result.is_error is not (replace_structured and same_content)
     assert "SECRET-1234" not in result.model_dump_json()
+
 
 
 @pytest.mark.asyncio
@@ -307,10 +307,8 @@ async def test_mcp_direct_content_edit_invalidates_stale_structured_data(logging
     )
     logging_obj.dynamic_success_callbacks = [DirectRedactor()]
     returned = await logging_obj.async_post_mcp_tool_call_hook(
-        kwargs={"original_response": result},
-        response_obj=result,
-        start_time=datetime.datetime.now(),
-        end_time=datetime.datetime.now(),
+        kwargs={"original_response": result}, response_obj=result,
+        start_time=datetime.datetime.now(), end_time=datetime.datetime.now(),
     )
     assert returned is result
     assert result.content == [TextContent(type="text", text="[REDACTED]")]
@@ -8392,6 +8390,8 @@ def test_get_assembled_streaming_response_bills_a_provider_reported_usage_cost()
     assert logging_obj._response_cost_calculator(result=assembled) == 0.0042
 
 
+
+
 def test_response_cost_calculator_prices_terminal_responses_event_from_its_response():
     logging_obj: Final = _responses_stream_logging_obj()
     inner_response: Final = ResponsesAPIResponse(
@@ -8431,10 +8431,6 @@ class TestBudgetReservationBinding:
 
 @pytest.mark.asyncio
 async def test_standard_logging_payload_keeps_message_content_when_message_logging_is_on(monkeypatch):
-    import json
-
-    from openai import AsyncOpenAI
-
     outbound: Final = asyncio.Queue()
     logs: Final = asyncio.Queue()
     monkeypatch.setattr(litellm, "turn_off_message_logging", False)
@@ -8483,13 +8479,9 @@ async def test_standard_logging_payload_keeps_message_content_when_message_loggi
 
 @pytest.mark.asyncio
 async def test_standard_logging_payload_redacts_message_content_when_message_logging_is_off(monkeypatch):
-    import json
-
-    from openai import AsyncOpenAI
-
     outbound: Final = asyncio.Queue()
     logs: Final = asyncio.Queue()
-    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
 
     def respond(request: httpx.Request) -> httpx.Response:
         outbound.put_nowait(json.loads(request.content))

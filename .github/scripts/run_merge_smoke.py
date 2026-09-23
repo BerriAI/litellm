@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Merge smoke harness: bounded, dependency-free checks for the merge-smoke workflow.
-
-Runs inside a loopback-only Linux network namespace. Subcommands verify
-isolation, interpreter version, import/CLI health, a DB-free proxy startup,
-and the exact 11-case pytest manifest.
-"""
+"""Merge smoke harness: bounded checks run inside a loopback-only Linux network namespace."""
 
 # ruff: noqa: T201  # CLI harness: stdout/stderr lines are the reported result
 
@@ -25,10 +20,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, NoReturn, TextIO, cast
+from typing import Final, NoReturn, TextIO, cast
 
-if TYPE_CHECKING:
-    import pytest
+import pytest
 
 EXPECTED_CASES: Final = (
     "CHAT-JSON",
@@ -269,6 +263,7 @@ def cmd_proxy_startup(args: _Args) -> int:
         env=env,
     )
     body: str | None = None
+    last_status: int | None = None
     while time.monotonic() - started < args.ready_deadline:
         if proc.poll() is not None:
             log_file.close()
@@ -277,18 +272,29 @@ def cmd_proxy_startup(args: _Args) -> int:
         try:
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("GET", "/health/readiness")
-            body = conn.getresponse().read().decode()
+            resp = conn.getresponse()
+            last_status = resp.status
+            candidate = resp.read().decode()
             conn.close()
-            break
         except (http.client.HTTPException, ConnectionError, OSError):
             time.sleep(args.poll_interval)
+            continue
+        if last_status == 200:
+            body = candidate
+            break
+        time.sleep(args.poll_interval)
     outcome["time_to_ready_s"] = round(time.monotonic() - started, 3)
     if body is None:
         log_file.close()
         result_path.write_text(json.dumps(outcome))
-        fail(f"readiness not reached within {args.ready_deadline}s\n{tail(log_path)}")
+        detail = f"last status {last_status}" if last_status is not None else "no response"
+        fail(f"readiness not reached within {args.ready_deadline}s ({detail})\n{tail(log_path)}")
     outcome["readiness"] = body
-    if json.loads(body) != {"status": "healthy", "db": "Not connected"}:
+    try:
+        readiness = cast(object, json.loads(body))
+    except json.JSONDecodeError:
+        readiness = None
+    if readiness != {"status": "healthy", "db": "Not connected"}:
         _terminate(proc, log_file)
         result_path.write_text(json.dumps(outcome))
         fail(f"unexpected readiness body: {body}")
@@ -408,7 +414,6 @@ def cmd_pytest(args: _Args) -> int:
         "-q",
         *(["--rootdir", args.rootdir] if args.rootdir else []),
     ]
-    import pytest
 
     recorder: Final = _Recorder()
     code: Final = pytest.main(argv, plugins=[recorder])
