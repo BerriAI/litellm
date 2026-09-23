@@ -150,6 +150,49 @@ async def test_post_call_failure_hook_attributes_single_router_deployment(
 
 
 @pytest.mark.asyncio
+async def test_pre_routing_reject_spend_log_keeps_public_model_group(proxy_logging, make_user_api_key_auth, monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    recorded: list[dict] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            recorded.append(kwargs)
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "internal-model",
+                    "litellm_params": {"model": "openai/gpt-4.1", "api_key": "sk-test"},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
+    proxy_logging.alert_types = []
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={"model": "internal-model", "messages": [{"role": "user", "content": "hi"}]},
+        original_exception=HTTPException(status_code=401, detail="blocked key"),
+        user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions"),
+        route="/chat/completions",
+    )
+
+    assert len(recorded) == 1
+    assert recorded[0]["standard_logging_object"]["model_group"] == "internal-model"
+    now: Final = datetime.now()
+    payload = get_logging_payload(
+        kwargs={**recorded[0], "completion_start_time": now}, response_obj=None, start_time=now, end_time=now
+    )
+    assert payload["model"] == "openai/gpt-4.1"
+    assert payload["model_group"] == "internal-model"
+
+
+@pytest.mark.asyncio
 async def test_post_call_failure_hook_keeps_router_stamped_metadata_for_post_call_failures(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
