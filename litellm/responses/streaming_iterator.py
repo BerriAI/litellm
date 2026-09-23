@@ -312,9 +312,15 @@ class BaseResponsesAPIStreamingIterator:
 
         # set hidden params for response headers (e.g., x-litellm-model-id)
         # This matches the stream wrapper in litellm/litellm_core_utils/streaming_handler.py
+        _model_call_details: Final = getattr(self.logging_obj, "model_call_details", None)
+        _optional_params: Final = (
+            _typed_gets_litellm_params(_model_call_details.get)("litellm_params", {})
+            if isinstance(_model_call_details, dict)
+            else {}
+        )
         _api_base: Final = get_api_base(
             model=model or "",
-            optional_params=_typed_gets_litellm_params(self.logging_obj.model_call_details.get)("litellm_params", {}),
+            optional_params=_optional_params,
         )
         self._hidden_params: dict[str, object] = {
             "model_id": _model_id_from_metadata(litellm_metadata),
@@ -512,7 +518,7 @@ class BaseResponsesAPIStreamingIterator:
             raise
 
     def _log_completed_response(self, *, is_async: bool) -> None:
-        if self._completed_response_logged:
+        if self._completed_response_logged or self.logging_obj is None:
             return
         self._completed_response_logged = True
 
@@ -1116,22 +1122,38 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def __init__(
         self,
-        response: httpx.Response,
-        model: str,
-        responses_api_provider_config: BaseResponsesAPIConfig,
-        logging_obj: LiteLLMLoggingObj,
+        response: httpx.Response | None = None,
+        model: str = "",
+        responses_api_provider_config: BaseResponsesAPIConfig | None = None,
+        logging_obj: LiteLLMLoggingObj | None = None,
         litellm_metadata: dict[str, object] | None = None,
         custom_llm_provider: str | None = None,
         request_data: dict[str, object] | None = None,
         call_type: str | None = None,
+        transformed_response: ResponsesAPIResponse | None = None,
     ):
-        transformed: Final = responses_api_provider_config.transform_response_api_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
-        )
+        if transformed_response is not None:
+            transformed: Final = transformed_response
+        elif responses_api_provider_config is not None and response is not None:
+            transformed: Final = responses_api_provider_config.transform_response_api_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+        elif response is not None:
+            from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+            transformed: Final = OpenAIResponsesAPIConfig().transform_response_api_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+        else:
+            raise ValueError(
+                "Either transformed_response or response must be provided to MockResponsesAPIStreamingIterator"
+            )
         super().__init__(
-            response=httpx.Response(200),
+            response=response or httpx.Response(200),
             model=model,
             responses_api_provider_config=None,
             logging_obj=logging_obj,

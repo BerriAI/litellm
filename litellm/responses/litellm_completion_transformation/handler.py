@@ -13,7 +13,11 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.responses.streaming_iterator import (
+    BaseResponsesAPIStreamingIterator,
+    MockResponsesAPIStreamingIterator,
+)
+from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
@@ -81,6 +85,19 @@ class LiteLLMCompletionTransformationHandler:
                 )
             )
 
+            converted_stream: Final = (
+                converted_stream_requested(kwargs)
+                or converted_stream_requested(litellm_completion_request)
+            )
+            if converted_stream and not kwargs.get("_agentic_loop_depth"):
+                return MockResponsesAPIStreamingIterator(
+                    model=model,
+                    transformed_response=responses_api_response,
+                    logging_obj=kwargs.get("logging_obj"),
+                    custom_llm_provider=custom_llm_provider,
+                    litellm_metadata=kwargs.get("litellm_metadata", {}),
+                )
+
             return responses_api_response
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
@@ -125,6 +142,19 @@ class LiteLLMCompletionTransformationHandler:
                     responses_api_request=responses_api_request,
                 )
             )
+
+            converted_stream: Final = (
+                converted_stream_requested(kwargs)
+                or converted_stream_requested(litellm_completion_request)
+            )
+            if converted_stream and not kwargs.get("_agentic_loop_depth"):
+                return MockResponsesAPIStreamingIterator(
+                    model=litellm_completion_request.get("model") or "",
+                    transformed_response=responses_api_response,
+                    logging_obj=kwargs.get("logging_obj"),
+                    custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
+                    litellm_metadata=kwargs.get("litellm_metadata", {}),
+                )
 
             return responses_api_response
 

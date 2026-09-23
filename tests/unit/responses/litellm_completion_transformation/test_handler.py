@@ -223,3 +223,95 @@ async def test_bridged_follow_up_turn_keeps_the_addressed_response_id_off_the_pr
     )
     assert isinstance(response, ResponsesAPIResponse)
     assert [item.type for item in response.output] == ["message"]
+
+
+@pytest.mark.parametrize(
+    "converted_stream_flag",
+    [
+        "_websearch_interception_converted_stream",
+        "_code_interpreter_interception_converted_stream",
+        "_headroom_interception_converted_stream",
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_fallback_wraps_converted_stream_as_synthetic_stream(converted_stream_flag):
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    handler = LiteLLMCompletionTransformationHandler()
+
+    async def fake_acompletion(**kwargs):
+        return ModelResponse(
+            id="chatcmpl-test",
+            created=1,
+            model="gpt-4o",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Search summary", role="assistant"),
+                )
+            ],
+        )
+
+    with patch("litellm.acompletion", fake_acompletion):
+        response = await handler.response_api_handler(
+            model="gpt-4o",
+            input="Search for the weather",
+            responses_api_request={},
+            custom_llm_provider="hosted_vllm",
+            _is_async=True,
+            **{converted_stream_flag: True},
+        )
+
+    assert isinstance(response, BaseResponsesAPIStreamingIterator)
+    events = [event async for event in response]
+    assert len(events) > 0
+    assert getattr(events[-1], "type", None) == "response.completed"
+
+
+@pytest.mark.parametrize(
+    "converted_stream_flag",
+    [
+        "_websearch_interception_converted_stream",
+        "_code_interpreter_interception_converted_stream",
+        "_headroom_interception_converted_stream",
+    ],
+)
+def test_sync_fallback_wraps_converted_stream_as_synthetic_stream(converted_stream_flag):
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    handler = LiteLLMCompletionTransformationHandler()
+
+    def fake_completion(**kwargs):
+        return ModelResponse(
+            id="chatcmpl-test-sync",
+            created=1,
+            model="gpt-4o",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Sync search summary", role="assistant"),
+                )
+            ],
+        )
+
+    with patch("litellm.completion", fake_completion):
+        response = handler.response_api_handler(
+            model="gpt-4o",
+            input="Search for the weather",
+            responses_api_request={},
+            custom_llm_provider="hosted_vllm",
+            _is_async=False,
+            **{converted_stream_flag: True},
+        )
+
+    assert isinstance(response, BaseResponsesAPIStreamingIterator)
+    events = list(response)
+    assert len(events) > 0
+    assert getattr(events[-1], "type", None) == "response.completed"
+
