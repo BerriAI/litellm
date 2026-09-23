@@ -1067,12 +1067,12 @@ def _suppressed_comprehensions(tree: ast.AST, ok_lines: frozenset[int]) -> froze
     """
     comps: Final = tuple(n for n in ast.walk(tree) if isinstance(n, COMPREHENSION_NODES))
 
-    def len_of_span(node: ast.expr) -> int:
-        return len(_span(node))
+    def nesting_key(node: ast.expr) -> tuple[int, int]:
+        return (len(_span(node)), (node.end_col_offset or node.col_offset) - node.col_offset)
 
     def owner(line: int) -> ast.expr | None:
         containing: Final = tuple(n for n in comps if line in _span(n))
-        return min(containing, key=len_of_span, default=None)
+        return min(containing, key=nesting_key, default=None)
 
     return frozenset(id(o) for o in (owner(line) for line in ok_lines) if o is not None)
 

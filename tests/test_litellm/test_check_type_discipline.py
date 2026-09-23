@@ -755,7 +755,7 @@ def test_comprehension_ok_without_reason_is_lit005_and_does_not_suppress(tmp_pat
 
 def test_suppression_inside_inner_comprehension_does_not_silence_the_outer(tmp_path):
     src = (
-        "y = [\n"                          # line 1, outer comprehension starts
+        "y = [\n"
         "    x\n"
         "    for a in [\n"
         "        z for i in ys\n"
@@ -772,9 +772,9 @@ def test_suppression_inside_inner_comprehension_does_not_silence_the_outer(tmp_p
 
 def test_suppression_on_outer_closing_line_does_not_silence_the_inner(tmp_path):
     src = (
-        "y = [\n"                          # line 1, outer comprehension starts
+        "y = [\n"
         "    x\n"
-        "    for a in [z for i in ys for z in i]\n"  # line 3, inner comprehension
+        "    for a in [z for i in ys for z in i]\n"
         "    for x in a\n"
         "]  # comprehension-ok: outer flatten is the clearest form\n"
     )
@@ -782,6 +782,15 @@ def test_suppression_on_outer_closing_line_does_not_silence_the_inner(tmp_path):
     f.write_text(src, encoding="utf-8")
     flagged = [v for v in checker.check_file(f) if v.code == "LIT013"]
     assert [v.line for v in flagged] == [3]
+
+
+def test_equal_span_suppression_belongs_to_the_inner_comprehension(tmp_path):
+    src = "y = [x for a in [z for i in ys for z in i] if a if x]  # comprehension-ok: inner flatten is fine\n"
+    f = tmp_path / "snippet.py"
+    f.write_text(src, encoding="utf-8")
+    flagged = [v for v in checker.check_file(f) if v.code == "LIT013"]
+    assert len(flagged) == 1
+    assert "1 `for` clauses and 2 `if` clauses" in flagged[0].message
 
 
 def test_violation_message_names_the_clause_counts(tmp_path):
