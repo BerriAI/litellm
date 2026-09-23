@@ -257,6 +257,24 @@
     "tests/integration/observability/test_otel_text_completion_choices.py::test_otel_weave_output_keeps_text_completion_provider_fields_beside_the_synthesized_message": [
       "other.observability.otel.text_completion_choices_keep_provider_fields"
     ],
+    "tests/integration/observability/test_langfuse_otel_identity.py::test_langfuse_otel_header_end_user_lands_in_user_id_not_session_id_for_a_key_owned_by_an_internal_user": [
+      "other.observability.langfuse_otel.header_end_user_in_user_id_over_internal_user"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity.py::test_langfuse_otel_header_end_user_lands_in_user_id_for_a_service_account_key": [
+      "other.observability.langfuse_otel.header_end_user_in_user_id_service_key"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity.py::test_langfuse_otel_body_user_is_never_a_session": [
+      "other.observability.langfuse_otel.body_user_never_a_session"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity.py::test_langfuse_otel_caller_trace_user_id_wins_over_the_end_user": [
+      "other.observability.langfuse_otel.caller_trace_user_id_wins"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity.py::test_langfuse_otel_caller_session_id_stays_the_session_beside_the_end_user": [
+      "other.observability.langfuse_otel.caller_session_id_stays_session"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity.py::test_langfuse_otel_v2_header_end_user_lands_in_user_id": [
+      "other.observability.langfuse_otel.v2_header_end_user_in_user_id"
+    ],
     "tests/integration/observability/test_guardrail_effects.py::test_guardrail_rewrites_system_and_user_in_actual_anthropic_request": [
       "other.observability.guardrails.rewrite_reaches_correct_anthropic_positions"
     ],
