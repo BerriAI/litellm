@@ -22,7 +22,6 @@ from html import escape
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
-    Annotated,
     Any,
     Final,
     Literal,
@@ -41,7 +40,7 @@ if TYPE_CHECKING:
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -92,6 +91,7 @@ from litellm.proxy.auth.auth_utils import (
     _has_user_setup_sso,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.team_grants import TeamModelAliasTable
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
@@ -202,31 +202,14 @@ def _team_detail_db(repo: TeamRepository) -> "TableActions[_TeamDetailRow]":
     return repo.table
 
 
-_MODEL_ALIASES_ADAPTER: Final = TypeAdapter(dict[str, str])
 _SSO_TOKEN_CLAIMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-
-
-def _decode_model_aliases(value: object) -> object:
-    """``/team/new`` stores team model aliases as a JSON-encoded string in the Json column."""
-    if not isinstance(value, str):
-        return value
-    try:
-        return _MODEL_ALIASES_ADAPTER.validate_json(value)
-    except ValidationError:
-        return None
-
-
-class _TeamModelAliasTable(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
-
-    model_aliases: Annotated[Mapping[str, str] | None, BeforeValidator(_decode_model_aliases)] = None
 
 
 class _TeamRowGrants(BaseModel):
     team_id: str
     team_alias: str | None = None
     models: tuple[str, ...] = ()
-    litellm_model_table: _TeamModelAliasTable | None = None
+    litellm_model_table: TeamModelAliasTable | None = None
 
 
 class CliSsoTeamDetail(BaseModel):

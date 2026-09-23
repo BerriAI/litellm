@@ -6,7 +6,7 @@ callers kept losing grants (aliases, permissions, limits) one field at a time. B
 ``team_grants`` and the two paths cannot drift.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Annotated, Final
 
@@ -61,10 +61,10 @@ class TeamGrants(TypedDict, total=False):
     team_soft_budget: ReadOnly[float | None]
     team_model_max_budget: ReadOnly[dict[str, object] | None]  # mutable-ok: prisma table field typed loosely
     team_spend: ReadOnly[float | None]
-    team_models: ReadOnly[Sequence[str]]
+    team_models: ReadOnly[list[str]]  # mutable-ok: UserAPIKeyAuth declares a list field
     team_blocked: ReadOnly[bool]
-    team_metadata: ReadOnly[Mapping[str, object] | None]
-    team_model_aliases: ReadOnly[Mapping[str, str] | None]
+    team_metadata: ReadOnly[dict[str, object] | None]  # mutable-ok: UserAPIKeyAuth declares a dict field
+    team_model_aliases: ReadOnly[dict[str, str] | None]  # mutable-ok: UserAPIKeyAuth declares a dict field
     team_object_permission_id: ReadOnly[str | None]
     team_object_permission: ReadOnly[LiteLLM_ObjectPermissionTable | None]
     team_member: ReadOnly[Member | None]
@@ -104,11 +104,14 @@ def team_grants(
         team_soft_budget=team_object.soft_budget,
         team_model_max_budget=team_object.model_max_budget,
         team_spend=team_object.spend,
-        team_models=tuple(team_object.models),
+        team_models=list(team_object.models),
         team_blocked=team_object.blocked,
-        team_metadata=json_columns.metadata,
+        team_metadata=dict(json_columns.metadata) if json_columns.metadata is not None else None,
         team_model_aliases=(
-            json_columns.litellm_model_table.model_aliases if json_columns.litellm_model_table is not None else None
+            dict(json_columns.litellm_model_table.model_aliases)
+            if json_columns.litellm_model_table is not None
+            and json_columns.litellm_model_table.model_aliases is not None
+            else None
         ),
         team_object_permission_id=team_object.object_permission_id,
         team_object_permission=team_object.object_permission,

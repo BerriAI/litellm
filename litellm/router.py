@@ -21,7 +21,7 @@ import time
 import traceback
 import weakref
 from collections import defaultdict
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Iterator, Mapping, Sequence
 from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
@@ -9445,6 +9445,15 @@ class Router:
 
         if _budget_limiter is not None:
             _budget_limiter.register_deployment_budget(deployment=deployment.to_json(exclude_none=True))
+
+    def config_deployments(self) -> Iterator[Mapping[str, object]]:
+        """The model_list rows that came from config.yaml rather than the DB (``model_info.db_model`` unset)."""
+        for deployment in self.model_list:
+            if not isinstance(deployment, Mapping):
+                continue
+            model_info = deployment.get("model_info")
+            if not (isinstance(model_info, Mapping) and model_info.get("db_model")):
+                yield deployment
 
     def get_deployment(self, model_id: str) -> Deployment | None:
         """

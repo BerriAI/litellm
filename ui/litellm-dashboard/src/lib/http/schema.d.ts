@@ -28154,6 +28154,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -29477,6 +29479,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -31959,6 +31963,8 @@ export interface components {
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
             team_member_tpm_limit?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -35923,6 +35929,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -36063,6 +36071,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -38034,6 +38044,10 @@ export interface components {
             team_model_aliases?: {
                 [key: string]: unknown;
             } | null;
+            /** Team Model Max Budget */
+            team_model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Team Models
              * @default []
@@ -38048,6 +38062,8 @@ export interface components {
             team_soft_budget?: number | null;
             /** Team Spend */
             team_spend?: number | null;
+            /** Team Tpd Limit */
+            team_tpd_limit?: number | null;
             /** Team Tpm Limit */
             team_tpm_limit?: number | null;
             /** Token */
@@ -38537,6 +38553,11 @@ export interface components {
             input_cost_per_character?: number | null;
             /** Input Cost Per Token */
             input_cost_per_token?: number | null;
+            /**
+             * Member Auto Router
+             * @default false
+             */
+            member_auto_router: boolean;
             /** Output Cost Per Character */
             output_cost_per_character?: number | null;
             /** Output Cost Per Token */

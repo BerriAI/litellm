@@ -4364,7 +4364,7 @@ async def team_info(
         try:
             team_info: BaseModel | None = await _team_db(prisma_client).find_unique(
                 where={"team_id": team_id},
-                include={"litellm_model_table": True, "object_permission": True},
+                include={"litellm_model_table": True, "object_permission": True},  # mutable-ok: prisma include clause
             )
             if team_info is None:
                 raise Exception
@@ -5567,7 +5567,7 @@ async def team_model_add(
     updated_team: Final = await _team_db(prisma_client).update(
         where={"team_id": data.team_id},
         data={"updated_at": datetime.now(timezone.utc)},
-        include={"object_permission": True},
+        include={"litellm_model_table": True, "object_permission": True},  # mutable-ok: prisma include clause
     )
     if updated_team is None:
         raise HTTPException(
@@ -5654,7 +5654,7 @@ async def team_model_delete(
     updated_team: Final = await _team_db(prisma_client).update(
         where={"team_id": data.team_id},
         data={"models": updated_models},
-        include={"object_permission": True},
+        include={"litellm_model_table": True, "object_permission": True},  # mutable-ok: prisma include clause
     )
     if updated_team is None:
         raise HTTPException(

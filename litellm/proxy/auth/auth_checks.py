@@ -473,6 +473,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
 
 
 _NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
+_TEAM_GRANT_RELATIONS: Final[Mapping[str, object]] = MappingProxyType({"litellm_model_table": True})
 
 
 def _has_ptu_flat_cost(model: str, llm_router: "Router") -> bool:
@@ -549,11 +550,12 @@ def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
             return True
 
         model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
-        if model_id is None:
+        if not isinstance(model_id, str):
             continue
 
+        model_name = litellm_params.get("model")
         model_info = llm_router.get_deployment_model_info(
-            model_id=model_id, model_name=litellm_params.get("model") or ""
+            model_id=model_id, model_name=model_name if isinstance(model_name, str) else ""
         )
         if model_info is not None and _entry_has_priced_metric(model_info):
             return True
@@ -2847,7 +2849,10 @@ class TeamNotFoundError(HTTPException):
 async def _get_team_db_check(
     team_id: str, prisma_client: PrismaClient, team_id_upsert: bool | None = None
 ) -> "_PrismaTeamRow | None":
-    response = await _team_table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id})
+    response = await _team_table(TeamRepository(prisma_client)).find_unique(
+        where={"team_id": team_id},  # mutable-ok: prisma where clause
+        include=_TEAM_GRANT_RELATIONS,
+    )
 
     if response is None and team_id_upsert:
         from litellm.proxy.management_endpoints.team_endpoints import new_team
@@ -3147,7 +3152,10 @@ async def get_team_object_by_alias(
 
     # Query database by team_alias
     try:
-        teams: Final = await _team_table(TeamRepository(prisma_client)).find_many(where={"team_alias": team_alias})
+        teams: Final = await _team_table(TeamRepository(prisma_client)).find_many(
+            where={"team_alias": team_alias},  # mutable-ok: prisma where clause
+            include=_TEAM_GRANT_RELATIONS,
+        )
 
         if not teams:
             raise HTTPException(

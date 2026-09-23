@@ -922,7 +922,9 @@ def _is_classifier_timeout(exc: BaseException) -> bool:
     # LiteLLM still supports 3.10, where they are distinct exception classes.
     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
         return True
-    return type(exc).__name__.endswith("TimeoutError")
+    from litellm.exceptions import Timeout as LiteLLMTimeout
+
+    return isinstance(exc, LiteLLMTimeout)
 
 
 class _SessionAffinityPin(NamedTuple):

@@ -31,6 +31,10 @@ from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment, updateLiteLLMParams
 
 
+async def _passthrough_row(update_data):
+    return update_data
+
+
 class MockPrismaClient:
     def __init__(
         self,
@@ -1027,7 +1031,7 @@ class TestTeamModelSiblingRouting:
         team_id = "team_no_alias"
         public_name = "gpt-4.1-mini"
 
-        async def mock_add_model_to_db(model_params, user_api_key_dict, prisma_client):
+        async def mock_add_model_to_db(model_params, user_api_key_dict, prisma_client, slot=None):
             return MagicMock(model_id=str(uuid.uuid4()))
 
         mock_team_model_add = AsyncMock()
@@ -1207,6 +1211,7 @@ class TestTeamModelUpdate:
                 patch_data=patch_data,
                 user_api_key_dict=user_api_key_dict,
                 prisma_client=prisma_client,  # type: ignore
+                write_row=_passthrough_row,
             )
 
             assert result.get("model_name", "").startswith("model_name_test_team_123_")
@@ -1437,6 +1442,7 @@ class TestTeamModelUpdate:
                     patch_data=patch_data,
                     user_api_key_dict=user_api_key_dict,
                     prisma_client=prisma_client,  # type: ignore
+                    write_row=_passthrough_row,
                 )
             assert "403" in str(exc_info.value)
 
@@ -1697,6 +1703,7 @@ class TestTeamModelUpdate:
                 patch_data=patch_data,
                 user_api_key_dict=user_api_key_dict,
                 prisma_client=prisma_client,  # type: ignore
+                write_row=_passthrough_row,
             )
 
         # team ACL must not be touched on a no-op edit
@@ -4480,3 +4487,122 @@ class TestTeamMemberAutoRouterWrites:
         assert saved == expected
         assert row.litellm_params["complexity_router_config"] == stored_config
         assert request.litellm_params.complexity_router_config == config
+
+    async def test_admin_router_changes_release_member_scope(self, endpoint: str, change: str) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model, update_model
+
+        original: Final = self._row()
+        row: Final = original.model_copy(update={"model_info": {**original.model_info, "member_auto_router": True}})
+        database: Final = self._database(self._team(), row)
+        params: Final = {
+            "config": {"complexity_router_config": {"tiers": {"SIMPLE": "allowed"}, "session_affinity": True}},
+            "strategy": {"model": "auto_router/quality_router", "quality_router_default_model": "allowed"},
+            "unrelated": {"model": "auto_router/complexity_router", "max_tokens": 100},
+        }
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams.model_validate(params[change]),
+            model_info=ModelInfo(id=row.model_id) if endpoint == "legacy" or change == "unrelated" else None,
+        )
+        with self._environment(database, row):
+            actor: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+            if endpoint == "patch":
+                await patch_model(row.model_id, request, actor)
+            else:
+                await update_model(request, actor)
+        written: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        saved_info: Final = json.loads(written["model_info"]) if "model_info" in written else row.model_info
+        assert saved_info["member_auto_router"] is (change == "unrelated")
+        assert saved_info["team_id"] == "member-team"
+        assert saved_info["access_groups"] == ["retained-admin-group"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    @pytest.mark.parametrize("access", ["owner", "peer", "limited-key"])
+    async def test_both_update_entries_enforce_creator_and_stamp_member_scope(self, endpoint: str, access: str) -> None:
+        from fastapi import HTTPException
+
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model, update_model
+
+        row: Final = self._row()
+        database: Final = self._database(self._team(), row)
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(
+                complexity_router_config={"tiers": {"SIMPLE": "allowed"}, "session_affinity": True}
+            ),
+            model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+        )
+        actor: Final = UserAPIKeyAuth(
+            user_id="peer" if access == "peer" else "owner",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=["personal-router"] if access == "limited-key" else ["allowed"],
+            config={"timeout": 60},
+        )
+        with self._environment(database, row):
+            operation: Final = (
+                patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
+            )
+            if access != "owner":
+                with pytest.raises((HTTPException, ProxyException)):
+                    await operation
+                database.transaction.litellm_proxymodeltable.update.assert_not_awaited()
+                return
+            await operation
+        written: Final = database.transaction.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        saved_info: Final = json.loads(written["model_info"])
+        assert saved_info["member_auto_router"] is True
+        assert saved_info["team_id"] == "member-team"
+        assert saved_info["access_groups"] == ["retained-admin-group"]
+        assert "created_by" not in written
+        assert json.loads(written["litellm_params"])["complexity_router_config"]["session_affinity"] is True
+        assert written.get("model_name", row.model_name) == row.model_name
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("access", ["allowed", "opt-out", "limited-key"])
+    async def test_create_entry_requires_opt_in_and_appends_only_its_router(self, access: str) -> None:
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+        row: Final = self._row()
+        database: Final = self._database(self._team(enabled=access != "opt-out"), row)
+        actor: Final = UserAPIKeyAuth(
+            user_id="owner",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=["personal-router"] if access == "limited-key" else ["allowed"],
+            config={"timeout": 60},
+        )
+        deployment: Final = Deployment(
+            model_name="new-personal-router",
+            litellm_params=LiteLLM_Params(
+                model="auto_router/complexity_router", complexity_router_config={"tiers": {"SIMPLE": "allowed"}}
+            ),
+            model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+        )
+        with (
+            self._environment(database, row),
+            patch(
+                "litellm.proxy.proxy_server.proxy_config.add_deployment",
+                new=AsyncMock(
+                    return_value=ReconcileOutcome(  # test-quality-ok: [TQ008] model reload I/O boundary
+                        still_desired=frozenset((row.model_id, "allowed-id")),
+                        live_after=frozenset((row.model_id, "allowed-id")),
+                    )
+                ),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add", new=AsyncMock()
+            ) as appended,  # test-quality-ok: [TQ008] persistence boundary; the appended scope is asserted
+        ):
+            if access != "allowed":
+                with pytest.raises(ProxyException) as denied:
+                    await add_new_model(deployment, actor)
+                assert denied.value.code == "403"
+                database.transaction.litellm_proxymodeltable.create.assert_not_awaited()
+                appended.assert_not_awaited()
+                return
+            await add_new_model(deployment, actor)
+        written: Final = database.transaction.litellm_proxymodeltable.create.await_args.kwargs["data"]
+        assert written["created_by"] == "owner"
+        assert json.loads(written["model_info"])["member_auto_router"] is True
+        assert appended.await_args.kwargs["data"].models == ["new-personal-router"]
+        assert appended.await_args.kwargs["data"].team_id == "member-team"
