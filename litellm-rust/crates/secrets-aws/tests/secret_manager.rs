@@ -12,8 +12,8 @@ use aws_sdk_secretsmanager::{
 };
 use litellm_secrets_aws::{AwsSecretsManagerV2, Error, RotationResponse};
 use litellm_secrets_types::{
-    AwsOperationContext, BaseSecretManager, KeyManagementSettings, SecretDeleter, SecretValue,
-    SecretWriteContext, SecretWriter,
+    AwsOperationContext, BaseSecretManager, KeyManagementSettings, Secret, SecretDeleter,
+    SecretValue, SecretWriteContext, SecretWriter,
 };
 use rstest::{fixture, rstest};
 use serde_json::json;
@@ -62,14 +62,14 @@ fn default_settings() -> KeyManagementSettings {
 }
 
 #[rstest]
-#[case::string_value("KEY", Some("value"))]
+#[case::string_value("KEY", Some(Secret::String(SecretValue::new("value"))))]
 #[case::missing_value("missing", None)]
-#[case::non_string_value("BOOL", None)]
+#[case::non_string_value("BOOL", Some(Secret::Bool(true)))]
 #[tokio::test]
 async fn primary_lookup_preserves_read_semantics(
     default_settings: KeyManagementSettings,
     #[case] name: &str,
-    #[case] expected: Option<&str>,
+    #[case] expected: Option<Secret>,
 ) {
     let server = MockServer::start().await;
     Mock::given(header("x-amz-target", "secretsmanager.GetSecretValue"))
@@ -87,9 +87,7 @@ async fn primary_lookup_preserves_read_semantics(
         manager
             .read_secret_for_resolver(name, Some("primary"), &|_: &str| None)
             .await
-            .unwrap()
-            .and_then(|v| v.as_str().map(str::to_owned))
-            .as_deref(),
+            .unwrap(),
         expected
     );
 }
@@ -658,46 +656,113 @@ async fn create_failure_does_not_overwrite_an_alias_without_a_deletion_date(
     ));
 }
 
+#[derive(Clone, Copy, Debug)]
+enum RecoveryFailure {
+    Restore,
+    Update,
+    Tag,
+    DeleteAfterUpdate,
+    DeleteAfterTag,
+}
+
+#[rstest]
+#[case::restore(RecoveryFailure::Restore)]
+#[case::update(RecoveryFailure::Update)]
+#[case::tag(RecoveryFailure::Tag)]
+#[case::delete_after_update(RecoveryFailure::DeleteAfterUpdate)]
+#[case::delete_after_tag(RecoveryFailure::DeleteAfterTag)]
 #[tokio::test]
-async fn failed_update_reschedules_deletion_of_a_restored_alias() {
+async fn failed_update_reschedules_deletion_of_a_restored_alias(#[case] failure: RecoveryFailure) {
     let server = MockServer::start().await;
+    let response = |failed| {
+        if failed {
+            (400, json!({"__type":"InvalidRequestException"}))
+        } else {
+            (200, json!({}))
+        }
+    };
+    let (restore_status, restore_body) = response(matches!(failure, RecoveryFailure::Restore));
+    let (update_status, update_body) = response(matches!(
+        failure,
+        RecoveryFailure::Update | RecoveryFailure::DeleteAfterUpdate
+    ));
+    let (delete_status, delete_body) = response(matches!(
+        failure,
+        RecoveryFailure::DeleteAfterUpdate | RecoveryFailure::DeleteAfterTag
+    ));
+    let prefix = [
+        (
+            "CreateSecret",
+            json!({"Name":"key", "SecretString":"new", "Tags":[{"Key":"stage", "Value":"test"}]}),
+            400,
+            json!({"__type":"ResourceExistsException"}),
+        ),
+        (
+            "DescribeSecret",
+            json!({"SecretId":"key"}),
+            200,
+            json!({"DeletedDate":1}),
+        ),
+        (
+            "RestoreSecret",
+            json!({"SecretId":"key"}),
+            restore_status,
+            restore_body,
+        ),
+    ];
+    let update = (!matches!(failure, RecoveryFailure::Restore)).then_some((
+        "UpdateSecret",
+        json!({"SecretId":"key", "SecretString":"new"}),
+        update_status,
+        update_body,
+    ));
+    let tag = matches!(
+        failure,
+        RecoveryFailure::Tag | RecoveryFailure::DeleteAfterTag
+    )
+    .then_some((
+        "TagResource",
+        json!({"SecretId":"key", "Tags":[{"Key":"stage", "Value":"test"}]}),
+        400,
+        json!({"__type":"InvalidRequestException"}),
+    ));
+    let delete = (!matches!(failure, RecoveryFailure::Restore)).then_some((
+        "DeleteSecret",
+        json!({"SecretId":"key", "RecoveryWindowInDays":7}),
+        delete_status,
+        delete_body,
+    ));
     scripted_actions(
         &server,
-        vec![
-            (
-                "CreateSecret",
-                json!({"Name":"key", "SecretString":"new"}),
-                400,
-                json!({"__type":"ResourceExistsException"}),
-            ),
-            (
-                "DescribeSecret",
-                json!({"SecretId":"key"}),
-                200,
-                json!({"DeletedDate":1}),
-            ),
-            ("RestoreSecret", json!({"SecretId":"key"}), 200, json!({})),
-            (
-                "UpdateSecret",
-                json!({"SecretId":"key", "SecretString":"new"}),
-                400,
-                json!({"__type":"InvalidRequestException"}),
-            ),
-            (
-                "DeleteSecret",
-                json!({"SecretId":"key", "RecoveryWindowInDays":7}),
-                200,
-                json!({}),
-            ),
-        ],
+        prefix
+            .into_iter()
+            .chain(update)
+            .chain(tag)
+            .chain(delete)
+            .collect(),
     )
     .await;
-    assert!(
-        manager(&server, Default::default())
-            .async_write_secret("key", &SecretValue::new("new"), None)
-            .await
-            .is_err()
-    );
+    let error = manager(
+        &server,
+        KeyManagementSettings {
+            tags: Some(std::collections::BTreeMap::from([(
+                "stage".into(),
+                "test".into(),
+            )])),
+            ..Default::default()
+        },
+    )
+    .async_write_secret("key", &SecretValue::new("new"), None)
+    .await
+    .unwrap_err();
+    match failure {
+        RecoveryFailure::Restore => assert!(matches!(error, Error::Restore(_))),
+        RecoveryFailure::Update => assert!(matches!(error, Error::Update(_))),
+        RecoveryFailure::Tag => assert!(matches!(error, Error::Tag(_))),
+        RecoveryFailure::DeleteAfterUpdate | RecoveryFailure::DeleteAfterTag => {
+            assert!(matches!(error, Error::Delete(_)))
+        }
+    }
 }
 
 #[rstest]
