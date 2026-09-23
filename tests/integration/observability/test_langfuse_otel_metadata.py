@@ -1014,8 +1014,7 @@ def test_langfuse_otel_slow_sink_does_not_deadlock_exports(gateway: Gateway, tmp
         )
 
 
-@pytest.mark.covers("other.observability.langfuse_otel.v2_mapper_unchanged")
-def test_langfuse_otel_v2_mapper_keeps_existing_trace_metadata_keys(gateway: Gateway, tmp_path: Path) -> None:
+def test_langfuse_otel_v2_mapper_emits_request_metadata_and_identity(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "lf-v2-" + uuid.uuid4().hex
     with (
         _langfuse_rig(
@@ -1049,4 +1048,101 @@ def test_langfuse_otel_v2_mapper_keeps_existing_trace_metadata_keys(gateway: Gat
         attrs: Final = next(s for s in observed if s.get("gen_ai.response.id") == response.json()["id"])
         assert attrs.get("langfuse.trace.metadata.team_id") == identity["team_id"], attrs
         assert attrs.get("langfuse.trace.metadata.team_alias") == identity["team_alias"], attrs
-        assert "langfuse.observation.metadata" not in attrs, sorted(attrs)
+        assert "langfuse.observation.metadata" in attrs, sorted(attrs)
+        observation: Final = json.loads(str(attrs["langfuse.observation.metadata"]))
+        expected: Final = _chat_identity_fields(identity)
+        assert {key: observation.get(key) for key in expected} == dict(expected), observation
+        assert observation["spend_logs_metadata"] == {"ticket": "LIT-8283"}, observation
+        assert not [key_ for key_, value in observation.items() if value is None], observation
+        flattened: Final = {
+            attribute: attrs.get(attribute)
+            for attribute in (f"langfuse.trace.metadata.{field}" for field in _IDENTITIES)
+            if attribute in attrs
+        }
+        assert flattened == {f"langfuse.trace.metadata.{field}": value for field, value in expected.items()}, attrs
+
+
+def test_langfuse_otel_v2_mapper_redacts_user_api_key_fields(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "lf-v2-redact-" + uuid.uuid4().hex
+    with (
+        _langfuse_rig(
+            gateway,
+            tmp_path,
+            {"redact_user_api_key_info": True},
+            marker,
+            overrides={"LITELLM_OTEL_V2": "1"},
+        ) as rig,
+        rig.candidate.scenario() as scenario,
+    ):
+        key: Final = scenario.key(
+            key_alias="lf-v2-redact-" + uuid.uuid4().hex,
+            metadata={"spend_logs_metadata": {"ticket": "LIT-8283"}},
+        )
+        model: Final = scenario.model(api_base=rig.provider.url + "/v1")
+        response: Final = rig.candidate.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": marker}],
+                "cache": {"no-cache": True},
+            },
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+        watch: Final = _watched_spans(rig.collector)
+        observed: Final = eventually(
+            watch,
+            lambda spans: sum(s.get("gen_ai.response.id") == response.json()["id"] for s in spans) == 1,
+            seconds=25,
+        )
+        attrs: Final = next(s for s in observed if s.get("gen_ai.response.id") == response.json()["id"])
+        assert "langfuse.observation.metadata" in attrs, sorted(attrs)
+        observation: Final = json.loads(str(attrs["langfuse.observation.metadata"]))
+        assert not [name for name in observation if name.startswith("user_api_key")], observation
+        assert not [key_ for key_, value in observation.items() if value is None], observation
+        assert observation["spend_logs_metadata"] == {"ticket": "LIT-8283"}, observation
+        assert not [name for name in attrs if name.startswith("langfuse.trace.metadata.user_api_key_")], sorted(attrs)
+
+
+def test_langfuse_otel_v2_mapper_teamless_key_emits_no_team_identity(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "lf-v2-noteam-" + uuid.uuid4().hex
+    with (
+        _langfuse_rig(
+            gateway,
+            tmp_path,
+            {},
+            marker,
+            overrides={"LITELLM_OTEL_V2": "1"},
+        ) as rig,
+        rig.candidate.scenario() as scenario,
+    ):
+        key, identity = _scenario_identity(scenario, rig.provider, team=False)
+        response: Final = rig.candidate.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": identity["model"],
+                "messages": [{"role": "user", "content": marker}],
+                "cache": {"no-cache": True},
+            },
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+        watch: Final = _watched_spans(rig.collector)
+        observed: Final = eventually(
+            watch,
+            lambda spans: sum(s.get("gen_ai.response.id") == response.json()["id"] for s in spans) == 1,
+            seconds=25,
+        )
+        attrs: Final = next(s for s in observed if s.get("gen_ai.response.id") == response.json()["id"])
+        assert "langfuse.observation.metadata" in attrs, sorted(attrs)
+        observation: Final = json.loads(str(attrs["langfuse.observation.metadata"]))
+        for field in ("user_api_key_team_id", "user_api_key_team_alias", "user_api_key_end_user_id"):
+            assert field not in observation, observation
+        assert not [key_ for key_, value in observation.items() if value is None], observation
+        assert {
+            attribute: attrs.get(attribute)
+            for attribute in (f"langfuse.trace.metadata.{field}" for field in _IDENTITIES)
+            if attribute in attrs
+        } == {"langfuse.trace.metadata.user_api_key_alias": identity["key_alias"]}, attrs

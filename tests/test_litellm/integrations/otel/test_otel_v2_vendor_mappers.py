@@ -332,3 +332,101 @@ def test_resolve_mappers_composition_layers_vocabularies():
 def test_resolve_mappers_rejects_unknown_name():
     with pytest.raises(ValueError, match="unknown mapper name 'nope'"):
         resolve_mappers(["genai", "nope"])
+
+
+def test_langfuse_mapper_emits_request_metadata_and_identity():
+    payload: Final[dict[str, object]] = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-4o",
+        "metadata": {
+            "user_api_key_alias": "prod-key",
+            "user_api_key_user_id": "user-1",
+            "user_api_key_end_user_id": "end-1",
+            "user_api_key_team_id": "team-9",
+            "user_api_key_team_alias": "team nine",
+            "user_api_key_max_budget": None,
+            "spend_logs_metadata": {"ticket": "LIT-8283"},
+            "requester_metadata": {"headers": {"x-tenant": "acme"}},
+        },
+        "response": {},
+    }
+    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
+
+    assert json.loads(attrs["langfuse.observation.metadata"]) == {
+        "user_api_key_alias": "prod-key",
+        "user_api_key_user_id": "user-1",
+        "user_api_key_end_user_id": "end-1",
+        "user_api_key_team_id": "team-9",
+        "user_api_key_team_alias": "team nine",
+        "spend_logs_metadata": {"ticket": "LIT-8283"},
+        "requester_metadata": {"headers": {"x-tenant": "acme"}},
+    }
+    assert attrs["langfuse.trace.metadata.user_api_key_alias"] == "prod-key"
+    assert attrs["langfuse.trace.metadata.user_api_key_user_id"] == "user-1"
+    assert attrs["langfuse.trace.metadata.user_api_key_end_user_id"] == "end-1"
+    assert attrs["langfuse.trace.metadata.user_api_key_team_id"] == "team-9"
+    assert attrs["langfuse.trace.metadata.user_api_key_team_alias"] == "team nine"
+    assert attrs["langfuse.trace.metadata.team_id"] == "team-9"
+    assert attrs["langfuse.trace.metadata.team_alias"] == "team nine"
+    assert attrs["langfuse.observation.metadata.provider"] == "openai"
+
+
+def test_langfuse_mapper_skips_empty_identity_values():
+    payload: Final[dict[str, object]] = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-4o",
+        "metadata": {
+            "user_api_key_alias": None,
+            "user_api_key_user_id": "",
+            "user_api_key_end_user_id": "end-1",
+        },
+        "response": {},
+    }
+    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
+
+    assert "langfuse.trace.metadata.user_api_key_alias" not in attrs
+    assert "langfuse.trace.metadata.user_api_key_user_id" not in attrs
+    assert attrs["langfuse.trace.metadata.user_api_key_end_user_id"] == "end-1"
+
+
+def test_langfuse_mapper_redacts_user_api_key_fields():
+    import litellm
+
+    saved: Final = litellm.redact_user_api_key_info
+    try:
+        litellm.redact_user_api_key_info = True
+        payload: Final[dict[str, object]] = {
+            "call_type": "acompletion",
+            "custom_llm_provider": "openai",
+            "model": "gpt-4o",
+            "metadata": {
+                "user_api_key_alias": "prod-key",
+                "user_api_key_team_id": "team-9",
+                "spend_logs_metadata": {"ticket": "LIT-8283"},
+            },
+            "response": {},
+        }
+        attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
+    finally:
+        litellm.redact_user_api_key_info = saved
+
+    exported: Final = json.loads(attrs["langfuse.observation.metadata"])
+    assert not [key for key in exported if key.startswith("user_api_key")]
+    assert exported["spend_logs_metadata"] == {"ticket": "LIT-8283"}
+    assert not [key for key in attrs if key.startswith("langfuse.trace.metadata.user_api_key_")]
+    assert attrs["langfuse.trace.metadata.team_id"] == "team-9"
+
+
+def test_langfuse_mapper_omits_observation_metadata_without_payload_metadata():
+    payload: Final[dict[str, object]] = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-4o",
+        "metadata": {},
+        "response": {},
+    }
+    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
+
+    assert json.loads(attrs["langfuse.observation.metadata"]) == {"requester_metadata": {}}
