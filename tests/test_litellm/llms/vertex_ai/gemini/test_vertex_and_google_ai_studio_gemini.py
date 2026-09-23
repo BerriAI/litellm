@@ -6352,7 +6352,7 @@ def test_add_cache_creation_usage_preserves_cache_read_and_bills_creation_tokens
     )
     creation: VertexAICachedContentCreation = {
         "name": "cached-content",
-        "model": "gemini-2.0-flash",
+        "model": "gemini-3.8-flash",
         "total_token_count": 10000,
         "create_time": None,
         "expire_time": None,
@@ -6366,7 +6366,7 @@ def test_add_cache_creation_usage_preserves_cache_read_and_bills_creation_tokens
     assert merged_usage.prompt_tokens_details.cached_tokens == 10000
     assert merged_usage.prompt_tokens_details.cache_creation_tokens == 10000
 
-    model = "gemini-2.0-flash"
+    model = "gemini-3.8-flash"
     base_response = ModelResponse(model=model, usage=base_usage)
     merged_response = ModelResponse(model=model, usage=merged_usage)
     base_cost = litellm.completion_cost(
@@ -6388,7 +6388,7 @@ def test_add_cache_creation_usage_preserves_cache_read_and_bills_creation_tokens
 
 @pytest.mark.parametrize("include_creation", [True, False])
 def test_transform_response_applies_cache_creation_usage(include_creation):
-    model = "gemini-2.0-flash"
+    model = "gemini-3.8-flash"
     logging_obj = MagicMock()
     logging_obj.model_call_details = (
         {
