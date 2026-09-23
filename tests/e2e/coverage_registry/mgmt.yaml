@@ -47,6 +47,7 @@
 - {id: mgmt.user.list.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "internal_user_endpoints.py:475", rationale: "Admin view all users"}
 - {id: mgmt.user.info.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "internal_user_endpoints.py:440", rationale: "Roles/perms/team membership"}
 - {id: mgmt.organization.new.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "organization_endpoints.py:403", rationale: "Org for multi-tenant isolation"}
+- {id: mgmt.organization.new.admin_unrestricted_models, module: mgmt, tier: P1, surface: api, assertions: [admin_unrestricted_models], source: "organization_endpoints.py:503", fail_before_fix: proven, rationale: "A proxy admin grants an org all models even when the admin's own key scopes them"}
 - {id: mgmt.organization.update.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "organization_endpoints.py:545", rationale: "Org metadata updates persist"}
 - {id: mgmt.organization.delete.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "organization_endpoints.py:710", rationale: "Cascades to teams/keys"}
 - {id: mgmt.organization.member_add.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "organization_endpoints.py:835", rationale: "Org member onboarding"}

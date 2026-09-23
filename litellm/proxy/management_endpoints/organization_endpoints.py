@@ -32,7 +32,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
-    can_user_call_model,
     delete_cache_key_objects,
     get_jwt_key_mapping_cache_keys_for_tokens,
     get_user_object,
@@ -464,18 +463,6 @@ async def new_organization(
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
         )
 
-    user_object_correct_type: LiteLLM_UserTable | None = None
-
-    if user_api_key_dict.user_id is not None:
-        try:
-            user_object: Final = await _table(UserRepository(prisma_client)).find_unique(
-                where={"user_id": user_api_key_dict.user_id}
-            )
-            if user_object is not None:
-                user_object_correct_type = LiteLLM_UserTable.model_validate(user_object.model_dump())
-        except Exception:
-            pass
-
     if data.budget_id is None:
         """
         Every organization needs a budget attached.
@@ -508,23 +495,6 @@ async def new_organization(
         data=data,
         prisma_client=prisma_client,
     )
-
-    """
-    Ensure only models that user has access to, are given to org
-    """
-    if len(user_api_key_dict.models) == 0:  # user has access to all models
-        pass
-    else:
-        if len(data.models) == 0:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "User not allowed to give access to all models. Select models you want org to have access to."
-                },
-            )
-
-        for m in data.models:
-            await can_user_call_model(m, llm_router=llm_router, user_object=user_object_correct_type)
 
     organization_payload: Final = _STR_OBJECT_DICT_ADAPTER.validate_python(data.json(exclude_none=True))
     organization_payload["object_permission_id"] = object_permission_id
