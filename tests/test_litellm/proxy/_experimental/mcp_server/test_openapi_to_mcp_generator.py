@@ -9,7 +9,11 @@ This test suite ensures that:
 5. Path parameters are properly URL encoded
 """
 
+import asyncio
+import time
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Final, TextIO
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -24,6 +28,7 @@ from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
     create_tool_function,
     extract_parameters,
     get_base_url,
+    load_openapi_spec_async,
     resolve_operation_params,
 )
 
@@ -1378,3 +1383,20 @@ class TestUpstreamStatusIsClassified:
         assert exc.value.status_code == status_code
         assert secret_body not in str(exc.value)
         assert str(exc.value) == f"upstream returned HTTP {status_code}"
+
+
+@pytest.mark.asyncio
+async def test_local_spec_read_respects_async_timeout(tmp_path: Path) -> None:
+    path: Final = tmp_path / "openapi.json"
+    path.write_text("{}")
+
+    def slow_load(_file: TextIO) -> dict[str, str]:
+        time.sleep(0.2)
+        return {}
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.json.load",
+        side_effect=slow_load,
+    ):
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(load_openapi_spec_async(str(path)), timeout=0.02)
