@@ -23,6 +23,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
 from opentelemetry.trace import SpanKind  # noqa: E402
 from opentelemetry.trace.status import StatusCode  # noqa: E402
 
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY  # noqa: E402
 from litellm.integrations.otel import (  # noqa: E402
     GenAI,
     LiteLLM,
@@ -173,6 +174,64 @@ def test_async_log_success_event_emits_llm_call_span():
     assert span.attributes[LiteLLM.CALL_ID] == "call_1"
     # Success leaves status UNSET (semconv default), not forced OK.
     assert span.status.status_code is StatusCode.UNSET
+
+
+def test_llm_call_span_carries_the_callers_conversation_id():
+    logger, exporter = _logger()
+    kwargs = {**_kwargs(), "litellm_params": {"litellm_session_id": "conv-42", "metadata": {}}}
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[GenAI.CONVERSATION_ID] == "conv-42"
+
+
+def test_llm_call_span_without_a_caller_session_has_no_conversation_id():
+    """The proxy stamps ``metadata.trace_id`` with the OTel trace id and
+    ``get_litellm_params`` back-fills ``litellm_session_id`` from it."""
+    logger, exporter = _logger()
+    otel_trace_id = "6ca5745ef6780d958f62925747f7a5ee"
+    kwargs = {
+        **_kwargs(payload=_payload(trace_id=otel_trace_id)),
+        "litellm_trace_id": otel_trace_id,
+        "litellm_params": {
+            "litellm_session_id": otel_trace_id,
+            "litellm_trace_id": otel_trace_id,
+            "metadata": {"trace_id": otel_trace_id},
+        },
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.CONVERSATION_ID not in span.attributes
+
+
+def test_llm_call_span_keeps_the_header_session_when_the_proxy_generated_a_body_one():
+    """``missing_session_id: generate`` mints a body session and marks it, but the
+    caller's ``langfuse_session_id`` header is still their conversation."""
+    logger, exporter = _logger()
+    kwargs = {
+        **_kwargs(),
+        "litellm_params": {
+            "litellm_session_id": "minted-by-proxy",
+            "metadata": {"session_id": "minted-by-proxy", SESSION_ID_GENERATED_METADATA_KEY: True},
+            "proxy_server_request": {"headers": {"langfuse_session_id": "conv-header"}},
+        },
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[GenAI.CONVERSATION_ID] == "conv-header"
+
+
+def test_replayed_llm_call_span_does_not_take_the_payloads_session_id():
+    """``/callback_logs`` replays a finished payload whose ``litellm_params`` hold
+    only key metadata; a session minted under ``missing_session_id: generate``
+    lands there without its marker, so ``payload.session_id`` is never trusted."""
+    logger, exporter = _logger()
+    kwargs = {
+        **_kwargs(payload=_payload(session_id="minted-then-replayed", trace_id="minted-then-replayed")),
+        "litellm_params": {"metadata": {"user_api_key_hash": "hsh"}},
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.CONVERSATION_ID not in span.attributes
 
 
 def test_streaming_span_carries_time_to_first_chunk():

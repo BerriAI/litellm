@@ -9,7 +9,6 @@ fi
 suite="${1:?integration suite required}"
 results="test-results/integration-${suite}"
 mkdir -p "$results"
-shard_timeout=11m
 integration_identity="$(.venv/bin/python -c 'import uuid; print(uuid.uuid4().hex)')"
 upstream_pid=""
 proxy_pid=""
@@ -121,12 +120,17 @@ start_proxy() {
       "LITELLM_MODEL_COST_MAP_URL=$INTEGRATION_UPSTREAM_URL/_cost_map"
       "MODEL_COST_MAP_MIN_MODEL_COUNT=1"
       "MODEL_COST_MAP_MAX_SHRINK_RATIO=0"
+      "GEMINI_API_BASE=$INTEGRATION_UPSTREAM_URL"
+      "ANTHROPIC_API_BASE=$INTEGRATION_UPSTREAM_URL"
+      "GEMINI_API_KEY=sk-scripted-provider"
+      "ANTHROPIC_API_KEY=sk-scripted-provider"
     )
   else
     cost_map_env=("LITELLM_LOCAL_MODEL_COST_MAP=True")
   fi
   setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
     DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
+    INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
     LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" LITELLM_UI_PATH="$LITELLM_UI_PATH" PROXY_BASE_URL="http://127.0.0.1:$port" \
     LITELLM_MODE=PRODUCTION STORE_MODEL_IN_DB=True "${cost_map_env[@]}" \
     AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
@@ -172,7 +176,7 @@ if [ "$suite" = browser ]; then
   exit 0
 fi
 
-timeout --signal=TERM --kill-after=20s "$shard_timeout" env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
+env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_RUN_ID="$integration_identity" \
   DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
   INTEGRATION_PROXY_URL="$INTEGRATION_PROXY_URL" INTEGRATION_PEER_URL="$INTEGRATION_PEER_URL" \

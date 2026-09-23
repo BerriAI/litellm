@@ -240,7 +240,7 @@ class OpenTelemetryV2(CustomLogger):
         provider: Final = resolve_logger_provider(self.config, logger_provider)
         if provider is None:
             return None
-        return GenAIEventRecorder(get_event_logger(provider, LITELLM_TRACER_NAME))
+        return GenAIEventRecorder(get_event_logger(provider, LITELLM_TRACER_NAME), provider.resource)
 
     # ====================================================================== #
     #  Proxy global registration
@@ -561,6 +561,7 @@ class OpenTelemetryV2(CustomLogger):
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
             request_route=request_root_http_route(),
             trace=call.trace,
+            session_id=call.session_id,
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:
