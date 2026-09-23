@@ -3541,6 +3541,12 @@ async def _lookup_end_user_and_apply_budget(
                     budget_info=default_budget,
                     end_user_id=valid_token.end_user_id or "",
                 )
+                # This branch has no end-user row, so the budget here is the key's
+                # ``end_user_budget_id`` (or the proxy-wide default) - a fallback, not
+                # this end user's own budget. It must only fill a cap the custom auth
+                # callable left unset, never loosen one it set, so keep it out of the
+                # write-back and let the fill-only assignment below apply it.
+                end_user_params.pop("end_user_max_budget", None)
                 valid_token = update_valid_token_with_end_user_params(
                     valid_token=valid_token, end_user_params=end_user_params
                 )
