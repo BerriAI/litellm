@@ -517,6 +517,10 @@ fn main() {
             json!({"mode": "responses", "input_cost_per_second": 0.5, "output_cost_per_second": 1.0}),
         ),
         (
+            "openai/cache_savings_model".to_owned(),
+            json!({"input_cost_per_token": 2e-6, "output_cost_per_token": 4e-6, "cache_read_input_token_cost": 0.5e-6}),
+        ),
+        (
             "vertex_ai/rerank".to_owned(),
             json!({"input_cost_per_query": 0.25}),
         ),
@@ -615,4 +619,11 @@ fn main() {
         "breakdown_reasoning={:.6} breakdown_cache={:.6}",
         breakdown.reasoning_cost, breakdown.cache_read_cost
     );
+    let savings = model_info_catalog
+        .calculate_prompt_caching_savings(ModelCostRequest {
+            model: "cache_savings_model",
+            ..completion_request.token
+        })
+        .unwrap();
+    println!("prompt_caching_savings={savings:.6}");
 }

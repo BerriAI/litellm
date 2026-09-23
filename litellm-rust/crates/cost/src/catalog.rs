@@ -14,6 +14,9 @@ use crate::completion_cost::{
 use crate::custom_pricing::CustomTokenRates;
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::per_second::per_second_pricing_cost;
+use crate::prompt_caching_savings::{
+    PromptCachingSavingsRequest, calculate_prompt_caching_savings,
+};
 use crate::provider_cache::apply_provider_cache_read_default;
 use crate::responses_usage::ChatUsage;
 use crate::retrieval_cost::{rerank_cost, vector_store_search_cost};
@@ -250,6 +253,23 @@ impl ModelInfoCatalog {
             at: request.at,
             custom_cost_per_token,
         })
+    }
+
+    pub fn calculate_prompt_caching_savings(&self, request: ModelCostRequest<'_>) -> Option<f64> {
+        let model_info = self
+            .select_model_key(request.model, request.provider, request.region)
+            .and_then(|key| self.entries.get(key))?;
+        Some(calculate_prompt_caching_savings(
+            PromptCachingSavingsRequest {
+                model_info,
+                usage: request.usage,
+                provider: request.provider,
+                service_tier: request.service_tier,
+                data_residency: request.data_residency,
+                vertex_location: request.vertex_location,
+                at: request.at,
+            },
+        ))
     }
 
     pub fn rerank_cost(
