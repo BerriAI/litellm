@@ -129,7 +129,7 @@ def _capture(client: object, adapter: _ClientAdapter) -> NativeSecretManagerConf
         settings_attributes=adapter.settings_attributes,
         methods=tuple((name, getattr(type(client), name)) for name in adapter.methods),
     )
-    setattr(client, "_litellm_native_secret_config", config)
+    vars(client)["_litellm_native_secret_config"] = config
     return config
 
 
