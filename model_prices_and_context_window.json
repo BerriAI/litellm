@@ -67060,6 +67060,15 @@
         "output_cost_per_token": 1.2e-06,
         "source": "https://api.together.ai/v1/models"
     },
+    "together_ai/together/Tev1-4B-experimental": {
+        "cache_read_input_token_cost": 4.2e-08,
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.together.ai/v1/models"
+    },
     "azure/eu/codex-mini": {
         "deprecation_date": "2026-11-15",
         "cache_read_input_token_cost": 4.13e-07,
