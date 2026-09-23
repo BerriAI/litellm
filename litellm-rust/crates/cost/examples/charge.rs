@@ -9,7 +9,10 @@ use litellm_cost::custom_pricing::{
     normalize_cache_usage,
 };
 use litellm_cost::gemini_cost::cost_per_web_search_request;
-use litellm_cost::generic_cost::{ResolvedTokenRates, calculate_generic_cost_with_resolved_rates};
+use litellm_cost::generic_cost::{
+    ResolvedTokenRates, calculate_generic_cost_from_model_info_without_off_peak,
+    calculate_generic_cost_with_resolved_rates,
+};
 use litellm_cost::generic_input::{InputBaseRates, calculate_input_cost};
 use litellm_cost::generic_usage::parse_prompt_tokens_details;
 use litellm_cost::guardrail_cost::bedrock_guardrail_cost;
@@ -392,4 +395,31 @@ fn main() {
         None,
     );
     println!("generic_prompt={generic_prompt:.5} generic_output={generic_output:.5}");
+    let threshold_usage = get_usage_object(&json!({
+        "usage": {
+            "prompt_tokens": 128_001,
+            "completion_tokens": 100,
+            "total_tokens": 128_101,
+            "prompt_tokens_details": {"cached_tokens": 20_000},
+            "completion_tokens_details": {"reasoning_tokens": 40}
+        }
+    }))
+    .unwrap()
+    .unwrap();
+    let (threshold_prompt, threshold_output) =
+        calculate_generic_cost_from_model_info_without_off_peak(
+            &threshold_usage,
+            &json!({
+                "input_cost_per_token": 2e-6,
+                "output_cost_per_token": 4e-6,
+                "output_cost_per_reasoning_token": 8e-6,
+                "input_cost_per_token_above_128k_tokens": 5e-6,
+                "output_cost_per_token_above_128k_tokens": 7e-6,
+                "cache_read_input_token_cost_above_128k_tokens": 1e-6
+            }),
+            None,
+            false,
+            1.0,
+        );
+    println!("threshold_prompt={threshold_prompt:.6} threshold_output={threshold_output:.5}");
 }

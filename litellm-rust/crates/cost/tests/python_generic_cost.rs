@@ -1,5 +1,7 @@
 use litellm_cost::generic_cost::{
-    ResolvedTokenRates, billable_prompt_details, calculate_generic_cost_with_resolved_rates,
+    ResolvedTokenRates, billable_prompt_details,
+    calculate_generic_cost_from_model_info_without_off_peak,
+    calculate_generic_cost_with_resolved_rates,
 };
 use litellm_cost::generic_input::InputBaseRates;
 use litellm_cost::usage_dispatch::get_usage_object;
@@ -105,4 +107,65 @@ fn calculate_generic_cost_with_resolved_rates_applies_multiplier_to_both_sides()
     );
     assert!((uplifted.0 - base.0 * 1.1).abs() < 1e-12);
     assert!((uplifted.1 - base.1 * 1.1).abs() < 1e-12);
+}
+
+#[rstest]
+fn calculate_generic_cost_from_model_info_without_off_peak_uses_threshold_cache_and_reasoning_rates()
+ {
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 128_001,
+        "completion_tokens": 100,
+        "total_tokens": 128_101,
+        "prompt_tokens_details": {"cached_tokens": 20_000},
+        "completion_tokens_details": {"reasoning_tokens": 40}
+    }}))
+    .unwrap()
+    .unwrap();
+    let model_info = json!({
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 4e-6,
+        "output_cost_per_reasoning_token": 8e-6,
+        "input_cost_per_token_above_128k_tokens": 5e-6,
+        "output_cost_per_token_above_128k_tokens": 7e-6,
+        "cache_read_input_token_cost_above_128k_tokens": 1e-6
+    });
+    let actual = calculate_generic_cost_from_model_info_without_off_peak(
+        &usage,
+        &model_info,
+        None,
+        false,
+        1.0,
+    );
+    let expected_prompt = 108_001.0 * 5e-6 + 20_000.0 * 1e-6;
+    let expected_output = 60.0 * 7e-6 + 40.0 * 8e-6;
+    assert!((actual.0 - expected_prompt).abs() < 1e-12);
+    assert!((actual.1 - expected_output).abs() < 1e-12);
+}
+
+#[rstest]
+fn calculate_generic_cost_from_model_info_without_off_peak_uses_selected_tier_for_reasoning() {
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 32_001,
+        "completion_tokens": 100,
+        "total_tokens": 32_101,
+        "completion_tokens_details": {"reasoning_tokens": 40}
+    }}))
+    .unwrap()
+    .unwrap();
+    let model_info = json!({
+        "output_cost_per_token": 4e-6,
+        "tiered_pricing": [
+            {"range": [0, 32_000], "input_cost_per_token": 2e-6, "output_cost_per_token": 3e-6},
+            {"range": [32_000, 128_000], "input_cost_per_token": 5e-6, "output_cost_per_reasoning_token": 9e-6}
+        ]
+    });
+    let actual = calculate_generic_cost_from_model_info_without_off_peak(
+        &usage,
+        &model_info,
+        None,
+        false,
+        1.0,
+    );
+    assert!((actual.0 - 32_001.0 * 5e-6).abs() < 1e-12);
+    assert!((actual.1 - (60.0 * 4e-6 + 40.0 * 9e-6)).abs() < 1e-12);
 }

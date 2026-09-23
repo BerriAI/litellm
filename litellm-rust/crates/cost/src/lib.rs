@@ -1,4 +1,5 @@
 pub mod anthropic_usage;
+pub mod base_rate_selection;
 pub mod batch;
 pub mod catalog;
 pub mod custom_pricing;
