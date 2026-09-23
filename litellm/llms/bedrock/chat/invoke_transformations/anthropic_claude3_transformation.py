@@ -225,6 +225,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
+        anthropic_request.pop("stream_chunk_size", None)
         apply_bedrock_invoke_structured_output(
             model=model,
             request_body=anthropic_request,
