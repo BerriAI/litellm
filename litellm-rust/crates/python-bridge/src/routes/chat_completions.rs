@@ -1,3 +1,6 @@
+use pyo3::types::{PyDict, PyTuple};
+
+use crate::errors::RustBridgeDeclined;
 use crate::logger::{run_async, run_sync};
 use litellm_core::chat_completions::{
     Error, chat_completions as run_chat_completions, chat_completions_decline_reason,
@@ -123,9 +126,54 @@ pub(crate) fn achat_completions<'py>(
     )
 }
 
+#[pyfunction]
+pub(crate) fn completion(
+    _request: Bound<'_, PyAny>,
+    _args: Bound<'_, PyTuple>,
+    _kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    Err(RustBridgeDeclined::new_err(
+        "native chat completions route is not implemented",
+    ))
+}
+
+#[pyfunction]
+pub(crate) fn acompletion(
+    _request: Bound<'_, PyAny>,
+    _args: Bound<'_, PyTuple>,
+    _kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    Err(RustBridgeDeclined::new_err(
+        "native chat completions route is not implemented",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
-    use pyo3::{prelude::*, types::PyList};
+    use pyo3::{
+        prelude::*,
+        types::{PyDict, PyList, PyTuple},
+    };
+
+    use crate::errors::RustBridgeDeclined;
+
+    #[test]
+    fn both_entrypoints_decline_before_provider_execution() {
+        Python::initialize();
+        Python::attach(|py| {
+            let request = PyDict::new(py);
+            let args = PyTuple::empty(py);
+            let kwargs = PyDict::new(py);
+
+            for entrypoint in [super::completion, super::acompletion] {
+                let error = entrypoint(request.clone().into_any(), args.clone(), kwargs.clone())
+                    .expect_err(
+                        "native chat completions must decline until a route machine exists",
+                    );
+                assert!(error.is_instance_of::<RustBridgeDeclined>(py));
+            }
+        });
+    }
 
     #[test]
     fn chat_completions_decline_keeps_existing_reasons() {

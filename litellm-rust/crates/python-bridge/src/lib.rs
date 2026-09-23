@@ -27,7 +27,7 @@ mod _native {
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
     use crate::routes::chat_completions::{
-        achat_completions, chat_completions, chat_completions_decline,
+        achat_completions, acompletion, chat_completions, chat_completions_decline, completion,
     };
     #[pymodule_export]
     use crate::routes::embeddings::{aembedding, embedding};
@@ -36,7 +36,7 @@ mod _native {
     #[pymodule_export]
     use crate::routes::ocr::{aocr, ocr};
     #[pymodule_export]
-    use crate::routes::responses::ResponsesWebSocketConnection;
+    use crate::routes::responses::{ResponsesWebSocketConnection, aresponses, responses};
     #[pymodule_export]
     use crate::routes::token_counter::TokenCounter;
     #[cfg(feature = "huggingface")]
@@ -94,6 +94,10 @@ mod tests {
                 "chat_completions_decline",
                 "chat_completions",
                 "achat_completions",
+                "completion",
+                "acompletion",
+                "responses",
+                "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
                 "TokenCounter",
