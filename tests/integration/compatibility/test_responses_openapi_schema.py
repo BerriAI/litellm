@@ -28,6 +28,9 @@ def test_v1_responses_post_declares_a_request_body_and_response_schema(gateway: 
         properties
     ), sorted(properties)
     assert {"id", "object", "output", "usage"} <= set(_ok_schema_properties(openapi, post)), post["responses"]
+    assert "tool_calls" in object_value(
+        object_value(object_value(object_value(openapi["components"])["schemas"])["Message"])["properties"]
+    )
 
 
 def test_v1_responses_by_id_routes_declare_response_schemas(gateway: Gateway) -> None:

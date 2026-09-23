@@ -153,7 +153,7 @@ def test_move_defs_to_components():
         },
     }
 
-    CustomOpenAPISpec._move_defs_to_components(openapi_schema=openapi_schema, defs=defs)
+    CustomOpenAPISpec._move_defs_to_components(openapi_schema=openapi_schema, defs=defs, namespace="Req")
 
     assert "components" in openapi_schema
     assert "schemas" in openapi_schema["components"]
@@ -185,7 +185,7 @@ def test_rewrite_defs_refs():
         },
     }
 
-    rewritten = CustomOpenAPISpec._rewrite_defs_refs(schema=schema)
+    rewritten = CustomOpenAPISpec._rewrite_defs_refs(schema=schema, renames={})
 
     assert "$defs" not in rewritten
     assert (
@@ -224,3 +224,52 @@ def test_responses_api_paths_covers_all_three_routes():
         "/responses",
         "/openai/v1/responses",
     ]
+
+
+def test_add_schema_to_components_renames_colliding_def_instead_of_overwriting():
+    openapi = {
+        "components": {
+            "schemas": {
+                "Message": {"type": "object", "properties": {"content": {"type": "string"}}},
+            }
+        }
+    }
+
+    CustomOpenAPISpec.add_schema_to_components(
+        openapi,
+        "Req",
+        {
+            "type": "object",
+            "properties": {"m": {"$ref": "#/$defs/Message"}, "n": {"$ref": "#/$defs/Other"}},
+            "$defs": {
+                "Message": {"type": "object", "properties": {"role": {"type": "string"}}},
+                "Other": {"type": "integer"},
+            },
+        },
+    )
+
+    schemas = openapi["components"]["schemas"]
+    assert schemas["Message"] == {"type": "object", "properties": {"content": {"type": "string"}}}
+    assert schemas["Req_Message"] == {"type": "object", "properties": {"role": {"type": "string"}}}
+    assert schemas["Other"] == {"type": "integer"}
+    assert schemas["Req"]["properties"]["m"]["$ref"] == "#/components/schemas/Req_Message"
+    assert schemas["Req"]["properties"]["n"]["$ref"] == "#/components/schemas/Other"
+    assert "$defs" not in schemas["Req"]
+
+
+def test_add_schema_to_components_keeps_name_for_identical_existing_def():
+    openapi = {"components": {"schemas": {"Same": {"type": "integer"}}}}
+
+    CustomOpenAPISpec.add_schema_to_components(
+        openapi,
+        "Req",
+        {
+            "type": "object",
+            "properties": {"s": {"$ref": "#/$defs/Same"}},
+            "$defs": {"Same": {"type": "integer"}},
+        },
+    )
+
+    schemas = openapi["components"]["schemas"]
+    assert "Req_Same" not in schemas
+    assert schemas["Req"]["properties"]["s"]["$ref"] == "#/components/schemas/Same"
