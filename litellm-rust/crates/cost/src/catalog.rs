@@ -23,6 +23,10 @@ use crate::completion_cost::{
 use crate::custom_pricing::CustomTokenRates;
 use crate::dashscope_cost::cost_per_token as dashscope_cost_per_token;
 use crate::databricks_cost::registry_key as databricks_registry_key;
+use crate::fal_ai_image_cost::{
+    cost_calculator as fal_ai_image_cost_calculator,
+    fal_ai_passthrough_cost as calculate_fal_ai_passthrough_cost,
+};
 use crate::fireworks_cost::{
     FireworksThresholds, cost_per_token as fireworks_cost_per_token, get_base_model_for_pricing,
 };
@@ -856,6 +860,31 @@ impl ModelInfoCatalog {
             provider,
             at,
         )?)
+    }
+
+    pub fn fal_ai_image_generation_cost(
+        &self,
+        model: &str,
+        image_response: &Value,
+        optional_params: &Value,
+        deployment_prices: Option<&Value>,
+    ) -> Result<f64, CatalogError> {
+        fal_ai_image_cost_calculator(
+            model,
+            image_response,
+            optional_params,
+            deployment_prices,
+            &self.entries,
+        )
+        .ok_or(CatalogError::ModelNotFound)
+    }
+
+    pub fn fal_ai_passthrough_cost(&self, model: &str, request_body: &Value) -> Option<f64> {
+        let normalized = model.strip_prefix("fal_ai/").unwrap_or(model);
+        calculate_fal_ai_passthrough_cost(
+            self.entries.get(&format!("fal_ai/{normalized}")),
+            request_body,
+        )
     }
 
     pub fn default_image_cost_calculator(

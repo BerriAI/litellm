@@ -560,6 +560,14 @@ fn main() {
             json!({"input_cost_per_token": 0.001, "output_cost_per_image_token": 0.003, "output_cost_per_image": 0.5}),
         ),
         (
+            "fal_ai/medium/1024-x-1024/openai/image-sample".to_owned(),
+            json!({"output_cost_per_image": 0.15}),
+        ),
+        (
+            "fal_ai/fal-ai/trellis-sample".to_owned(),
+            json!({"output_cost_per_image": 0.3, "output_cost_per_image_512": 0.25}),
+        ),
+        (
             "low/1024-x-1024/default-sample".to_owned(),
             json!({"input_cost_per_image": 0.04}),
         ),
@@ -1076,4 +1084,24 @@ fn main() {
     )
     .unwrap();
     println!("gpt_image_generation={gpt_image:.3}");
+    let fal_image = route_image_generation_cost_calculator(
+        &model_info_catalog,
+        ImageCostRouteRequest {
+            model: "openai/image-sample",
+            provider: Some("fal_ai"),
+            image_response: &json!({"data": [{}, {}]}),
+            call_type: Some("image_generation"),
+            quality: None,
+            size: None,
+            n: None,
+            optional_params: &json!({"quality": "medium", "image_size": "square_hd"}),
+            supplied_model_info: None,
+            at,
+        },
+    )
+    .unwrap();
+    let fal_passthrough = model_info_catalog
+        .fal_ai_passthrough_cost("fal-ai/trellis-sample", &json!({"resolution": 512}))
+        .unwrap();
+    println!("fal_image_generation={fal_image:.3} fal_passthrough={fal_passthrough:.3}");
 }

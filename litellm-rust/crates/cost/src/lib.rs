@@ -11,6 +11,7 @@ pub mod completion_cost;
 pub mod custom_pricing;
 pub mod dashscope_cost;
 pub mod databricks_cost;
+pub mod fal_ai_image_cost;
 pub mod fireworks_cost;
 pub mod gemini_cost;
 pub mod generic_cost;
