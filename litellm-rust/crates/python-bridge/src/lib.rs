@@ -20,7 +20,7 @@ mod _native {
     #[pymodule_export]
     use crate::diagnostics::{gil_stats, process_state_started, reserve_process_for_forking};
     #[pymodule_export]
-    use crate::errors::{RustBridgeDeclined, RustUpstreamError};
+    use crate::errors::{RustBridgeDeclined, RustRequestError, RustUpstreamError};
     #[pymodule_export]
     use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
@@ -78,6 +78,7 @@ mod tests {
         Python::attach(|py| {
             let mut expected = vec![
                 "RustBridgeDeclined",
+                "RustRequestError",
                 "RustUpstreamError",
                 "ForkedAfterNativeRuntimeStarted",
                 "ProcessReservedForForking",

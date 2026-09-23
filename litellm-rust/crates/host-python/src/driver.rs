@@ -207,6 +207,13 @@ where
                 self.stage = Stage::Call;
                 self.resume_machine(py, None)
             }
+            (Expect::Arguments, LifecycleStep::Response(response)) => {
+                self.ended_at.get_or_insert_with(epoch_seconds);
+                match self.adapter.after_success(py, response, self.timing()) {
+                    Ok(step) => self.on_adapter(py, step, Expect::Response),
+                    Err(error) => self.failure(py, error, FailureOrigin::Host),
+                }
+            }
             (Expect::Wire, LifecycleStep::Wire(wire)) => {
                 self.resume_machine(py, Some(Ok(HostResult::BeforeSend(wire))))
             }

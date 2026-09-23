@@ -44,6 +44,10 @@ impl PublicCall {
         &self.kwargs
     }
 
+    pub(crate) fn request(&self) -> &Py<PyAny> {
+        &self.request
+    }
+
     pub(crate) fn set_kwargs(&mut self, kwargs: Py<PyDict>) {
         self.kwargs = kwargs;
     }

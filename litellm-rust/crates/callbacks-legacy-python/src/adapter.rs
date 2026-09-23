@@ -32,6 +32,7 @@ pub struct LegacySurface {
     pub input_description: &'static str,
     /// How a streamed response is billed; `None` for a route that never streams.
     pub stream: Option<PassThroughStream>,
+    pub pre_request_hooks: bool,
 }
 
 /// The pass-through billing a streamed response goes through once its chunks are in.
@@ -50,6 +51,7 @@ struct DeliveredStream {
 
 enum Pending {
     DeploymentPreCall,
+    PreRequestHooks,
     DeploymentPostCall,
     DeploymentFailure,
     AsyncFailure,
@@ -120,6 +122,16 @@ impl LegacyLogging {
     fn prepare(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
         let prepared = prepare(py, self.call.kwargs().bind(py), self.logger()?)?.unbind();
         self.call.set_kwargs(prepared);
+        if self.asynchronous && self.surface.pre_request_hooks {
+            self.pending = Some(Pending::PreRequestHooks);
+            let hook = py
+                .import("litellm.rust_bridge.messages.route_host")?
+                .getattr("run_pre_request_hooks")?;
+            return Ok(LifecycleStep::Await(
+                hook.call1((self.call.kwargs(), self.call.request()))?
+                    .unbind(),
+            ));
+        }
         Ok(LifecycleStep::Arguments(self.call.kwargs().clone_ref(py)))
     }
 
@@ -441,6 +453,15 @@ impl PythonLifecycle for LegacyLogging {
 
     fn resume(&mut self, py: Python<'_>, result: PyResult<Py<PyAny>>) -> PyResult<LifecycleStep> {
         match self.pending.take().ok_or_else(missing_state)? {
+            Pending::PreRequestHooks => {
+                let (redirected, payload): (bool, Py<PyAny>) = result?.extract(py)?;
+                if redirected {
+                    return Ok(LifecycleStep::Response(payload));
+                }
+                self.call
+                    .set_kwargs(payload.into_bound(py).cast_into::<PyDict>()?.unbind());
+                Ok(LifecycleStep::Arguments(self.call.kwargs().clone_ref(py)))
+            }
             Pending::DeploymentPreCall => {
                 self.call
                     .set_kwargs(result?.into_bound(py).cast_into::<PyDict>()?.unbind());

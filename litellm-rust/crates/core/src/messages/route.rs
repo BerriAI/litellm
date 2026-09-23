@@ -12,6 +12,7 @@ use litellm_host::{
 use litellm_llms::anthropic::common_utils::{
     is_invalid_thinking_error, strip_thinking_blocks_from_request,
 };
+use litellm_llms::anthropic::experimental_pass_through::messages::transformation::MessagesFeatures;
 use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
 use serde_json::{Map, Value};
 
@@ -41,6 +42,7 @@ pub struct MessagesCall {
     pub custom_llm_provider: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
+    pub messages_features: MessagesFeatures,
 }
 
 impl MessagesCall {
@@ -133,6 +135,7 @@ async fn execute(host: MessagesHost) -> Result<MessagesOutput, Error> {
         custom_llm_provider: call.custom_llm_provider.as_deref(),
         extra_headers: call.extra_headers.clone(),
         timeout: call.timeout,
+        messages_features: &call.messages_features,
     })?;
     if stream && request.provider != ANTHROPIC_MESSAGES_PROVIDER {
         return Err(Error::Unsupported("streaming messages for this provider"));

@@ -5,6 +5,7 @@ use litellm_core::messages::{
 };
 use litellm_host_python::{InvokeError, RouteHost, from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
+use litellm_llms::anthropic::experimental_pass_through::messages::transformation::MessagesFeatures;
 use pyo3::{
     exceptions::{PyException, PyValueError},
     gc::{PyTraverseError, PyVisit},
@@ -14,13 +15,13 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::{RustUpstreamError, messages_error_to_pyerr},
+    errors::{RustRequestError, RustUpstreamError, messages_error_to_pyerr},
     marshal::{optional_timeout, python_timeout_seconds},
 };
 
 /// The Anthropic Messages body fields a caller may pass besides `model` and `messages`,
 /// as `AnthropicMessagesRequestOptionalParams` declares them.
-const BODY_FIELDS: [&str; 22] = [
+const BODY_FIELDS: [&str; 24] = [
     "max_tokens",
     "metadata",
     "stop_sequences",
@@ -43,6 +44,8 @@ const BODY_FIELDS: [&str; 22] = [
     "reasoning_effort",
     "compaction",
     "safeguards",
+    "cache_control_injection_points",
+    "enable_prompt_caching",
 ];
 
 fn provider_specific_headers(value: Value, provider: &str) -> Map<String, Value> {
@@ -116,6 +119,11 @@ impl MessagesRouteHost {
             .map(|value| from_py::<Map<String, Value>>(&value))
             .transpose()?;
         let provider = string("custom_llm_provider")?.unwrap_or_else(|| self.provider(py));
+        let capabilities = py
+            .import("litellm.rust_bridge.messages.route_host")?
+            .getattr("messages_features")?
+            .call1((&model, &provider))?;
+        let messages_features: MessagesFeatures = from_py(&capabilities)?;
         let scoped_headers = argument("provider_specific_header")?
             .map(|value| {
                 from_py::<Value>(&value).map(|value| provider_specific_headers(value, &provider))
@@ -135,6 +143,7 @@ impl MessagesRouteHost {
             custom_llm_provider: string("custom_llm_provider")?,
             extra_headers: (!headers.is_empty()).then_some(headers),
             timeout: optional_timeout(timeout),
+            messages_features,
         })
     }
 
@@ -203,6 +212,7 @@ impl RouteHost for MessagesRouteHost {
 
     fn classify(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
         let native = match error {
+            Error::InvalidRequest(message) => RustRequestError::new_err(message),
             Error::Transport(TransportError::Http { status, body }) => {
                 let error = RustUpstreamError::new_err((status, body));
                 error

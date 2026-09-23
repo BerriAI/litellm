@@ -36,6 +36,7 @@ const SURFACE: LegacySurface = LegacySurface {
     call_type: "ocr",
     input_description: "OCR document processing",
     stream: None,
+    pre_request_hooks: false,
 };
 
 const ASYNC_SURFACE: LegacySurface = LegacySurface {

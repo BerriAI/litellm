@@ -15,6 +15,7 @@ use crate::errors::RustBridgeDeclined;
 const SURFACE: LegacySurface = LegacySurface {
     call_type: "anthropic_messages",
     input_description: "Messages",
+    pre_request_hooks: true,
     stream: Some(PassThroughStream {
         url_route: "/v1/messages",
         endpoint_type: "anthropic",

@@ -20,6 +20,13 @@ pyo3::create_exception!(
     "The provider call was already issued and failed. Args are (status, message); status is 0 when there was no HTTP response."
 );
 
+pyo3::create_exception!(
+    _native,
+    RustRequestError,
+    pyo3::exceptions::PyValueError,
+    "The native route rejected the request before calling the provider."
+);
+
 fn auth_is_value_error(error: &litellm_auth::Error) -> bool {
     !matches!(error, litellm_auth::Error::MissingApiKey { .. })
 }

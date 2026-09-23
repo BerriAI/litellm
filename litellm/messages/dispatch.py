@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 import litellm
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages import handler as main
 from litellm.rust_bridge.catalog import Delivery, Route, RouteContext
@@ -61,15 +61,11 @@ def _resolved_model_provider(model: str, provider: str | None) -> tuple[str, str
         return None
 
 
-def _has_python_request_hook() -> bool:
-    return any(
-        isinstance(callback, CustomLogger)
-        and (
-            type(callback).async_pre_request_hook is not CustomLogger.async_pre_request_hook
-            or type(callback).async_pre_call_deployment_hook is not CustomLogger.async_pre_call_deployment_hook
-        )
-        for callback in litellm.callbacks
-    )
+def _message_cache_point(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    point: Final = cast(Mapping[object, object], value)  # cast-ok: runtime Mapping check narrows legacy input
+    return point.get("location") == "message"
 
 
 def _public_request(
@@ -84,10 +80,36 @@ def _public_request(
     if not isinstance(model, str) or messages is None or not isinstance(max_tokens, int):
         return None
     extras: Final = optional_mapping(fields.get("kwargs")) or MappingProxyType({})
-    output_config: Final = extras.get("output_config")
-    thinking: Final = fields.get("thinking")
+    points: Final = extras.get("cache_control_injection_points")
+    supported_points: Final = isinstance(points, list) and all(
+        _message_cache_point(point)
+        for point in cast(list[object], points)  # cast-ok: list elements are validated above
+    )
     provider: Final = optional_str(fields.get("custom_llm_provider"))
     resolved: Final = _resolved_model_provider(model, provider)
+    speed: Final = extras.get("speed")
+    if speed is not None and resolved is not None and resolved[1] == "anthropic":
+        if not AnthropicConfig._model_supports_speed_param(  # pyright: ignore[reportPrivateUsage]  # Python validates unsupported speed before send
+            resolved[0], resolved[1]
+        ):
+            return None
+    auto_prompt_cache: Final = litellm.enable_anthropic_prompt_caching or extras.get("enable_prompt_caching") is True
+    proxy_request: Final = extras.get("proxy_server_request")
+    if auto_prompt_cache and isinstance(proxy_request, Mapping):
+        proxy_fields: Final = cast(  # cast-ok: runtime Mapping check validates this legacy request
+            Mapping[object, object], proxy_request
+        )
+        proxy_headers: Final = proxy_fields.get("headers")
+        if isinstance(proxy_headers, Mapping):
+            headers: Final = cast(  # cast-ok: runtime Mapping check validates these legacy headers
+                Mapping[object, object], proxy_headers
+            )
+            user_agent: Final = next(
+                (value for name, value in headers.items() if isinstance(name, str) and name.lower() == "user-agent"),
+                None,
+            )
+            if isinstance(user_agent, str) and user_agent.startswith(("claude-cli/", "claude-code/")):
+                return None
     sampling: Final = (
         (fields.get("temperature") is not None and fields.get("temperature") != 1)
         or fields.get("top_p") is not None
@@ -99,18 +121,10 @@ def _public_request(
         ):
             return None
     if (
-        _has_python_request_hook()
-        or litellm.enable_anthropic_prompt_caching
-        or fields.get("client") is not None
-        or extras.get("reasoning_effort") is not None
-        or extras.get("speed") is not None
-        or extras.get("cache_control_injection_points") is not None
+        fields.get("client") is not None
+        or (points is not None and not supported_points)
         or extras.get("additional_drop_params") is not None
-        or extras.get("enable_prompt_caching") is True
         or extras.get("mock_response") is not None
-        or isinstance(output_config, Mapping)
-        and output_config.get("effort") is not None
-        or thinking is not None
     ):
         return None
     return LiteLLMMessagesRequest(
@@ -156,13 +170,17 @@ async def _native_amessages_with_cache(
 ) -> MessagesResult:
     cache: Final = litellm.cache
     cache_control: Final = kwargs.get("cache")
-    controls: Final = cache_control if isinstance(cache_control, Mapping) else MappingProxyType({})
+    controls: Final[Mapping[object, object]] = (
+        cast(Mapping[object, object], cache_control)  # cast-ok: runtime Mapping check narrows legacy cache controls
+        if isinstance(cache_control, Mapping)
+        else MappingProxyType({})
+    )
     if cache is None or cache.supported_call_types is None or "anthropic_messages" not in cache.supported_call_types:
         return await hook(request, args, kwargs)
 
     from litellm.caching.caching_handler import LLMCachingHandler
 
-    call_kwargs: Final = dict(kwargs)
+    call_kwargs: Final = dict(kwargs)  # mutable-ok: legacy caching handler edits owned request kwargs
     caching_handler: Final = LLMCachingHandler(
         original_function=_PYTHON_AMESSAGES,
         request_kwargs=call_kwargs,
@@ -181,9 +199,11 @@ async def _native_amessages_with_cache(
         return await _PYTHON_AMESSAGES(*args, **kwargs)
 
     result: Final = await hook(request, args, kwargs)
-    if request.stream:
+    if isinstance(result, AsyncIterator):
         return caching_handler.wrap_streaming_result_for_cache(result, "anthropic_messages")
-    await caching_handler.async_set_cache(result, original_function=_PYTHON_AMESSAGES, kwargs=call_kwargs, args=args)
+    await caching_handler.async_set_cache(  # pyright: ignore[reportUnknownMemberType]  # legacy cache handler has untyped callback return
+        result, original_function=_PYTHON_AMESSAGES, kwargs=call_kwargs, args=args
+    )
     return result
 
 

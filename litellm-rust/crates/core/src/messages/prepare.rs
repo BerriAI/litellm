@@ -1,7 +1,7 @@
 use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
 use litellm_llms::anthropic::common_utils::normalize_messages;
 use litellm_llms::anthropic::experimental_pass_through::messages::transformation::{
-    anthropic_beta_headers, normalize_context_management,
+    anthropic_beta_headers, inject_cache_control, normalize_context_management, normalize_reasoning,
 };
 use litellm_llms::base_llm::anthropic_messages::transformation::{
     BaseAnthropicMessagesConfig, MessagesAuthStrategy,
@@ -40,7 +40,7 @@ pub(super) fn prepare_provider_request(
     let env_lookup = |key: &str| std::env::var(key).ok();
 
     let body = if provider == "anthropic" {
-        normalize_anthropic_body(request.body)?
+        normalize_anthropic_body(request.body, request.messages_features)?
     } else {
         request.body
     };
@@ -79,7 +79,10 @@ pub(super) fn prepare_provider_request(
     })
 }
 
-fn normalize_anthropic_body(body: Value) -> Result<Value, Error> {
+fn normalize_anthropic_body(
+    body: Value,
+    capabilities: &litellm_llms::anthropic::experimental_pass_through::messages::transformation::MessagesFeatures,
+) -> Result<Value, Error> {
     let Value::Object(fields) = body else {
         return Ok(body);
     };
@@ -93,7 +96,7 @@ fn normalize_anthropic_body(body: Value) -> Result<Value, Error> {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    Ok(Value::Object(
+    let body = Value::Object(
         fields
             .into_iter()
             .map(|(name, value)| -> Result<(String, Value), Error> {
@@ -128,7 +131,9 @@ fn normalize_anthropic_body(body: Value) -> Result<Value, Error> {
                 }
             })
             .collect::<Result<Map<String, Value>, Error>>()?,
-    ))
+    );
+    let body = inject_cache_control(body, capabilities);
+    normalize_reasoning(body, capabilities).map_err(Error::InvalidRequest)
 }
 
 fn validate_environment(
@@ -249,7 +254,10 @@ mod tests {
 
     #[test]
     fn anthropic_messages_require_max_tokens_before_network() {
-        let result = normalize_anthropic_body(json!({"model":"claude-sonnet-5","messages":[]}));
+        let result = normalize_anthropic_body(
+            json!({"model":"claude-sonnet-5","messages":[]}),
+            &Default::default(),
+        );
         assert!(
             matches!(result, Err(Error::InvalidRequest(message)) if message.contains("max_tokens"))
         );
@@ -301,11 +309,16 @@ mod tests {
     fn anthropic_metadata_keeps_only_api_fields_and_rejects_invalid_user_id() {
         let body = normalize_anthropic_body(
             json!({"max_tokens":16,"metadata":{"user_id":"user","internal":"private"}}),
+            &Default::default(),
         )
         .unwrap();
         assert_eq!(body["metadata"], json!({"user_id":"user"}));
         assert!(
-            normalize_anthropic_body(json!({"max_tokens":16,"metadata":{"user_id":12}})).is_err()
+            normalize_anthropic_body(
+                json!({"max_tokens":16,"metadata":{"user_id":12}}),
+                &Default::default()
+            )
+            .is_err()
         );
     }
 }

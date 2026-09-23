@@ -7,6 +7,7 @@ import pytest
 import litellm
 from litellm.caching.caching import Cache, LiteLLMCacheType
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.anthropic.experimental_pass_through.messages import handler as python_messages_handler
 from litellm.rust_bridge.catalog import CacheRule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.response_cache import resolve_response_cache
@@ -125,6 +126,7 @@ async def test_native_messages_matches_python_request_cleanup_and_beta_headers(
     monkeypatch.setenv("LITELLM_RUST", "0")
     await litellm.anthropic.messages.acreate(**kwargs)
     monkeypatch.setenv("LITELLM_RUST", "1")
+    monkeypatch.setattr(python_messages_handler, "base_llm_http_handler", None)
     await litellm.anthropic.messages.acreate(**kwargs)
 
     python_request, rust_request = messages_server.requests
@@ -134,6 +136,210 @@ async def test_native_messages_matches_python_request_cleanup_and_beta_headers(
     assert rust_request.headers["x-scope"] == "selected"
     assert "x-ignored" not in rust_request.headers
     assert not rust_request.headers.get("user-agent", "").startswith("python-httpx")
+
+
+@pytest.mark.parametrize(
+    ("model", "options"),
+    (
+        ("claude-opus-4-7", {"reasoning_effort": "low", "max_tokens": 8192}),
+        (
+            "claude-sonnet-4-5",
+            {"thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}, "max_tokens": 8192},
+        ),
+        ("claude-opus-4-7", {"thinking": {"type": "disabled"}, "speed": "fast"}),
+    ),
+)
+@pytest.mark.asyncio
+async def test_native_messages_matches_python_thinking_and_reasoning_rules(
+    messages_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    options: dict[str, object],
+) -> None:
+    messages_server.expected_requests = 2
+    kwargs: Final = arguments(messages_server, model=model, **options)
+
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    await litellm.anthropic.messages.acreate(**kwargs)
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    monkeypatch.setattr(python_messages_handler, "base_llm_http_handler", None)
+    await litellm.anthropic.messages.acreate(**kwargs)
+
+    python_request, rust_request = messages_server.requests
+    assert rust_request.body == python_request.body
+    assert rust_request.headers.get("anthropic-beta") == python_request.headers.get("anthropic-beta")
+    assert not rust_request.headers.get("user-agent", "").startswith("python-httpx")
+
+
+@pytest.mark.asyncio
+async def test_native_invalid_reasoning_effort_fails_without_upstream_request(
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    messages_server.expected_requests = 0
+    monkeypatch.setattr(python_messages_handler, "base_llm_http_handler", None)
+
+    with pytest.raises(litellm.BadRequestError):
+        await litellm.anthropic.messages.acreate(
+            **arguments(messages_server, model="claude-opus-4-7", reasoning_effort="invalid")
+        )
+
+    assert not messages_server.requests
+
+
+@pytest.mark.asyncio
+async def test_native_messages_matches_python_prompt_cache_injection(
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    messages_server.expected_requests = 2
+    kwargs: Final = arguments(
+        messages_server,
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Keep this context"}]}],
+        cache_control_injection_points=[{"location": "message", "index": -1}],
+    )
+
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    await litellm.anthropic.messages.acreate(**kwargs)
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    monkeypatch.setattr(python_messages_handler, "base_llm_http_handler", None)
+    await litellm.anthropic.messages.acreate(**kwargs)
+
+    python_request, rust_request = messages_server.requests
+    assert rust_request.body == python_request.body
+    assert not rust_request.headers.get("user-agent", "").startswith("python-httpx")
+
+
+@pytest.mark.parametrize("enabled_by_request", (False, True))
+@pytest.mark.asyncio
+async def test_native_messages_matches_python_default_prompt_cache_injection(
+    messages_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    enabled_by_request: bool,
+) -> None:
+    messages_server.expected_requests = 2
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", not enabled_by_request)
+    kwargs: Final = arguments(
+        messages_server,
+        system="Stable instructions",
+        messages=[
+            {"role": "user", "content": [{"type": "text", "text": "First"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Latest"}]},
+        ],
+        **({"enable_prompt_caching": True} if enabled_by_request else {}),
+    )
+
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    await litellm.anthropic.messages.acreate(**kwargs)
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    monkeypatch.setattr(python_messages_handler, "base_llm_http_handler", None)
+    await litellm.anthropic.messages.acreate(**kwargs)
+
+    python_request, rust_request = messages_server.requests
+    assert rust_request.body == python_request.body
+    assert rust_request.body["system"][0]["cache_control"]["type"] == "ephemeral"
+    assert rust_request.body["messages"][-1]["content"][-1]["cache_control"]["type"] == "ephemeral"
+
+
+@pytest.mark.asyncio
+async def test_same_provider_request_hook_runs_once_and_uses_native_transport(
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Edit(CustomLogger):
+        calls = 0
+
+        async def async_pre_request_hook(self, model, messages, kwargs):
+            self.calls += 1
+            return {**kwargs, "temperature": 0.25}
+
+    hook: Final = Edit()
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    monkeypatch.setattr(python_messages_handler, "base_llm_http_handler", None)
+
+    await litellm.anthropic.messages.acreate(**arguments(messages_server, model="claude-sonnet-4-5"))
+
+    assert hook.calls == 1
+    assert_served_natively(messages_server)
+    assert messages_server.requests[0].body["temperature"] == 0.25
+
+
+@pytest.mark.asyncio
+async def test_provider_changing_request_hook_continues_on_python_once(
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Redirect(CustomLogger):
+        calls = 0
+
+        async def async_pre_request_hook(self, model, messages, kwargs):
+            self.calls += 1
+            return {**kwargs, "litellm_params": {"custom_llm_provider": "bedrock"}}
+
+    hook: Final = Redirect()
+    calls: Final = []
+
+    async def python_handler(**kwargs: object) -> object:
+        calls.append(kwargs)
+        return MESSAGES_RESPONSE
+
+    messages_server.expected_requests = 0
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    monkeypatch.setattr(python_messages_handler, "anthropic_messages_handler", python_handler)
+
+    result: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server))
+
+    assert hook.calls == 1
+    assert len(calls) == 1
+    assert calls[0]["custom_llm_provider"] == "bedrock"
+    assert result["content"] == MESSAGES_RESPONSE["content"]
+    assert not messages_server.requests
+
+
+@pytest.mark.asyncio
+async def test_native_request_hooks_keep_deployment_and_pre_call_order(
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: Final = []
+
+    class Ordered(CustomLogger):
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            events.append("deployment")
+            return kwargs
+
+        async def async_pre_request_hook(self, model, messages, kwargs):
+            events.append("request")
+            return {**kwargs, "temperature": 0.25}
+
+        def log_pre_api_call(self, model, messages, kwargs):
+            events.append("pre_call")
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            events.append("success")
+
+    monkeypatch.setattr(litellm, "callbacks", [Ordered()])
+    monkeypatch.setattr(python_messages_handler, "base_llm_http_handler", None)
+
+    await litellm.anthropic.messages.acreate(**arguments(messages_server, model="claude-sonnet-4-5"))
+    await drain_logging()
+
+    assert events == ["deployment", "request", "pre_call", "success"]
+    assert messages_server.requests[0].body["temperature"] == 0.25
+
+
+@pytest.mark.asyncio
+async def test_native_request_hook_can_enable_streaming(
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Stream(CustomLogger):
+        async def async_pre_request_hook(self, model, messages, kwargs):
+            return {**kwargs, "stream": True}
+
+    messages_server.enqueue(STREAM)
+    monkeypatch.setattr(litellm, "callbacks", [Stream()])
+    monkeypatch.setattr(python_messages_handler, "base_llm_http_handler", None)
+
+    stream: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server))
+    chunks: Final = b"".join([chunk async for chunk in stream])
+
+    assert chunks == sse_payload()
+    assert messages_server.requests[0].body["stream"] is True
 
 
 @pytest.mark.asyncio

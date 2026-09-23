@@ -15,6 +15,12 @@ pub struct AnthropicMessagesConfig;
 
 pub const ANTHROPIC_MESSAGES_CONFIG: AnthropicMessagesConfig = AnthropicMessagesConfig;
 
+mod prompt_cache;
+mod reasoning;
+
+pub use prompt_cache::inject_cache_control;
+pub use reasoning::{MessagesFeatures, normalize_reasoning};
+
 pub fn normalize_context_management(value: Value) -> Value {
     let Value::Array(entries) = value else {
         return match value {
@@ -262,6 +268,180 @@ mod tests {
             normalize_context_management(json!({"edits":[]})),
             json!({"edits":[]})
         );
+    }
+
+    #[test]
+    fn reasoning_effort_uses_adaptive_thinking_and_keeps_caller_effort() {
+        let capabilities = MessagesFeatures {
+            adaptive: true,
+            xhigh: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            normalize_reasoning(
+                json!({"max_tokens":8192,"reasoning_effort":"minimal"}),
+                &capabilities
+            )
+            .unwrap(),
+            json!({"max_tokens":8192,"thinking":{"type":"adaptive","display":"summarized"},"output_config":{"effort":"low"}})
+        );
+        assert_eq!(
+            normalize_reasoning(json!({"max_tokens":8192,"reasoning_effort":"low","output_config":{"effort":"high"}}), &capabilities).unwrap(),
+            json!({"max_tokens":8192,"thinking":{"type":"adaptive","display":"summarized"},"output_config":{"effort":"high"}})
+        );
+    }
+
+    #[test]
+    fn older_model_maps_adaptive_effort_to_capped_legacy_budget() {
+        let capabilities = MessagesFeatures {
+            reasoning: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            normalize_reasoning(json!({"max_tokens":1500,"temperature":0.2,"thinking":{"type":"adaptive"},"output_config":{"effort":"high","format":{"type":"json_schema"}}}), &capabilities).unwrap(),
+            json!({"max_tokens":1500,"thinking":{"type":"enabled","budget_tokens":1499},"output_config":{"format":{"type":"json_schema"}}})
+        );
+    }
+
+    #[test]
+    fn auto_summary_adds_display_to_enabled_thinking_only() {
+        let capabilities = MessagesFeatures {
+            auto_summary: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            normalize_reasoning(
+                json!({"thinking":{"type":"enabled","budget_tokens":1024}}),
+                &capabilities
+            )
+            .unwrap()["thinking"],
+            json!({"type":"enabled","budget_tokens":1024,"display":"summarized"})
+        );
+        assert_eq!(
+            normalize_reasoning(json!({"thinking":{"type":"disabled"}}), &capabilities).unwrap()["thinking"],
+            json!({"type":"disabled"})
+        );
+    }
+
+    #[test]
+    fn none_effort_clears_explicit_thinking_and_output_config() {
+        assert_eq!(
+            normalize_reasoning(
+                json!({"reasoning_effort":"none","thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}),
+                &MessagesFeatures::default(),
+            ).unwrap(),
+            json!({})
+        );
+    }
+
+    #[test]
+    fn invalid_and_unsupported_reasoning_efforts_fail_before_send() {
+        let adaptive = MessagesFeatures {
+            adaptive: true,
+            ..Default::default()
+        };
+        assert!(normalize_reasoning(json!({"reasoning_effort":"invalid"}), &adaptive).is_err());
+        assert!(
+            normalize_reasoning(json!({"reasoning_effort":"xhigh"}), &adaptive)
+                .unwrap_err()
+                .contains("not supported")
+        );
+    }
+
+    #[test]
+    fn always_on_model_drops_disabled_thinking_and_legacy_budget_becomes_adaptive() {
+        let capabilities = MessagesFeatures {
+            adaptive: true,
+            always_on: true,
+            xhigh: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            normalize_reasoning(json!({"thinking":{"type":"disabled"}}), &capabilities).unwrap(),
+            json!({})
+        );
+        assert_eq!(
+            normalize_reasoning(
+                json!({"thinking":{"type":"enabled","budget_tokens":8192}}),
+                &capabilities
+            )
+            .unwrap(),
+            json!({"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"}})
+        );
+    }
+
+    #[test]
+    fn explicit_message_cache_injection_respects_existing_blocks_and_limit() {
+        let body = json!({
+            "messages": [
+                {"role":"user","content":[{"type":"text","text":"first","cache_control":{"type":"ephemeral","ttl":"1h"}}]},
+                {"role":"user","content":[{"type":"text","text":"second"}]},
+                {"role":"user","content":[{"type":"text","text":"third"}]},
+                {"role":"user","content":[{"type":"text","text":"fourth"}]},
+                {"role":"user","content":[{"type":"text","text":"fifth"}]}
+            ],
+            "system":"instructions",
+            "cache_control_injection_points":[
+                {"location":"message","role":"system"},
+                {"location":"message","role":"user"}
+            ]
+        });
+        let injected = inject_cache_control(body.clone(), &MessagesFeatures::default());
+        assert_eq!(
+            injected["messages"][0]["content"][0]["cache_control"],
+            json!({"type":"ephemeral","ttl":"1h"})
+        );
+        assert_eq!(
+            injected["messages"][1]["content"][0]["cache_control"],
+            json!({"type":"ephemeral"})
+        );
+        assert!(
+            injected["messages"][4]["content"][0]
+                .get("cache_control")
+                .is_none()
+        );
+        assert_eq!(
+            injected["system"][0]["cache_control"],
+            json!({"type":"ephemeral"})
+        );
+        assert!(injected.get("cache_control_injection_points").is_none());
+        assert!(body["system"].is_string());
+    }
+
+    #[test]
+    fn default_prompt_cache_marks_system_and_last_turn_only_when_unmarked() {
+        let capabilities = MessagesFeatures {
+            prompt_cache_supported: true,
+            prompt_cache_enabled: true,
+            prompt_cache_ttl: Some("1h".into()),
+            ..Default::default()
+        };
+        let body = json!({
+            "system":"stable instructions",
+            "messages":[
+                {"role":"user","content":[{"type":"text","text":"first"}]},
+                {"role":"user","content":[{"type":"text","text":"latest"}]}
+            ]
+        });
+        let injected = inject_cache_control(body.clone(), &capabilities);
+        assert_eq!(
+            injected["system"][0]["cache_control"],
+            json!({"type":"ephemeral","ttl":"1h"})
+        );
+        assert_eq!(
+            injected["messages"][1]["content"][0]["cache_control"],
+            json!({"type":"ephemeral","ttl":"1h"})
+        );
+        assert!(
+            injected["messages"][0]["content"][0]
+                .get("cache_control")
+                .is_none()
+        );
+        let marked = json!({
+            "system":"stable instructions",
+            "messages":[{"role":"user","content":[{"type":"text","text":"latest","cache_control":{"type":"ephemeral"}}]}]
+        });
+        assert_eq!(inject_cache_control(marked.clone(), &capabilities), marked);
     }
 
     #[test]

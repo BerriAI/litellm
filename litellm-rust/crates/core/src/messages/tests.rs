@@ -160,6 +160,7 @@ async fn messages_round_trip_builds_azure_request_and_passes_response_through() 
         custom_llm_provider: Some("azure_ai"),
         extra_headers: None,
         timeout: Some(Duration::from_secs(5)),
+        messages_features: &Default::default(),
     })
     .await
     .expect("messages request succeeds");
@@ -216,6 +217,7 @@ async fn messages_round_trip_builds_native_anthropic_request() {
         custom_llm_provider: Some("anthropic"),
         extra_headers: None,
         timeout: Some(Duration::from_secs(5)),
+        messages_features: &Default::default(),
     })
     .await
     .expect("messages request succeeds");
@@ -269,6 +271,7 @@ async fn messages_does_not_duplicate_auth_when_x_api_key_supplied() {
         custom_llm_provider: Some("azure_ai"),
         extra_headers: Some(headers),
         timeout: Some(Duration::from_secs(5)),
+        messages_features: &Default::default(),
     })
     .await
     .expect("messages request succeeds");
@@ -323,6 +326,7 @@ async fn messages_forwards_entra_id_bearer_without_requiring_api_key() {
         custom_llm_provider: Some("azure_ai"),
         extra_headers: Some(headers),
         timeout: Some(Duration::from_secs(5)),
+        messages_features: &Default::default(),
     })
     .await
     .expect("entra id request succeeds without api key");
@@ -347,6 +351,7 @@ async fn messages_requires_auth_when_no_key_and_no_header() {
         custom_llm_provider: Some("azure_ai"),
         extra_headers: None,
         timeout: Some(Duration::from_millis(50)),
+        messages_features: &Default::default(),
     })
     .await
     .expect_err("missing auth errors");
@@ -385,6 +390,7 @@ async fn messages_ignores_malformed_authorization_and_uses_api_key() {
         custom_llm_provider: Some("azure_ai"),
         extra_headers: Some(headers),
         timeout: Some(Duration::from_secs(5)),
+        messages_features: &Default::default(),
     })
     .await
     .expect("falls back to api key");
@@ -426,6 +432,7 @@ async fn messages_maps_provider_error_status_to_http_error() {
         custom_llm_provider: Some("azure_ai"),
         extra_headers: None,
         timeout: Some(Duration::from_secs(5)),
+        messages_features: &Default::default(),
     })
     .await
     .expect_err("provider error propagates");
@@ -446,6 +453,7 @@ async fn messages_rejects_unsupported_provider() {
         custom_llm_provider: Some("openai"),
         extra_headers: None,
         timeout: Some(Duration::from_millis(50)),
+        messages_features: &Default::default(),
     })
     .await
     .expect_err("unsupported provider errors");
