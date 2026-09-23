@@ -2052,6 +2052,9 @@
         ],
         "tests/integration/spend/test_reset_budget_leader_election.py::test_reset_sweep_skips_ticks_while_another_pod_holds_the_lease_and_resumes_after_release": [
             "spend.budget_reset.one_pod_sweeps_per_tick"
+        ],
+        "tests/integration/spend/test_responses_cache_write_itemization.py::test_responses_cache_write_tokens_are_itemized_as_cache_creation_cost": [
+            "spend.responses_api.cache_write_tokens_itemized_as_cache_creation_cost"
         ]
     },
     "browser": {
