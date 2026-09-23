@@ -609,4 +609,10 @@ fn main() {
     let dispatched_tool_cost =
         model_info_catalog.built_in_tool_cost("openai/model", Some("openai"), None, tool_request);
     println!("dispatched_tool_cost={dispatched_tool_cost:.2}");
+    let breakdown =
+        model_info_catalog.get_token_type_cost_breakdown(completion_request.token, None);
+    println!(
+        "breakdown_reasoning={:.6} breakdown_cache={:.6}",
+        breakdown.reasoning_cost, breakdown.cache_read_cost
+    );
 }

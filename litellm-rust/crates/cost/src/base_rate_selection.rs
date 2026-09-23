@@ -21,7 +21,7 @@ struct MissingCacheRates {
     one_hour: bool,
 }
 
-fn tier_key(base: &str, service_tier: Option<&str>) -> String {
+pub(crate) fn tier_key(base: &str, service_tier: Option<&str>) -> String {
     match service_tier.map(str::to_ascii_lowercase).as_deref() {
         Some("flex") => format!("{base}_flex"),
         Some("priority" | "fast") => format!("{base}_priority"),

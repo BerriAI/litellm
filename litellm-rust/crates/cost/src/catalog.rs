@@ -3,11 +3,18 @@ use std::collections::HashMap;
 use jiff::Timestamp;
 use serde_json::Value;
 
+use crate::billed_token_rates::{
+    BilledRatesRequest, BilledTokenRates, TokenTypeCostBreakdown,
+    get_billed_token_rates as calculate_billed_token_rates,
+    get_token_type_cost_breakdown as calculate_token_type_cost_breakdown,
+};
 use crate::completion_cost::{
     CompletionCost, ResponseCostError, completion_cost, get_response_cost_from_hidden_params,
 };
+use crate::custom_pricing::CustomTokenRates;
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::per_second::per_second_pricing_cost;
+use crate::provider_cache::apply_provider_cache_read_default;
 use crate::responses_usage::ChatUsage;
 use crate::retrieval_cost::{rerank_cost, vector_store_search_cost};
 use crate::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
@@ -190,19 +197,59 @@ impl ModelInfoCatalog {
         let key = self
             .select_model_key(request.model, request.provider, request.region)
             .ok_or(CatalogError::ModelNotFound)?;
-        let model_info = &self.entries[key];
-        if let Some(cost) = per_second_pricing_cost(model_info, request.response_time_ms) {
+        let model_info = apply_provider_cache_read_default(&self.entries[key], request.provider);
+        if let Some(cost) = per_second_pricing_cost(&model_info, request.response_time_ms) {
             return Ok(cost);
         }
         Ok(calculate_generic_cost_from_model_info_with_region(
             request.usage,
-            model_info,
+            &model_info,
             request.service_tier,
             request.provider == Some("xai"),
             request.data_residency,
             request.vertex_location,
             request.at,
         ))
+    }
+
+    pub fn get_billed_token_rates(
+        &self,
+        request: ModelCostRequest<'_>,
+        custom_cost_per_token: Option<CustomTokenRates>,
+    ) -> Option<BilledTokenRates> {
+        let model_info = self
+            .select_model_key(request.model, request.provider, request.region)
+            .and_then(|key| self.entries.get(key));
+        calculate_billed_token_rates(BilledRatesRequest {
+            model_info,
+            usage: request.usage,
+            provider: request.provider,
+            service_tier: request.service_tier,
+            data_residency: request.data_residency,
+            vertex_location: request.vertex_location,
+            at: request.at,
+            custom_cost_per_token,
+        })
+    }
+
+    pub fn get_token_type_cost_breakdown(
+        &self,
+        request: ModelCostRequest<'_>,
+        custom_cost_per_token: Option<CustomTokenRates>,
+    ) -> TokenTypeCostBreakdown {
+        let model_info = self
+            .select_model_key(request.model, request.provider, request.region)
+            .and_then(|key| self.entries.get(key));
+        calculate_token_type_cost_breakdown(BilledRatesRequest {
+            model_info,
+            usage: request.usage,
+            provider: request.provider,
+            service_tier: request.service_tier,
+            data_residency: request.data_residency,
+            vertex_location: request.vertex_location,
+            at: request.at,
+            custom_cost_per_token,
+        })
     }
 
     pub fn rerank_cost(

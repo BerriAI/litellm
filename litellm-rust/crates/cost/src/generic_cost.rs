@@ -149,12 +149,23 @@ pub fn calculate_generic_cost_from_model_info(
         threshold_inclusive,
         at,
     );
-    let off_peak_reasoning = open_off_peak_block(model_info, at)
-        .and_then(|block| parse_off_peak_rate(block.get("output_cost_per_reasoning_token")));
-    let reasoning = off_peak_reasoning
-        .or_else(|| get_tiered_reasoning_rate(model_info, usage.prompt_tokens))
-        .unwrap_or_else(|| resolve_reasoning_token_cost(model_info, service_tier, base.output));
+    let reasoning = resolve_billed_reasoning_rate(usage, model_info, service_tier, base.output, at);
     calculate_with_base_rates(usage, model_info, base, service_tier, reasoning, multiplier)
+}
+
+pub fn resolve_billed_reasoning_rate(
+    usage: &ChatUsage,
+    model_info: &Value,
+    service_tier: Option<&str>,
+    completion_base_cost: f64,
+    at: Timestamp,
+) -> f64 {
+    open_off_peak_block(model_info, at)
+        .and_then(|block| parse_off_peak_rate(block.get("output_cost_per_reasoning_token")))
+        .or_else(|| get_tiered_reasoning_rate(model_info, usage.prompt_tokens))
+        .unwrap_or_else(|| {
+            resolve_reasoning_token_cost(model_info, service_tier, completion_base_cost)
+        })
 }
 
 pub fn calculate_generic_cost_from_model_info_with_region(
