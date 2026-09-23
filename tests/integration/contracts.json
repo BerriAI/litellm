@@ -1855,6 +1855,9 @@
     "tests/integration/spend/test_passthrough_budget_reservation.py::test_repeated_gemini_passthrough_calls_stay_served_while_key_spend_is_below_max_budget": [
       "spend.budget_reservation.gemini_passthrough_success_releases_reservation_from_spend_counter"
     ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_passthrough_upstream_error_body_reaches_proxy_log_and_spend_row": [
+      "observability.passthrough.upstream_error_body_logged_and_in_spend_log"
+    ],
     "tests/integration/spend/test_team_daily_activity_aggregated.py::test_aggregated_team_activity_reports_the_whole_range_team_spend_in_one_page": [
       "quota_management.spend_tracking.team_daily_activity_aggregated_reports_whole_range_team_spend"
     ],
