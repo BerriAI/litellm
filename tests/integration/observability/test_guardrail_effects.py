@@ -3,14 +3,65 @@ import uuid
 from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
 import yaml
-
-from integration._support.client import Gateway, eventually
-from integration._support.database import read_rows
+from integration._support.client import Gateway
 from integration._support.mcp import mcp_peer, register_mcp, tool_names
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
+from pydantic import JsonValue
+
+PNG_BASE64: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+PDF_BASE64: Final = "JVBERi0xLjQKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRvYmoKMiAwIG9iago8PC9UeXBlL1BhZ2VzL0tpZHNbMyAwIFJdL0NvdW50IDE+PgplbmRvYmoKMyAwIG9iago8PC9UeXBlL1BhZ2UvUGFyZW50IDIgMCBSL01lZGlhQm94WzAgMCA2MTIgNzkyXT4+CmVuZG9iago="
+
+
+def _bedrock_policy(endpoint: str) -> dict[str, JsonValue]:
+    return {
+        "guardrail": "bedrock",
+        "mode": "pre_call",
+        "default_on": True,
+        "guardrailIdentifier": "synthetic-guardrail",
+        "guardrailVersion": "1",
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "synthetic-access-key",
+        "aws_secret_access_key": "synthetic-secret-key",
+        "aws_bedrock_runtime_endpoint": endpoint,
+    }
+
+
+def _guardrail_config(tmp_path: Path, name: str, params: dict[str, JsonValue], filename: str) -> Path:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["guardrails"] = [{"guardrail_name": name, "litellm_params": params}]
+    path: Final = tmp_path / filename
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+def _allow(_request: Request) -> Reply:
+    return Reply(body=b'{"action":"NONE","outputs":[],"assessments":[]}')
+
+
+def _unreachable(_request: Request) -> Reply:
+    return Reply(status=500)
+
+
+def _anthropic_reply(request: Request) -> Reply:
+    assert request.target == "/v1/messages"
+    return Reply(
+        body=json.dumps(
+            {
+                "id": "wire-message",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5-20250929",
+                "content": [{"type": "text", "text": "wire response"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 5, "output_tokens": 2},
+            }
+        ).encode()
+    )
 
 
 @pytest.mark.covers("other.observability.guardrails.rewrite_reaches_correct_anthropic_positions")
@@ -124,8 +175,6 @@ def test_guardrail_denial_prevents_provider_and_preserves_allowed_control(gatewa
         with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model()
             key: Final = scenario.key(models=[model])
-            import httpx
-
             with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
                 observed.get("/__observations")
                 denied: Final = candidate.request(
@@ -214,3 +263,215 @@ def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway:
                     assert len(calls) == 1
                     assert calls[0]["body"]["params"]["name"] == tool
                     assert calls[0]["body"]["params"]["arguments"] == arguments
+
+
+@pytest.mark.covers("other.observability.guardrails.bedrock_scans_image_only_chat")
+def test_bedrock_guardrail_scans_image_only_chat_request(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+
+    def guardrail(request: Request) -> Reply:
+        assert request.target == "/guardrail/synthetic-guardrail/version/1/apply"
+        body: Final = json.loads(request.body)
+        assert body["content"] == [{"image": {"format": "png", "source": {"bytes": PNG_BASE64}}}]
+        return Reply(body=b'{"action":"NONE","outputs":[],"assessments":[]}')
+
+    with wire_server(guardrail) as policy:
+        path: Final = _guardrail_config(tmp_path, identity, _bedrock_policy(policy.url), "bedrock-image.yaml")
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model()
+            with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
+                observed.get("/__observations")
+                response: Final = candidate.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {
+                        "model": model,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{PNG_BASE64}"}}
+                                ],
+                            }
+                        ],
+                    },
+                )
+                assert response.status_code == 200, response.text
+                assert len(observed.get("/__observations").json()["requests"]) == 1
+            assert len(policy.drain()) == 1
+
+
+@pytest.mark.covers("other.observability.guardrails.bedrock_refuses_chat_file_part_without_wire_calls")
+def test_bedrock_guardrail_refuses_chat_file_part_without_reaching_guardrail_or_provider(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+
+    with wire_server(_allow) as policy:
+        path: Final = _guardrail_config(tmp_path, identity, _bedrock_policy(policy.url), "bedrock-file.yaml")
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model()
+            with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
+                observed.get("/__observations")
+                response: Final = candidate.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {
+                        "model": model,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": "synthetic summarize request"},
+                                    {
+                                        "type": "file",
+                                        "file": {
+                                            "file_data": f"data:application/pdf;base64,{PDF_BASE64}",
+                                            "filename": "a.pdf",
+                                        },
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                )
+                assert response.status_code == 400, response.text
+                assert "document/file attachment(s) cannot be scanned" in response.text, response.text
+                assert observed.get("/__observations").json()["requests"] == []
+            assert policy.drain() == ()
+
+
+@pytest.mark.covers("other.observability.guardrails.bedrock_refuses_anthropic_document_block")
+def test_bedrock_guardrail_refuses_anthropic_document_block(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+
+    with wire_server(_allow) as policy, wire_server(_anthropic_reply) as upstream:
+        path: Final = _guardrail_config(tmp_path, identity, _bedrock_policy(policy.url), "bedrock-document.yaml")
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(
+                model="anthropic/claude-sonnet-4-5-20250929", api_base=upstream.url, api_key="synthetic-anthropic-key"
+            )
+            response: Final = candidate.request(
+                "POST",
+                "/v1/messages",
+                {
+                    "model": model,
+                    "max_tokens": 16,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "synthetic summarize request"},
+                                {
+                                    "type": "document",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "application/pdf",
+                                        "data": PDF_BASE64,
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                },
+            )
+            assert response.status_code == 400, response.text
+            assert "document/file attachment(s) cannot be scanned" in response.text, response.text
+            assert policy.drain() == upstream.drain() == ()
+
+
+@pytest.mark.covers("other.observability.guardrails.bedrock_refuses_responses_input_file")
+def test_bedrock_guardrail_refuses_responses_input_file(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+
+    with wire_server(_allow) as policy:
+        path: Final = _guardrail_config(tmp_path, identity, _bedrock_policy(policy.url), "bedrock-input-file.yaml")
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model()
+            with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
+                observed.get("/__observations")
+                response: Final = candidate.request(
+                    "POST",
+                    "/v1/responses",
+                    {
+                        "model": model,
+                        "input": [
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [
+                                    {"type": "input_text", "text": "synthetic summarize request"},
+                                    {
+                                        "type": "input_file",
+                                        "file_data": f"data:application/pdf;base64,{PDF_BASE64}",
+                                        "filename": "a.pdf",
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                )
+                assert response.status_code == 400, response.text
+                assert "document/file attachment(s) cannot be scanned" in response.text, response.text
+                assert observed.get("/__observations").json()["requests"] == []
+            assert policy.drain() == ()
+
+
+@pytest.mark.covers("other.observability.guardrails.bedrock_text_only_payload_is_texts_only")
+def test_bedrock_guardrail_text_only_request_payload_is_texts_only(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+
+    def guardrail(request: Request) -> Reply:
+        assert request.target == "/guardrail/synthetic-guardrail/version/1/apply"
+        body: Final = json.loads(request.body)
+        assert body["content"] == [{"text": {"text": "synthetic text only request"}}]
+        return Reply(body=b'{"action":"NONE","outputs":[],"assessments":[]}')
+
+    with wire_server(guardrail) as policy:
+        path: Final = _guardrail_config(tmp_path, identity, _bedrock_policy(policy.url), "bedrock-text.yaml")
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model()
+            response: Final = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": "synthetic text only request"}]},
+            )
+            assert response.status_code == 200, response.text
+            assert len(policy.drain()) == 1
+
+
+@pytest.mark.covers("other.observability.guardrails.non_bedrock_policy_skips_image_only_request")
+def test_non_bedrock_guardrail_is_not_invoked_on_image_only_request(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+
+    with wire_server(_unreachable) as policy:
+        params: Final = {
+            "guardrail": "generic_guardrail_api",
+            "mode": "pre_call",
+            "default_on": True,
+            "api_base": policy.url,
+            "api_key": "synthetic-guardrail-key",
+        }
+        path: Final = _guardrail_config(tmp_path, identity, params, "generic-image.yaml")
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model()
+            with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
+                observed.get("/__observations")
+                response: Final = candidate.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {
+                        "model": model,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{PNG_BASE64}"}}
+                                ],
+                            }
+                        ],
+                    },
+                )
+                assert response.status_code == 200, response.text
+                assert len(observed.get("/__observations").json()["requests"]) == 1
+            assert policy.drain() == ()

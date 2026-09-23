@@ -272,6 +272,24 @@
     "tests/integration/observability/test_guardrail_effects.py::test_guardrail_denial_prevents_provider_and_preserves_allowed_control": [
       "other.observability.guardrails.denial_prevents_provider_with_allowed_control"
     ],
+    "tests/integration/observability/test_guardrail_effects.py::test_bedrock_guardrail_scans_image_only_chat_request": [
+      "other.observability.guardrails.bedrock_scans_image_only_chat"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_bedrock_guardrail_refuses_chat_file_part_without_reaching_guardrail_or_provider": [
+      "other.observability.guardrails.bedrock_refuses_chat_file_part_without_wire_calls"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_bedrock_guardrail_refuses_anthropic_document_block": [
+      "other.observability.guardrails.bedrock_refuses_anthropic_document_block"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_bedrock_guardrail_refuses_responses_input_file": [
+      "other.observability.guardrails.bedrock_refuses_responses_input_file"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_bedrock_guardrail_text_only_request_payload_is_texts_only": [
+      "other.observability.guardrails.bedrock_text_only_payload_is_texts_only"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_non_bedrock_guardrail_is_not_invoked_on_image_only_request": [
+      "other.observability.guardrails.non_bedrock_policy_skips_image_only_request"
+    ],
     "tests/integration/mcp/test_mcp_protocol_errors.py::test_jsonrpc_error_and_malformed_tool_result_remain_errors": [
       "other.mcp.errors.protocol_and_malformed_results_cannot_be_empty_success"
     ],
