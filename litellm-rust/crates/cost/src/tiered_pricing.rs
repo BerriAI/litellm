@@ -23,16 +23,19 @@ pub fn select_tier_for_input(tiers: &[Value], input_tokens: i64) -> Option<&Valu
         .map(|(tier, _)| tier)
 }
 
-fn rate(value: Option<&Value>) -> f64 {
+fn rate(value: Option<&Value>) -> Option<f64> {
     match value {
-        Some(Value::Bool(value)) => u8::from(*value) as f64,
-        Some(Value::Number(value)) => value.as_f64().unwrap_or(0.0),
-        Some(Value::String(value)) => value.parse().unwrap_or(0.0),
-        _ => 0.0,
+        Some(Value::Bool(value)) => Some(u8::from(*value) as f64),
+        Some(Value::Number(value)) => value.as_f64(),
+        Some(Value::String(value)) => value.parse().ok(),
+        _ => None,
     }
 }
 
 pub fn tier_rate(tier: &Value, cost_key: &str, fallback_cost_key: Option<&str>) -> f64 {
-    let primary = tier.get(cost_key).filter(|value| !value.is_null());
-    rate(primary.or_else(|| fallback_cost_key.and_then(|key| tier.get(key))))
+    rate(tier.get(cost_key).filter(|value| !value.is_null()))
+        .or_else(|| {
+            fallback_cost_key.and_then(|key| rate(tier.get(key).filter(|value| !value.is_null())))
+        })
+        .unwrap_or(0.0)
 }

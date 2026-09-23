@@ -39,6 +39,8 @@ fn select_tier_for_input_skips_invalid_ranges_and_chooses_first_matching_tier() 
 #[case(json!({"cache_read_input_token_cost": 0, "input_cost_per_token": "4e-07"}), "cache_read_input_token_cost", Some("input_cost_per_token"), 0.0)]
 #[case(json!({"input_cost_per_token": "4e-07"}), "cache_read_input_token_cost", Some("input_cost_per_token"), 4e-7)]
 #[case(json!({"input_cost_per_token": "bad"}), "input_cost_per_token", None, 0.0)]
+#[case(json!({"output_cost_per_token": "bad", "input_cost_per_token": "4e-07"}), "output_cost_per_token", Some("input_cost_per_token"), 4e-7)]
+#[case(json!({"output_cost_per_token": ["bad"], "input_cost_per_token": "4e-07"}), "output_cost_per_token", Some("input_cost_per_token"), 4e-7)]
 fn tier_rate_preserves_zero_and_coerces_yaml_strings(
     #[case] tier: Value,
     #[case] key: &str,

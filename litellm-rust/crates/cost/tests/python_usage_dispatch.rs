@@ -84,3 +84,30 @@ fn get_usage_object_maps_interactions_shape() {
     assert_eq!(usage.completion_tokens, 20);
     assert_eq!(usage.total_tokens, 120);
 }
+
+#[test]
+fn chat_usage_coerces_numeric_strings_and_bools_like_pydantic() {
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": "150",
+        "completion_tokens": true,
+        "total_tokens": 151,
+        "cache_read_input_tokens": "40",
+        "cache_creation_input_tokens": true,
+        "reasoning_tokens": "12"
+    }}))
+    .unwrap()
+    .unwrap();
+    assert_eq!(usage.prompt_tokens, 150);
+    assert_eq!(usage.completion_tokens, 1);
+    let prompt = usage.prompt_tokens_details.expect("details");
+    assert_eq!(prompt.cached_tokens, 40);
+    assert_eq!(prompt.cache_creation_tokens, Some(1));
+    let completion = usage.completion_tokens_details.expect("details");
+    assert_eq!(completion.reasoning_tokens, Some(12));
+}
+
+#[test]
+fn chat_usage_still_rejects_uncoercible_counts() {
+    assert!(get_usage_object(&json!({"usage": {"prompt_tokens": "not-a-number"}})).is_err());
+    assert!(get_usage_object(&json!({"usage": {"prompt_tokens": 12.5}})).is_err());
+}

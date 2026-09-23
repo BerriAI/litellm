@@ -14,6 +14,13 @@ use crate::transcription_usage::{
     is_transcription_usage_object, transform_transcription_usage_object,
 };
 
+fn lenient_count(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+        .or_else(|| value.as_bool().map(u64::from))
+}
+
 pub fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
     let object = raw.as_object().ok_or(UsageError::InvalidShape)?;
     let count = |name: &str| {
@@ -21,7 +28,7 @@ pub fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
             .get(name)
             .filter(|value| !value.is_null())
             .map_or(Ok(0), |value| {
-                value.as_u64().ok_or(UsageError::InvalidUsage)
+                lenient_count(value).ok_or(UsageError::InvalidUsage)
             })
     };
     let prompt_tokens = count("prompt_tokens")?;
@@ -29,10 +36,10 @@ pub fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
     let total_tokens = count("total_tokens")?;
     let read = object
         .get("cache_read_input_tokens")
-        .and_then(Value::as_u64);
+        .and_then(lenient_count);
     let creation = object
         .get("cache_creation_input_tokens")
-        .and_then(Value::as_u64);
+        .and_then(lenient_count);
     let prompt_details: Option<PromptTokenDetails> = object
         .get("prompt_tokens_details")
         .filter(|value| value.as_object().is_some_and(|details| !details.is_empty()))
@@ -60,7 +67,7 @@ pub fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
         .filter(|value| value.as_object().is_some_and(|details| !details.is_empty()))
         .map(|value| serde_json::from_value(value.clone()).map_err(|_| UsageError::InvalidUsage))
         .transpose()?;
-    let reasoning = object.get("reasoning_tokens").and_then(Value::as_u64);
+    let reasoning = object.get("reasoning_tokens").and_then(lenient_count);
     let completion_tokens_details = match (completion_tokens_details, reasoning) {
         (None, None | Some(0)) => None,
         (details, reasoning) => {
