@@ -68,6 +68,10 @@ from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 GAP_WORD_TOKENIZER: Final = re.compile(r"\b\w+\b")
 SENTENCE_TERMINATORS: Final = re.compile(r"[.!?]+")
+# MySQL/MariaDB executable comments: /*!50000UNION*/ runs as UNION. The "!"
+# would be taken as a sentence break and the version number glues onto the
+# keyword, so whole-word matching would miss it.
+EXECUTABLE_COMMENT_PREFIX: Final = re.compile(r"/\*M?!\d*")
 
 
 WORD_NUMBER_MAP: Final = {
@@ -1022,6 +1026,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         # Split text into sentences for more precise matching
         # Simple sentence splitting on common terminators
         sentences: Final = SENTENCE_TERMINATORS.split(text)
+        whole_word_sentences: Final = SENTENCE_TERMINATORS.split(EXECUTABLE_COMMENT_PREFIX.sub("/* ", text))
 
         for category_name, config in self.conditional_categories.items():
             identifier_words = config["identifier_words"]
@@ -1045,7 +1050,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     continue
 
             # Check each sentence for identifier + block word combination
-            for sentence in sentences:
+            for sentence in whole_word_sentences if whole_words else sentences:
                 sentence_lower = sentence.lower().strip()
                 if not sentence_lower:
                     continue
