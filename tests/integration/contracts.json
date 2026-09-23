@@ -2019,6 +2019,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/providers/test_anthropic_legacy_thinking_budget_wire.py::test_claude_4_6_thinking_budget_tokens_on_messages_is_forwarded_instead_of_rewritten_to_adaptive": [
+      "providers.anthropic_messages.claude_4_6_legacy_thinking_budget_reaches_the_wire_unchanged"
     ]
   },
   "browser": {
