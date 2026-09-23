@@ -29,6 +29,7 @@ def _row(**overrides):
 def _prisma(rows):
     prisma_client = MagicMock()
     prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=rows)
+    prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
     prisma_client.db.litellm_mcpservertable.update = AsyncMock()
     return prisma_client
 

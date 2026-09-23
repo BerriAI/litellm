@@ -464,7 +464,7 @@ class _MapTable:
 @pytest.mark.parametrize("quoted", [False, True])
 async def test_secret_maps_create_update_round_trip(map_algorithm: str, field: str, quoted: bool) -> None:
     table: Final = _MapTable(quoted=quoted)
-    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table))
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))))
     original: Final = {"TOKEN": "  sensitive-secret\n", "PREFIX": "v2:gcm:literal", "TEMPLATE": "Bearer ${TOKEN}"}
     create: Final = NewMCPServerRequest.model_validate({
         "server_id": "srv-map", "transport": "http", "url": "https://up.example.com/mcp", field: original,
@@ -537,7 +537,7 @@ async def test_secret_map_rotation_migrates_rekeys_and_preserves_corrupt(
         {"server_id": "encrypted", field: old, other: None},
     )
     prisma: Final = SimpleNamespace(db=SimpleNamespace(
-        litellm_mcpservertable=table, litellm_mcpserveroauthclient=SimpleNamespace(find_many=AsyncMock(return_value=[]))
+        litellm_mcpservertable=table, litellm_mcpserveroauthclient=SimpleNamespace(find_many=AsyncMock(return_value=[])), litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))
     ))
     await rotate_mcp_server_credentials_master_key(prisma, touched_by="test", new_master_key="rotated-map-key")
     assert table.rows["broken"][field] == corrupt
@@ -565,7 +565,7 @@ async def test_bulk_reads_isolate_corrupt_secret_maps(reader, field, map_algorit
     ]
     snapshot = [row.model_dump() for row in rows]
     table = SimpleNamespace(find_many=AsyncMock(return_value=rows))
-    prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table))
+    prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))))
     result = await reader(prisma, ["broken", "healthy"]) if reader is get_mcp_servers else await reader(prisma)
     items = result.items if reader is get_mcp_submissions else result
     assert [row.server_id for row in items] == ["healthy"]
@@ -584,7 +584,7 @@ async def test_bulk_reads_do_not_swallow_unrelated_validation_errors(reader):
 
     row = _prisma_map_row({"server_id": "invalid", "transport": "unsupported"})
     table = SimpleNamespace(find_many=AsyncMock(return_value=[row]))
-    prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table))
+    prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))))
     request = reader(prisma, ["invalid"]) if reader is get_mcp_servers else reader(prisma)
     with pytest.raises(ValidationError, match="transport"):
         await request
@@ -1502,6 +1502,7 @@ async def test_master_key_rotation_reencrypts_oauth_client_store(monkeypatch):
 
     prisma = MagicMock()
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     prisma.db.litellm_mcpserveroauthclient.find_many = AsyncMock(
         return_value=[SimpleNamespace(server_id="config_faros", credentials=blob_old)]
     )

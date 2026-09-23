@@ -993,6 +993,7 @@ class TestRotateCredentials:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[server])
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_mcpservertable.update = AsyncMock()
         mock_prisma.db.litellm_mcpserveroauthclient.find_many = AsyncMock(return_value=[])
 
@@ -1041,6 +1042,7 @@ class TestRotateCredentials:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[server])
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_mcpservertable.update = AsyncMock()
         mock_prisma.db.litellm_mcpserveroauthclient.find_many = AsyncMock(return_value=[])
 

@@ -7732,6 +7732,7 @@ class TestGatewaySessionAdmission:
         )
         prisma = MagicMock()
         prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
             patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
@@ -9824,6 +9825,7 @@ class TestScopedSessionAdmission:
         )
         prisma = MagicMock()
         prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
             patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),

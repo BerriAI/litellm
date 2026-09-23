@@ -81,6 +81,7 @@ class TargetCatalog:
         self._arrival_ticket = 0
         self._completed_ticket = 0
         self._shared_snapshot: CatalogSnapshot | None = None
+        self._applied_revision: int | None = None
         self._warned_shadowed_config_server_ids: frozenset[str] = frozenset()
         self._warned_capturing_config_server_ids: frozenset[str] = frozenset()
         self._operation: ContextVar[tuple[CatalogSnapshot, asyncio.Event, int] | None] = ContextVar(
@@ -116,12 +117,17 @@ class TargetCatalog:
 
         if not should_load_db_object("mcp"):
             return _snapshot(self.manager, self._database_identity)
+        from litellm.proxy._experimental.mcp_server.db import get_mcp_catalog_revision
+
+        revision: Final = await get_mcp_catalog_revision(prisma_client)
+        if revision is not None and revision == self._applied_revision and self._shared_snapshot is not None:
+            return self._shared_snapshot
         self._arrival_ticket += 1
         arrival: Final = self._arrival_ticket
         async with self._refresh_lock:
             if arrival > self._completed_ticket:
                 try:
-                    await self._publish_refresh(reuse_unchanged=True)
+                    await self._publish_refresh(revision, reuse_unchanged=True)
                 except Exception as exc:
                     raise HTTPException(
                         status_code=503, detail="MCP server configuration could not be refreshed"
@@ -227,10 +233,14 @@ class TargetCatalog:
         return resolved
 
     async def reload(self) -> None:
-        async with self._refresh_lock:
-            await self._publish_refresh()
+        from litellm.proxy._experimental.mcp_server.db import get_mcp_catalog_revision
+        from litellm.proxy.proxy_server import prisma_client
 
-    async def _publish_refresh(self, *, reuse_unchanged: bool = False) -> None:
+        revision: Final = await get_mcp_catalog_revision(prisma_client) if prisma_client is not None else None
+        async with self._refresh_lock:
+            await self._publish_refresh(revision)
+
+    async def _publish_refresh(self, revision: int | None, *, reuse_unchanged: bool = False) -> None:
         covered: Final = self._arrival_ticket
         token: Final = self._operation.set(None)
         try:
@@ -241,6 +251,7 @@ class TargetCatalog:
             raise
         else:
             self._shared_snapshot = _snapshot(self.manager, self._database_identity)
+            self._applied_revision = revision
             self._completed_ticket = covered
         finally:
             self._operation.reset(token)
@@ -522,6 +533,5 @@ def global_manager() -> MCPServerManager:
     return global_mcp_server_manager
 
 
-public_catalog_operation: Final[Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]] = (
-    catalog_operation(global_manager)
-)
+def public_catalog_operation(function: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+    return catalog_operation(global_manager)(function)

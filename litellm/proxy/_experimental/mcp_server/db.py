@@ -40,6 +40,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -511,6 +512,20 @@ async def _db_find_mcp_server_row(
     prisma_client: PrismaClient, server_id: str
 ) -> "prisma_db_models.LiteLLM_MCPServerTable | None":
     return await _mcp_server_table_actions(prisma_client).find_unique(where={"server_id": server_id})
+
+
+MCP_CATALOG_REVISION_PARAM_NAME: Final = "mcp_catalog"
+
+
+async def get_mcp_catalog_revision(prisma_client: PrismaClient) -> int | None:
+    """The ``LiteLLM_Config`` revision the MCP server table trigger last published, or None when
+    no write has ever bumped it (or the trigger is not installed), meaning always reload."""
+    row: Final = await ConfigRepository(prisma_client).table.find_unique(
+        where={"param_name": MCP_CATALOG_REVISION_PARAM_NAME}
+    )
+    if row is None:
+        return None
+    return int(row.reload_revision or 0)
 
 
 async def _db_update_mcp_server_row(
