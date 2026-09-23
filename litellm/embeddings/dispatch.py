@@ -19,8 +19,12 @@ __all__ = ("aembedding", "embedding")
 PythonEmbedding: TypeAlias = Callable[..., EmbeddingResponse | Coroutine[object, object, EmbeddingResponse]]
 PythonAembedding: TypeAlias = Callable[..., Awaitable[EmbeddingResponse]]
 
-_PYTHON_EMBEDDING: Final = cast(PythonEmbedding, main.embedding)  # cast-ok: [LIT006] preserve the legacy public callable contract
-_PYTHON_AEMBEDDING: Final = cast(PythonAembedding, main.aembedding)  # cast-ok: [LIT006] preserve the legacy public callable contract
+_PYTHON_EMBEDDING: Final = cast(
+    PythonEmbedding, main.embedding
+)  # cast-ok: [LIT006] preserve the legacy public callable contract
+_PYTHON_AEMBEDDING: Final = cast(
+    PythonAembedding, main.aembedding
+)  # cast-ok: [LIT006] preserve the legacy public callable contract
 _EMBEDDING_SIGNATURE: Final = signature(_PYTHON_EMBEDDING)
 
 
