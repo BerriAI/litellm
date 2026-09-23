@@ -14,6 +14,7 @@ import pytest
 import litellm
 from litellm.llms.bedrock.common_utils import bedrock_supports_openai_responses
 from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig
+from litellm.responses.file_search.emulated_handler import should_use_emulated_file_search
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -41,6 +42,9 @@ class TestCompleteURL:
             "https://proxy.example.com/",
             "https://proxy.example.com/openai/v1",
             "https://proxy.example.com/openai/v1/responses",
+            "https://proxy.example.com/v1",
+            "https://proxy.example.com/v1/responses",
+            "https://proxy.example.com/responses",
         ],
     )
     def test_custom_host_is_preserved_and_path_never_doubles(self, api_base):
@@ -230,6 +234,18 @@ class TestUnsupportedToolDrop:
             outbound = self._outbound_tools([self._SHELL_TOOL, {"type": "custom", "name": "exec"}])
         assert outbound == [self._SHELL_TOOL, {"type": "custom", "name": "exec"}]
         assert not [r for r in caplog.records if "dropping unsupported tool type" in r.getMessage()]
+
+
+class TestFileSearchEmulation:
+    """bedrock-runtime runs no server-side tools, so a file_search tool must take the emulated path."""
+
+    def test_file_search_tool_is_routed_to_emulation(self):
+        tools = [{"type": "file_search", "vector_store_ids": ["vs_1"]}]
+        assert should_use_emulated_file_search(tools, _cfg()) is True
+
+    def test_plain_function_tools_skip_emulation(self):
+        tools = [{"type": "function", "name": "shell", "parameters": {"type": "object", "properties": {}}}]
+        assert should_use_emulated_file_search(tools, _cfg()) is False
 
 
 class TestCodexHistoryNormalization:

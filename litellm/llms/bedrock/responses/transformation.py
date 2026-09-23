@@ -46,6 +46,13 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
 BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH: Final = "/openai/v1/responses"
+BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES: Final = (
+    "/openai/v1/responses",
+    "/v1/responses",
+    "/responses",
+    "/openai/v1",
+    "/v1",
+)
 BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
     {"function", "mcp", "custom", "apply_patch", "namespace", "tool_search", "computer"}
 )
@@ -97,13 +104,14 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         host: Final = (
             override or self._select_default_endpoint_url(endpoint_type="runtime", aws_region_name=region)
         ).rstrip("/")
-        if host.endswith(BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH):
-            return host
         base: Final = next(
-            (host[: -len(suffix)] for suffix in ("/openai/v1", "/v1") if host.endswith(suffix)),
+            (host[: -len(suffix)] for suffix in BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES if host.endswith(suffix)),
             host,
         )
         return f"{base}{BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH}"
+
+    def supports_native_file_search(self) -> bool:
+        return False
 
     def validate_environment(
         self,
