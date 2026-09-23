@@ -2055,6 +2055,9 @@
         ],
         "tests/integration/spend/test_responses_cache_write_itemization.py::test_responses_cache_write_tokens_are_itemized_as_cache_creation_cost": [
             "spend.responses_api.cache_write_tokens_itemized_as_cache_creation_cost"
+        ],
+        "tests/integration/authorization/test_bedrock_passthrough_model_access.py::test_key_scoped_to_one_model_cannot_call_another_through_bedrock_passthrough_routes": [
+            "authz.key_models.bedrock_passthrough_route_model_is_enforced"
         ]
     },
     "browser": {
