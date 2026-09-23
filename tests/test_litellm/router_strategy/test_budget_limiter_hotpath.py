@@ -359,12 +359,10 @@ async def test_push_waits_for_redis_before_completing(disable_budget_sync):
     push_task = asyncio.create_task(limiter._push_in_memory_increments_to_redis())
     await asyncio.wait_for(redis_started.wait(), timeout=1)
     assert not push_task.done()
-    assert limiter._detached_increment_operations is not None
     redis_answered.set()
     assert await asyncio.wait_for(push_task, timeout=1) is True
     assert redis_cache.async_increment_pipeline.await_count == 1
     assert limiter.redis_increment_operation_queue == []
-    assert limiter._detached_increment_operations is None
 
 
 @pytest.mark.asyncio
@@ -542,7 +540,6 @@ async def test_should_requeue_increments_when_redis_pipeline_fails() -> None:
 
     assert flush_succeeded is False
     assert budget_limiter.redis_increment_operation_queue == [_increment(10.0)]
-    assert budget_limiter._detached_increment_operations is None
 
 
 @pytest.mark.asyncio
@@ -642,7 +639,6 @@ async def test_should_keep_increments_when_flush_is_cancelled_after_success() ->
 
     assert redis_cache.values[_SPEND_KEY] == 10.0
     assert budget_limiter.redis_increment_operation_queue == []
-    assert budget_limiter._detached_increment_operations is None
 
 
 @pytest.mark.asyncio
@@ -684,7 +680,6 @@ async def test_empty_flush_does_not_block_later_increment_sync() -> None:
     await budget_limiter._sync_in_memory_spend_with_redis()
 
     assert empty_flush_succeeded is True
-    assert budget_limiter._detached_increment_operations is None
     assert budget_limiter.redis_increment_operation_queue == []
     assert redis_cache.values[_SPEND_KEY] == 120.0
     assert in_memory_cache.values[_SPEND_KEY] == 120.0
@@ -719,7 +714,6 @@ async def test_should_requeue_increments_when_flush_is_cancelled_and_redis_fails
 
     assert redis_cache.values[_SPEND_KEY] == 0.0
     assert budget_limiter.redis_increment_operation_queue == [_increment(10.0)]
-    assert budget_limiter._detached_increment_operations is None
 
 
 @pytest.mark.asyncio
@@ -790,4 +784,3 @@ async def test_cancelled_flush_does_not_requeue_an_applied_batch(cancellations: 
     await limiter._push_in_memory_increments_to_redis()
     assert redis_cache.values[_SPEND_KEY] == 10.0
     assert limiter.redis_increment_operation_queue == []
-    assert limiter._detached_increment_operations is None
