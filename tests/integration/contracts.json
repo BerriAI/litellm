@@ -2019,6 +2019,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/routing/test_request_payload_release.py::test_worker_memory_settles_after_a_burst_of_large_chat_requests": [
+      "other.routing.memory.large_request_payloads_are_released_after_the_request_ends"
     ]
   },
   "browser": {
