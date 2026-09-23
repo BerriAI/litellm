@@ -4043,6 +4043,7 @@ all_litellm_params = (
         "no-log",
         "base_model",
         "stream_timeout",
+        "stream_chunk_size",
         "supports_system_message",
         "region_name",
         "allowed_model_region",
