@@ -1983,6 +1983,7 @@ export const userFilterUICall = async (accessToken: string, params: URLSearchPar
         user_email: params.get("user_email") || undefined,
         user_id: params.get("user_id") || undefined,
         team_id: params.get("team_id") || undefined,
+        search: params.get("search") || undefined,
       },
     });
   } catch (error) {
@@ -2003,6 +2004,7 @@ interface UiSpendLogsParams {
   end_user?: string;
   status_filter?: string;
   cache_hit_filter?: string;
+  span_type?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
   /** Filter by model ID (litellm model deployment id) */

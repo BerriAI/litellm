@@ -875,9 +875,7 @@ class _ConfigTable:
         await asyncio.sleep(0)
         return _ConfigRow(param_value=value) if value is not None else None
 
-    async def upsert(
-        self, *, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]
-    ) -> _ConfigRow:
+    async def upsert(self, *, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]) -> _ConfigRow:
         param_name: Final = where["param_name"]
         value: Final = _CONFIG_VALUE.validate_json(data["update"]["param_value"])
         self.rows[param_name] = value
@@ -926,7 +924,9 @@ class _ConfigPrisma:
             self.db.litellm_config.upserted_param_names.append(param_name)
 
 
-def _db_backed_proxy_config(monkeypatch, rows: Mapping[str, Mapping[str, JsonValue]]) -> tuple[ProxyConfig, _ConfigTable]:
+def _db_backed_proxy_config(
+    monkeypatch, rows: Mapping[str, Mapping[str, JsonValue]]
+) -> tuple[ProxyConfig, _ConfigTable]:
     table: Final = _ConfigTable(rows)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _ConfigPrisma(db=_ConfigDb(litellm_config=table)))
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
@@ -2196,6 +2196,34 @@ async def test_ProxyConfig_load_config_wires_general_settings_url_validation(tmp
         litellm.user_url_validation = original_validation
         litellm.user_url_allowed_hosts = original_hosts
         litellm.provider_url_destination_allowed_hosts = original_provider_hosts
+
+
+@pytest.mark.asyncio
+async def test_ssrf_block_message_names_a_config_section_load_config_honors(tmp_path, monkeypatch):
+    """Regression for LIT-8349: the remediation in the SSRF block message must point at a section that works."""
+    from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
+
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [])
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    with pytest.raises(SSRFError) as blocked:
+        validate_url("http://10.96.3.245:10002/agent.json")
+    section_match = re.search(r"add the host to `user_url_allowed_hosts` in (\w+)\.", str(blocked.value))
+    assert section_match is not None, str(blocked.value)
+    section: Final = section_match.group(1)
+    assert section == "litellm_settings", f"block message points admins at {section}, which the docs contradict"
+
+    f = tmp_path / "c.yaml"
+    f.write_text(f"model_list: []\n{section}:\n  user_url_allowed_hosts:\n    - '10.96.3.245:10002'\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+    assert litellm.user_url_allowed_hosts == ["10.96.3.245:10002"], f"{section} did not apply the allowlist"
+    assert validate_url("http://10.96.3.245:10002/agent.json") == (
+        "http://10.96.3.245:10002/agent.json",
+        "10.96.3.245:10002",
+    )
 
 
 @pytest.mark.asyncio
@@ -4722,9 +4750,7 @@ def test_validate_deployment_access_windows_rejects_malformed_time():
         "model_name": "gpt-4o-shared",
         "litellm_params": {"model": "gpt-4o"},
         "model_info": {
-            "access_windows": [
-                {"start": "25:00", "end": "06:00", "timezone": "America/New_York", "team_ids": ["t"]}
-            ]
+            "access_windows": [{"start": "25:00", "end": "06:00", "timezone": "America/New_York", "team_ids": ["t"]}]
         },
     }
 
@@ -4739,9 +4765,7 @@ def test_validate_deployment_access_windows_rejects_unknown_timezone():
         "model_name": "gpt-4o-shared",
         "litellm_params": {"model": "gpt-4o"},
         "model_info": {
-            "access_windows": [
-                {"start": "22:00", "end": "06:00", "timezone": "Mars/Olympus", "team_ids": ["t"]}
-            ]
+            "access_windows": [{"start": "22:00", "end": "06:00", "timezone": "Mars/Olympus", "team_ids": ["t"]}]
         },
     }
 
@@ -4771,3 +4795,28 @@ def test_validate_deployment_access_windows_accepts_valid_and_absent():
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_updates_availability_catalog_and_retains_it_on_db_failure():
+    pc = ProxyConfig()
+    row = SimpleNamespace(
+        model_id="gated",
+        created_by="owner",
+        model_info={},
+        litellm_params={
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"classifier_type": "heuristic_v2"},
+        },
+    )
+    find_many = AsyncMock(side_effect=[[row], RuntimeError("database unavailable"), []])
+    client = SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many)))
+    assert pc.auto_router_db_catalog is None
+    assert await pc._get_models_from_db(client) == [row]
+    loaded = pc.auto_router_db_catalog
+    assert loaded is not None and loaded[0].model_id == "gated"
+    assert await pc._get_models_from_db(client) is None
+    assert pc.auto_router_db_catalog == loaded
+    assert await pc._get_models_from_db(client) == []
+    assert pc.auto_router_db_catalog == ()
+    assert find_many.await_count == 3

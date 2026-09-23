@@ -976,7 +976,7 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
 
 
 @pytest.mark.asyncio
-async def test_tuning_baseline_v2_is_created_alongside_the_legacy_row():
+async def test_tuning_baseline_v3_is_created_alongside_the_legacy_row():
     from litellm.router_utils.auto_router_tuning_baseline import DEFAULT_TUNING_FINGERPRINT
 
     prisma_client = MagicMock()
@@ -991,9 +991,59 @@ async def test_tuning_baseline_v2_is_created_alongside_the_legacy_row():
 
     assert result == {'yaml:["a",[]]': DEFAULT_TUNING_FINGERPRINT}
     assert prisma_client.db.litellm_config.create.await_args.kwargs["data"] == {
-        "param_name": "auto_router_tuning_baseline_v2",
+        "param_name": "auto_router_tuning_baseline_v3",
         "param_value": json.dumps(dict(result)),
     }
+
+
+@pytest.mark.asyncio
+async def test_scorer_baseline_upgrade_preserves_existing_routers_and_is_not_refreshed_on_restart():
+    from litellm.router_utils.auto_router_tuning_baseline import mutable_tuned_identities, snapshot_tuning_baselines
+
+    deployments = [
+        {
+            "model_name": name,
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": name}, "code_keywords": [name]},
+            },
+        }
+        for name in ("a", "b")
+    ]
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_config.find_unique = AsyncMock(
+        side_effect=lambda where: (
+            MagicMock(param_value='{"legacy-router":"old-combined-hash"}')
+            if where["param_name"] == "auto_router_tuning_baseline_v2"
+            else None
+        )
+    )
+    prisma_client.db.litellm_config.create = AsyncMock()
+
+    baseline = await ProxyStartupEvent._load_heuristic_v1_tuning_baselines(prisma_client, deployments)
+
+    assert baseline == snapshot_tuning_baselines(deployments)
+    assert mutable_tuned_identities(deployments, baseline) == frozenset()
+    prisma_client.db.litellm_config.create.assert_awaited_once_with(
+        data={"param_name": "auto_router_tuning_baseline_v3", "param_value": json.dumps(dict(baseline))}
+    )
+    prisma_client.db.litellm_config.find_unique.side_effect = None
+    prisma_client.db.litellm_config.find_unique.return_value = MagicMock(param_value=json.dumps(dict(baseline)))
+    changed = [
+        {
+            "model_name": "a",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": "different-model"}, "code_keywords": ["new-rule"]},
+            },
+        }
+    ]
+
+    reloaded = await ProxyStartupEvent._load_heuristic_v1_tuning_baselines(prisma_client, changed)
+
+    assert reloaded == baseline
+    assert mutable_tuned_identities(changed, reloaded) == frozenset({'yaml:["a",[]]'})
+    prisma_client.db.litellm_config.create.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -249,6 +249,23 @@ def test_map_openai_params_drops_unknown_reasoning_effort_when_dropping():
     assert "reasoning" not in mapped
 
 
+@pytest.mark.parametrize("effort", [{"level": "low"}, ["low"], 1])
+def test_map_openai_params_rejects_non_string_reasoning_effort(effort: object) -> None:
+    with pytest.raises(FalAIError) as exc_info:
+        FalAIChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model=MODEL, drop_params=False
+        )
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize("effort", [{"level": "low"}, ["low"], 1])
+def test_map_openai_params_drops_non_string_reasoning_effort_when_dropping(effort: object) -> None:
+    mapped = FalAIChatConfig().map_openai_params(
+        non_default_params={"reasoning_effort": effort}, optional_params={}, model=MODEL, drop_params=True
+    )
+    assert "reasoning" not in mapped
+
+
 def test_map_openai_params_maps_sampling_params():
     mapped = FalAIChatConfig().map_openai_params(
         non_default_params={"temperature": 0.5, "top_p": 0.7, "max_tokens": 10},

@@ -1234,6 +1234,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Get Auto Router Availability */
+        post: operations["get_auto_router_availability_auto_router_availability_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/benchmarks": {
         parameters: {
             query?: never;
@@ -4348,6 +4365,31 @@ export interface paths {
          *     For cache management, use the cache management endpoints
          */
         get: operations["get_memory_summary_debug_memory_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/debug/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Debug Report
+         * @description The same LiteLLM-owned environment facts the bug report link puts in a GitHub issue:
+         *     versions, deployment kind, and config flags whose keys and values LiteLLM defines.
+         *     Nothing from the operator's config values, request data, or errors
+         *
+         *     Example usage:
+         *     curl http://localhost:4000/debug/report -H "Authorization: Bearer sk-1234"
+         */
+        get: operations["get_debug_report_debug_report_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -17300,7 +17342,7 @@ export interface paths {
         };
         /**
          * Ui View Users
-         * @description Filter users based on partial match of user_id or email with pagination.
+         * @description Filter users based on partial match of user_id or email, or combined ``search``, with pagination.
          *
          *     Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
          *     (stored in the ``litellm_uisettings`` table):
@@ -21126,7 +21168,9 @@ export interface paths {
          * List Vector Stores
          * @description List all available vector stores with optional filtering and pagination.
          *     Combines both in-memory vector stores and those stored in the database.
-         *     Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
+         *     Database is the source of truth for stores it owns: deleted stores are removed from memory, updated stores
+         *     sync to memory. Stores declared in the config file are owned by the config file, are always listed, and are
+         *     never overwritten by database rows.
          *
          *     Parameters:
          *     - page: int - Page number for pagination (default: 1)
@@ -22429,7 +22473,9 @@ export interface paths {
          * List Vector Stores
          * @description List all available vector stores with optional filtering and pagination.
          *     Combines both in-memory vector stores and those stored in the database.
-         *     Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
+         *     Database is the source of truth for stores it owns: deleted stores are removed from memory, updated stores
+         *     sync to memory. Stores declared in the config file are owned by the config file, are always listed, and are
+         *     never overwritten by database rows.
          *
          *     Parameters:
          *     - page: int - Page number for pagination (default: 1)
@@ -24098,6 +24144,43 @@ export interface components {
             updated_values?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** AutoRouterAllowance */
+        AutoRouterAllowance: {
+            /**
+             * Available
+             * @default true
+             */
+            available: boolean;
+            /** Key */
+            key: string;
+            /** Limit */
+            limit: number | null;
+            /** Remaining */
+            remaining: number | null;
+            /**
+             * Used By This Router
+             * @default false
+             */
+            used_by_this_router: boolean;
+        };
+        /** AutoRouterAvailabilityRequest */
+        AutoRouterAvailabilityRequest: {
+            /** Complexity Router Config */
+            complexity_router_config?: {
+                [key: string]: unknown;
+            } | null;
+            /** Saved Model Id */
+            saved_model_id?: string | null;
+            /** Team Id */
+            team_id?: string | null;
+        };
+        /** AutoRouterAvailabilityResponse */
+        AutoRouterAvailabilityResponse: {
+            /** Allowances */
+            allowances: components["schemas"]["AutoRouterAllowance"][];
+            /** Error */
+            error?: string | null;
         };
         /**
          * AutoRouterBenchmarkGroup
@@ -28779,6 +28862,22 @@ export interface components {
             /** Template Id */
             template_id: string;
         };
+        /** EnvironmentReport */
+        EnvironmentReport: {
+            /** Config Lines */
+            config_lines: string[];
+            /** Deployment */
+            deployment: string | null;
+            /** Litellm Version */
+            litellm_version: string;
+            /** Python Version */
+            python_version: string;
+            /**
+             * Surface
+             * @enum {string}
+             */
+            surface: "sdk" | "proxy";
+        };
         /** ErrorResponse */
         ErrorResponse: {
             /**
@@ -30781,6 +30880,8 @@ export interface components {
             created_at?: string | null;
             /** Custom Llm Provider */
             custom_llm_provider?: string;
+            /** Is Config */
+            is_config?: boolean;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Params */
@@ -30852,6 +30953,11 @@ export interface components {
             created_at?: string | null;
             /** Custom Llm Provider */
             custom_llm_provider: string;
+            /**
+             * Is Config
+             * @default false
+             */
+            is_config: boolean;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Params */
@@ -31435,6 +31541,8 @@ export interface components {
             output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
+            /** Provider Affinity Header */
+            provider_affinity_header?: string | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;
@@ -37377,6 +37485,11 @@ export interface components {
              */
             fields: components["schemas"]["RouterSettingsField"][];
             /**
+             * Routing Group Strategies
+             * @description Strategies supported when constructing a routing group
+             */
+            routing_group_strategies: string[];
+            /**
              * Routing Strategy Descriptions
              * @description Descriptions for each routing strategy option
              */
@@ -37418,6 +37531,11 @@ export interface components {
              */
             fields: components["schemas"]["RouterSettingsField"][];
             /**
+             * Routing Group Strategies
+             * @description Strategies supported when constructing a routing group
+             */
+            routing_group_strategies: string[];
+            /**
              * Routing Strategy Descriptions
              * @description Descriptions for each routing strategy option
              */
@@ -37439,6 +37557,13 @@ export interface components {
         RoutingGroup: {
             /** Group Name */
             group_name: string;
+            /**
+             * Model Priorities
+             * @description For priority groups, every model's priority. Lower numbers are tried first; equal numbers share traffic.
+             */
+            model_priorities?: {
+                [key: string]: number;
+            } | null;
             /** Models */
             models: string[];
             /** Routing Strategy */
@@ -42306,6 +42431,8 @@ export interface components {
             output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
+            /** Provider Affinity Header */
+            provider_affinity_header?: string | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;
@@ -44072,6 +44199,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_auto_router_availability_auto_router_availability_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoRouterAvailabilityRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterAvailabilityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -48588,6 +48748,26 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    get_debug_report_debug_report_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentReport"];
                 };
             };
         };
@@ -60964,6 +61144,8 @@ export interface operations {
                 status_filter?: string | null;
                 /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
                 cache_hit_filter?: string | null;
+                /** @description Filter logs by span type: llm, agent, mcp, or batch */
+                span_type?: string | null;
                 /** @description Filter logs by model */
                 model?: string | null;
                 /** @description Filter logs by model ID (litellm model deployment id) */
@@ -61082,6 +61264,8 @@ export interface operations {
                 status_filter?: string | null;
                 /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
                 cache_hit_filter?: string | null;
+                /** @description Filter logs by span type: llm, agent, mcp, or batch */
+                span_type?: string | null;
                 /** @description Filter logs by model */
                 model?: string | null;
                 /** @description Filter logs by model ID (litellm model deployment id) */
@@ -64252,6 +64436,8 @@ export interface operations {
                 user_id?: string | null;
                 /** @description User email in the request parameters */
                 user_email?: string | null;
+                /** @description Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive). */
+                search?: string | null;
                 /** @description Team ID — used when a team admin searches for users to add to their team */
                 team_id?: string | null;
                 /** @description Page number for pagination */
