@@ -22,7 +22,7 @@ from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
 from pydantic import BaseModel, Field
-from transport import HttpTransport, SplitTransport, Transport
+from transport import SplitTransport, Transport
 
 pytestmark = pytest.mark.e2e
 
@@ -75,7 +75,7 @@ class _StreamEvent(BaseModel):
     item: _StreamEventItem | None = None
 
 
-def _long_timeout_transport(transport: HttpTransport) -> Transport:
+def _long_timeout_transport(transport: Transport) -> Transport:
     if isinstance(transport, SplitTransport):
         return dataclasses.replace(
             transport,
