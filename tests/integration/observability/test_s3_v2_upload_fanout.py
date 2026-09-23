@@ -185,3 +185,30 @@ def test_s3_v2_batch_file_upload_writes_one_jsonl_object_per_flush(gateway: Gate
     lines: Final = tuple(line for put in puts for line in put.body.decode().splitlines())
     assert frozenset(json.loads(line)["id"] for line in lines) == ids
     assert len(lines) == REQUESTS
+
+
+@pytest.mark.covers("other.observability.s3_v2.batch_file_upload_keeps_team_prefix_in_object_key")
+def test_s3_v2_batch_file_upload_keeps_team_alias_prefix(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3team" + uuid.uuid4().hex[:8]
+    team_alias: Final = f"alpha-{uuid.uuid4().hex[:8]}"
+    team_batch_key: Final = re.compile(
+        rf"^/{BUCKET}/{PREFIX}/{team_alias}/\d{{4}}-\d{{2}}-\d{{2}}/batch_\d{{2}}-\d{{2}}-\d{{2}}_[0-9a-f]{{32}}\.jsonl$"
+    )
+    sink: Final = S3Sink()
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": True, "s3_use_team_prefix": True})
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "3"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            team: Final = scenario.team(team_alias=team_alias, models=[model])
+            key: Final = scenario.key(team_id=team, models=[model])
+            ids: Final = _burst(candidate, model, key, marker)
+            puts: Final = _collect(bucket, count_lines=True, expected=REQUESTS)
+    assert len(provider.drain()) == REQUESTS
+    assert len(puts) >= 1
+    assert all(team_batch_key.match(put.target) for put in puts), [put.target for put in puts]
+    lines: Final = tuple(line for put in puts for line in put.body.decode().splitlines())
+    assert frozenset(json.loads(line)["id"] for line in lines) == ids
+    assert len(lines) == REQUESTS

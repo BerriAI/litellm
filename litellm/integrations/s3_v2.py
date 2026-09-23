@@ -50,6 +50,10 @@ if TYPE_CHECKING:
     from botocore.credentials import Credentials
 
 
+def _s3_key_parent(s3_object_key: str) -> str:
+    return s3_object_key.rsplit("/", 1)[0] if "/" in s3_object_key else ""
+
+
 class S3BatchUploadError(Exception):
     def __init__(self, failed: int, total: int) -> None:
         self.failed = failed
@@ -478,36 +482,50 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         #  the log queue can be bounded by DEFAULT_S3_BATCH_SIZE
         #  see custom_batch_logger.py which triggers the flush
         #########################################################
-        if self.s3_batch_file_upload:
-            if not await self.async_upload_data_to_s3(self._build_batch_file_element(batch)):
-                raise S3BatchUploadError(failed=len(batch), total=len(batch))
-            return
-        results: Final = await asyncio.gather(*(self._upload_bounded(element) for element in batch))
-        failed: Final = tuple(element for element, ok in zip(batch, results, strict=True) if not ok)
+        uploads: Final = self._batch_file_elements(batch) if self._batch_file_mode_active() else batch
+        results: Final = await asyncio.gather(*(self._upload_bounded(element) for element in uploads))
+        failed: Final = tuple(element for element, ok in zip(uploads, results, strict=True) if not ok)
         if not failed:
             return
         self.log_queue[:] = [*failed, *self.log_queue[len(batch) :]]
-        raise S3BatchUploadError(failed=len(failed), total=len(batch))
+        raise S3BatchUploadError(failed=len(failed), total=len(uploads))
+
+    def _batch_file_mode_active(self) -> bool:
+        if not self.s3_batch_file_upload:
+            return False
+        if litellm.cold_storage_custom_logger == "s3_v2":
+            verbose_logger.warning(
+                "s3 logging: s3_batch_file_upload is ignored because s3_v2 is the cold storage logger; "
+                "per-request objects are required for spend log lookups"
+            )
+            return False
+        return True
 
     async def _upload_bounded(self, element: s3BatchLoggingElement) -> bool:
         async with self._upload_semaphore:
             return await self.async_upload_data_to_s3(element)
 
-    def _build_batch_file_element(self, batch: tuple[s3BatchLoggingElement, ...]) -> s3BatchLoggingElement:
+    def _batch_file_elements(self, batch: tuple[s3BatchLoggingElement, ...]) -> tuple[s3BatchLoggingElement, ...]:
         now: Final = datetime.now(timezone.utc)
+        groups: Final = {
+            parent: tuple(
+                element for element in batch if element.body is None and _s3_key_parent(element.s3_object_key) == parent
+            )
+            for parent in sorted({_s3_key_parent(element.s3_object_key) for element in batch if element.body is None})
+        }
+        return tuple(element for element in batch if element.body is not None) + tuple(
+            self._build_batch_file_element(elements, parent, now) for parent, elements in groups.items()
+        )
+
+    def _build_batch_file_element(
+        self, elements: tuple[s3BatchLoggingElement, ...], parent: str, now: datetime
+    ) -> s3BatchLoggingElement:
         batch_name: Final = f"batch_{now.strftime('%H-%M-%S')}_{uuid4().hex}"
         return s3BatchLoggingElement(
             payload={},
-            body="\n".join(safe_dumps(element.payload) for element in batch),
+            body="\n".join(safe_dumps(element.payload) for element in elements),
             content_type="application/x-ndjson",
-            s3_object_key=get_s3_object_key(
-                s3_path=cast(str | None, self.s3_path)  # cast-ok: self.s3_path comes from untyped s3_callback_params
-                or "",
-                prefix="",
-                start_time=now,
-                s3_file_name=batch_name,
-                extension=".jsonl",
-            ),
+            s3_object_key=f"{parent}/{batch_name}.jsonl" if parent else f"{batch_name}.jsonl",
             s3_object_download_filename=f"{batch_name}.jsonl",
         )
 
