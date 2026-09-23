@@ -1993,6 +1993,9 @@
     "tests/integration/streaming/test_stream_contracts.py::test_messages_stream_completes_through_trailing_empty_choices_usage_chunk": [
       "other.streaming.messages_bridge.empty_choices_usage_chunk_completes_stream"
     ],
+    "tests/integration/streaming/test_stream_contracts.py::test_messages_stream_opens_thinking_block_at_index_zero_for_reasoning_content_only_chunks": [
+      "streaming.messages_bridge.reasoning_content_only_chunks_open_a_thinking_block_first"
+    ],
     "tests/integration/streaming/test_stream_contracts.py::test_perplexity_stream_with_cost_breakdown_object_completes_and_bills_total_cost": [
       "other.streaming.usage.provider_cost_object_completes_stream_and_bills_total_cost"
     ],
