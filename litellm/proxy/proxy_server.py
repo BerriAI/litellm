@@ -6516,13 +6516,6 @@ class ProxyConfig:
             health_check_interval = general_settings.get("health_check_interval", DEFAULT_HEALTH_CHECK_INTERVAL)
             health_check_concurrency = general_settings.get("health_check_concurrency", None)
             health_check_details = general_settings.get("health_check_details", True)
-            ### INTERACTIONS API SCHEMA ###
-            _use_legacy_interactions_schema: Final = general_settings.get("use_legacy_interactions_schema")
-            if _use_legacy_interactions_schema is not None:
-                if isinstance(_use_legacy_interactions_schema, str):
-                    litellm.use_legacy_interactions_schema = _use_legacy_interactions_schema.lower() == "true"
-                else:
-                    litellm.use_legacy_interactions_schema = bool(_use_legacy_interactions_schema)
             ### BATCH LINE ITEM CALLBACKS ###
             _store_batch_line_items: Final = general_settings.get("store_batch_line_items_in_callbacks")
             if _store_batch_line_items is not None:
