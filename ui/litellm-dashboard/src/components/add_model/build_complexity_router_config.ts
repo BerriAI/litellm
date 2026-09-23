@@ -124,6 +124,7 @@ const scorerKnobPayload = ({
       };
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
+  enableNonReasoningTier?: boolean;
   customTierSet?: CustomTierSet;
   defaultModel: string | undefined;
   planModeMinTier: string | undefined;
@@ -187,6 +188,7 @@ export interface TierDefinitionPayload {
 
 export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers | Record<string, string[]>;
+  enable_non_reasoning_tier?: boolean;
   tier_definitions?: TierDefinitionPayload[];
   fallback_tier?: string;
   default_model?: string;
@@ -511,6 +513,7 @@ export const hydrateBuiltInTiers = (
 
 export const buildComplexityRouterConfig = ({
   tiers,
+  enableNonReasoningTier,
   customTierSet,
   defaultModel,
   planModeMinTier,
@@ -585,11 +588,12 @@ export const buildComplexityRouterConfig = ({
   };
   // An edited tier set forces the LLM classifier, so llm-only inputs must survive a classifier_type
   // the form never rewrote. The UI gates the same controls on this, not on the raw value.
-  const effectiveType: ClassifierType = customTierSet ? "llm" : classifierType;
   const effectiveType = effectiveClassifierType({ custom_tier_set: customTierSet, classifier_type: classifierType });
 
   const payload: ComplexityRouterConfigPayload = {
     tiers,
+    // The backend rejects the flag beside a custom tier set.
+    ...(!customTierSet && enableNonReasoningTier && { enable_non_reasoning_tier: true }),
     ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
     ...(defaultModel?.trim() && { default_model: defaultModel }),
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),

@@ -803,8 +803,6 @@ describe("buildComplexityRouterConfig scorer knobs", () => {
     expect(buildComplexityRouterConfig(tuned).tier_boundaries).toEqual(BOUNDARIES);
   });
 
-      const uncheckedParams: unknown = {
-      const payload = buildComplexityRouterConfig(uncheckedParams as BuildComplexityRouterConfigParams);
   it("drops them when the classifier falls back to the default model and nothing is scored", () => {
     expect(buildComplexityRouterConfig(llmWithDefaultFallback)).not.toHaveProperty("tier_boundaries");
   });

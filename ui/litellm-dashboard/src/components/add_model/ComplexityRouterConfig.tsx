@@ -1,5 +1,6 @@
 import type { JevClassifierConfig } from "./jev_classifier_config";
-import { type ClassifierType } from "./classifier_types";
+import { type ClassifierType, usesLlmClassifier } from "./classifier_types";
+import { TIER_DESCRIPTIONS, TIER_KEYS } from "./tier_descriptions";
 export { type ClassifierType, usesLlmClassifier, usesClassifierContext } from "./classifier_types";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
@@ -141,16 +142,6 @@ export interface ClassifierLLMConfig {
   classification_rubric?: ClassificationRubric;
   system_prompt?: string;
 }
-
-export type ClassifierType = "heuristic" | "heuristic_v2" | "llm" | "heuristic_first" | "hybrid";
-
-/**
- * Whether this router can call classifier_llm_config.model. Mirrors the backend's
- * ComplexityRouterConfig.uses_llm_classifier, and is the single gate for every classifier-only
- * control and payload key, so a new chaining type cannot strip knobs the operator set.
- */
-export const usesLlmClassifier = (classifierType: ClassifierType): boolean =>
-  classifierType === "llm" || classifierType === "heuristic_first" || classifierType === "hybrid";
 
 export type ClassifierFallback = "heuristic" | "default_model";
 
@@ -498,36 +489,7 @@ interface ComplexityRouterConfigProps {
   showValidationErrors?: boolean;
 }
 
-export const TIER_DESCRIPTIONS: Record<
-  keyof ComplexityTiers,
-  { label: string; description: string; examples: string }
-> = {
-  SIMPLE: {
-    label: "Simple",
-    description: "Basic questions, greetings, simple factual queries",
-    examples: '"Hello!", "What is Python?", "Thanks!"',
-  },
-  MEDIUM: {
-    label: "Medium",
-    description: "Standard queries requiring some reasoning or explanation",
-    examples: '"Explain how REST APIs work", "Debug this error"',
-  },
-  COMPLEX: {
-    label: "Complex",
-    description: "Technical, multi-part requests requiring deep knowledge",
-    examples: '"Design a microservices architecture", "Implement a rate limiter"',
-  },
-  REASONING: {
-    label: "Reasoning",
-    description: "Chain-of-thought, analysis, explicit reasoning requests",
-    examples: '"Think step by step...", "Analyze the pros and cons..."',
-  },
-};
-
-export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof ComplexityTiers>;
-
-export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
-  tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
+export { TIER_DESCRIPTIONS, TIER_KEYS, effectiveTierLabel } from "./tier_descriptions";
 
 export const DEFAULT_HEURISTIC_FIRST_MAX_TIER = "SIMPLE";
 

@@ -155,6 +155,27 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
+function ClassifierRows({ decision }: { decision: RoutingDecision }) {
+  return (
+    <>
+      {decision.classifier_model && <Row label="Classifier model">{decision.classifier_model}</Row>}
+      {decision.classifier_confidence != null && (
+        <Row label="Confidence">{(decision.classifier_confidence * 100).toFixed(1)}%</Row>
+      )}
+      {decision.classifier_probabilities && (
+        <Row label="Probabilities">
+          {Object.entries(decision.classifier_probabilities).map(([name, probability]) => (
+            <div key={name}>
+              {name}: {(probability * 100).toFixed(1)}%
+            </div>
+          ))}
+        </Row>
+      )}
+      {decision.classifier_cost != null && <Row label="Classifier cost">${decision.classifier_cost.toFixed(8)}</Row>}
+    </>
+  );
+}
+
 export function RoutingDecisionCard({
   decision,
   className,
@@ -213,20 +234,7 @@ export function RoutingDecisionCard({
         {requestType && <Row label="Request type">{requestType}</Row>}
 
         <Row label="Decided by">{describeCause(decision)}</Row>
-        {decision.classifier_model && <Row label="Classifier model">{decision.classifier_model}</Row>}
-        {decision.classifier_confidence != null && (
-          <Row label="Confidence">{(decision.classifier_confidence * 100).toFixed(1)}%</Row>
-        )}
-        {decision.classifier_probabilities && (
-          <Row label="Probabilities">
-            {Object.entries(decision.classifier_probabilities).map(([name, probability]) => (
-              <div key={name}>
-                {name}: {(probability * 100).toFixed(1)}%
-              </div>
-            ))}
-          </Row>
-        )}
-        {decision.classifier_cost != null && <Row label="Classifier cost">${decision.classifier_cost.toFixed(8)}</Row>}
+        <ClassifierRows decision={decision} />
 
         {score !== undefined && (
           <Row label="Score">
