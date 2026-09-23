@@ -14,38 +14,33 @@ from litellm.llms.vertex_ai.common_utils import (
 from litellm.types.llms.openai import BatchJobStatus, CreateBatchRequest
 from litellm.types.llms.vertex_ai import *
 from litellm.types.llms.vertex_ai import GenerateContentResponseBody
-from litellm.types.utils import LiteLLMBatch, ModelInfo, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import LiteLLMBatch, ModelInfo, Usage
 
 _NATIVE_VERTEX_RESPONSE: Final = TypeAdapter(GenerateContentResponseBody)
 
 
-def vertex_prompt_tokens_details(
-    usage_metadata: Mapping[str, object],
-) -> PromptTokensDetailsWrapper | None:
-    raw_details: Final = usage_metadata.get("promptTokensDetails")
-    if not isinstance(raw_details, list):
-        return None
+def _int_field(mapping: Mapping[str, object], key: str) -> int:
+    value: Final = mapping.get(key)
+    if isinstance(value, int):
+        return value
+    return int(value) if isinstance(value, str) and value.isdigit() else 0
 
-    def _normalize(detail: object) -> tuple[str, int] | None:
-        if not isinstance(detail, Mapping):
-            return None
-        modality: Final = detail.get("modality")
-        token_count: Final = detail.get("tokenCount")
-        if not isinstance(modality, str) or not isinstance(token_count, int):
-            return None
-        return modality.upper(), token_count
 
-    parsed_details: Final = tuple(_normalize(detail) for detail in raw_details)
-    normalized: Final = tuple(detail for detail in parsed_details if detail is not None)
-    if len(normalized) != len(parsed_details):
-        return None
+def vertex_embedding_prompt_token_count(vertex_response: Mapping[str, object]) -> int:
+    """
+    Prompt tokens billed for one Vertex Gemini Embedding batch row.
 
-    return PromptTokensDetailsWrapper(
-        text_tokens=sum(token_count for modality, token_count in normalized if modality in ("TEXT", "DOCUMENT")),
-        audio_tokens=sum(token_count for modality, token_count in normalized if modality == "AUDIO"),
-        image_tokens=sum(token_count for modality, token_count in normalized if modality == "IMAGE"),
-        video_tokens=sum(token_count for modality, token_count in normalized if modality == "VIDEO"),
-    )
+    Live rows report usage under `usageMetadata`; the documented `tokenCount` is kept as
+    a fallback.
+    """
+    usage_metadata: Final = vertex_response.get("usageMetadata")
+    if isinstance(usage_metadata, Mapping):
+        return _int_field(usage_metadata, "promptTokenCount")
+    return _int_field(vertex_response, "tokenCount")
+
+
+def is_vertex_embedding_batch_output_response(response_body: Mapping[str, object]) -> bool:
+    return isinstance(response_body.get("embedding"), dict)
 
 
 def is_native_vertex_batch_output_row(row: Mapping[str, object]) -> bool:
@@ -71,6 +66,23 @@ class NativeVertexBatchRowStats:
     completion_cost: float
 
 
+def _native_vertex_row_usage(
+    response_body: Mapping[str, object],
+    calculate_usage: Callable[[GenerateContentResponseBody], Usage],
+) -> Usage | None:
+    if is_vertex_embedding_batch_output_response(response_body):
+        prompt_tokens: Final = vertex_embedding_prompt_token_count(response_body)
+        return Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
+    if "usageMetadata" not in response_body:
+        return None
+    try:
+        completion_response: Final = _NATIVE_VERTEX_RESPONSE.validate_python(response_body)
+    except ValidationError as e:
+        verbose_logger.debug("vertex_ai batch row response is not a GenerateContentResponse: %s", str(e))
+        return None
+    return calculate_usage(completion_response)
+
+
 def native_vertex_batch_row_stats(
     row: Mapping[str, object],
     model_name: str | None,
@@ -82,18 +94,17 @@ def native_vertex_batch_row_stats(
     """
     Usage and cost of one native Vertex predictions.jsonl row, a
     `{"request": ..., "response": {"candidates": [...], "usageMetadata": {...}, "modelVersion": ...}}`
-    object. `model_name` (the deployment model) prices the row, else its own `modelVersion` does;
-    a row without `response.usageMetadata`, or whose response fails validation, is None (failed).
+    generateContent object or a `{"request": ..., "response": {"embedding": {...}, "usageMetadata": {...}}}`
+    embedding object. `model_name` (the deployment model) prices the row, else its own `modelVersion` does;
+    a row without a response, a generateContent row without `response.usageMetadata`, and a row whose
+    response fails validation are None (failed).
     """
     response_body: Final = row.get("response")
-    if not isinstance(response_body, dict) or "usageMetadata" not in response_body:
+    if not isinstance(response_body, dict):
         return None
-    try:
-        completion_response: Final = _NATIVE_VERTEX_RESPONSE.validate_python(response_body)
-    except ValidationError as e:
-        verbose_logger.debug("vertex_ai batch row response is not a GenerateContentResponse: %s", str(e))
+    usage: Final = _native_vertex_row_usage(response_body, calculate_usage)
+    if usage is None:
         return None
-    usage: Final = calculate_usage(completion_response)
     total_tokens: Final = usage.total_tokens or (usage.prompt_tokens + usage.completion_tokens)
     model_version: Final = response_body.get("modelVersion")
     model: Final = model_name or (model_version if isinstance(model_version, str) else None)

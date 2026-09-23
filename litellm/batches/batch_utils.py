@@ -353,8 +353,9 @@ def calculate_vertex_ai_batch_cost_and_usage(
     """
     Cost and usage of a native Vertex predictions.jsonl, one
     `{"request": ..., "response": {"candidates": [...], "usageMetadata": {...}, "modelVersion": ...}}`
-    row per line. `model_name` (the deployment model) prices every row, else each row's own
-    `modelVersion` does; a row without `response.usageMetadata` counts as failed.
+    generateContent row or `{"request": ..., "response": {"embedding": {...}, "usageMetadata": {...}}}`
+    embedding row per line. `model_name` (the deployment model) prices every row, else each row's own
+    `modelVersion` does; a row without a usable response counts as failed.
     """
     from litellm.cost_calculator import batch_cost_calculator
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig

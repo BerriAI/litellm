@@ -41,6 +41,7 @@ from litellm.llms.base_llm.files.transformation import (
     BaseFileUploadStream,
     LiteLLMLoggingObj,
 )
+from litellm.llms.vertex_ai.batches.transformation import vertex_embedding_prompt_token_count
 from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
     get_vertex_ai_fine_tuned_endpoint_id,
@@ -421,19 +422,6 @@ def _split_vertex_batch_key(vertex_output_row: Mapping[str, object]) -> tuple[st
     return unquote(match["custom_id"]), int(match["index"]), int(match["total"])
 
 
-def _embedding_prompt_token_count(vertex_response: _VertexEmbeddingResponse) -> int:
-    """
-    Prompt tokens billed for one Vertex Gemini Embedding batch row.
-
-    Live rows report usage under `usageMetadata`; the documented `tokenCount` is kept as
-    a fallback.
-    """
-    usage_metadata = vertex_response.get("usageMetadata")
-    if isinstance(usage_metadata, Mapping):
-        return int(usage_metadata.get("promptTokenCount") or 0)
-    return int(vertex_response.get("tokenCount") or 0)
-
-
 def _vertex_embeddings_rows_to_openai_batch_output_row(
     custom_id: str,
     vertex_output_rows: tuple[_VertexEmbeddingBatchRow, ...],
@@ -474,7 +462,7 @@ def _vertex_embeddings_rows_to_openai_batch_output_row(
         )
 
     responses = tuple(row["response"] for row in vertex_output_rows)
-    token_count = sum(_embedding_prompt_token_count(response) for response in responses)
+    token_count = sum(vertex_embedding_prompt_token_count(response) for response in responses)
     body = EmbeddingResponse(
         model=model or "",
         data=[

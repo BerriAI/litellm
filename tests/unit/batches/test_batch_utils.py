@@ -754,6 +754,32 @@ def test_vertex_batch_usage_preserves_modality_token_details(monkeypatch):
     assert result.prompt_cost == pytest.approx(64 * 3.25e-6 + 20 * 1e-7)
 
 
+def test_vertex_native_cost_bills_embedding_rows(monkeypatch):
+    monkeypatch.setitem(litellm.model_cost, "vertex_ai/gemini-embedding-2", {"input_cost_per_token_batches": 1e-7})
+    rows = [
+        {
+            "key": "id_1",
+            "status": "",
+            "request": {"content": {"parts": [{"text": "hello world"}]}},
+            "response": {"embedding": {"values": [0.1, 0.2]}, "usageMetadata": {"promptTokenCount": 2}},
+        },
+        {
+            "key": "id_2",
+            "status": "",
+            "request": {"content": {"parts": [{"text": "hello"}]}},
+            "response": {"embedding": {"values": [0.3]}, "tokenCount": 3},
+        },
+        {"key": "id_3", "status": "INVALID_ARGUMENT", "request": {"content": {"parts": [{"text": ""}]}}},
+    ]
+
+    result = bu.calculate_vertex_ai_batch_cost_and_usage(rows, "gemini-embedding-2")
+
+    assert (result.successful_requests, result.failed_requests) == (2, 1)
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (5, 0, 5)
+    assert result.cost == pytest.approx(5 * 1e-7)
+    assert result.models == ["gemini-embedding-2"]
+
+
 def test_vertex_cost_skips_none_response_body(monkeypatch):
     import litellm.cost_calculator as cc
 

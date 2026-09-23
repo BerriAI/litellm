@@ -19,7 +19,6 @@ import pytest
 
 from litellm.llms.vertex_ai.batches.transformation import (  # noqa: E402
     VertexAIBatchTransformation,
-    vertex_prompt_tokens_details,
 )
 from litellm.llms.vertex_ai.common_utils import (  # noqa: E402
     VertexAIError,
@@ -39,27 +38,6 @@ ENDPOINT_INPUT_FILE = (
     f"gs://litellm-testing-bucket/litellm-vertex-files/endpoints/{ENDPOINT_ID}/"
     "e9412502-2c91-42a6-8e61-f5c294cc0fc8"
 )
-
-
-def test_vertex_prompt_tokens_details_rejects_malformed_details():
-    assert vertex_prompt_tokens_details({"promptTokensDetails": [1]}) is None
-    assert vertex_prompt_tokens_details({"promptTokensDetails": [{"modality": "AUDIO"}]}) is None
-    assert (
-        vertex_prompt_tokens_details(
-            {
-                "promptTokensDetails": [
-                    {"modality": "AUDIO", "tokenCount": 1},
-                    "malformed",
-                ]
-            }
-        )
-        is None
-    )
-
-
-# =========================================================================== #
-# transform_openai_batch_request_to_vertex_ai_batch_request
-# =========================================================================== #
 
 
 def test_transform_openai_request_builds_full_vertex_job():
