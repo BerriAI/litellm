@@ -17,6 +17,7 @@ _MAX_JPEG_SEGMENTS: Final = 1024
 _MAX_JPEG_HEADER_OFFSET: Final = 16 * 1024 * 1024
 _JPEG_FIRST_SEGMENT_OFFSET: Final = 2
 _JPEG_SOF_PAYLOAD_SIZE: Final = 5
+_JPEG_FILL_CHUNK: Final = 64 * 1024
 _HEADER_READ_SIZE: Final = 32
 _MIN_PNG_HEADER_SIZE: Final = 24
 _MIN_GIF_HEADER_SIZE: Final = 10
@@ -85,10 +86,10 @@ def _jpeg_sof_dimensions(stream: IO[bytes], start: int, offset: int, segments_le
         if len(marker) < 4 or marker[0] != 0xFF:
             return None
         if marker[1] == 0xFF:
-            run = 1  # rebind-ok: consecutive fill bytes in this window
-            while run < 3 and marker[run + 1] == 0xFF:
-                run += 1
-            segment_offset += run
+            stream.seek(start + segment_offset)
+            fill = stream.read(_JPEG_FILL_CHUNK)
+            run = len(fill) - len(fill.lstrip(b"\xff"))
+            segment_offset += run if run == len(fill) else run - 1
             continue
         if marker[1] in _JPEG_SOF_MARKERS:
             sof = stream.read(_JPEG_SOF_PAYLOAD_SIZE)
