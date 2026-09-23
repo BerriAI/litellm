@@ -4488,6 +4488,8 @@ class TestTeamMemberAutoRouterWrites:
         assert row.litellm_params["complexity_router_config"] == stored_config
         assert request.litellm_params.complexity_router_config == config
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint,change", [("patch", "config"), ("legacy", "strategy"), ("patch", "unrelated")])
     async def test_admin_router_changes_release_member_scope(self, endpoint: str, change: str) -> None:
         from litellm.proxy.management_endpoints.model_management_endpoints import patch_model, update_model
 

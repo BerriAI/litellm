@@ -27,6 +27,7 @@ def _full_team(model_aliases=ALIASES) -> LiteLLM_TeamTable:
         team_alias="grants-team",
         tpm_limit=1000,
         rpm_limit=10,
+        tpd_limit=200000,
         max_budget=50.0,
         soft_budget=25.0,
         spend=12.5,
