@@ -97,7 +97,14 @@ def add_upstream_authorization(gateway: Gateway, peer: McpPeer, key: str, identi
     return add_upstream_headers(gateway, peer, key, identity)[b"authorization"]
 
 
+def list_tools_status(target: Gateway, key: str, identity: str) -> int:
+    return target.client.get(
+        "/mcp-rest/tools/list", headers={"x-litellm-api-key": key}, params={"server_id": identity}
+    ).status_code
+
+
 def wait_for_tools(target: Gateway, key: str, identity: str) -> dict[str, str]:
+    eventually(lambda: list_tools_status(target, key, identity), lambda status: status == 200, seconds=60)
     return eventually(lambda: tool_names(target, key, identity), lambda names: "add" in names, seconds=60)
 
 
