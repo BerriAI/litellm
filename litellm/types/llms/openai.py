@@ -2443,7 +2443,7 @@ class OpenAIRealtimeResponseUsage(TypedDict):
 
 class OpenAIRealtimeTranslationDurationUsage(TypedDict):
     type: ReadOnly[Literal["duration"]]
-    output_seconds: ReadOnly[float]
+    output_seconds: NotRequired[ReadOnly[float]]
     input_seconds: NotRequired[ReadOnly[float]]
 
 

@@ -16,7 +16,6 @@ from litellm.llms.openai.transcriptions.gpt_transformation import (
     OpenAIGPTTranscribeAudioTranscriptionConfig,
 )
 from litellm.llms.openai.transcriptions.handler import OpenAIAudioTranscription
-from litellm.main import _validate_gpt_transcription_request
 from litellm.types.utils import TranscriptionResponse
 from litellm.utils import get_optional_params_transcription
 
@@ -252,7 +251,19 @@ def test_gpt_live_transcribe_rejects_file_transcription(local_model_cost_map: No
         )
 
 
-def test_azure_async_gpt_transcribe_forwards_v1_api_version():
+@pytest.mark.parametrize(
+    ("api_version", "expected_api_version"),
+    [
+        ("v1", litellm.AZURE_DEFAULT_API_VERSION),
+        ("latest", litellm.AZURE_DEFAULT_API_VERSION),
+        ("preview", litellm.AZURE_DEFAULT_API_VERSION),
+        (None, None),
+        ("2025-04-01-preview", "2025-04-01-preview"),
+    ],
+)
+def test_azure_gpt_transcribe_resolves_api_version_in_provider(
+    local_model_cost_map: None, api_version: str | None, expected_api_version: str | None
+) -> None:
     handler = AzureAudioTranscription()
     handler.async_audio_transcriptions = MagicMock(return_value=MagicMock())
 
@@ -266,39 +277,11 @@ def test_azure_async_gpt_transcribe_forwards_v1_api_version():
         max_retries=0,
         api_key="sk-test",
         api_base="https://example.openai.azure.com",
-        api_version="v1",
+        api_version=api_version,
         atranscription=True,
     )
 
-    assert handler.async_audio_transcriptions.call_args.kwargs["api_version"] == "v1"
-
-
-@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
-def test_azure_gpt_transcribe_uses_deployment_scoped_api_version(local_model_cost_map: None, api_version: str) -> None:
-    resolved_api_version = _validate_gpt_transcription_request(
-        model="gpt-transcribe",
-        custom_llm_provider="azure",
-        language=None,
-        languages=None,
-        response_format="json",
-        api_version=api_version,
-    )
-
-    assert resolved_api_version == litellm.AZURE_DEFAULT_API_VERSION
-
-
-def test_azure_gpt_transcribe_keeps_unset_api_version_for_configured_default(local_model_cost_map: None) -> None:
-    assert (
-        _validate_gpt_transcription_request(
-            model="gpt-transcribe",
-            custom_llm_provider="azure",
-            language=None,
-            languages=None,
-            response_format="json",
-            api_version=None,
-        )
-        is None
-    )
+    assert handler.async_audio_transcriptions.call_args.kwargs["api_version"] == expected_api_version
 
 
 def test_azure_gpt_transcribe_uses_deployment_scoped_route():
@@ -340,19 +323,6 @@ def test_azure_gpt_transcribe_uses_deployment_scoped_route():
     assert response.languages is not None
     assert [language.code for language in response.languages] == ["en"]
     client.close()
-
-
-def test_azure_gpt_transcribe_preserves_dated_api_version(local_model_cost_map: None) -> None:
-    resolved_api_version = _validate_gpt_transcription_request(
-        model="gpt-transcribe",
-        custom_llm_provider="azure",
-        language=None,
-        languages=None,
-        response_format="json",
-        api_version="2025-04-01-preview",
-    )
-
-    assert resolved_api_version == "2025-04-01-preview"
 
 
 @pytest.mark.asyncio

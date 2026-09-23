@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from pydantic import BaseModel
 
+import litellm
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.llms.base_llm.audio_transcription.transformation import sdk_compatible_transcription_request_data
@@ -42,6 +43,19 @@ class AzureAudioTranscription(AzureChatCompletion):
     ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
         data: Final = {"model": model, "file": audio_file, **optional_params}
         sdk_data: Final = sdk_compatible_transcription_request_data(data)
+        model_info: Final = (
+            litellm.get_model_info(model=model, custom_llm_provider="azure")
+            if f"azure/{model}" in litellm.model_cost
+            else None
+        )
+        provider_specific_entry: Final = model_info.get("provider_specific_entry") if model_info is not None else None
+        resolved_api_version: Final = (
+            litellm.AZURE_DEFAULT_API_VERSION
+            if provider_specific_entry is not None
+            and provider_specific_entry.get("transcription_deployment_api") == 1
+            and api_version in ("v1", "latest", "preview")
+            else api_version
+        )
 
         if atranscription is True:
             return self.async_audio_transcriptions(
@@ -51,7 +65,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 timeout=timeout,
                 api_key=api_key,
                 api_base=api_base,
-                api_version=api_version,
+                api_version=resolved_api_version,
                 client=client,
                 max_retries=max_retries,
                 logging_obj=logging_obj,
@@ -61,7 +75,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             )
 
         azure_client: Final = self.get_azure_openai_client(
-            api_version=api_version,
+            api_version=resolved_api_version,
             api_base=api_base,
             api_key=api_key,
             model=model,
