@@ -2049,6 +2049,9 @@
         ],
         "tests/integration/observability/test_guardrail_effects.py::test_bedrock_guardrail_streams_anthropic_messages_tool_use_instead_of_chunk_builder_500": [
             "other.observability.guardrails.bedrock_post_call_scans_streamed_anthropic_messages_tool_use"
+        ],
+        "tests/integration/spend/test_reset_budget_leader_election.py::test_reset_sweep_skips_ticks_while_another_pod_holds_the_lease_and_resumes_after_release": [
+            "spend.budget_reset.one_pod_sweeps_per_tick"
         ]
     },
     "browser": {
