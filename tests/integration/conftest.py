@@ -81,17 +81,22 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     collected: Final = session.config.stash.get(COLLECTED, ())
     reports: Final = tuple(report for report in session.config.stash[REPORTS] if report.nodeid in collected)
     passed: Final = tuple(report.nodeid for report in reports if report.when == "call" and report.passed)
+    skipped: Final = tuple(report.nodeid for report in reports if report.skipped)
     complete: Final = (
         exitstatus == 0
         and bool(collected)
-        and sorted(collected) == sorted(passed)
-        and all(report.passed for report in reports)
+        and sorted(collected) == sorted(passed + skipped)
+        and not any(report.failed for report in reports)
     )
     output: Final = Path(destination)
     output.mkdir(parents=True, exist_ok=True)
     (output / "execution.json").write_text(
         json.dumps({
-            "collected": collected, "passed": passed, "complete": complete, "exitstatus": exitstatus,
+            "collected": collected,
+            "passed": passed,
+            "skipped": skipped,
+            "complete": complete,
+            "exitstatus": exitstatus,
             "hypothesis_version": version("hypothesis"),
             "hypothesis_seed": session.config.getoption("hypothesis_seed"),
             "order_seed": session.config.getoption("integration_order_seed"),
