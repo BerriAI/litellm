@@ -908,6 +908,7 @@ def test_unknown_model_error_reaches_caller_after_detect(rig: Rig) -> None:
     )
     assert response.status_code in (400, 401, 404), response.text
     assert "no-such-model-" + marker in response.text
+    assert len(_v3_request_calls(rig, marker)) == 1, rig.sink_calls(marker)
     assert rig.provider_calls(marker, rig.provider_drain()) == ()
 
 
@@ -1022,32 +1023,44 @@ def test_burst_with_platform_outage_recovers_without_duplicate_spend(rig: Rig) -
 
 
 # C2: one proxy worker is killed during a burst; the other keeps serving and detect still runs for each call
+def _uvicorn_workers(parent: psutil.Process, *, exclude: int = 0) -> tuple[psutil.Process, ...]:
+    return tuple(
+        c for c in parent.children() if c.is_running() and c.pid != exclude and "spawn_main" in " ".join(c.cmdline())
+    )
+
+
 def test_burst_survives_one_worker_kill(rig: Rig) -> None:
     parent: Final = psutil.Process(rig.owned.process.pid)
-    workers: Final = eventually(
-        lambda: tuple(c for c in parent.children(recursive=True) if c.is_running()), lambda c: len(c) >= 2
-    )
+    workers: Final = eventually(lambda: _uvicorn_workers(parent), lambda c: len(c) >= 2)
     victim: Final = workers[0].pid
     markers: Final = tuple(rig.marker() for _ in range(24))
+
+    def fresh_chat(text: str) -> tuple[int, str]:
+        with httpx.Client(base_url=rig._base(), timeout=15, trust_env=False) as fresh:
+            try:
+                response: Final = fresh.post(
+                    "/v1/chat/completions",
+                    json={"model": rig.chat_model, "messages": _messages(text)},
+                    headers={"Authorization": f"Bearer {rig.proxy.key}"},
+                )
+            except httpx.TransportError as error:
+                return 0, repr(error)
+        return response.status_code, response.text
 
     def call(index: int) -> tuple[int, str]:
         if index == 6:
             os.kill(victim, signal.SIGKILL)
-        response: Final = _chat(rig, "kill " + markers[index])
-        return response.status_code, response.text
+        return fresh_chat("kill " + markers[index])
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         results: Final = tuple(pool.map(call, range(24)))
     ok: Final = tuple(i for i, (status, _) in enumerate(results) if status == 200)
-    assert len(ok) >= 18, results
+    assert len(ok) >= 20, results
     for index in ok:
         assert len(_v3_request_calls(rig, markers[index])) >= 1, markers[index]
-    eventually(
-        lambda: tuple(c for c in parent.children(recursive=True) if c.is_running() and c.pid != victim),
-        lambda c: len(c) >= 2,
-    )
-    after: Final = _chat(rig, "after-kill " + rig.marker())
-    assert after.status_code == 200, after.text
+    eventually(lambda: _uvicorn_workers(parent, exclude=victim), lambda c: len(c) >= 2)
+    after: Final = fresh_chat("after-kill " + rig.marker())
+    assert after[0] == 200, after
 
 
 # C3: proxy restart between a blocked turn and its replay: the memory is per process and empties, so Straiker is asked again
