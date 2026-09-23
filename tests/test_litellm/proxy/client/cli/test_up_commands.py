@@ -3,6 +3,8 @@ import shutil
 import stat
 import sys
 import time
+from pathlib import Path
+from typing import Final
 from unittest.mock import patch
 
 import click
@@ -297,35 +299,35 @@ def _capture_login(monkeypatch, on_login=lambda: None):
 
 
 class TestSecureCreate:
-    def test_skips_fchmod_where_the_platform_lacks_it(self, monkeypatch, tmp_path):
+    def test_skips_fchmod_where_the_platform_lacks_it(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """Windows only gained os.fchmod in 3.13; on 3.10-3.12 writing a credential file
         through secure_create must not die on AttributeError (the profile directory's ACL
         protects the file there)."""
         monkeypatch.setattr(up_module.os, "name", "nt")
         monkeypatch.delattr(up_module.os, "fchmod", raising=False)
-        path = tmp_path / "secret.json"
+        path: Final = tmp_path / "secret.json"
 
         with up_module.secure_create(path) as f:
             f.write("{}")
 
         assert path.read_text() == "{}"
 
-    def test_still_applies_0600_before_writing_on_posix(self, monkeypatch, tmp_path):
-        modes = []
-        real_fchmod = up_module.os.fchmod
+    def test_applies_0600_before_any_content_on_posix(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        modes_at_write: Final[list[tuple[int, int]]] = []
+        real_fchmod: Final = up_module.os.fchmod
 
-        def spy(fd, mode):
-            modes.append(mode)
+        def spy(fd: int, mode: int) -> None:
+            modes_at_write.append((mode, up_module.os.fstat(fd).st_size))
             real_fchmod(fd, mode)
 
         monkeypatch.setattr(up_module.os, "name", "posix")
         monkeypatch.setattr(up_module.os, "fchmod", spy)
-        path = tmp_path / "secret.json"
+        path: Final = tmp_path / "secret.json"
 
         with up_module.secure_create(path) as f:
             f.write("{}")
 
-        assert modes == [0o600]
+        assert modes_at_write == [(0o600, 0)]
 
 
 class TestEnsureFreshLogin:
