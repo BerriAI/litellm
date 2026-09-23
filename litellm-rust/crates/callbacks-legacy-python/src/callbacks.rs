@@ -51,6 +51,7 @@ pub trait LegacyCallbacks {
         response: &Option<Py<PyAny>>,
         start: &Py<PyAny>,
         end: &Option<Py<PyAny>>,
+        cache_hit: bool,
     ) -> PyResult<()>;
 
     fn failure(
@@ -68,6 +69,7 @@ pub trait LegacyCallbacks {
         response: &Option<Py<PyAny>>,
         start: &Py<PyAny>,
         end: &Option<Py<PyAny>>,
+        cache_hit: bool,
     ) -> PyResult<()>;
 
     fn enqueue_success(
@@ -76,6 +78,7 @@ pub trait LegacyCallbacks {
         response: &Option<Py<PyAny>>,
         start: &Py<PyAny>,
         end: &Option<Py<PyAny>>,
+        cache_hit: bool,
     ) -> PyResult<()>;
 }
 
@@ -181,8 +184,18 @@ impl LegacyCallbacks for PythonLogger {
         response: &Option<Py<PyAny>>,
         start: &Py<PyAny>,
         end: &Option<Py<PyAny>>,
+        cache_hit: bool,
     ) -> PyResult<()> {
-        Logging::SyncSuccessForAsyncCall.call(py, (self.object(py), response, start, end))?;
+        Logging::SyncSuccessForAsyncCall.call(
+            py,
+            (
+                self.object(py),
+                response,
+                start,
+                end,
+                cache_hit.then_some(true),
+            ),
+        )?;
         Ok(())
     }
 
@@ -205,8 +218,18 @@ impl LegacyCallbacks for PythonLogger {
         response: &Option<Py<PyAny>>,
         start: &Py<PyAny>,
         end: &Option<Py<PyAny>>,
+        cache_hit: bool,
     ) -> PyResult<()> {
-        Logging::SubmitSuccess.call(py, (self.object(py), response, start, end))?;
+        Logging::SubmitSuccess.call(
+            py,
+            (
+                self.object(py),
+                response,
+                start,
+                end,
+                cache_hit.then_some(true),
+            ),
+        )?;
         Ok(())
     }
 
@@ -216,9 +239,18 @@ impl LegacyCallbacks for PythonLogger {
         response: &Option<Py<PyAny>>,
         start: &Py<PyAny>,
         end: &Option<Py<PyAny>>,
+        cache_hit: bool,
     ) -> PyResult<()> {
-        let coroutine =
-            Logging::AsyncSuccessHandler.call(py, (self.object(py), response, start, end))?;
+        let coroutine = Logging::AsyncSuccessHandler.call(
+            py,
+            (
+                self.object(py),
+                response,
+                start,
+                end,
+                cache_hit.then_some(true),
+            ),
+        )?;
         let enqueue = Logging::Enqueue.call(py, (&coroutine,));
         if enqueue.is_err()
             && let Err(error) = coroutine.call_method0("close")

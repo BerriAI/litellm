@@ -20,6 +20,7 @@ fn defer<'py>(py: Python<'py>, script: &CStr) -> Bound<'py, PyDict> {
                 response: Some(local(&locals, "response").unbind()),
                 start: py.None(),
                 end: Some(py.None()),
+                cache_hit: false,
             }),
         },
     )
@@ -56,7 +57,7 @@ pending.release(True)
 pending.release(True)
 assert observed == ['release'], observed
 assert logger.names() == ['async_success_handler', 'enqueued'], logger.calls
-assert logger.calls[0][1] is response
+assert logger.calls[0][1][0] is response
 ",
         );
     });

@@ -9,6 +9,28 @@ pub fn missing_state() -> PyErr {
     PyRuntimeError::new_err("missing native call state")
 }
 
+/// What a route host produced for one route operation: either the result now, or a
+/// Python awaitable the driver hands back to the caller's task before asking the host
+/// to resume the same operation.
+pub enum Invoke<R: Route> {
+    Ready(R::OpResult),
+    Await(Py<PyAny>),
+}
+
+/// Where the response a call completes with came from: the provider, or a served
+/// response-cache hit.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ResponseOrigin {
+    Provider,
+    Cache,
+}
+
+/// The public value a call completes with and where it came from.
+pub struct Completed {
+    pub response: Py<PyAny>,
+    pub origin: ResponseOrigin,
+}
+
 /// What an adapter step produced: either the value the driver asked for, or a Python
 /// awaitable the driver hands back to the caller's task before asking again.
 pub enum LifecycleStep {
@@ -67,6 +89,7 @@ pub trait PythonLifecycle: Send + Sync {
         py: Python<'_>,
         response: Py<PyAny>,
         timing: Timing,
+        origin: ResponseOrigin,
     ) -> PyResult<LifecycleStep>;
 
     fn emit(&mut self, py: Python<'_>, event: LifecycleEvent<'_>) -> PyResult<LifecycleStep>;
@@ -117,13 +140,26 @@ pub trait RouteHost: Send + Sync {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
         op: <Self::Route as Route>::Op,
-    ) -> Result<<Self::Route as Route>::OpResult, InvokeError<<Self::Route as Route>::Error>>;
+    ) -> Result<Invoke<Self::Route>, InvokeError<<Self::Route as Route>::Error>>;
+
+    /// The value the awaitable an `invoke` returned resolved to, or the Python
+    /// exception it raised. Only called while the host has an awaited operation
+    /// pending.
+    fn resume_op(
+        &mut self,
+        _py: Python<'_>,
+        _result: PyResult<Py<PyAny>>,
+    ) -> Result<<Self::Route as Route>::OpResult, InvokeError<<Self::Route as Route>::Error>> {
+        Err(InvokeError::Python(PyRuntimeError::new_err(
+            "route host has no pending operation",
+        )))
+    }
 
     fn complete(
         &mut self,
         py: Python<'_>,
         response: <Self::Route as Route>::Response,
-    ) -> PyResult<Py<PyAny>>;
+    ) -> PyResult<Completed>;
 
     /// One streamed chunk as the caller receives it.
     fn chunk(

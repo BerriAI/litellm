@@ -65,14 +65,14 @@ FAKES = {
     ),
     'defers_async_logging': lambda logger: bool(getattr(logger, '_defer_async_logging', False)),
     'defer_success': lambda logger, pending: setattr(logger, '_native_pending_logging', pending),
-    'sync_success_for_async_call': lambda logger, response, start, end: logger.handle_sync_success_callbacks_for_async_calls(
-        response, start, end
+    'sync_success_for_async_call': lambda logger, response, start, end, cache_hit: logger.handle_sync_success_callbacks_for_async_calls(
+        response, start, end, cache_hit=cache_hit
     ),
     'failure_handler': lambda logger, error, start, end, asynchronous: (
         logger.async_failure_handler if asynchronous else logger.failure_handler
     )(error, ''.join(traceback.format_exception(error)), start, end),
-    'submit_success': lambda logger, response, start, end: logger.record('submit', (response, start, end)),
-    'async_success_handler': lambda logger, response, start, end: logger.async_success_handler(response, start, end),
+    'submit_success': lambda logger, response, start, end, cache_hit: logger.record('submit', (response, start, end, cache_hit)),
+    'async_success_handler': lambda logger, response, start, end, cache_hit: logger.async_success_handler(response, start, end, cache_hit),
     'enqueue_logging': lambda coroutine: coroutine.enqueue(),
     'restore_context': lambda logger: logger.record('restore', None),
     'custom_pricing_fields': lambda: ('ocr_cost_per_page',),
@@ -148,12 +148,12 @@ class StubLogger:
     def success_handler(self, response, start, end):
         self.record('success_handler', response)
 
-    def async_success_handler(self, response, start, end):
-        self.record('async_success_handler', response)
+    def async_success_handler(self, response, start, end, cache_hit=None):
+        self.record('async_success_handler', (response, cache_hit))
         return StubCoroutine(self)
 
-    def handle_sync_success_callbacks_for_async_calls(self, response, start, end):
-        self.record('sync_success_for_async_call', response)
+    def handle_sync_success_callbacks_for_async_calls(self, response, start, end, cache_hit=None):
+        self.record('sync_success_for_async_call', (response, cache_hit))
 
 
 logger = StubLogger()

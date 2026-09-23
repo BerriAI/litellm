@@ -286,6 +286,15 @@ async def test_inference_resolver_declines_a_native_runtime_whose_facade_changed
     assert replacement.get_cache("stale-only") is None
     assert replacement.get_cache("swapped-backend") is None
 
+    stale: Final = facade._native_cache
+    facade.add_cache({"answer": 7}, cache_key="facade-swapped")
+    assert facade.cache.get_cache("facade-swapped")["response"] == {"answer": 7}
+    assert facade.get_cache(cache_key="facade-swapped") == {"answer": 7}
+    if stale is not None:
+        request: Final = stale.request(facade, {"cache_key": "facade-swapped"})
+        assert request is not None
+        assert await stale.async_lookup(request) is None
+
 
 def test_existing_global_lifecycle_remains_the_resolver_source_of_truth() -> None:
     resolver: Final = _CacheTestResolver(litellm)

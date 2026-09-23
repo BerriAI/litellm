@@ -44,7 +44,7 @@ fn run_messages(
         SURFACE,
         PublicCall::capture(&request, &args, &kwargs)?,
         crate::logger::LoggedMachine::new(messages_machine()),
-        MessagesRouteHost::new(request.unbind()),
+        MessagesRouteHost::new(request.unbind(), asynchronous),
         asynchronous,
     )
 }

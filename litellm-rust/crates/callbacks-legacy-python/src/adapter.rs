@@ -6,7 +6,7 @@ use litellm_host::event::{
     FailureOrigin, MachineEvent, RequestContext, Timing, WireRequest, epoch_seconds,
 };
 use litellm_host_python::{
-    LifecycleEvent, LifecycleStep, PythonLifecycle, from_py, missing_state, to_py,
+    LifecycleEvent, LifecycleStep, PythonLifecycle, ResponseOrigin, from_py, missing_state, to_py,
 };
 use pyo3::{
     exceptions::{PyBaseException, PyException},
@@ -67,6 +67,7 @@ pub struct LegacyLogging {
     headers: Option<Py<PyDict>>,
     context: Option<RequestContext>,
     stream: Option<DeliveredStream>,
+    cache_hit: bool,
     asynchronous: bool,
     internal: bool,
     pending: Option<Pending>,
@@ -99,6 +100,7 @@ impl LegacyLogging {
             headers: None,
             context: None,
             stream: None,
+            cache_hit: false,
             asynchronous,
             internal: false,
             pending: None,
@@ -155,6 +157,7 @@ impl LegacyLogging {
             response: self.response.as_ref().map(|value| value.clone_ref(py)),
             start: self.start.clone_ref(py),
             end: self.end.as_ref().map(|value| value.clone_ref(py)),
+            cache_hit: self.cache_hit,
         };
         if !self.asynchronous {
             return pending().sync(py);
@@ -179,7 +182,13 @@ impl LegacyLogging {
                 pending().asynchronous(py)?;
             }
         }
-        logger.sync_success_for_async_call(py, &self.response, &self.start, &self.end)
+        logger.sync_success_for_async_call(
+            py,
+            &self.response,
+            &self.start,
+            &self.end,
+            self.cache_hit,
+        )
     }
 
     fn stream_success(&self, py: Python<'_>, stream: &DeliveredStream) -> PyResult<()> {
@@ -349,9 +358,14 @@ impl PythonLifecycle for LegacyLogging {
         py: Python<'_>,
         response: Py<PyAny>,
         timing: Timing,
+        origin: ResponseOrigin,
     ) -> PyResult<LifecycleStep> {
         self.end = Some(datetime(py, timing.end_time)?);
         self.response = Some(response);
+        self.cache_hit = origin == ResponseOrigin::Cache;
+        if origin == ResponseOrigin::Cache {
+            return self.finalize(py);
+        }
         if self.runs_deployment_hooks() {
             self.pending = Some(Pending::DeploymentPostCall);
             return Ok(LifecycleStep::Await(DeploymentHooks::after_success(

@@ -21,13 +21,17 @@ use super::{
 };
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum MessagesOp {
     ProjectRequest,
+    LookupCache,
+    StoreCache(Box<AnthropicMessagesResponse>),
 }
 
 pub enum MessagesOpResult {
     Request(Box<MessagesCall>),
+    Cached(Option<Box<AnthropicMessagesResponse>>),
+    Stored,
 }
 
 /// The caller's request as the host projects it.
@@ -49,6 +53,8 @@ impl MessagesCall {
 
 pub enum MessagesOutput {
     Message(Box<AnthropicMessagesResponse>),
+    /// A response-cache hit the host served before any provider request.
+    Cached(Box<AnthropicMessagesResponse>),
     /// Every chunk already reached the host through `Deliver`.
     Streamed,
 }
@@ -116,6 +122,8 @@ impl Host<Messages> for LocalMessagesHost {
                 .ok_or_else(|| {
                     Error::InvalidRequest("messages request was already projected".into())
                 }),
+            MessagesOp::LookupCache => Ok(MessagesOpResult::Cached(None)),
+            MessagesOp::StoreCache(_) => Ok(MessagesOpResult::Stored),
         }
     }
 }
@@ -125,8 +133,19 @@ pub fn messages_machine() -> MessagesMachine {
 }
 
 async fn execute(host: MessagesHost) -> Result<MessagesOutput, Error> {
-    let MessagesOpResult::Request(call) = host.route(MessagesOp::ProjectRequest).await?;
+    let MessagesOpResult::Request(call) = host.route(MessagesOp::ProjectRequest).await? else {
+        return Err(MachineFault::Mismatch.into());
+    };
     let stream = call.streams();
+    if !stream {
+        match host.route(MessagesOp::LookupCache).await? {
+            MessagesOpResult::Cached(Some(cached)) => {
+                return Ok(MessagesOutput::Cached(cached));
+            }
+            MessagesOpResult::Cached(None) => {}
+            _ => return Err(MachineFault::Mismatch.into()),
+        }
+    }
     let request = prepare_provider_request(MessagesRequest {
         model: &call.model,
         body: Value::Object(call.body.clone()),
@@ -174,8 +193,15 @@ async fn execute(host: MessagesHost) -> Result<MessagesOutput, Error> {
         raw: RawResponse { body: text.clone() },
     })
     .await?;
-    decode_response(request.config, &request.model, &text)
-        .map(|message| MessagesOutput::Message(Box::new(message)))
+    let message = decode_response(request.config, &request.model, &text)?;
+    match host
+        .route(MessagesOp::StoreCache(Box::new(message.clone())))
+        .await?
+    {
+        MessagesOpResult::Stored => {}
+        _ => return Err(MachineFault::Mismatch.into()),
+    }
+    Ok(MessagesOutput::Message(Box::new(message)))
 }
 
 /// Hands each upstream chunk to the caller as it arrives. A caller that stops reading

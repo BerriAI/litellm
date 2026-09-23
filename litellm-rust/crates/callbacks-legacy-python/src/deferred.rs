@@ -10,17 +10,18 @@ pub(crate) struct PendingSuccess {
     pub(crate) response: Option<Py<PyAny>>,
     pub(crate) start: Py<PyAny>,
     pub(crate) end: Option<Py<PyAny>>,
+    pub(crate) cache_hit: bool,
 }
 
 impl PendingSuccess {
     pub(crate) fn sync(&self, py: Python<'_>) -> PyResult<()> {
         self.logger
-            .submit_success(py, &self.response, &self.start, &self.end)
+            .submit_success(py, &self.response, &self.start, &self.end, self.cache_hit)
     }
 
     pub(crate) fn asynchronous(&self, py: Python<'_>) -> PyResult<()> {
         self.logger
-            .enqueue_success(py, &self.response, &self.start, &self.end)
+            .enqueue_success(py, &self.response, &self.start, &self.end, self.cache_hit)
     }
 }
 

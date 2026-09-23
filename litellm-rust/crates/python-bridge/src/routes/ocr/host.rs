@@ -1,6 +1,8 @@
 use litellm_auth::ResolvedCredential;
 use litellm_core::ocr::route::{Ocr, OcrOp, OcrOpResult};
-use litellm_host_python::{InvokeError, RouteHost, missing_state, to_py};
+use litellm_host_python::{
+    Completed, Invoke, InvokeError, ResponseOrigin, RouteHost, missing_state, to_py,
+};
 use litellm_llms::base_llm::ocr::{error::Error, transformation::LiteLLMOcrResponse};
 use pyo3::{
     exceptions::{PyBaseException, PyException},
@@ -113,16 +115,20 @@ impl RouteHost for OcrRouteHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
         op: OcrOp,
-    ) -> Result<OcrOpResult, InvokeError<Error>> {
+    ) -> Result<Invoke<Ocr>, InvokeError<Error>> {
         self.answer(py, arguments, op)
+            .map(Invoke::Ready)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))
     }
 
-    fn complete(&mut self, py: Python<'_>, response: LiteLLMOcrResponse) -> PyResult<Py<PyAny>> {
+    fn complete(&mut self, py: Python<'_>, response: LiteLLMOcrResponse) -> PyResult<Completed> {
         py.import("litellm.rust_bridge.ocr.route_host")?
             .getattr("response")?
             .call1((to_py(py, &response)?,))
-            .map(Bound::unbind)
+            .map(|value| Completed {
+                response: value.unbind(),
+                origin: ResponseOrigin::Provider,
+            })
     }
 
     fn chunk(&mut self, _: Python<'_>, chunk: std::convert::Infallible) -> PyResult<Py<PyAny>> {
@@ -209,10 +215,10 @@ del provider
             let projected = host.invoke(py, &kwargs, OcrOp::ProjectRequest).unwrap();
             assert!(matches!(
                 projected,
-                OcrOpResult::Request {
+                Invoke::Ready(OcrOpResult::Request {
                     caller_token: true,
                     ..
-                }
+                })
             ));
             locals.del_item("kwargs").unwrap();
             drop(kwargs);

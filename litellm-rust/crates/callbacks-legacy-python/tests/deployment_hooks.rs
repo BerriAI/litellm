@@ -1,7 +1,7 @@
 use std::ffi::CStr;
 
 use litellm_host::event::{FailureOrigin, Timing};
-use litellm_host_python::{LifecycleEvent, LifecycleStep, PythonLifecycle};
+use litellm_host_python::{LifecycleEvent, LifecycleStep, PythonLifecycle, ResponseOrigin};
 use pyo3::exceptions::asyncio::CancelledError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -152,7 +152,12 @@ logger.hooks = {'pre': lambda kwargs: kwargs}
             .resume(py, Ok(local(&locals, "kwargs").unbind()))
             .unwrap();
         let step = logging
-            .after_success(py, local(&locals, "response").unbind(), TIMING)
+            .after_success(
+                py,
+                local(&locals, "response").unbind(),
+                TIMING,
+                ResponseOrigin::Provider,
+            )
             .unwrap();
         assert!(awaits_deployment_hook(&step));
         let step = logging
@@ -186,7 +191,12 @@ fn cancelling_a_deployment_hook_ends_the_call_with_that_cancellation(#[case] pos
                 .resume(py, Ok(local(&locals, "kwargs").unbind()))
                 .unwrap();
             logging
-                .after_success(py, local(&locals, "response").unbind(), TIMING)
+                .after_success(
+                    py,
+                    local(&locals, "response").unbind(),
+                    TIMING,
+                    ResponseOrigin::Provider,
+                )
                 .unwrap();
         }
         let cancellation = CancelledError::new_err("cancelled");

@@ -452,3 +452,137 @@ async fn messages_rejects_unsupported_provider() {
 
     assert!(matches!(err, Error::InvalidProvider(provider) if provider == "openai"));
 }
+
+mod cache {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use litellm_host::{host::Host, run::run};
+    use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+    use serde_json::json;
+
+    use super::*;
+    use crate::messages::{
+        Error,
+        route::{
+            Messages, MessagesCall, MessagesOp, MessagesOpResult, MessagesOutput, messages_machine,
+        },
+    };
+
+    struct CacheHost {
+        call: Mutex<Option<MessagesCall>>,
+        cached: Mutex<Option<AnthropicMessagesResponse>>,
+        before_sends: AtomicUsize,
+        stores: AtomicUsize,
+    }
+
+    impl CacheHost {
+        fn new(cached: Option<AnthropicMessagesResponse>, api_base: String) -> Self {
+            Self {
+                call: Mutex::new(Some(MessagesCall {
+                    model: "claude-sonnet-4-5".into(),
+                    body: json!({
+                        "model": "claude-sonnet-4-5",
+                        "max_tokens": 8,
+                        "messages": [{"role": "user", "content": "hi"}]
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                    api_key: Some("sk-ant".into()),
+                    api_base: Some(api_base),
+                    custom_llm_provider: Some("anthropic".into()),
+                    extra_headers: None,
+                    timeout: Some(Duration::from_secs(5)),
+                })),
+                cached: Mutex::new(cached),
+                before_sends: AtomicUsize::new(0),
+                stores: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl Host<Messages> for CacheHost {
+        async fn route(&self, op: MessagesOp) -> Result<MessagesOpResult, Error> {
+            match op {
+                MessagesOp::ProjectRequest => Ok(MessagesOpResult::Request(Box::new(
+                    self.call
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .take()
+                        .expect("projected once"),
+                ))),
+                MessagesOp::LookupCache => Ok(MessagesOpResult::Cached(
+                    self.cached
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .take()
+                        .map(Box::new),
+                )),
+                MessagesOp::StoreCache(_) => {
+                    self.stores.fetch_add(1, Ordering::SeqCst);
+                    Ok(MessagesOpResult::Stored)
+                }
+            }
+        }
+
+        async fn before_send(
+            &self,
+            wire: litellm_host::event::WireRequest,
+            _context: &litellm_host::event::RequestContext,
+        ) -> Result<litellm_host::event::WireRequest, Error> {
+            self.before_sends.fetch_add(1, Ordering::SeqCst);
+            Ok(wire)
+        }
+    }
+
+    fn cached_response() -> AnthropicMessagesResponse {
+        serde_json::from_value(json!({
+            "id": "msg_cached",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "cached"}],
+            "model": "claude-sonnet-4-5",
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 2}
+        }))
+        .expect("cached response deserializes")
+    }
+
+    #[tokio::test]
+    async fn a_cache_hit_completes_without_a_provider_request() {
+        let host = CacheHost::new(Some(cached_response()), "http://127.0.0.1:1".into());
+        let output = run(messages_machine(), &host)
+            .await
+            .expect("cache hit completes");
+        assert!(matches!(output, MessagesOutput::Cached(message) if message.id == "msg_cached"));
+        assert_eq!(host.before_sends.load(Ordering::SeqCst), 0);
+        assert_eq!(host.stores.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_cache_miss_stores_the_decoded_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+        let addr = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accepts request");
+            read_http_request(&mut socket).await;
+            let body = r#"{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"hi"}],"model":"claude-sonnet-4-5","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}"#;
+            socket
+                .write_all(write_response(body).as_bytes())
+                .await
+                .expect("writes response");
+        });
+
+        let host = CacheHost::new(None, format!("http://{addr}"));
+        let output = run(messages_machine(), &host)
+            .await
+            .expect("cache miss completes");
+        assert!(matches!(output, MessagesOutput::Message(message) if message.id == "msg_1"));
+        assert_eq!(host.before_sends.load(Ordering::SeqCst), 1);
+        assert_eq!(host.stores.load(Ordering::SeqCst), 1);
+        server.await.expect("server task completes");
+    }
+}

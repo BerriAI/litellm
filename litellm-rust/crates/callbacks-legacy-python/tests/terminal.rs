@@ -88,7 +88,7 @@ fn success_reaches_the_logging_handlers(
             py,
             &locals,
             c"
-assert all(value is response for name, value in logger.calls if name.endswith('_handler'))
+assert all(value[0] is response for name, value in logger.calls if name.endswith('_handler'))
 assert hasattr(logger, '_native_pending_logging') == getattr(logger, '_defer_async_logging', False)
 ",
         );
@@ -151,7 +151,7 @@ response = object()
 failure = ValueError('terminal diagnostic')
 
 class FailingLogger(StubLogger):
-    def handle_sync_success_callbacks_for_async_calls(self, *args):
+    def handle_sync_success_callbacks_for_async_calls(self, *args, **kwargs):
         raise failure
 
 logger = FailingLogger()

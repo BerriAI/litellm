@@ -239,9 +239,15 @@ def defer_success(logger: LoggingSurface, pending: object) -> None:
 
 
 def sync_success_for_async_call(
-    logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime
+    logger: LoggingSurface,
+    response: object,
+    start: datetime.datetime,
+    end: datetime.datetime,
+    cache_hit: bool | None = None,
 ) -> None:
-    logger.handle_sync_success_callbacks_for_async_calls(result=response, start_time=start, end_time=end)
+    logger.handle_sync_success_callbacks_for_async_calls(
+        result=response, start_time=start, end_time=end, cache_hit=cache_hit
+    )
 
 
 def failure_handler(
@@ -258,16 +264,29 @@ def failure_handler(
     return None
 
 
-def submit_success(logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime) -> None:
+def submit_success(
+    logger: LoggingSurface,
+    response: object,
+    start: datetime.datetime,
+    end: datetime.datetime,
+    cache_hit: bool | None = None,
+) -> None:
     from litellm.litellm_core_utils.litellm_logging import executor
 
-    executor.submit(contextvars.copy_context().run, logger.success_handler, response, start, end)
+    executor.submit(
+        contextvars.copy_context().run,
+        lambda: logger.success_handler(response, start, end, cache_hit=cache_hit),
+    )
 
 
 def async_success_handler(
-    logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime
+    logger: LoggingSurface,
+    response: object,
+    start: datetime.datetime,
+    end: datetime.datetime,
+    cache_hit: bool | None = None,
 ) -> Coroutine[object, object, None]:
-    return logger.async_success_handler(response, start, end)
+    return logger.async_success_handler(response, start, end, cache_hit=cache_hit)
 
 
 def enqueue_logging(coroutine: Coroutine[object, object, None]) -> None:

@@ -13,7 +13,7 @@ use pyo3::types::PyDict;
 use tokio::sync::Mutex;
 
 use crate::adapter::{
-    InvokeError, LifecycleEvent, LifecycleStep, PythonLifecycle, RouteHost, missing_state,
+    Invoke, InvokeError, LifecycleEvent, LifecycleStep, PythonLifecycle, RouteHost, missing_state,
 };
 use crate::execution::{poll_async_value, run_async_value, run_sync_value};
 use crate::handle::{Execution, ExecutionBody, ExecutionStep};
@@ -57,6 +57,8 @@ enum Expect {
 enum Pending {
     Native,
     Adapter(Expect),
+    /// A route operation the host answered with a Python awaitable.
+    RouteOp,
     /// The stream handed to the caller waits for its next read or its close.
     Consumer,
 }
@@ -186,6 +188,13 @@ where
                     Err(error) => self.adapter_failed(py, error),
                 }
             }
+            (Some(Pending::RouteOp), Some(result)) => match self.route.resume_op(py, result) {
+                Ok(result) => self.resume_machine(py, Some(Ok(HostResult::Route(result)))),
+                Err(InvokeError::Native(error)) => {
+                    self.resume_machine(py, Some(Err(HostFailure::Error(error))))
+                }
+                Err(InvokeError::Python(error)) => self.interrupt(py, error),
+            },
             _ => Err(missing_state()),
         }
     }
@@ -281,7 +290,11 @@ where
             HostOp::Route(op) => {
                 let arguments = self.arguments.as_ref().ok_or_else(missing_state)?;
                 match self.route.invoke(py, arguments.bind(py), op) {
-                    Ok(result) => Ok(HostResult::Route(result)),
+                    Ok(Invoke::Ready(result)) => Ok(HostResult::Route(result)),
+                    Ok(Invoke::Await(awaitable)) => {
+                        self.pending = Some(Pending::RouteOp);
+                        return Ok(Next::Return(ExecutionStep::Await(awaitable)));
+                    }
                     Err(InvokeError::Native(error)) => {
                         return self
                             .resume_core(py, Some(Err(HostFailure::Error(error))))
@@ -414,15 +427,18 @@ where
 
     fn completed(&mut self, py: Python<'_>, response: ResponseOf<H>) -> PyResult<ExecutionStep> {
         self.ended_at = Some(epoch_seconds());
-        let public = match self.route.complete(py, response) {
-            Ok(public) => public,
+        let completed = match self.route.complete(py, response) {
+            Ok(completed) => completed,
             Err(error) => return self.failure(py, error, FailureOrigin::Call),
         };
         if let Stage::Streaming = self.stage {
-            return self.succeeded(py, public);
+            return self.succeeded(py, completed.response);
         }
         self.stage = Stage::AfterSuccess;
-        match self.adapter.after_success(py, public, self.timing()) {
+        match self
+            .adapter
+            .after_success(py, completed.response, self.timing(), completed.origin)
+        {
             Ok(step) => self.on_adapter(py, step, Expect::Response),
             Err(error) => self.failure(py, error, FailureOrigin::Host),
         }
@@ -534,6 +550,7 @@ mod tests {
     use pyo3::types::PyDict;
 
     use super::*;
+    use crate::adapter::{Completed, ResponseOrigin};
 
     static PYTHON_GLOBALS: Mutex<()> = Mutex::new(());
 
@@ -658,6 +675,8 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         Answer,
         RaisePython,
         RejectNatively,
+        AwaitAnswer,
+        AwaitPythonError,
     }
 
     struct SyntheticHost {
@@ -683,15 +702,43 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
 
         fn invoke(
             &mut self,
-            _: Python<'_>,
+            py: Python<'_>,
             arguments: &Bound<'_, PyDict>,
             op: &'static str,
-        ) -> Result<String, InvokeError<Error>> {
+        ) -> Result<Invoke<Synthetic>, InvokeError<Error>> {
             self.log.push(format!("route:{op}"));
             match self.op {
-                OpScript::Answer => Ok(format!("{op}:{}", arguments.len())),
+                OpScript::Answer => Ok(Invoke::Ready(format!("{op}:{}", arguments.len()))),
                 OpScript::RaisePython => Err(PyValueError::new_err("op failed").into()),
                 OpScript::RejectNatively => Err(InvokeError::Native(Error("op rejected".into()))),
+                OpScript::AwaitAnswer | OpScript::AwaitPythonError => {
+                    let globals = PyDict::new(py);
+                    py.run(
+                        pyo3::ffi::c_str!("async def resolved():\n    return 'resumed'"),
+                        Some(&globals),
+                        Some(&globals),
+                    )?;
+                    Ok(Invoke::Await(
+                        globals.get_item("resolved")?.unwrap().call0()?.unbind(),
+                    ))
+                }
+            }
+        }
+
+        fn resume_op(
+            &mut self,
+            py: Python<'_>,
+            result: PyResult<Py<PyAny>>,
+        ) -> Result<String, InvokeError<Error>> {
+            self.log.push("resume_op");
+            match self.op {
+                OpScript::AwaitAnswer => result?.extract::<String>(py).map_err(InvokeError::Python),
+                OpScript::AwaitPythonError => {
+                    Err(InvokeError::Python(PyValueError::new_err("resume failed")))
+                }
+                _ => Err(InvokeError::Python(PyRuntimeError::new_err(
+                    "route host has no pending operation",
+                ))),
             }
         }
 
@@ -699,11 +746,14 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             match chunk {}
         }
 
-        fn complete(&mut self, py: Python<'_>, response: String) -> PyResult<Py<PyAny>> {
+        fn complete(&mut self, py: Python<'_>, response: String) -> PyResult<Completed> {
             self.log.push("complete");
-            Ok(pyo3::types::PyString::new(py, &response)
-                .into_any()
-                .unbind())
+            Ok(Completed {
+                response: pyo3::types::PyString::new(py, &response)
+                    .into_any()
+                    .unbind(),
+                origin: ResponseOrigin::Provider,
+            })
         }
 
         fn classify(&self, _: Python<'_>, error: Error) -> PyResult<Classified> {
@@ -772,6 +822,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             py: Python<'_>,
             response: Py<PyAny>,
             _: Timing,
+            _: ResponseOrigin,
         ) -> PyResult<LifecycleStep> {
             self.log.push("after_success");
             match self.script {
@@ -1045,6 +1096,73 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
     }
 
     #[test]
+    fn an_awaited_route_operation_is_resumed_with_its_value() {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            let (result, log) = run_scripted(
+                py,
+                success_machine(),
+                OpScript::AwaitAnswer,
+                AdapterScript::Plain,
+                true,
+            );
+            assert_eq!(result.unwrap().extract::<String>(py).unwrap(), "done");
+            assert_eq!(
+                log,
+                [
+                    "started",
+                    "begin",
+                    "route:project",
+                    "resume_op",
+                    "before_send",
+                    "response:raw",
+                    "complete",
+                    "after_success",
+                    "succeeded:done",
+                    "adapter.close",
+                    "route.close",
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn a_python_error_resuming_a_route_operation_interrupts_the_call() {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            let (result, log) = run_scripted(
+                py,
+                success_machine(),
+                OpScript::AwaitPythonError,
+                AdapterScript::Plain,
+                true,
+            );
+            let error = result.unwrap_err();
+            assert_eq!(error.value(py).to_string(), "resume failed");
+            assert_eq!(
+                log,
+                [
+                    "started",
+                    "begin",
+                    "route:project",
+                    "resume_op",
+                    "failed:Call:resume failed",
+                    "adapter.close",
+                    "route.close",
+                ]
+            );
+        });
+    }
+
+    #[test]
     fn a_failing_classifier_surfaces_with_the_native_error_as_context() {
         let _guard = PYTHON_GLOBALS
             .lock()
@@ -1183,7 +1301,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                     _: Python<'_>,
                     _: &Bound<'_, PyDict>,
                     _: &'static str,
-                ) -> Result<String, InvokeError<Error>> {
+                ) -> Result<Invoke<Synthetic>, InvokeError<Error>> {
                     self.0.push("route");
                     Err(pyo3::exceptions::asyncio::CancelledError::new_err(()).into())
                 }
@@ -1194,7 +1312,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 ) -> PyResult<Py<PyAny>> {
                     match chunk {}
                 }
-                fn complete(&mut self, _: Python<'_>, _: String) -> PyResult<Py<PyAny>> {
+                fn complete(&mut self, _: Python<'_>, _: String) -> PyResult<Completed> {
                     Err(missing_state())
                 }
                 fn classify(&self, _: Python<'_>, error: Error) -> PyResult<Classified> {

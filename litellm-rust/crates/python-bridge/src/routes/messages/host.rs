@@ -3,7 +3,9 @@ use litellm_core::messages::{
     Error,
     route::{Messages, MessagesCall, MessagesOp, MessagesOpResult, MessagesOutput},
 };
-use litellm_host_python::{InvokeError, RouteHost, from_py, lookup, to_py};
+use litellm_host_python::{
+    Completed, Invoke, InvokeError, ResponseOrigin, RouteHost, from_py, lookup, to_py,
+};
 use litellm_http::transport::Error as TransportError;
 use pyo3::{
     exceptions::{PyException, PyValueError},
@@ -43,15 +45,89 @@ const BODY_FIELDS: [&str; 20] = [
     "reasoning_effort",
 ];
 
-/// The Python side of the Messages route: projects the prepared arguments and builds the
-/// public response, chunks and exceptions.
+/// A route operation the host answered with a Python awaitable.
+enum Pending {
+    Lookup,
+}
+
+/// The Python side of the Messages route: projects the prepared arguments, serves the
+/// response cache, and builds the public response, chunks and exceptions.
 pub(super) struct MessagesRouteHost {
     request: Py<PyAny>,
+    pending: Option<Pending>,
+    call_type: &'static str,
+    asynchronous: bool,
 }
 
 impl MessagesRouteHost {
-    pub(super) fn new(request: Py<PyAny>) -> Self {
-        Self { request }
+    pub(super) fn new(request: Py<PyAny>, asynchronous: bool) -> Self {
+        Self {
+            request,
+            pending: None,
+            call_type: if asynchronous {
+                "aanthropic_messages"
+            } else {
+                "anthropic_messages"
+            },
+            asynchronous,
+        }
+    }
+
+    fn asynchronous(&self) -> bool {
+        self.asynchronous
+    }
+
+    fn public_response(
+        &self,
+        py: Python<'_>,
+        message: &litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse,
+        origin: ResponseOrigin,
+    ) -> PyResult<Completed> {
+        py.import("litellm.rust_bridge.messages.route_host")?
+            .getattr("response")?
+            .call1((to_py(py, message)?,))
+            .map(|response| Completed {
+                response: response.unbind(),
+                origin,
+            })
+    }
+
+    fn lookup_cache(
+        &mut self,
+        py: Python<'_>,
+        arguments: &Bound<'_, PyDict>,
+    ) -> Result<Invoke<Messages>, InvokeError<Error>> {
+        let module = py
+            .import("litellm.rust_bridge.call_cache")
+            .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?;
+        if self.asynchronous() {
+            let awaitable = module
+                .getattr("lookup")
+                .and_then(|lookup| lookup.call1((self.call_type, arguments)))
+                .map(Bound::unbind)
+                .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?;
+            self.pending = Some(Pending::Lookup);
+            Ok(Invoke::Await(awaitable))
+        } else {
+            module
+                .getattr("lookup_sync")
+                .and_then(|lookup| lookup.call1((self.call_type, arguments)))
+                .map_err(|error| InvokeError::Python(self.map_failure(py, error)))
+                .map(|result| self.cached(&result))
+        }
+    }
+
+    fn cached(&self, value: &Bound<'_, PyAny>) -> Invoke<Messages> {
+        if value.is_none() {
+            return Invoke::Ready(MessagesOpResult::Cached(None));
+        }
+        match from_py::<
+            litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse,
+        >(value)
+        {
+            Ok(message) => Invoke::Ready(MessagesOpResult::Cached(Some(Box::new(message)))),
+            Err(_) => Invoke::Ready(MessagesOpResult::Cached(None)),
+        }
     }
 
     fn project(&self, py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<MessagesCall> {
@@ -136,23 +212,63 @@ impl RouteHost for MessagesRouteHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
         op: MessagesOp,
-    ) -> Result<MessagesOpResult, InvokeError<Error>> {
+    ) -> Result<Invoke<Messages>, InvokeError<Error>> {
         match op {
             MessagesOp::ProjectRequest => self
                 .project(py, arguments)
                 .map(|call| MessagesOpResult::Request(Box::new(call)))
+                .map(Invoke::Ready)
                 .map_err(|error| InvokeError::Python(self.map_failure(py, error))),
+            MessagesOp::LookupCache => self.lookup_cache(py, arguments),
+            MessagesOp::StoreCache(message) => {
+                let store = if self.asynchronous() {
+                    "store"
+                } else {
+                    "store_sync"
+                };
+                py.import("litellm.rust_bridge.call_cache")
+                    .and_then(|module| module.getattr(store))
+                    .and_then(|call| {
+                        call.call1((self.call_type, arguments, to_py(py, message.as_ref())?))
+                    })
+                    .map(|_| Invoke::Ready(MessagesOpResult::Stored))
+                    .map_err(|error| InvokeError::Python(self.map_failure(py, error)))
+            }
         }
     }
 
-    fn complete(&mut self, py: Python<'_>, response: MessagesOutput) -> PyResult<Py<PyAny>> {
+    fn resume_op(
+        &mut self,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> Result<MessagesOpResult, InvokeError<Error>> {
+        match self.pending.take() {
+            Some(Pending::Lookup) => {
+                let value =
+                    result.map_err(|error| InvokeError::Python(self.map_failure(py, error)))?;
+                match self.cached(value.bind(py)) {
+                    Invoke::Ready(result) => Ok(result),
+                    Invoke::Await(_) => unreachable!("cached() only produces ready results"),
+                }
+            }
+            None => Err(InvokeError::Python(
+                pyo3::exceptions::PyRuntimeError::new_err("route host has no pending operation"),
+            )),
+        }
+    }
+
+    fn complete(&mut self, py: Python<'_>, response: MessagesOutput) -> PyResult<Completed> {
         match response {
-            MessagesOutput::Message(message) => py
-                .import("litellm.rust_bridge.messages.route_host")?
-                .getattr("response")?
-                .call1((to_py(py, message.as_ref())?,))
-                .map(Bound::unbind),
-            MessagesOutput::Streamed => Ok(py.None()),
+            MessagesOutput::Message(message) => {
+                self.public_response(py, message.as_ref(), ResponseOrigin::Provider)
+            }
+            MessagesOutput::Cached(message) => {
+                self.public_response(py, message.as_ref(), ResponseOrigin::Cache)
+            }
+            MessagesOutput::Streamed => Ok(Completed {
+                response: py.None(),
+                origin: ResponseOrigin::Provider,
+            }),
         }
     }
 

@@ -84,6 +84,21 @@ const VALKEY_POOL: RedisPoolAttributes = STANDALONE_POOL;
 /// `Cache._native_cache` holds the runtime `Cache.__init__` resolved.
 const INSTANCE_STATE: &[&str] = &["_native_cache"];
 
+/// Class attributes the interpreter adds lazily (for example `abc._abc_impl`) must not
+/// invalidate a captured guard, but an added hook that can intercept member access can.
+const INTERCEPTION_HOOKS: &[&str] = &[
+    "__getattr__",
+    "__getattribute__",
+    "__setattr__",
+    "__delattr__",
+    "__get__",
+    "__set__",
+    "__delete__",
+    "__instancecheck__",
+    "__subclasscheck__",
+    "__subclasshook__",
+];
+
 pub(super) struct FacadeGuard {
     outer: ObjectGuard,
     backend: ObjectGuard,
@@ -167,7 +182,14 @@ impl ObjectGuard {
             }
             let attributes = class.getattr("__dict__")?;
             if attributes.len()? != expected.attributes.len() {
-                return Ok(false);
+                for item in attributes.call_method0("items")?.try_iter()? {
+                    let (name, _): (String, Bound<'_, PyAny>) = item?.extract()?;
+                    if !expected.attributes.iter().any(|(known, _)| known == &name)
+                        && INTERCEPTION_HOOKS.contains(&name.as_str())
+                    {
+                        return Ok(false);
+                    }
+                }
             }
             for (name, value) in &expected.attributes {
                 if (instance.contains(name)?
