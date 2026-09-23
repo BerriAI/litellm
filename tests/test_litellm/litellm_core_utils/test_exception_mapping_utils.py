@@ -3,8 +3,6 @@ import openai
 import pytest
 
 import litellm
-
-
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     _get_body_error_code,
@@ -974,6 +972,31 @@ def test_an_unmapped_exception_with_no_model_or_provider_is_a_connection_error(q
     assert "boom" in raised.value.message
 
 
+def test_unmapped_sdk_exception_includes_bug_report_link(quiet_exception_mapping):
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        exception_type(
+            model="my-model",
+            custom_llm_provider="minimax",
+            original_exception=ValueError("boom"),
+        )
+
+    assert "https://github.com/BerriAI/litellm/issues/new?" in str(raised.value)
+    assert "ValueError" in str(raised.value)
+
+
+def test_unmapped_sdk_exception_bug_report_link_can_be_disabled(quiet_exception_mapping, monkeypatch):
+    monkeypatch.setenv("LITELLM_DISABLE_BUG_REPORT_LINK", "true")
+
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        exception_type(
+            model="my-model",
+            custom_llm_provider="minimax",
+            original_exception=ValueError("boom"),
+        )
+
+    assert "https://github.com/BerriAI/litellm/issues/new?" not in str(raised.value)
+
+
 def _raise_and_map(model: str | None, original_exception: Exception, custom_llm_provider: str | None) -> None:
     """Calls exception_type() from inside the except block, as litellm/main.py does,
     so traceback.format_exc() has a real stack."""
@@ -1435,6 +1458,33 @@ def test_openai_compatible_vendor_400_keeps_body_but_not_headers():
 
     assert exc_info.value.body["type"] == "vendor_specific_error"
     assert not exc_info.value.response.headers
+
+
+@pytest.mark.parametrize(
+    ("status_code", "mapped_class", "reported_type"),
+    [(429, litellm.RateLimitError, "throttling_error"), (500, litellm.InternalServerError, "internal_server_error")],
+)
+def test_openai_429_and_500_keep_body_but_report_litellm_type(
+    status_code: int, mapped_class: type[openai.APIError], reported_type: str
+):
+    with pytest.raises(mapped_class) as exc_info:
+        exception_type(
+            model="gpt-5.4-mini",
+            original_exception=_openai_handler_error(
+                "server_error", {}, status_code=status_code, message="upstream cannot complete this response"
+            ),
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.body == {
+        **_GUARDRAIL_BLOCK_ERROR,
+        "type": "server_error",
+        "code": str(status_code),
+        "message": "upstream cannot complete this response",
+    }
+    assert exc_info.value.type == reported_type
 
 
 def test_litellm_proxy_repeated_response_header_keeps_each_value():

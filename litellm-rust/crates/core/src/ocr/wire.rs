@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, time::Duration};
 
-use litellm_auth::InputSource;
+use litellm_auth::{InputSource, SecretValue};
 use litellm_llms::base_llm::ocr::{
     error::Error,
     transformation::{OcrDocument, decode_request_value},
@@ -44,7 +44,7 @@ pub fn consumed_optional_param_names(
 pub struct OcrWireRequest<D = Value> {
     pub model: String,
     pub document: D,
-    pub api_key: Option<String>,
+    pub api_key: Option<SecretValue>,
     pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,

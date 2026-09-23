@@ -6,7 +6,7 @@ import httpx
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.ocr import main
 from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
-from litellm.rust_bridge.catalog import Context, Route
+from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch, call_hook
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR, LiteLLMOcrRequest
 
@@ -52,8 +52,10 @@ _PYTHON_AOCR: Final = cast(  # cast-ok: forward the original call shape through 
 )
 
 
-def _context(request: LiteLLMOcrRequest) -> Context:
-    return Context(Route.OCR, provider=request.custom_llm_provider, model=request.model)
+def _context(request: LiteLLMOcrRequest) -> RouteContext:
+    prefix, separator, _ = request.model.partition("/")
+    provider: Final = request.custom_llm_provider or (prefix if separator else None)
+    return RouteContext(Route.OCR, provider=provider, model=request.model)
 
 
 _DISPATCH: Final = PublicDispatch(

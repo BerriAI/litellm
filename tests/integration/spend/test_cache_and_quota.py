@@ -1,16 +1,27 @@
+import json
+import os
+import threading
 import uuid
-from contextlib import ExitStack
+from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager
 from hashlib import sha256
+from pathlib import Path
 from typing import Final
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+import psycopg
 import pytest
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_as_test
-
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, eventually, string_value
 from integration._support.database import read_rows
+from integration._support.database_relay import database_relay
 from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
+from integration._support.process import owned_proxy
+from integration._support.wire import Reply, Request, wire_server
+from psycopg import sql
 
 
 @pytest.mark.covers("quota_management.response_cache.generated_sequences_preserve_content_and_accounting")
@@ -185,7 +196,7 @@ def test_key_budget_at_boundary_blocks_provider_then_explicit_reset_restores(gat
             {"model": model, "messages": [{"role": "user", "content": f"over budget {uuid.uuid4().hex}"}]},
             key=key,
         )
-        assert denied.status_code == 429 and denied.json()["error"]["type"] == "budget_exceeded", denied.text
+        assert denied.status_code == 422 and denied.json()["error"]["type"] == "budget_exceeded", denied.text
         assert upstream.get("/__observations").json()["requests"] == []
         assert gateway.chat(model, key=control, text=f"control {uuid.uuid4().hex}")["usage"]["total_tokens"] == 40
         gateway.post("/key/update", {"key": key, "spend": 0})
@@ -205,10 +216,214 @@ def test_key_budget_at_boundary_blocks_provider_then_explicit_reset_restores(gat
             {"model": model, "messages": [{"role": "user", "content": f"boundary again {uuid.uuid4().hex}"}]},
             key=key,
         )
-        assert denied_again.status_code == 429 and denied_again.json()["error"]["type"] == "budget_exceeded", (
+        assert denied_again.status_code == 422 and denied_again.json()["error"]["type"] == "budget_exceeded", (
             denied_again.text
         )
         assert upstream.get("/__observations").json()["requests"] == []
+
+
+RESET_SWEEP_QUERY: Final = b'"LiteLLM_VerificationToken"."budget_reset_at" < $'
+
+
+@contextmanager
+def scratch_database() -> Generator[str]:
+    name: Final = f"integration_{uuid.uuid4().hex}"
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as admin:
+        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+        try:
+            yield urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{name}"))
+        finally:
+            admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
+
+
+@pytest.mark.covers("quota_management.budget.key.scheduled_reset_survives_transient_db_outage")
+@pytest.mark.timeout(300)
+def test_scheduled_budget_reset_reconnects_after_db_transport_failure_and_unblocks_key(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with (
+        scratch_database() as scratch_url,
+        database_relay(scratch_url, RESET_SWEEP_QUERY) as (relay, relayed_url),
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {
+                "DATABASE_URL": relayed_url,
+                "PROXY_BUDGET_RESCHEDULER_MIN_TIME": "30",
+                "PROXY_BUDGET_RESCHEDULER_MAX_TIME": "30",
+                "PRISMA_HEALTH_WATCHDOG_ENABLED": "false",
+            },
+        ) as candidate,
+    ):
+        model: Final = f"integration-{uuid.uuid4().hex}"
+        candidate.post(
+            "/model/new",
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "integration-provider-key",
+                    "api_base": f"{gateway.upstream_url}/v1",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+                "model_info": {},
+            },
+        )
+        key: Final = string_value(
+            candidate.post("/key/generate", {"models": [model], "max_budget": 0.06, "budget_duration": "5s"})["key"]
+        )
+        digest: Final = sha256(key.encode()).hexdigest()
+        row_query: Final = (
+            'SELECT spend, budget_reset_at::text AS budget_reset_at FROM "LiteLLM_VerificationToken" WHERE token=%s'
+        )
+        assert candidate.chat(model, key=key, text=f"spend it {uuid.uuid4().hex}")["usage"]["total_tokens"] == 40
+        exhausted: Final = eventually(
+            lambda: read_rows(row_query, (digest,), database_url=scratch_url),
+            lambda rows: len(rows) == 1 and float(rows[0]["spend"]) >= 0.06,
+            seconds=70,
+        )
+        assert float(exhausted[0]["spend"]) == pytest.approx(0.06)
+        upstream.get("/__observations").raise_for_status()
+        denied: Final = candidate.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": f"over budget {uuid.uuid4().hex}"}]},
+            key=key,
+        )
+        assert denied.status_code == 422 and denied.json()["error"]["type"] == "budget_exceeded", denied.text
+        assert upstream.get("/__observations").json()["requests"] == []
+        relay.arm()
+        assert relay.tripped.wait(90), "Scheduled reset sweep never reached the database"
+        eventually(lambda: relay.refused, lambda count: count >= 1, seconds=30)
+        reset: Final = eventually(
+            lambda: read_rows(row_query, (digest,), database_url=scratch_url),
+            lambda rows: len(rows) == 1 and float(rows[0]["spend"]) == 0,
+            seconds=80,
+            return_last_on_timeout=True,
+        )
+        assert len(reset) == 1 and reset[0]["spend"] == 0.0, (exhausted, reset)
+        assert str(reset[0]["budget_reset_at"]) > str(exhausted[0]["budget_reset_at"]), (exhausted, reset)
+        prompt: Final = f"after reset {uuid.uuid4().hex}"
+        recovered: Final = candidate.request(
+            "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": prompt}]}, key=key
+        )
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json()["usage"]["total_tokens"] == 40, recovered.text
+        reached: Final = upstream.get("/__observations").json()["requests"]
+        assert len(reached) == 1 and reached[0]["body"]["messages"] == [{"role": "user", "content": prompt}], reached
+
+
+@pytest.mark.covers("quota_management.budget.key.count_tokens_reserves_nothing_so_completion_within_budget_succeeds")
+def test_repeated_count_tokens_on_budgeted_key_does_not_reserve_budget_or_block_later_completion(
+    gateway: Gateway,
+) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        key: Final = scenario.key(models=[model], max_budget=0.1)
+        digest: Final = sha256(key.encode()).hexdigest()
+        upstream.get("/__observations").raise_for_status()
+        counts: Final = tuple(
+            gateway.request(
+                "POST",
+                "/v1/messages/count_tokens",
+                {"model": model, "messages": [{"role": "user", "content": "hello!!!"}]},
+                key=key,
+                headers={"anthropic-version": "2023-06-01"},
+            )
+            for _ in range(3)
+        )
+        for count in counts:
+            assert count.status_code == 200, count.text
+            assert count.json() == counts[0].json(), count.text
+        input_tokens: Final = counts[0].json()["input_tokens"]
+        assert isinstance(input_tokens, int) and input_tokens > 0, counts[0].text
+        assert upstream.get("/__observations").json()["requests"] == []
+        completion: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": f"after counting {uuid.uuid4().hex}"}]},
+            key=key,
+        )
+        assert completion.status_code == 200, completion.text
+        assert completion.json()["usage"]["total_tokens"] == 40, completion.text
+        assert [request["path"] for request in upstream.get("/__observations").json()["requests"]] == [
+            "/v1/chat/completions"
+        ]
+        spent: Final = eventually(
+            lambda: read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)),
+            lambda values: len(values) == 1 and float(values[0]["spend"]) > 0,
+            seconds=70,
+        )
+        assert float(spent[0]["spend"]) == pytest.approx(20 * 0.001 + 20 * 0.002)
+        rows: Final = eventually(
+            lambda: read_rows('SELECT call_type, spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (digest,)),
+            lambda values: len(values) >= 1,
+            seconds=70,
+        )
+        assert [(row["call_type"], float(row["spend"])) for row in rows] == [("acompletion", pytest.approx(0.06))]
+
+
+@pytest.mark.covers(
+    "quota_management.budget.key.in_flight_count_tokens_reserves_nothing_so_completion_reaches_provider"
+)
+def test_in_flight_count_tokens_does_not_reserve_key_budget_away_from_a_completion(gateway: Gateway) -> None:
+    counting_reached_provider: Final = threading.Event()
+    completion_answered: Final = threading.Event()
+
+    def respond(request: Request) -> Reply:
+        counting_reached_provider.set()
+        assert completion_answered.wait(timeout=30), "completion never ran while count tokens was in flight"
+        return Reply(body=b'{"totalTokens": 12, "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 12}]}')
+
+    with (
+        wire_server(respond) as wire,
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+        ThreadPoolExecutor(max_workers=1) as background,
+    ):
+        counted: Final = scenario.model(
+            model="gemini/gemini-3.8-flash",
+            api_base=wire.url,
+            api_key="synthetic-gemini-key",
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+        )
+        completed: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        key: Final = scenario.key(models=[counted, completed], max_budget=0.06)
+        contents: Final = [{"role": "user", "parts": [{"text": "hello"}]}]
+        counting: Final = background.submit(
+            gateway.request, "POST", f"/v1beta/models/{counted}:countTokens", {"contents": contents}, key=key
+        )
+        assert counting_reached_provider.wait(timeout=30), "count tokens request never reached the provider"
+        upstream.get("/__observations").raise_for_status()
+        prompt: Final = f"after count tokens {uuid.uuid4().hex}"
+        completion: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": completed, "messages": [{"role": "user", "content": prompt}]},
+            key=key,
+        )
+        completion_answered.set()
+        count: Final = counting.result(timeout=30)
+        assert completion.status_code == 200 and completion.json()["usage"]["total_tokens"] == 40, completion.text
+        assert [call["body"]["messages"] for call in upstream.get("/__observations").json()["requests"]] == [
+            [{"role": "user", "content": prompt}]
+        ]
+        assert count.status_code == 200, count.text
+        assert count.json() == {"totalTokens": 12, "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 12}]}, (
+            count.text
+        )
+        provider_calls: Final = wire.drain()
+        assert [(call.method, call.target) for call in provider_calls] == [
+            ("POST", "/v1beta/models/gemini-3.8-flash:countTokens")
+        ]
+        assert provider_calls[0].headers["x-goog-api-key"] == "synthetic-gemini-key"
+        assert json.loads(provider_calls[0].body) == {"contents": contents}
 
 
 @pytest.mark.covers("quota_management.response_cache.system_messages_partition_cache_identity")
@@ -219,8 +434,8 @@ def test_different_system_messages_do_not_share_a_cached_response(gateway: Gatew
     ):
         model: Final = scenario.model()
         prompt: Final = uuid.uuid4().hex
-        identities: dict[str, str] = {}
-        for system, expected_calls in (("first policy", 1), ("second policy", 1), ("first policy", 0)):
+
+        def completion_id(system: str, expected_calls: int) -> str:
             upstream.get("/__observations").raise_for_status()
             response: Final = gateway.request(
                 "POST",
@@ -232,14 +447,12 @@ def test_different_system_messages_do_not_share_a_cached_response(gateway: Gatew
             )
             assert response.status_code == 200 and response.json()["usage"]["total_tokens"] == 40, response.text
             calls: Final = upstream.get("/__observations").json()["requests"]
-            assert len(calls) == expected_calls
-            if system in identities:
-                assert response.json()["id"] == identities[system]
-            else:
-                assert response.json()["id"] not in identities.values()
-                identities = {**identities, system: response.json()["id"]}
-            if calls:
-                assert calls[0]["body"]["messages"] == [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": prompt},
-                ]
+            assert [call["body"]["messages"] for call in calls] == [
+                [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+            ] * expected_calls, calls
+            return response.json()["id"]
+
+        first_policy_id: Final = completion_id("first policy", 1)
+        second_policy_id: Final = completion_id("second policy", 1)
+        assert first_policy_id != second_policy_id
+        assert completion_id("first policy", 0) == first_policy_id

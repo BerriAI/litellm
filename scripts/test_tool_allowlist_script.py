@@ -3,10 +3,10 @@
 Standalone script to test tool allowlist enforcement and tool name extraction.
 
 Run from repo root:
-  poetry run python scripts/test_tool_allowlist_script.py
+  uv run python scripts/test_tool_allowlist_script.py
 
 Or run the unit tests:
-  poetry run pytest tests/test_litellm/proxy/test_tools_allowlist_enforcement.py -v
+  uv run pytest tests/test_litellm/proxy/test_tools_allowlist_enforcement.py -v
 """
 
 import asyncio
@@ -148,7 +148,7 @@ def main():
     asyncio.run(test_check_tools_allowlist())
     print("Done. For full unit tests run:")
     print(
-        "  poetry run pytest tests/test_litellm/proxy/test_tools_allowlist_enforcement.py -v"
+        "  uv run pytest tests/test_litellm/proxy/test_tools_allowlist_enforcement.py -v"
     )
 
 

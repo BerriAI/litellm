@@ -2,7 +2,10 @@ import copy
 import hashlib
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
+
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.utils import (
@@ -16,6 +19,7 @@ OPENAI_MAX_TOOL_NAME_LENGTH: Final = 64
 TOOL_NAME_HASH_LENGTH: Final = 8
 TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1  # 55
 PROVIDERS_PROXYING_AN_UNKNOWN_BACKEND: Final = frozenset({"litellm_proxy"})
+_COMPACTION_BLOCK: Final = TypeAdapter(dict[str, JsonValue])
 
 
 def _optional_attr(source: object, name: str) -> object:
@@ -34,6 +38,20 @@ def _thought_signature(provider_specific_fields: object) -> str | None:
         return None
     signature: Final = fields.get("thought_signature")
     return signature if isinstance(signature, str) else None
+
+
+def _compaction_blocks(provider_specific_fields: object) -> tuple[Mapping[str, object], ...]:
+    fields: Final = _as_string_mapping(provider_specific_fields)
+    raw_blocks: Final = fields.get("compaction_blocks") if fields is not None else None
+    return (
+        tuple(
+            block
+            for raw_block in raw_blocks
+            if (block := _as_string_mapping(raw_block)) is not None and block.get("type") == "compaction"
+        )
+        if isinstance(raw_blocks, (list, tuple))
+        else ()
+    )
 
 
 _ANTHROPIC_TOOL_SCHEMA_KEYS: Final = frozenset(
@@ -111,6 +129,7 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
 from litellm.llms.anthropic.common_utils import (
+    eager_input_streaming_flag,
     is_empty_unsigned_thinking_block,
     normalize_anthropic_tool_use_id,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
@@ -195,6 +214,15 @@ def target_supports_mid_conversation_system(model: str | None, custom_llm_provid
     if not model:
         return False
     return supports_mid_conversation_system(model=model, custom_llm_provider=custom_llm_provider)
+
+
+def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
+    eager_input_streaming: Final = eager_input_streaming_flag(tool)
+    if eager_input_streaming is None:
+        return ChatCompletionToolParam(type="function", function=function_chunk)
+    return ChatCompletionToolParam(
+        type="function", function=function_chunk, eager_input_streaming=eager_input_streaming
+    )
 
 
 class AnthropicAdapter:
@@ -374,7 +402,7 @@ class LiteLLMAnthropicMessagesAdapter:
         cache_control: Final = (
             source.get("cache_control") if isinstance(source, dict) else getattr(source, "cache_control", None)
         )
-        if cache_control and model and (self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model)):
+        if cache_control and model and self.target_consumes_cache_control(model):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
             if isinstance(target, dict):
@@ -667,6 +695,10 @@ class LiteLLMAnthropicMessagesAdapter:
         model_lower: Final = model.lower()
         return "arn:" in model_lower and ":bedrock:" in model_lower
 
+    @classmethod
+    def target_consumes_cache_control(cls, model: str) -> bool:
+        return cls.is_anthropic_claude_model(model) or cls.is_bedrock_arn_model(model) or "gemini" in model.lower()
+
     @staticmethod
     def translate_thinking_for_model(
         thinking: AnthropicThinkingParam,
@@ -770,6 +802,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "cache_control",
             "strict",
             "type",
+            "eager_input_streaming",
         ]
 
         for idx, tool in enumerate(tools):
@@ -808,7 +841,7 @@ class LiteLLMAnthropicMessagesAdapter:
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
-            tool_param = ChatCompletionToolParam(type="function", function=function_chunk)
+            tool_param = _chat_tool_param(function_chunk, tool)
             self._add_cache_control_if_applicable(tool, tool_param, model)
             new_tools.append(tool_param)
 
@@ -1212,7 +1245,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self._add_system_message_to_messages(new_messages, anthropic_message_request)
 
         new_kwargs: Final[ChatCompletionRequest] = {
-            "model": anthropic_message_request.get("model", ""),
+            "model": anthropic_message_request["model"],
             "messages": new_messages,
         }
         ## CONVERT METADATA (user_id + litellm metadata)
@@ -1315,7 +1348,11 @@ class LiteLLMAnthropicMessagesAdapter:
         tool_name_mapping: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         new_content: Final[list[dict[str, Any]]] = []
-        for choice in choices:
+        for choice, compaction_blocks in (
+            (choice, _compaction_blocks(_optional_attr(choice.message, "provider_specific_fields")))
+            for choice in choices
+        ):
+            new_content.extend(_COMPACTION_BLOCK.validate_python(block) for block in compaction_blocks)
             # Handle thinking blocks first
             if hasattr(choice.message, "thinking_blocks") and choice.message.thinking_blocks:
                 for thinking_block in choice.message.thinking_blocks:
@@ -1350,7 +1387,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 )
 
             # Handle text content
-            if choice.message.content is not None:
+            if choice.message.content is not None and (choice.message.content != "" or not compaction_blocks):
                 new_content.append(
                     AnthropicResponseContentBlockText(type="text", text=choice.message.content).model_dump()
                 )
@@ -1399,6 +1436,8 @@ class LiteLLMAnthropicMessagesAdapter:
             return "max_tokens"
         elif openai_finish_reason == "tool_calls":
             return "tool_use"
+        elif openai_finish_reason in ["content_filter", "refusal"]:
+            return "refusal"
         return "end_turn"
 
     @staticmethod
@@ -1528,21 +1567,35 @@ class LiteLLMAnthropicMessagesAdapter:
             openai_finish_reason=openai_finish_reason
         )
         anthropic_finish_reason: Final = (
-            "refusal"
+            "compaction"
+            if len(anthropic_content) == 1 and anthropic_content[0].get("type") == "compaction"
+            else "refusal"
             if refusal_text is not None and translated_finish_reason != "max_tokens"
             else translated_finish_reason
         )
         # extract usage
         usage: Final[Usage] = getattr(response, "usage")
-        anthropic_usage: Final = self._translate_openai_usage_to_anthropic_usage(usage)
-
-        if polyfill_result is not None and polyfill_result.iterations_usage is not None:
-            message_iteration: Final[UsageIteration] = {
-                "type": "message",
-                "input_tokens": anthropic_usage["input_tokens"],
-                "output_tokens": usage.completion_tokens or 0,
-            }
-            anthropic_usage["iterations"] = list(polyfill_result.iterations_usage) + [message_iteration]
+        message_usage: Final = self._translate_openai_usage_to_anthropic_usage(usage)
+        polyfill_iterations: Final = polyfill_result.iterations_usage if polyfill_result is not None else None
+        anthropic_usage: Final[AnthropicUsage] = (
+            TypeAdapter(AnthropicUsage).validate_python(
+                MappingProxyType(
+                    {
+                        **message_usage,
+                        "iterations": (
+                            *polyfill_iterations,
+                            UsageIteration(
+                                type="message",
+                                input_tokens=message_usage.get("input_tokens", 0),
+                                output_tokens=usage.completion_tokens or 0,
+                            ),
+                        ),
+                    }
+                )
+            )
+            if polyfill_iterations is not None
+            else message_usage
+        )
 
         translated_obj: Final = AnthropicMessagesResponse(
             id=response.id,

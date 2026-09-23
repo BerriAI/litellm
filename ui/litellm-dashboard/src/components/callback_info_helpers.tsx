@@ -17,6 +17,7 @@ interface CallbackConfig {
   logo?: string;
   supports_key_team_logging: boolean;
   dynamic_params: Record<string, "text" | "password" | "select" | "upload" | "number">;
+  dynamic_param_options?: Record<string, readonly string[]>;
   description: string;
 }
 
@@ -29,6 +30,8 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     dynamic_params: {
       arize_api_key: "password",
       arize_space_id: "password",
+      arize_success_sampling_rate: "number",
+      arize_error_sampling_rate: "number",
     },
     description: "Arize Logging Integration",
   },
@@ -124,6 +127,10 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langfuse_secret_key: "password",
       langfuse_host: "text",
       langfuse_environment: "text",
+      langfuse_span_scope: "select",
+    },
+    dynamic_param_options: {
+      langfuse_span_scope: ["full", "llm_only"],
     },
     description: "Langfuse v3 OTEL Logging Integration",
   },

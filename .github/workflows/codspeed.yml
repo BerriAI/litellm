@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - litellm_internal_staging
     paths:
       - "litellm/**"
       - "tests/benchmarks/**"
@@ -13,10 +12,10 @@ on:
       - ".github/workflows/codspeed.yml"
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/actions/cache-cargo-build/**"
+      - ".github/scripts/uv_sync_with_retries.sh"
   pull_request:
     branches:
       - main
-      - litellm_internal_staging
     paths:
       - "litellm/**"
       - "tests/benchmarks/**"
@@ -25,6 +24,7 @@ on:
       - ".github/workflows/codspeed.yml"
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/actions/cache-cargo-build/**"
+      - ".github/scripts/uv_sync_with_retries.sh"
   # Allow CodSpeed to trigger backtest performance analysis
   # in order to generate initial data
   workflow_dispatch:
@@ -59,19 +59,27 @@ jobs:
 
       - name: Cache the Rust build
         uses: ./.github/actions/cache-cargo-build
+        with:
+          profile: release
 
       # Build the wheel and resolve every dependency outside the CodSpeed
       # runner: the same maturin build took 42 minutes inside `codspeed run`
       # versus under 3 minutes as a plain step (LIT-6183)
-      - name: Build environment
+      - name: Build the release wheel
+        run: uv build --wheel --out-dir dist
+
+      - name: Install the wheel into the benchmark environment
+        run: |
+          UV_PROJECT_ENVIRONMENT="${RUNNER_TEMP}/benchmark-venv" .github/scripts/uv_sync_with_retries.sh --frozen --no-default-groups --group benchmarks --no-install-project --python 3.12
+          uv pip install --python "${RUNNER_TEMP}/benchmark-venv/bin/python" --no-deps dist/*.whl
+
+      - name: Collect benchmarks
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          LITELLM_REQUIRE_INSTALLED_WHEEL: "1"
         run: >
-          env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-          uv run --frozen --no-default-groups
-          --with pytest==8.3.5
-          --with pytest-codspeed==4.3.0
-          --with "mcp>=1.26.0,<2.0"
-          --with "a2a-sdk>=1.1.0,<2.0"
-          pytest
+          "${RUNNER_TEMP}/benchmark-venv/bin/python" -I -m pytest
+          --import-mode=importlib
           -p pytest_codspeed.plugin
           tests/benchmarks/
           --codspeed
@@ -82,13 +90,9 @@ jobs:
         with:
           mode: simulation
           run: >
-            env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-            uv run --frozen --no-default-groups
-            --with pytest==8.3.5
-            --with pytest-codspeed==4.3.0
-            --with "mcp>=1.26.0,<2.0"
-            --with "a2a-sdk>=1.1.0,<2.0"
-            pytest
+            env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 LITELLM_REQUIRE_INSTALLED_WHEEL=1
+            "${RUNNER_TEMP}/benchmark-venv/bin/python" -I -m pytest
+            --import-mode=importlib
             -p pytest_codspeed.plugin
             tests/benchmarks/
             --codspeed

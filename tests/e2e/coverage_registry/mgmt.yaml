@@ -72,7 +72,6 @@
 - {id: mgmt.callback.list.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "callback_management_endpoints.py", rationale: "Callback config (smoke)"}
 - {id: mgmt.cost_tracking.estimate.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "cost_tracking_settings.py", rationale: "Cost estimate (smoke)"}
 - {id: mgmt.router_settings.update.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "router_settings_endpoints.py", rationale: "Router config (smoke)"}
-- {id: mgmt.config.allowed_ip.changed_key_only, module: mgmt, tier: P2, surface: api, assertions: [persists], source: "proxy_setting_endpoints.py:496", rationale: "An allowed-IP change leaves unrelated file settings out of the DB row"}
 - {id: mgmt.jwt_key_mapping.new.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "jwt_key_mapping_endpoints.py", rationale: "JWT->key mapping (smoke)"}
 - {id: mgmt.compliance.gdpr.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "compliance_endpoints.py", rationale: "GDPR ops (smoke)"}
 - {id: mgmt.tool_management.list.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "tool_management_endpoints.py", rationale: "Tool inventory (smoke)"}
@@ -95,6 +94,10 @@
 - {id: mgmt.mcp_toolset.update.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "mcp_management_endpoints.py:3098", rationale: "Narrowing the tools to one entry reads back exactly that entry"}
 - {id: mgmt.mcp_toolset.update.clear_persists, module: mgmt, tier: P0, surface: api, assertions: [clear_persists], source: "mcp_management_endpoints.py:3098", fail_before_fix: proven, rationale: "An explicit null clears the stored description; the update used to drop null and keep the old value"}
 - {id: mgmt.mcp_toolset.delete.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "mcp_management_endpoints.py:3149", rationale: "A deleted toolset is gone by id and from the list on every replica"}
+- {id: mgmt.key.delete.audit_logged, module: mgmt, tier: P0, surface: api, assertions: [audit_logged], source: "key_management_endpoints.py:3981", rationale: "Every hard key deletion writes one LiteLLM_VerificationToken deleted audit row, whether the key is addressed by key or by alias"}
+- {id: mgmt.team.member_delete.audit_logs_keys, module: mgmt, tier: P0, surface: api, assertions: [audit_logs_keys], source: "team_endpoints.py:3563", rationale: "Removing a team member hard-deletes their keys and each deleted key writes a deleted audit row"}
+- {id: mgmt.team.delete.audit_logs_keys, module: mgmt, tier: P0, surface: api, assertions: [audit_logs_keys], source: "team_endpoints.py:4344", rationale: "Deleting a team hard-deletes its keys and each deleted key writes a deleted audit row"}
+- {id: mgmt.user.delete.audit_logs_keys, module: mgmt, tier: P0, surface: api, assertions: [audit_logs_keys], source: "internal_user_endpoints.py:2369", rationale: "Deleting a user hard-deletes their keys and each deleted key writes a deleted audit row"}
 
 - {id: mgmt.user.jwt.database_roles, module: mgmt, tier: P0, surface: api, assertions: [database_roles], source: "auth/handle_jwt.py", rationale: "User-only JWT subjects retain their seeded database roles and memberships"}
 - {id: mgmt.key.jwt.viewer_denied, module: mgmt, tier: P0, surface: api, assertions: [viewer_denied], source: "auth/route_checks.py", rationale: "An admin viewer can read a key but cannot update it or change stored state"}

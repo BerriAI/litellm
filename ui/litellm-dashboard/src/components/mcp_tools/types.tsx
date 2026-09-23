@@ -407,6 +407,7 @@ export interface MCPToolsViewerProps {
 
 export interface MCPServer {
   server_id: string;
+  is_config?: boolean;
   server_name?: string | null;
   alias?: string | null;
   description?: string | null;
@@ -517,6 +518,7 @@ export interface MCPServerProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+  isViewOnly?: boolean;
 }
 
 export interface MCPToolsetTool {
@@ -586,4 +588,24 @@ export interface MCPGatewaySessionsResponse {
   by_client: MCPGatewaySessionGroupCount[];
   by_user: MCPGatewaySessionGroupCount[];
   sessions: MCPGatewaySession[];
+}
+
+export interface MCPGatewaySessionsTerminateResponse {
+  worker_pid: number;
+  terminated_sessions: number;
+  sessions: MCPGatewaySession[];
+}
+
+export type MCPGatewaySessionSelector =
+  | { session_id_prefix: string; user_id?: undefined }
+  | { user_id: string; session_id_prefix?: undefined };
+
+export type MCPServerUserCredentialType = "oauth2" | "byok";
+
+export interface MCPServerUserCredentialListItem {
+  user_id: string;
+  credential_type: MCPServerUserCredentialType;
+  expires_at: string | null;
+  connected_at: string | null;
+  updated_at: string;
 }

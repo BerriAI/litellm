@@ -1,7 +1,9 @@
-use litellm_auth::{InputSource, Sourced};
-use litellm_llms::base_llm::ocr::transformation::{
-    OcrConnection, OcrCredentialInputs, PreparedOcrRequest, credential_env,
+use litellm_auth::{InputSource, SecretValue, Sourced};
+use litellm_llms::base_llm::ocr::{
+    handler::OcrClient,
+    transformation::{OcrConnection, OcrCredentialInputs, PreparedOcrRequest},
 };
+use litellm_secrets::source::Secrets;
 
 use super::provider_config::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, ResolvedOcrRequest};
@@ -9,26 +11,35 @@ use crate::ocr::types::{LiteLLMOcrRequest, ResolvedOcrRequest};
 pub(crate) fn prepare_request(
     request: ResolvedOcrRequest,
     caller_document: bool,
+    client: &OcrClient,
+    secrets: Secrets,
 ) -> PreparedOcrRequest {
     let credentials = request.credentials.clone();
-    let api_base_env = match request.config.provider() {
-        OcrProvider::Mistral => Some("MISTRAL_API_BASE"),
-        OcrProvider::AzureAi => Some("AZURE_AI_API_BASE"),
-        OcrProvider::Cohere | OcrProvider::Reducto | OcrProvider::VertexAi => None,
+    let (preferred_api_key_env, api_base_env) = match request.config.provider() {
+        OcrProvider::Mistral => (
+            Some("MISTRAL_AZURE_API_KEY"),
+            Some("MISTRAL_AZURE_API_BASE"),
+        ),
+        OcrProvider::AzureAi => (None, Some("AZURE_AI_API_BASE")),
+        OcrProvider::AwsTextract
+        | OcrProvider::Cohere
+        | OcrProvider::Reducto
+        | OcrProvider::VertexAi => (None, None),
     };
+    let secret = |name: &str| secrets.truthy(name);
     let dynamic_api_key = credentials.dynamic_api_key.or_else(|| {
         credentials.api_key.clone().or_else(|| {
-            request
-                .config
-                .get_api_key_env_var()
-                .and_then(credential_env)
-                .map(|value| Sourced::new(value, InputSource::Environment))
+            preferred_api_key_env
+                .into_iter()
+                .chain(request.config.get_api_key_env_var())
+                .find_map(secret)
+                .map(|value| Sourced::new(SecretValue::new(value), InputSource::Environment))
         })
     });
     let dynamic_api_base = credentials.dynamic_api_base.or_else(|| {
         credentials.api_base.clone().or_else(|| {
             api_base_env
-                .and_then(credential_env)
+                .and_then(secret)
                 .map(|value| Sourced::new(value, InputSource::Environment))
         })
     });
@@ -51,7 +62,7 @@ pub(crate) fn prepare_request(
     PreparedOcrRequest {
         model,
         document,
-        connection: OcrConnection::new(resolved, transport),
+        connection: OcrConnection::new(resolved, transport, client.settings().clone(), secrets),
         caller_document,
         optional_params,
         input_sources,
@@ -61,7 +72,12 @@ pub(crate) fn prepare_request(
 
 #[cfg(test)]
 pub(crate) fn prepare_request_for_test(request: ResolvedOcrRequest) -> PreparedOcrRequest {
-    prepare_request(request, true)
+    prepare_request(
+        request,
+        true,
+        &OcrClient::for_test(reqwest::Client::new(), reqwest::Client::new()),
+        std::sync::Arc::new(litellm_core_utils::settings::ProcessEnvironment),
+    )
 }
 
 #[cfg(test)]

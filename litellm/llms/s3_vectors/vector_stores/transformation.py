@@ -8,6 +8,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     VectorStoreEmbeddingExecutor,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.types.rag import RAGIngestEmbeddingOptions
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
     VECTOR_STORE_OPENAI_PARAMS,
@@ -26,6 +27,50 @@ else:
 
 _DEFAULT_QUERY_EMBEDDING_MODEL: Final = "text-embedding-3-small"
 _DEFAULT_TOP_K: Final = 5
+S3_VECTORS_STORE_ID_ERROR: Final = (
+    "vector_store_id must be in format 'bucket_name:index_name' for S3 Vectors, "
+    "or vector_bucket_name must be provided in litellm_params"
+)
+
+
+def split_s3_vectors_store_id(vector_store_id: str, fallback_bucket_name: object) -> tuple[str, str]:
+    id_bucket_name, separator, id_index_name = vector_store_id.partition(":")
+    bucket_name: Final = id_bucket_name if separator else fallback_bucket_name
+    index_name: Final = id_index_name if separator else vector_store_id
+    if not isinstance(bucket_name, str) or not bucket_name or not index_name:
+        raise ValueError(S3_VECTORS_STORE_ID_ERROR)
+    return bucket_name, index_name
+
+
+def _non_empty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def s3_vectors_ingest_target(vector_store_config: Mapping[str, object]) -> tuple[str, str | None]:
+    explicit_bucket_name: Final = _non_empty_str(vector_store_config.get("vector_bucket_name"))
+    explicit_index_name: Final = _non_empty_str(vector_store_config.get("index_name"))
+    vector_store_id: Final = _non_empty_str(vector_store_config.get("vector_store_id"))
+    if vector_store_id is None:
+        if explicit_bucket_name is None:
+            raise ValueError(S3_VECTORS_STORE_ID_ERROR)
+        return explicit_bucket_name, explicit_index_name
+    derived_bucket_name, derived_index_name = split_s3_vectors_store_id(vector_store_id, explicit_bucket_name)
+    return explicit_bucket_name or derived_bucket_name, explicit_index_name or derived_index_name
+
+
+def s3_vectors_configured_embedding_model(litellm_params: Mapping[str, object]) -> str | None:
+    return _non_empty_str(litellm_params.get("litellm_embedding_model") or litellm_params.get("embedding_model"))
+
+
+def s3_vectors_ingest_embedding_options(
+    vector_store_config: Mapping[str, object],
+    embedding_options: RAGIngestEmbeddingOptions | None,
+) -> RAGIngestEmbeddingOptions | None:
+    store_embedding_model: Final = s3_vectors_configured_embedding_model(vector_store_config)
+    if store_embedding_model is None:
+        return embedding_options
+    store_embedding_options: Final[RAGIngestEmbeddingOptions] = {"model": store_embedding_model}
+    return store_embedding_options
 
 
 class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM):
@@ -69,21 +114,11 @@ class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM
 
     @staticmethod
     def query_embedding_model(litellm_params: Mapping[str, object]) -> str:
-        configured: Final = litellm_params.get("litellm_embedding_model") or litellm_params.get("embedding_model")
-        return configured if isinstance(configured, str) and configured else _DEFAULT_QUERY_EMBEDDING_MODEL
+        return s3_vectors_configured_embedding_model(litellm_params) or _DEFAULT_QUERY_EMBEDDING_MODEL
 
     @staticmethod
     def _query_target(vector_store_id: str, litellm_params: Mapping[str, object]) -> tuple[str, str]:
-        if ":" in vector_store_id:
-            bucket_name, index_name = vector_store_id.split(":", 1)
-            return bucket_name, index_name
-        bucket_name_from_params: Final = litellm_params.get("vector_bucket_name")
-        if not isinstance(bucket_name_from_params, str) or not bucket_name_from_params:
-            raise ValueError(
-                "vector_store_id must be in format 'bucket_name:index_name' for S3 Vectors, "
-                "or vector_bucket_name must be provided in litellm_params"
-            )
-        return bucket_name_from_params, vector_store_id
+        return split_s3_vectors_store_id(vector_store_id, litellm_params.get("vector_bucket_name"))
 
     @staticmethod
     def _query_request(

@@ -29,8 +29,6 @@ on:
   pull_request:
     branches:
       - main
-      - litellm_internal_staging
-      - litellm_oss_staging
       - "litellm_**"
     paths:
       - "litellm-rust/**"
@@ -105,6 +103,16 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Install Python dependencies for the bridge tests
+        working-directory: .
+        run: |
+          uv sync --frozen --no-install-project
+          echo "PYTHONPATH=$PWD/.venv/lib/$(ls .venv/lib)/site-packages" >> "$GITHUB_ENV"
+
       - run: rustup toolchain install --no-self-update
 
       - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
@@ -119,6 +127,20 @@ jobs:
       - run: cargo nextest run --workspace --locked
 
       - run: cargo test --workspace --doc --locked
+
+      - name: Test token counter feature combinations
+        run: |
+          for features in '' fast huggingface tiktoken fast,huggingface fast,tiktoken huggingface,tiktoken fast,huggingface,tiktoken; do
+            cargo test -p litellm-token-counter --locked --no-default-features --features "$features"
+            cargo check -p litellm-python-bridge --locked --no-default-features --features "abi3${features:+,$features}"
+          done
+
+      - name: Test secret manager feature combinations
+        run: |
+          cargo test -p litellm-auth-gcp --locked --no-default-features
+          for features in '' aws google hashicorp azure cyberark aws,google aws,azure google,azure aws,google,azure aws,google,cyberark aws,google,azure,cyberark aws,google,hashicorp,azure,cyberark; do
+            cargo test -p litellm-secrets --locked --no-default-features --features "$features"
+          done
 
   rust-wheel:
     runs-on: ubuntu-latest
