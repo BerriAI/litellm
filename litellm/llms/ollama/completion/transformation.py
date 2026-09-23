@@ -36,9 +36,8 @@ from litellm.types.utils import (
 from ..common_utils import OllamaError, OllamaModelInfo, _convert_image
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -263,7 +262,7 @@ class OllamaConfig(BaseConfig):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> Any:
+    ) -> dict[str, object] | None:
         """
         curl http://localhost:11434/api/show -d '{
           "name": "mistral"
@@ -284,7 +283,7 @@ class OllamaConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

@@ -12,7 +12,8 @@ import pytest
 import respx
 from fastapi import HTTPException
 
-from litellm.proxy._types import LitellmTableNames, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import UI_TEAM_ID, LitellmTableNames, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.login_utils import PASSWORD_SESSION_METADATA
 from litellm.proxy.management_endpoints.password_endpoints import change_password
 from litellm.proxy.utils import hash_password, verify_password
 
@@ -37,7 +38,15 @@ def _make_prisma(user: MagicMock | None) -> MagicMock:
 
 
 def _caller(user_id: str | None = "user-123") -> UserAPIKeyAuth:
-    return UserAPIKeyAuth(user_id=user_id)
+    return UserAPIKeyAuth(user_id=user_id, team_id=UI_TEAM_ID, metadata=dict(PASSWORD_SESSION_METADATA))
+
+
+def _sso_session_caller() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(user_id="user-123", team_id=UI_TEAM_ID, metadata={})
+
+
+def _virtual_key_caller() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(user_id="user-123", team_id="team-abc", metadata=dict(PASSWORD_SESSION_METADATA))
 
 
 def _hibp_url_for(password: str) -> str:
@@ -102,6 +111,67 @@ async def test_change_password_rejects_wrong_current_password():
 
     assert exc_info.value.status_code == 400
     assert "Current password is incorrect" in exc_info.value.detail["error"]
+    prisma.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_change_password_rejects_unchanged_password():
+    from litellm.proxy._types import ChangePasswordRequest
+
+    prisma = _make_prisma(_make_user_row(hash_password(CURRENT_PASSWORD)))
+
+    with (
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await change_password(
+                data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=CURRENT_PASSWORD),
+                user_api_key_dict=_caller(),
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "must be different from the current password" in exc_info.value.detail["error"]
+    prisma.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller",
+    [
+        pytest.param(_sso_session_caller(), id="sso_dashboard_session"),
+        pytest.param(_virtual_key_caller(), id="virtual_key_with_forged_metadata"),
+    ],
+)
+async def test_change_password_rejects_non_password_login_session(caller: UserAPIKeyAuth):
+    """Only the session minted by a password login may change the password, so a
+    stolen virtual key or an SSO session cannot use the endpoint as a
+    current_password guessing oracle."""
+    from litellm.proxy._types import ChangePasswordRequest
+
+    prisma = _make_prisma(_make_user_row(hash_password(CURRENT_PASSWORD)))
+
+    with (
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await change_password(
+                data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=NEW_PASSWORD),
+                user_api_key_dict=caller,
+            )
+
+    assert exc_info.value.status_code == 403
+    assert "logging in with a password" in exc_info.value.detail["error"]
+    prisma.db.litellm_usertable.find_first.assert_not_called()
     prisma.db.litellm_usertable.update.assert_not_called()
 
 

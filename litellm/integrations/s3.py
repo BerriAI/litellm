@@ -2,8 +2,12 @@
 #    On success + failure, log events to Supabase
 
 import hashlib
+import os
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Final, cast
+
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -11,9 +15,28 @@ from litellm.constants import (
     MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES,
     MAX_S3_OBJECT_KEY_BYTES,
     S3_BOUNDED_OBJECT_KEY_HEAD_BYTES,
+    S3_LOG_PROMPTS_ONLY_ENV_VAR,
     S3_PREFIX_DIGEST_CHARS,
 )
 from litellm.types.utils import StandardLoggingPayload
+
+_S3_LOG_PROMPTS_ONLY: Final = TypeAdapter(bool)
+
+
+def resolve_s3_log_prompts_only(configured: object, environ: Mapping[str, str] | None = None) -> bool:
+    env: Final = os.environ if environ is None else environ
+    raw: Final = env.get(S3_LOG_PROMPTS_ONLY_ENV_VAR) if configured is None else configured
+    if raw is None or raw == "":
+        return False
+    try:
+        return _S3_LOG_PROMPTS_ONLY.validate_python(raw.strip() if isinstance(raw, str) else raw)
+    except ValidationError:
+        verbose_logger.warning("s3 logging: s3_log_prompts_only=%r is not a boolean, logging prompts only", raw)
+        return True
+
+
+def prompts_only_payload(payload: StandardLoggingPayload) -> StandardLoggingPayload:
+    return {**payload, "response": None}
 
 
 class S3Logger:
@@ -33,6 +56,7 @@ class S3Logger:
         s3_config=None,
         s3_server_side_encryption: str | None = None,
         s3_sse_kms_key_id: str | None = None,
+        s3_log_prompts_only: bool | None = None,
         **kwargs,
     ):
         import boto3
@@ -41,29 +65,30 @@ class S3Logger:
             verbose_logger.debug("in init s3 logger - s3_callback_params %s", litellm.s3_callback_params)
 
             s3_use_team_prefix = False
+            params: Final = {
+                key: litellm.get_secret(value) if isinstance(value, str) and value.startswith("os.environ/") else value
+                for key, value in (litellm.s3_callback_params or {}).items()
+            }
 
             if litellm.s3_callback_params is not None:
-                # read in .env variables - example os.environ/AWS_BUCKET_NAME
-                for key, value in litellm.s3_callback_params.items():
-                    if isinstance(value, str) and value.startswith("os.environ/"):
-                        litellm.s3_callback_params[key] = litellm.get_secret(value)
-                # now set s3 params from litellm.s3_logger_params
-                s3_bucket_name = litellm.s3_callback_params.get("s3_bucket_name")
-                s3_region_name = litellm.s3_callback_params.get("s3_region_name")
-                s3_api_version = litellm.s3_callback_params.get("s3_api_version")
-                s3_use_ssl = litellm.s3_callback_params.get("s3_use_ssl", True)
-                s3_verify = litellm.s3_callback_params.get("s3_verify")
-                s3_endpoint_url = litellm.s3_callback_params.get("s3_endpoint_url")
-                s3_aws_access_key_id = litellm.s3_callback_params.get("s3_aws_access_key_id")
-                s3_aws_secret_access_key = litellm.s3_callback_params.get("s3_aws_secret_access_key")
-                s3_aws_session_token = litellm.s3_callback_params.get("s3_aws_session_token")
-                s3_config = litellm.s3_callback_params.get("s3_config")
-                s3_path = litellm.s3_callback_params.get("s3_path")
-                s3_server_side_encryption = litellm.s3_callback_params.get("s3_server_side_encryption")
-                s3_sse_kms_key_id = litellm.s3_callback_params.get("s3_sse_kms_key_id")
-                # done reading litellm.s3_callback_params
-                s3_use_team_prefix = bool(litellm.s3_callback_params.get("s3_use_team_prefix", False))
+                s3_bucket_name = params.get("s3_bucket_name")
+                s3_region_name = params.get("s3_region_name")
+                s3_api_version = params.get("s3_api_version")
+                s3_use_ssl = params.get("s3_use_ssl", True)
+                s3_verify = params.get("s3_verify")
+                s3_endpoint_url = params.get("s3_endpoint_url")
+                s3_aws_access_key_id = params.get("s3_aws_access_key_id")
+                s3_aws_secret_access_key = params.get("s3_aws_secret_access_key")
+                s3_aws_session_token = params.get("s3_aws_session_token")
+                s3_config = params.get("s3_config")
+                s3_path = params.get("s3_path")
+                s3_server_side_encryption = params.get("s3_server_side_encryption")
+                s3_sse_kms_key_id = params.get("s3_sse_kms_key_id")
+                s3_use_team_prefix = bool(params.get("s3_use_team_prefix", False))
             self.s3_use_team_prefix = s3_use_team_prefix
+            self.s3_log_prompts_only: object = (
+                params.get("s3_log_prompts_only") if s3_log_prompts_only is None else s3_log_prompts_only
+            )
             self.bucket_name = s3_bucket_name
             self.s3_path = s3_path
             self.s3_server_side_encryption, self.s3_sse_kms_key_id = resolve_sse_params(
@@ -144,7 +169,9 @@ class S3Logger:
 
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-            payload_str: Final = safe_dumps(payload)
+            payload_str: Final = safe_dumps(
+                prompts_only_payload(payload) if resolve_s3_log_prompts_only(self.s3_log_prompts_only) else payload
+            )
 
             print_verbose(f"\ns3 Logger - Logging payload = {payload_str}")
 
@@ -250,7 +277,7 @@ def get_s3_object_key(
     start_time: datetime,
     s3_file_name: str,
 ) -> str:
-    sanitized_s3_file_name: Final = s3_file_name.replace("/", "_")
+    sanitized_s3_file_name: Final = s3_file_name.replace("/", "_").replace(":", "_")
     configured_prefix: Final = (s3_path.rstrip("/") + "/" if s3_path else "") + prefix
     date_segment: Final = start_time.strftime("%Y-%m-%d") + "/"
     # we need the s3 key to include the time, so we log cache hits too

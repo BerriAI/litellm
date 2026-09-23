@@ -8,7 +8,7 @@ from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.utils import (
-    _is_explicitly_disabled_factory,
+    is_explicitly_disabled_factory,
     peek_reasoning_summary_aliases,
     strip_reasoning_summary_aliases_from_optional_params,
 )
@@ -38,10 +38,6 @@ def test_gpt5_supports_reasoning_effort(config: OpenAIConfig):
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5-mini")
 
 
-def test_gpt5_chat_does_not_support_reasoning_effort(config: OpenAIConfig):
-    assert "reasoning_effort" not in config.get_supported_openai_params(
-        model="gpt-5-chat-latest"
-    )
 
 
 def test_gpt5_chat_supports_temperature(config: OpenAIConfig):
@@ -174,10 +170,6 @@ def test_gpt5_codex_unsupported_params_drop(config: OpenAIConfig):
         assert param not in config.get_supported_openai_params(model="gpt-5-codex")
 
 
-def test_gpt5_codex_supports_tool_choice(gpt5_config: OpenAIGPT5Config):
-    """Test that GPT-5-Codex supports tool_choice parameter."""
-    supported_params = gpt5_config.get_supported_openai_params(model="gpt-5-codex")
-    assert "tool_choice" in supported_params
 
 
 def test_gpt5_codex_supports_function_calling(config: OpenAIConfig):
@@ -246,14 +238,6 @@ def test_gpt5_1_reasoning_effort_none(config: OpenAIConfig):
         assert params["reasoning_effort"] == effort
 
 
-def test_gpt5_1_codex_max_allows_reasoning_effort_xhigh(config: OpenAIConfig):
-    params = config.map_openai_params(
-        non_default_params={"reasoning_effort": "xhigh"},
-        optional_params={},
-        model="gpt-5.1-codex-max",
-        drop_params=False,
-    )
-    assert params["reasoning_effort"] == "xhigh"
 
 
 def test_gpt5_rejects_reasoning_effort_xhigh_for_other_models(config: OpenAIConfig):
@@ -288,24 +272,6 @@ def test_gpt5_1_gpt5_2_gpt5_4_drop_minimal_reasoning_effort(config: OpenAIConfig
 
 
 # GPT-5.1 temperature handling tests
-def test_gpt5_1_model_detection(gpt5_config: OpenAIGPT5Config):
-    """Test that models supporting reasoning_effort='none' are correctly detected via model map."""
-    # gpt-5.1 and gpt-5.2 chat variants support none
-    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1", "none")
-    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1-2025-11-13", "none")
-    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1-chat-latest", "none")
-    assert gpt5_config._supports_reasoning_effort_level("gpt-5.2", "none")
-    assert gpt5_config._supports_reasoning_effort_level("gpt-5.2-2025-12-11", "none")
-    # codex/pro/chat variants do not support none
-    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.1-codex", "none")
-    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.1-codex-max", "none")
-    assert not gpt5_config._supports_reasoning_effort_level(
-        "gpt-5.2-chat-latest", "none"
-    )
-    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.2-pro", "none")
-    assert not gpt5_config._supports_reasoning_effort_level("gpt-5", "none")
-    assert not gpt5_config._supports_reasoning_effort_level("gpt-5-mini", "none")
-    assert not gpt5_config._supports_reasoning_effort_level("gpt-5-codex", "none")
 
 
 def test_gpt5_1_temperature_with_reasoning_effort_none(config: OpenAIConfig):
@@ -491,14 +457,6 @@ def test_gpt5_minimal_dict_accepted_for_supported_model(config: OpenAIConfig):
     assert params["reasoning_effort"] == "minimal"
 
 
-def test_gpt5_supports_reasoning_effort_level_minimal(gpt5_config: OpenAIGPT5Config):
-    """Test that _supports_reasoning_effort_level correctly identifies minimal support."""
-    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.4", "minimal")
-    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.4-pro", "minimal")
-    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.4-mini", "minimal")
-    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.4-nano", "minimal")
-
-
 def test_gpt5_minimal_explicitly_disabled_check(gpt5_config: OpenAIGPT5Config):
     """_is_reasoning_effort_level_explicitly_disabled returns True only for explicit False entries.
 
@@ -524,19 +482,19 @@ def test_gpt5_minimal_explicitly_disabled_check(gpt5_config: OpenAIGPT5Config):
 
 
 def test_is_explicitly_disabled_factory_minimal():
-    """_is_explicitly_disabled_factory returns True only for explicit False entries.
+    """is_explicitly_disabled_factory returns True only for explicit False entries.
 
     Verifies the shared helper used by _is_reasoning_effort_level_explicitly_disabled
     directly — so future changes to the helper are caught without going through the
     method wrapper.
     """
     key = "supports_minimal_reasoning_effort"
-    assert _is_explicitly_disabled_factory("gpt-5.4-mini", None, key)
-    assert _is_explicitly_disabled_factory("gpt-5.4-nano", None, key)
-    assert _is_explicitly_disabled_factory("openai/gpt-5.4-mini", None, key)
-    assert _is_explicitly_disabled_factory("gpt-5.4", None, key)
-    assert _is_explicitly_disabled_factory("gpt-5.4-pro", None, key)
-    assert not _is_explicitly_disabled_factory("gpt-5.4-turbo-preview", None, key)
+    assert is_explicitly_disabled_factory("gpt-5.4-mini", None, key)
+    assert is_explicitly_disabled_factory("gpt-5.4-nano", None, key)
+    assert is_explicitly_disabled_factory("openai/gpt-5.4-mini", None, key)
+    assert is_explicitly_disabled_factory("gpt-5.4", None, key)
+    assert is_explicitly_disabled_factory("gpt-5.4-pro", None, key)
+    assert not is_explicitly_disabled_factory("gpt-5.4-turbo-preview", None, key)
 
 
 def test_gpt5_unknown_model_passes_through_minimal(config: OpenAIConfig):

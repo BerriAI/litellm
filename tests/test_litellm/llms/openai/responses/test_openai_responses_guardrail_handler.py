@@ -8,7 +8,7 @@ with guardrail transformations.
 import copy
 from collections.abc import Callable
 from typing import Any, List, Literal, Optional, Tuple
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import logging
 
@@ -31,6 +31,7 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -1609,13 +1610,14 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         events = self._ended_custom_tool_call_stream_events()
         events[5]["response"]["output"] = [{**events[5]["response"]["output"][0], "call_id": "call_999"}]
 
-        with pytest.raises(UndeliverableStreamRewrite):
+        with pytest.raises(UndeliverableStreamRewrite) as undeliverable:
             await handler.process_output_streaming_response(
                 responses_so_far=events,
                 guardrail_to_apply=PersimmonMaskingGuardrail(guardrail_name="mask"),
                 litellm_logging_obj=None,
                 deliver_ended_stream_rewrites=True,
             )
+        assert undeliverable.value.reason == "no stream event carries the rewritten call_id call_999"
 
     @staticmethod
     def _bridged_function_call_stream_events() -> List[dict]:
@@ -1687,8 +1689,21 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert events[1]["item"] == {"type": "reasoning", "id": "rs_1", "summary": []}
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("mismatch", ["orphan_call_id", "duplicate_call_id"])
-    async def test_deliver_ended_stream_function_call_rewrite_without_matching_events_fails_closed(self, mismatch):
+    @pytest.mark.parametrize(
+        ("mismatch", "expected_reason"),
+        [
+            ("orphan_call_id", "no stream event carries the rewritten call_id call_999"),
+            ("duplicate_call_id", "the stream's tool call items repeat a call_id"),
+            ("missing_call_id", "1 of the stream's 1 tool call items carry no call_id"),
+            (
+                "unknown_argument_item_id",
+                "a tool call argument event names an item_id that no output_item event introduced",
+            ),
+        ],
+    )
+    async def test_deliver_ended_stream_function_call_rewrite_without_matching_events_fails_closed(
+        self, mismatch, expected_reason
+    ):
         from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
         handler = OpenAIResponsesHandler()
@@ -1696,16 +1711,22 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         envelope_item = events[5]["response"]["output"][0]
         if mismatch == "orphan_call_id":
             events[5]["response"]["output"] = [{**envelope_item, "call_id": "call_999"}]
-        else:
+        elif mismatch == "duplicate_call_id":
             events[5]["response"]["output"] = [dict(envelope_item), dict(envelope_item)]
+        elif mismatch == "missing_call_id":
+            events[5]["response"]["output"] = [{key: value for key, value in envelope_item.items() if key != "call_id"}]
+        else:
+            events[1]["item_id"] = "fc_unknown"
 
-        with pytest.raises(UndeliverableStreamRewrite):
+        with pytest.raises(UndeliverableStreamRewrite) as undeliverable:
             await handler.process_output_streaming_response(
                 responses_so_far=events,
                 guardrail_to_apply=self._argument_masking_guardrail(),
                 litellm_logging_obj=None,
                 deliver_ended_stream_rewrites=True,
             )
+        assert undeliverable.value.reason == expected_reason
+        assert str(undeliverable.value).endswith(f"cannot be written back to the stream: {expected_reason}")
 
     @pytest.mark.asyncio
     async def test_ended_stream_function_call_rewrite_leaves_events_untouched_by_default(self):
@@ -1746,31 +1767,80 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert events[5]["response"]["output"][0]["content"][0]["text"] == "hello [MASKED]"
 
     @pytest.mark.asyncio
-    async def test_fallback_rewrite_with_delivery_expected_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
+    async def test_fallback_rewrite_with_delivery_expected_lands_in_the_delta_and_done_events(self):
         handler = OpenAIResponsesHandler()
         events = [
             {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hello "},
             {"type": "response.output_text.done", "output_index": 0, "content_index": 0, "text": "hello world"},
         ]
 
-        with pytest.raises(UndeliverableStreamRewrite):
-            await handler.process_output_streaming_response(
-                responses_so_far=events,
-                guardrail_to_apply=self._masking_guardrail(),
-                litellm_logging_obj=None,
-                deliver_ended_stream_rewrites=True,
-            )
+        result = await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is events
+        assert events[0]["delta"] == "hello [MASKED]"
+        assert events[1]["text"] == "hello [MASKED]"
 
     @pytest.mark.asyncio
-    async def test_fallback_delta_only_rewrite_with_delivery_expected_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
+    async def test_fallback_delta_only_rewrite_with_delivery_expected_spreads_over_the_deltas(self):
         handler = OpenAIResponsesHandler()
         events = [
             {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hello "},
             {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "world"},
+        ]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is events
+        assert [event["delta"] for event in events] == ["hello [MASKED]", ""]
+
+    @pytest.mark.asyncio
+    async def test_fallback_rewrite_across_parts_lands_whole_on_the_first_part(self):
+        handler = OpenAIResponsesHandler()
+        events = [
+            {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hello "},
+            {"type": "response.output_text.done", "output_index": 0, "content_index": 0, "text": "hello "},
+            {"type": "response.output_text.delta", "output_index": 1, "content_index": 0, "delta": "wor"},
+            {"type": "response.output_text.delta", "output_index": 1, "content_index": 0, "delta": "ld"},
+        ]
+        guardrail = MockRecordingGuardrail(guardrail_name="test")
+
+        await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+        assert [inputs.get("texts") for inputs in guardrail.seen_inputs] == [["hello world"]]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert events[0]["delta"] == "hello [MASKED]"
+        assert events[1]["text"] == "hello [MASKED]"
+        assert [event["delta"] for event in events[2:]] == ["", ""]
+
+    @pytest.mark.asyncio
+    async def test_fallback_rewrite_over_an_unplaceable_scanned_event_fails_open(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler = OpenAIResponsesHandler()
+        events = [
+            {"type": "response.reasoning_summary_text.delta", "output_index": 0, "summary_index": 0, "delta": "hello "},
+            {"type": "response.output_text.delta", "output_index": 1, "content_index": 0, "delta": "world"},
         ]
 
         with pytest.raises(UndeliverableStreamRewrite):
@@ -1780,21 +1850,26 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
                 litellm_logging_obj=None,
                 deliver_ended_stream_rewrites=True,
             )
+        assert [event["delta"] for event in events] == ["hello ", "world"]
 
     @pytest.mark.asyncio
-    async def test_output_item_done_last_rewrite_with_delivery_expected_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
+    async def test_output_item_done_last_rewrite_with_delivery_expected_syncs_every_text_event(self):
         handler = OpenAIResponsesHandler()
         events = self._ended_stream_events()[:-1]
 
-        with pytest.raises(UndeliverableStreamRewrite):
-            await handler.process_output_streaming_response(
-                responses_so_far=events,
-                guardrail_to_apply=self._masking_guardrail(),
-                litellm_logging_obj=None,
-                deliver_ended_stream_rewrites=True,
-            )
+        result = await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is events
+        assert events[0]["delta"] == "hello [MASKED]"
+        assert events[1]["delta"] == ""
+        assert events[2]["text"] == "hello [MASKED]"
+        assert events[3]["part"]["text"] == "hello [MASKED]"
+        assert events[4]["item"]["content"][0]["text"] == "hello [MASKED]"
 
     @pytest.mark.asyncio
     async def test_output_item_done_last_scans_text_with_delivery_expected(self):
@@ -2223,6 +2298,56 @@ class TestStructuredMessagesWriteBack:
         assert result["input"][3] == {"role": "user", "content": "What is the codename?"}
 
     @pytest.mark.asyncio
+    async def test_codex_custom_tool_items_survive_tool_output_compression(self):
+        handler = OpenAIResponsesHandler()
+        additional_tools_item = {
+            "type": "additional_tools",
+            "tools": [{"type": "custom", "name": "exec", "description": "Run a JavaScript snippet"}],
+        }
+        reasoning_item = {
+            "id": "rs_456",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "gAAAAA-signed-reasoning",
+        }
+        custom_tool_call_item = {
+            "id": "ctc_456",
+            "type": "custom_tool_call",
+            "call_id": "call_exec",
+            "name": "exec",
+            "input": 'const r = await tools.exec_command({"cmd": "cat memo.txt"});\ntext(r.output);',
+            "status": "completed",
+        }
+        data = {
+            "model": "gpt-5.6",
+            "input": [
+                additional_tools_item,
+                {"role": "user", "content": "What is the codename?"},
+                reasoning_item,
+                custom_tool_call_item,
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_exec",
+                    "output": [
+                        {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                        {"type": "input_text", "text": "memo " * 400},
+                    ],
+                },
+            ],
+        }
+
+        result = await handler.process_input_messages(data, ToolOutputRewriteGuardrail())
+
+        assert result["input"][0] is additional_tools_item
+        assert result["input"][1] == {"role": "user", "content": "What is the codename?"}
+        assert result["input"][2] is reasoning_item
+        assert result["input"][3] is custom_tool_call_item
+        assert result["input"][4]["type"] == "custom_tool_call_output"
+        assert result["input"][4]["call_id"] == "call_exec"
+        assert COMPRESSED_MARKER in str(result["input"][4]["output"])
+        assert len(result["input"]) == 5
+
+    @pytest.mark.asyncio
     async def test_web_search_call_item_preserved_verbatim(self):
         handler = OpenAIResponsesHandler()
         web_search_item = {
@@ -2336,6 +2461,135 @@ def _parallel_tool_call_input() -> list:
         {"type": "function_call_output", "call_id": "call_2", "output": "note " * 400},
         {"role": "user", "content": "What is the codename?"},
     ]
+
+
+SSN = "123-45-6789"
+REDACTED_SSN = "<US_SSN>"
+
+
+def _redacted(value: object) -> object:
+    if isinstance(value, str):
+        return value.replace(SSN, REDACTED_SSN)
+    if isinstance(value, list):
+        return [{**part, "text": _redacted(part["text"])} if "text" in part else part for part in value]
+    return value
+
+
+def _per_message_guardrail_server(structured_messages_in_answer: bool) -> Callable[..., MagicMock]:
+    """Answers one redacted text per chat row it was shown, the way a guardrail
+    that scans per message does, and optionally the rewritten rows themselves."""
+
+    def post(url: str, json: dict, headers: dict) -> MagicMock:
+        rows = json["structured_messages"]
+        answer: dict = {
+            "action": "GUARDRAIL_INTERVENED",
+            "texts": [_redacted(row["content"]) if isinstance(row.get("content"), str) else "" for row in rows],
+        }
+        if structured_messages_in_answer:
+            answer["structured_messages"] = [{**row, "content": _redacted(row.get("content"))} for row in rows]
+        response = MagicMock()
+        response.json.return_value = answer
+        response.raise_for_status = MagicMock()
+        return response
+
+    return post
+
+
+def _per_message_redactor() -> GenericGuardrailAPI:
+    return GenericGuardrailAPI(
+        api_base="https://guardrail.test",
+        guardrail_name="per-message-redactor",
+        event_hook="pre_call",
+        default_on=True,
+    )
+
+
+def _tool_replay_request() -> dict:
+    return {
+        "model": "gpt-5.6",
+        "instructions": "Never repeat the SSN " + SSN + " back.",
+        "input": [
+            {"role": "user", "content": "Look up " + SSN + " for me."},
+            {"type": "function_call", "call_id": "call_1", "name": "lookup_customer", "arguments": '{"id": "42"}'},
+            {"type": "function_call_output", "call_id": "call_1", "output": '{"ssn": "' + SSN + '"}'},
+        ],
+    }
+
+
+def _string_input_request() -> dict:
+    return {
+        "model": "gpt-5.6",
+        "instructions": "Never repeat the SSN " + SSN + " back.",
+        "input": "My SSN is " + SSN + ".",
+    }
+
+
+class TestPerMessageRewriteWriteBack:
+    """A guardrail that rewrites per chat row hands the rows back as
+    structured_messages, and the handler lands them on the instructions and the
+    input items they came from; the same rewrite handed back as texts alone has
+    no item to land on and is rejected by name instead of sent unrewritten."""
+
+    @pytest.mark.asyncio
+    async def test_structured_rows_land_on_instructions_and_tool_output(self):
+        guardrail = _per_message_redactor()
+        data = _tool_replay_request()
+        function_call_item = data["input"][1]
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_per_message_guardrail_server(True)):
+            result = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert result["instructions"] == "Never repeat the SSN " + REDACTED_SSN + " back."
+        assert _texts(result["input"][0]) == ["Look up " + REDACTED_SSN + " for me."]
+        assert result["input"][1] == function_call_item
+        assert result["input"][2] == {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": '{"ssn": "' + REDACTED_SSN + '"}',
+        }
+
+    @pytest.mark.asyncio
+    async def test_texts_only_per_message_answer_is_rejected_by_name(self):
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+
+        guardrail = _per_message_redactor()
+        data = _tool_replay_request()
+        original = copy.deepcopy(data)
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_per_message_guardrail_server(False)):
+            with pytest.raises(UnappliableRequestRewrite) as excinfo:
+                await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert excinfo.value.guardrail_name == "per-message-redactor"
+        assert data["input"] == original["input"]
+        assert data["instructions"] == original["instructions"]
+
+    @pytest.mark.asyncio
+    async def test_structured_rows_land_on_instructions_and_string_input(self):
+        guardrail = _per_message_redactor()
+        data = _string_input_request()
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_per_message_guardrail_server(True)):
+            result = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert result["instructions"] == "Never repeat the SSN " + REDACTED_SSN + " back."
+        assert [_texts(item) for item in result["input"]] == [["My SSN is " + REDACTED_SSN + "."]]
+
+    @pytest.mark.asyncio
+    async def test_texts_only_per_message_answer_over_a_string_input_is_rejected_by_name(self):
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+
+        guardrail = _per_message_redactor()
+        data = _string_input_request()
+        original = copy.deepcopy(data)
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_per_message_guardrail_server(False)):
+            with pytest.raises(UnappliableRequestRewrite) as excinfo:
+                await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert excinfo.value.guardrail_name == "per-message-redactor"
+        assert data["input"] == original["input"]
+        assert data["instructions"] == original["instructions"]
 
 
 class TestProvenancePatching:
@@ -3081,3 +3335,42 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
     def test_output_item_done_round_is_never_deduped(self):
         done = {"type": "response.output_item.done", "sequence_number": 1, "item": {"type": "function_call"}}
         assert OpenAIResponsesHandler().get_streaming_scan_key([self._delta(0, "hi"), done]) is None
+
+    @pytest.mark.parametrize("terminal_type", ["response.incomplete", "response.failed"])
+    def test_non_completed_terminal_envelopes_key_their_output_items(self, terminal_type):
+        handler = OpenAIResponsesHandler()
+        arguments_delta = {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 1,
+            "item_id": "fc_1",
+            "delta": '{"city":',
+        }
+        function_call = {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city":'}
+        terminal = {"type": terminal_type, "sequence_number": 2, "response": {"id": "resp_1", "output": [function_call]}}
+        mid_stream_key = handler.get_streaming_scan_key([arguments_delta])
+        ended_key = handler.get_streaming_scan_key([arguments_delta, terminal])
+        assert ended_key.stream_ended is True
+        assert ended_key.tool_calls_in_flight is False
+        assert len(ended_key.tool_calls) == 1
+        assert ended_key != mid_stream_key
+
+    def test_streamed_tool_call_events_flag_tool_calls_in_flight_until_the_stream_ends(self):
+        handler = OpenAIResponsesHandler()
+        added = {
+            "type": "response.output_item.added",
+            "sequence_number": 1,
+            "item": {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "get_weather"},
+        }
+        arguments_delta = {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 2,
+            "item_id": "fc_1",
+            "delta": '{"city":',
+        }
+        function_call = {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"}
+        assert handler.get_streaming_scan_key([self._delta(0, "hi")]).tool_calls_in_flight is False
+        assert handler.get_streaming_scan_key([self._delta(0, "hi"), added]).tool_calls_in_flight is True
+        assert handler.get_streaming_scan_key([self._delta(0, "hi"), arguments_delta]).tool_calls_in_flight is True
+        ended_key = handler.get_streaming_scan_key([self._delta(0, "hi"), added, self._completed(3, [function_call])])
+        assert ended_key.tool_calls_in_flight is False
+        assert len(ended_key.tool_calls) == 1

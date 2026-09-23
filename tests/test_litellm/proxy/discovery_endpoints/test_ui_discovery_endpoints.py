@@ -340,12 +340,50 @@ def test_ui_discovery_endpoints_hide_default_credentials_hint_default_false():
         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
     ):
         os.environ.pop("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", None)
+        os.environ.pop("UI_PASSWORD", None)
 
         response = client.get("/.well-known/litellm-ui-config")
 
         assert response.status_code == 200
         data = response.json()
         assert data["hide_default_credentials_hint"] is False
+
+
+def test_ui_discovery_endpoints_hide_default_credentials_hint_when_ui_password_set():
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with patch.dict(os.environ, {"UI_PASSWORD": "s3cret-pass", "DISABLE_ADMIN_UI": "false"}, clear=False):
+        os.environ.pop("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", None)
+
+        response = client.get("/.well-known/litellm-ui-config")
+
+        assert response.status_code == 200
+        assert response.json()["hide_default_credentials_hint"] is True
+
+
+@pytest.mark.parametrize(
+    "env_overrides",
+    [
+        pytest.param({"UI_USERNAME": "opsadmin"}, id="username_only_keeps_master_key_password"),
+        pytest.param({"UI_PASSWORD": ""}, id="empty_password_is_not_set"),
+    ],
+)
+def test_ui_discovery_endpoints_keeps_default_credentials_hint_without_real_ui_password(env_overrides):
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false", **env_overrides}, clear=False):
+        os.environ.pop("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", None)
+        if "UI_PASSWORD" not in env_overrides:
+            os.environ.pop("UI_PASSWORD", None)
+
+        response = client.get("/.well-known/litellm-ui-config")
+
+        assert response.status_code == 200
+        assert response.json()["hide_default_credentials_hint"] is False
 
 
 def test_ui_discovery_endpoints_hide_default_credentials_hint_via_env_var():

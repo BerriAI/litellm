@@ -83,6 +83,7 @@ describe("ProjectsTable pagination URL state", () => {
     await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
     const [update] = onUrlUpdate.mock.calls[0];
     expect(update.searchParams.get("page")).toBe("2");
+    expect(update.searchParams.has("page_size")).toBe(false);
     expect(update.options.history).toBe("push");
     expect(firstDataRow().getByText("Project 11")).toBeInTheDocument();
   });
@@ -147,6 +148,7 @@ describe("ProjectsTable pagination URL state", () => {
     const lastUpdate = onUrlUpdate.mock.calls.at(-1)?.[0];
     expect(lastUpdate.searchParams.get("page")).toBeNull();
     expect(lastUpdate.searchParams.get("page_size")).toBe("25");
+    expect(lastUpdate.options.history).toBe("push");
   });
 
   it("should apply both params from a ?page=2&page_size=25 deep link so the restored view matches", () => {

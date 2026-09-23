@@ -8,12 +8,14 @@ request kwargs to OTEL spans, which would log plaintext passwords. The audit
 signal is emitted by hand below, with field names only, never values.
 """
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     ChangePasswordRequest,
     ChangePasswordResponse,
     CommonProxyErrors,
@@ -21,6 +23,7 @@ from litellm.proxy._types import (
     LitellmTableNames,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.login_utils import PASSWORD_SESSION_METADATA
 from litellm.proxy.auth.password_policy import validate_password_not_breached, validate_password_policy
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
@@ -37,11 +40,19 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 _PASSWORD_CHANGED_AUDIT_VALUES: Final = '{"fields_changed": ["password"]}'
+_KEY_METADATA: Final = TypeAdapter(dict[str, object])
 
 
 def _error_detail(message: str) -> HTTPExceptionErrorDetail:
     detail: Final[HTTPExceptionErrorDetail] = {"error": message}
     return detail
+
+
+def _is_password_login_session(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    if user_api_key_dict.team_id != UI_TEAM_ID:
+        return False
+    key_metadata: Final = _KEY_METADATA.validate_python(user_api_key_dict.metadata)
+    return all(key_metadata.get(k) == v for k, v in PASSWORD_SESSION_METADATA.items())
 
 
 def _user_table(
@@ -58,16 +69,19 @@ def _user_table(
 )
 async def change_password(
     data: ChangePasswordRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> ChangePasswordResponse:
     """
     Change the calling user's own password.
 
-    Requires the current password. The new password must satisfy the
-    configured password policy (`general_settings.password_policy_*`: minimum
-    length, character classes, and, when enabled, breached-password screening
-    via haveibeenpwned.com). A successful change lifts any pending forced
-    password reset (`password_reset_required`) on the account.
+    Only callable with the dashboard session issued by a username/password
+    login; SSO sessions and virtual keys are rejected with 403. Requires the
+    current password. The new password must differ from the
+    current one and satisfy the configured password policy
+    (`general_settings.password_policy_*`: minimum length, character classes,
+    and, when enabled, breached-password screening via haveibeenpwned.com).
+    A successful change lifts any pending forced password reset
+    (`password_reset_required`) on the account.
 
     Parameters:
     - current_password: str - The user's current password.
@@ -79,6 +93,14 @@ async def change_password(
         raise HTTPException(
             status_code=500,
             detail=_error_detail(CommonProxyErrors.db_not_connected_error.value),
+        )
+
+    if not _is_password_login_session(user_api_key_dict):
+        raise HTTPException(
+            status_code=403,
+            detail=_error_detail(
+                "Passwords can only be changed from a dashboard session created by logging in with a password."
+            ),
         )
 
     user_id: Final = user_api_key_dict.user_id
@@ -102,6 +124,12 @@ async def change_password(
 
     if not verify_password(data.current_password, stored_password):
         raise HTTPException(status_code=400, detail=_error_detail("Current password is incorrect."))
+
+    if data.new_password == data.current_password:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail("New password must be different from the current password."),
+        )
 
     validate_password_policy(data.new_password, general_settings)
     await validate_password_not_breached(data.new_password, general_settings)

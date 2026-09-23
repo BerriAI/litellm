@@ -135,6 +135,57 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
     handleChange(updatedConfigs);
   };
 
+  const renderParamControl = (
+    config: LoggingConfig,
+    configIndex: number,
+    paramName: string,
+    param: { type: string; options: readonly string[] },
+  ) => {
+    const { type: paramType, options } = param;
+    const label = paramName.replace(/_/g, " ");
+    if (options.length > 0) {
+      return (
+        <Select
+          items={options.map((option) => ({ label: option, value: option }))}
+          value={config.callback_vars[paramName] || null}
+          onValueChange={(selected: string | null) => updateCallbackVar(configIndex, paramName, selected ?? "")}
+        >
+          <SelectTrigger aria-label={label} className="w-full">
+            <SelectValue placeholder={`Select ${label}`} />
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      );
+    }
+    if (paramType === "number") {
+      return (
+        <NumericalInput
+          step={0.01}
+          width={400}
+          placeholder={`os.environ/${paramName.toUpperCase()}`}
+          value={config.callback_vars[paramName] || ""}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+            updateCallbackVar(configIndex, paramName, e.target.value)
+          }
+        />
+      );
+    }
+    return (
+      <CallbackVarInput
+        sensitive={paramType === "password"}
+        placeholder={`os.environ/${paramName.toUpperCase()}`}
+        value={config.callback_vars[paramName] || ""}
+        onValueChange={(newValue) => updateCallbackVar(configIndex, paramName, newValue)}
+      />
+    );
+  };
+
   const renderDynamicParams = (config: LoggingConfig, configIndex: number) => {
     if (!config.callback_name) return null;
 
@@ -144,6 +195,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
     if (!callbackDisplayName) return null;
 
     const dynamicParams = callbackInfo[callbackDisplayName]?.dynamic_params || {};
+    const paramOptions = callbackInfo[callbackDisplayName]?.dynamic_param_options || {};
 
     if (Object.keys(dynamicParams).length === 0) return null;
 
@@ -166,22 +218,10 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
               {paramType === "number" && (
                 <span className="text-xs text-muted-foreground">Value must be between 0 and 1</span>
               )}
-              {paramType === "number" ? (
-                <NumericalInput
-                  step={0.01}
-                  width={400}
-                  placeholder={`os.environ/${paramName.toUpperCase()}`}
-                  value={config.callback_vars[paramName] || ""}
-                  onChange={(e: any) => updateCallbackVar(configIndex, paramName, e.target.value)}
-                />
-              ) : (
-                <CallbackVarInput
-                  sensitive={paramType === "password"}
-                  placeholder={`os.environ/${paramName.toUpperCase()}`}
-                  value={config.callback_vars[paramName] || ""}
-                  onValueChange={(newValue) => updateCallbackVar(configIndex, paramName, newValue)}
-                />
-              )}
+              {renderParamControl(config, configIndex, paramName, {
+                type: paramType,
+                options: paramType === "select" ? paramOptions[paramName] || [] : [],
+              })}
             </div>
           ))}
         </div>

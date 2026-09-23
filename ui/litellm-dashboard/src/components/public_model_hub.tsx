@@ -1281,7 +1281,7 @@ config = {
         "${selectedMcpServer.server_name}": {
             "url": "${getProxyBaseUrl()}/${selectedMcpServer.server_name}/mcp",
             "headers": {
-                "x-litellm-api-key": "Bearer sk-1234"
+                "x-litellm-api-key": "Bearer <your-master-key>"
             }
         }
     }
@@ -1321,7 +1321,7 @@ config = {
         "${selectedMcpServer.server_name}": {
             "url": "${getProxyBaseUrl()}/${selectedMcpServer.server_name}/mcp",
             "headers": {
-                "x-litellm-api-key": "Bearer sk-1234"
+                "x-litellm-api-key": "Bearer <your-master-key>"
             }
         }
     }
