@@ -257,7 +257,9 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = comprehend_medical_handler_result["result"]  # rebind-ok: elif-chain
             kwargs = comprehend_medical_handler_result["kwargs"]  # rebind-ok: elif-chain contract
-        elif self.is_typesafe_route(custom_llm_provider):
+        elif self.is_typesafe_route(custom_llm_provider) or self.is_openrouter_decisions_route(
+            url_route, custom_llm_provider
+        ):
             from .llm_provider_handlers.typesafe_passthrough_logging_handler import (
                 TypeSafePassthroughLoggingHandler,
             )
@@ -272,6 +274,7 @@ class PassThroughEndpointLogging:
                 end_time=end_time,
                 cache_hit=cache_hit,
                 request_body=request_body,
+                custom_llm_provider=custom_llm_provider or "",
                 **kwargs,
             )
             standard_logging_response_object = typesafe_handler_result["result"]
@@ -409,6 +412,9 @@ class PassThroughEndpointLogging:
 
     def is_typesafe_route(self, custom_llm_provider: str | None) -> bool:
         return custom_llm_provider == "typesafe"
+
+    def is_openrouter_decisions_route(self, url_route: str, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == "openrouter" and urlparse(url_route).path.endswith("/alpha/decisions")
 
     def is_langfuse_route(self, url_route: str):
         parsed_url: Final = urlparse(url_route)
