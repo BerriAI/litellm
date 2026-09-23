@@ -1,3 +1,6 @@
+use litellm_cost::non_token::{
+    ImageRates, ImageUsage, OcrRates, OcrUsage, calculate_image, calculate_ocr,
+};
 use litellm_cost::{
     Pricing, PromptConvention, Rate, Rates, Request, ServiceTier, ThresholdPolicy, Usage, compile,
 };
@@ -37,4 +40,31 @@ fn main() {
         cost.output(),
         cost.total()
     );
+    let image = calculate_image(
+        &[ImageRates {
+            input_per_image: Rate::Value(0.04),
+            output_per_image: Rate::Missing,
+            input_per_pixel: Rate::Missing,
+        }],
+        ImageUsage {
+            count: 2,
+            width: 1024,
+            height: 1024,
+        },
+    )
+    .unwrap();
+    let ocr = calculate_ocr(
+        OcrRates {
+            per_credit: Rate::Missing,
+            per_page: Rate::Value(0.01),
+            per_annotation_page: Rate::Missing,
+        },
+        OcrUsage {
+            credits: None,
+            pages: 3,
+            annotation_pages: 0,
+        },
+    )
+    .unwrap();
+    println!("image={} ocr={}", image.total, ocr.total);
 }

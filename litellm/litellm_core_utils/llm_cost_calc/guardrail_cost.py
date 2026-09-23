@@ -6,7 +6,6 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.rust_bridge.cost.dispatch import CostApi, route_cost_api
 from litellm.types.utils import CostBreakdown
 
 BEDROCK_GUARDRAIL_PRICING_KEY: Final = "bedrock/guardrails"
@@ -72,7 +71,6 @@ def _priced_units(units: int, price_per_unit: float | None) -> float | None:
     return None if price_per_unit is None else units * price_per_unit
 
 
-@route_cost_api(CostApi.BEDROCK_GUARDRAIL_COST_BY_UNIT)
 def bedrock_guardrail_cost_by_unit(
     usage_units: Mapping[str, int], aws_region_name: str | None
 ) -> Mapping[str, float | None] | None:
@@ -100,7 +98,6 @@ def bedrock_guardrail_cost(usage_units: Mapping[str, int], aws_region_name: str 
 AZURE_PROMPT_SHIELD_TEXT_RECORD_UNIT: Final = "text_records"
 
 
-@route_cost_api(CostApi.AZURE_PROMPT_SHIELD_GUARDRAIL_COST)
 def azure_prompt_shield_guardrail_cost(
     usage_units: Mapping[str, int],
     cost_tier: str | None,
@@ -141,7 +138,6 @@ def _validated_entry_cost(raw: object) -> float:
         return 0.0
 
 
-@route_cost_api(CostApi.GUARDRAIL_INFORMATION_COST)
 def guardrail_information_cost(guardrail_information: object) -> float:
     if guardrail_information is None:
         return 0.0

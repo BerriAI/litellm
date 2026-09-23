@@ -1,4 +1,4 @@
-"""Ordered rollout policy for routes, cache backends, secret managers, and costs.
+"""Ordered rollout policy for routes, cache backends, and secret managers.
 
 The first matching rule wins; unmatched contexts stay on Python. Native
 admission separately decides whether the selected implementation can execute.
@@ -86,29 +86,11 @@ class SecretManagerRule:
         return isinstance(context, SecretManagerContext) and (self.systems is None or context.system in self.systems)
 
 
-@dataclass(frozen=True, slots=True)
-class CostContext:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class CostRule:
-    rollout: Rollout
-
-    def __post_init__(self) -> None:
-        if self.rollout not in (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED):
-            raise ValueError("Cost rollout must be PYTHON_ONLY or RUST_REQUIRED")
-
-    def matches(self, context: Context) -> bool:
-        return isinstance(context, CostContext)
-
-
-Context: TypeAlias = RouteContext | CacheContext | SecretManagerContext | CostContext
-Rule: TypeAlias = RouteRule | CacheRule | SecretManagerRule | CostRule
+Context: TypeAlias = RouteContext | CacheContext | SecretManagerContext
+Rule: TypeAlias = RouteRule | CacheRule | SecretManagerRule
 Rules: TypeAlias = tuple[Rule, ...]
 
 RULES: Final[Rules] = (
-    CostRule(Rollout.PYTHON_ONLY),
     RouteRule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),
     RouteRule(Route.OCR, Rollout.RUST_OPT_OUT),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),

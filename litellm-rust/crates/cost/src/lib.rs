@@ -1,3 +1,5 @@
+pub mod non_token;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Rate {
     Missing,
