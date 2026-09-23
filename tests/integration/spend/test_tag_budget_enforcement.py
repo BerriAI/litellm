@@ -1,7 +1,6 @@
 import uuid
 from typing import Final
 
-import pytest
 from integration._support.client import Gateway, eventually
 
 

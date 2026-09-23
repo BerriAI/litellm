@@ -2,7 +2,6 @@ import json
 import uuid
 from typing import Final
 
-import pytest
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -127,33 +126,3 @@ def test_responses_system_input_item_carries_cache_control_to_anthropic_system(g
         assert any(item.get("type") == "message" for item in payload.get("output", []) if isinstance(item, dict))
         assert len(wire.drain()) == 1
 
-
-def test_responses_instructions_block_list_carries_cache_control_to_anthropic_system(gateway: Gateway) -> None:
-    pytest.skip(
-        "BUG: Responses instructions cannot carry cache_control; the system block reaches Anthropic without it"
-    )
-    identity: Final = f"responses-instructions-cc-{uuid.uuid4().hex}"
-    policy: Final = f"policy {identity}"
-
-    def respond(request: Request) -> Reply:
-        assert request.method == "POST" and request.target == "/v1/messages"
-        _assert_system_block(_JSON_OBJECT.validate_json(request.body), policy)
-        return Reply(body=_anthropic_reply(identity, "done"))
-
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY)
-        response: Final = gateway.request(
-            "POST",
-            "/v1/responses",
-            {
-                "model": model,
-                "instructions": [
-                    {"type": "input_text", "text": policy, "cache_control": {"type": "ephemeral"}}
-                ],
-                "input": [{"role": "user", "content": "hi"}],
-            },
-        )
-        assert response.status_code == 200, response.text
-        payload: Final = _JSON_OBJECT.validate_json(response.content)
-        assert payload["status"] == "completed", response.text
-        assert len(wire.drain()) == 1

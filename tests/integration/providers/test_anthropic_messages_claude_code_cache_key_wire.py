@@ -2,7 +2,6 @@ import json
 import uuid
 from typing import Final
 
-import pytest
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
