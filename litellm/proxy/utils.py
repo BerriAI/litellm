@@ -2340,9 +2340,6 @@ class ProxyLogging:
         With ``guardrails_only`` the walk is limited to guardrails and guardrail pipelines: rate
         limiting, budget accounting, prompt templates and hanging-request alerting are skipped.
         Use it to scan a payload that is not itself a request, such as one record of a batch file.
-
-        With ``skip_guardrails`` the walk skips guardrails and guardrail pipelines while rate
-        limiting, budget accounting and the rest still run.
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
 
