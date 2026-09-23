@@ -487,6 +487,121 @@ fn video_status_poll_does_not_bill_response_time_as_generation_duration() {
 }
 
 #[rstest]
+fn realtime_response_prices_session_tokens_and_completed_transcription() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        (
+            "openai/session".to_owned(),
+            json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003}),
+        ),
+        (
+            "openai/asr".to_owned(),
+            json!({"input_cost_per_second": 0.02}),
+        ),
+    ]));
+    let response = json!({"results": [
+        {"type": "session.created", "session": {"model": "session", "audio": {"input": {"transcription": {"model": "asr"}}}}},
+        {"type": "response.done", "response": {"usage": {"input_tokens": 100, "output_tokens": 20}}},
+        {"type": "conversation.item.input_audio_transcription.completed", "usage": {"type": "duration", "seconds": 2.0}},
+        {"type": "conversation.item.input_audio_transcription.failed", "usage": {"type": "duration", "seconds": 100.0}}
+    ]});
+    let discount = json!({"openai": 0.5});
+    let margin = json!({"global": {"fixed_amount": 0.1}});
+    let base = request(
+        Some(&response),
+        Some("requested"),
+        Some("openai"),
+        &discount,
+        &margin,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                call_type: Some("_arealtime"),
+                ..base.input
+            },
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.total - 0.3).abs() < 1e-12);
+    assert_eq!(result.cost.discount_percent, 0.0);
+    assert_eq!(result.cost.margin_fixed_amount, 0.0);
+}
+
+#[rstest]
+fn responses_websocket_prices_each_tier_and_applies_fixed_margin_per_tier() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/model".to_owned(),
+        json!({
+            "input_cost_per_token": 0.002,
+            "output_cost_per_token": 0.003,
+            "input_cost_per_token_priority": 0.005,
+            "output_cost_per_token_priority": 0.007
+        }),
+    )]));
+    let response = json!({"results": [
+        {"type": "response.completed", "response": {"service_tier": "default", "usage": {"input_tokens": 100, "output_tokens": 40}}},
+        {"type": "response.incomplete", "response": {"service_tier": "priority", "usage": {"input_tokens": 60, "output_tokens": 10}}},
+        {"type": "response.failed", "response": {"service_tier": "priority", "usage": {"input_tokens": 1000, "output_tokens": 1000}}}
+    ]});
+    let discount = json!({"openai": 0.1});
+    let margin = json!({"global": {"fixed_amount": 0.1}});
+    let base = request(
+        Some(&response),
+        Some("model"),
+        Some("openai"),
+        &discount,
+        &margin,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                call_type: Some("_aresponses_websocket"),
+                ..base.input
+            },
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.original - 0.69).abs() < 1e-12);
+    assert!((result.cost.total - 0.821).abs() < 1e-12);
+    assert!((result.cost.margin_fixed_amount - 0.2).abs() < 1e-12);
+    assert_eq!(result.cost.discount_percent, 0.1);
+}
+
+#[rstest]
+fn empty_responses_websocket_applies_one_fixed_margin() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/model".to_owned(),
+        json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003}),
+    )]));
+    let response = json!({"results": [{"type": "response.failed", "response": {"usage": null}}]});
+    let empty = json!({});
+    let margin = json!({"global": {"fixed_amount": 0.1}});
+    let base = request(
+        Some(&response),
+        Some("model"),
+        Some("openai"),
+        &empty,
+        &margin,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                call_type: Some("_aresponses_websocket"),
+                ..base.input
+            },
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.total - 0.1).abs() < 1e-12);
+}
+
+#[rstest]
 fn unsupported_call_does_not_silently_bill_as_tokens() {
     let catalog = ModelInfoCatalog::new(HashMap::new());
     let response = json!({"model": "image"});

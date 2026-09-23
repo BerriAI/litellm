@@ -2,13 +2,17 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::catalog::{
-    CatalogCallError, CatalogImageError, CostCall, ModelCostRequest, ModelInfoCatalog,
+    CatalogCallError, CatalogError, CatalogImageError, CostCall, ModelCostRequest, ModelInfoCatalog,
 };
 use crate::completion_cost::{CompletionCost, completion_cost};
 use crate::completion_input::{CompletionInputRequest, PreparedCompletionInput, ResponseKind};
 use crate::image_cost_router::{
     ImageCostRouteError, ImageCostRouteRequest, call_type_has_image_response,
     route_image_generation_cost_calculator,
+};
+use crate::realtime_cost::{
+    collect_and_combine_usage_from_realtime_stream_results, combine_usage_objects, event_usage,
+    partition_results_by_service_tier,
 };
 use crate::responses_usage::{ChatUsage, UsageError};
 
@@ -48,10 +52,18 @@ pub enum CompletionResponseCostError {
     Usage(UsageError),
     MissingUsage,
     MissingModel,
+    MissingProvider,
     UnsupportedCallType,
     Cost(CatalogCallError),
     Image(ImageCostRouteError),
     Video(CatalogImageError),
+    Realtime(CatalogError),
+}
+
+impl From<UsageError> for CompletionResponseCostError {
+    fn from(value: UsageError) -> Self {
+        Self::Usage(value)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -293,6 +305,145 @@ fn price_video_response(
     Ok(flat_priced(prepared, model, total))
 }
 
+fn realtime_results(
+    request: CompletionResponseCostRequest<'_>,
+) -> Result<&[Value], CompletionResponseCostError> {
+    request
+        .input
+        .model_selection
+        .response
+        .and_then(|response| response.get("results"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .ok_or(CompletionResponseCostError::MissingUsage)
+}
+
+fn price_realtime_response(
+    catalog: &ModelInfoCatalog,
+    request: CompletionResponseCostRequest<'_>,
+    prepared: PreparedCompletionInput,
+    provider: Option<&str>,
+) -> Result<PricedCompletionResponse, CompletionResponseCostError> {
+    let provider = provider.ok_or(CompletionResponseCostError::MissingProvider)?;
+    let results = realtime_results(request)?;
+    let combined = match prepared.usage.as_ref().or(request.fallback_usage) {
+        Some(usage) => usage.clone(),
+        None => collect_and_combine_usage_from_realtime_stream_results(results)
+            .map_err(CompletionResponseCostError::Usage)?,
+    };
+    let model = prepared
+        .model_candidates
+        .iter()
+        .flatten()
+        .next()
+        .ok_or(CompletionResponseCostError::MissingModel)?
+        .clone();
+    let total = catalog.handle_realtime_stream_cost_calculation(
+        results,
+        &combined,
+        provider,
+        &model,
+        request.data_residency,
+        request.at,
+    );
+    Ok(flat_priced(prepared, model, total))
+}
+
+fn add_completion_costs(first: CompletionCost, second: CompletionCost) -> CompletionCost {
+    CompletionCost {
+        original: first.original + second.original,
+        discounted: first.discounted + second.discounted,
+        total: first.total + second.total,
+        discount_percent: second.discount_percent,
+        discount_amount: first.discount_amount + second.discount_amount,
+        margin_percent: second.margin_percent,
+        margin_fixed_amount: first.margin_fixed_amount + second.margin_fixed_amount,
+        margin_total_amount: first.margin_total_amount + second.margin_total_amount,
+    }
+}
+
+fn price_responses_websocket(
+    catalog: &ModelInfoCatalog,
+    request: CompletionResponseCostRequest<'_>,
+    prepared: PreparedCompletionInput,
+    provider: Option<&str>,
+    region: Option<&str>,
+) -> Result<PricedCompletionResponse, CompletionResponseCostError> {
+    let results = realtime_results(request)?;
+    let partition = partition_results_by_service_tier(results);
+    let groups = if partition.is_empty() {
+        vec![(prepared.service_tier.as_deref(), Vec::new())]
+    } else {
+        partition
+    };
+    let priced_groups: Vec<_> = groups
+        .into_iter()
+        .enumerate()
+        .map(|(index, (tier, events))| {
+            let usage = combine_usage_objects(
+                events
+                    .into_iter()
+                    .map(event_usage)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )?;
+            let (model, (prompt, output)) = price_candidates(&prepared.model_candidates, |model| {
+                catalog.cost_per_token(ModelCostRequest {
+                    model,
+                    provider,
+                    region,
+                    usage: &usage,
+                    service_tier: tier,
+                    data_residency: request.data_residency,
+                    vertex_location: request.vertex_location,
+                    at: request.at,
+                    response_time_ms: None,
+                })
+            })
+            .map_err(|error| match error {
+                CandidatePriceError::MissingModel => CompletionResponseCostError::MissingModel,
+                CandidatePriceError::Price(error) => CompletionResponseCostError::Realtime(error),
+            })?;
+            let built_in = if index == 0 {
+                request.built_in_tool_cost
+            } else {
+                0.0
+            };
+            let additional = if index == 0 {
+                request.additional_costs
+            } else {
+                &[]
+            };
+            Ok::<_, CompletionResponseCostError>((
+                model,
+                completion_cost(
+                    prompt,
+                    output,
+                    built_in,
+                    additional,
+                    provider,
+                    request.discount_config,
+                    request.margin_config,
+                ),
+            ))
+        })
+        .collect::<Result<_, _>>()?;
+    let model = priced_groups
+        .first()
+        .map(|(model, _)| model.clone())
+        .or_else(|| prepared.model_candidates.iter().flatten().next().cloned())
+        .ok_or(CompletionResponseCostError::MissingModel)?;
+    let zero = completion_cost(0.0, 0.0, 0.0, &[], None, &Value::Null, &Value::Null);
+    let cost = priced_groups
+        .into_iter()
+        .map(|(_, cost)| cost)
+        .fold(zero, add_completion_costs);
+    Ok(PricedCompletionResponse {
+        model,
+        prepared,
+        cost,
+    })
+}
+
 pub fn completion_cost_from_response(
     catalog: &ModelInfoCatalog,
     request: CompletionResponseCostRequest<'_>,
@@ -318,6 +469,22 @@ pub fn completion_cost_from_response(
     }
     if is_video_call(&prepared.call_type) {
         return price_video_response(catalog, request, prepared, provider, deployment_info);
+    }
+    if prepared.call_type == "_arealtime" {
+        return price_realtime_response(catalog, request, prepared, provider);
+    }
+    if prepared.call_type == "_aresponses_websocket" {
+        let explicit_pricing = request.input.model_selection.custom_pricing
+            || request.input.model_selection.base_model.is_some();
+        let region = if explicit_pricing {
+            None
+        } else {
+            hidden_params
+                .and_then(|hidden| hidden.get("region_name"))
+                .and_then(Value::as_str)
+                .or(request.region)
+        };
+        return price_responses_websocket(catalog, request, prepared, provider, region);
     }
     if matches!(
         prepared.call_type.as_str(),
