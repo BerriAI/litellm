@@ -644,6 +644,7 @@ async def test_dynamic_route_observes_committed_peer_catalog_changes(monkeypatch
     prisma = SimpleNamespace(db=SimpleNamespace(
         litellm_mcpservertable=SimpleNamespace(find_many=read_rows),
         litellm_mcptoolsettable=SimpleNamespace(find_first=AsyncMock(return_value=None)),
+        litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
     ))
     manager = mcp_server_manager.MCPServerManager()
     if change != "create":

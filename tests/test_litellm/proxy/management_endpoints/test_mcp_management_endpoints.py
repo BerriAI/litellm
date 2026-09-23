@@ -2775,6 +2775,7 @@ class TestTemporaryMCPSessionEndpoints:
         prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=persisted_rows)
         prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
         prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=None)
+        prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         request: Final = Request(
             {"type": "http", "method": "GET", "scheme": "http", "server": ("localhost", 4000),
              "path": "/v1/mcp/server/oauth/saved-server/authorize", "headers": [],
@@ -8016,6 +8017,7 @@ async def test_saved_server_authorize_denial_does_not_dispatch_upstream():
         authorization_url="https://upstream.example/authorize", token_url="https://upstream.example/token")
     prisma: Final = MagicMock()
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     user: Final = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER)
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
