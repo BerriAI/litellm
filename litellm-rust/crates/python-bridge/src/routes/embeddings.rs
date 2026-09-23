@@ -6,6 +6,7 @@ use pyo3::{
 use crate::errors::RustBridgeDeclined;
 
 #[pyfunction]
+#[allow(unused_variables)] // the entrypoints pin the stub contract and decline before consuming their arguments
 pub(crate) fn embedding(
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
@@ -17,6 +18,7 @@ pub(crate) fn embedding(
 }
 
 #[pyfunction]
+#[allow(unused_variables)] // the entrypoints pin the stub contract and decline before consuming their arguments
 pub(crate) fn aembedding(
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
