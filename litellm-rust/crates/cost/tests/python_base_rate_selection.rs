@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use litellm_cost::base_rate_selection::{
     TokenBaseRates, get_tiered_reasoning_rate, get_token_base_cost_without_off_peak,
     uses_inclusive_token_thresholds,

@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use std::collections::BTreeMap;
 
 use litellm_cost::billed_token_rates::{BilledTokenRates, TokenTypeCostBreakdown};

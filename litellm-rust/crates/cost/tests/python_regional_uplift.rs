@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use jiff::Timestamp;
 use litellm_cost::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use litellm_cost::regional_uplift::{

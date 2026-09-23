@@ -20,3 +20,6 @@ rstest.workspace = true
 [[bench]]
 name = "calculate"
 harness = false
+
+[lints.clippy]
+disallowed-types = "deny"

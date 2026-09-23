@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use litellm_cost::generic_usage::{
     get_billable_input_tokens, parse_completion_tokens_details, parse_prompt_tokens_details,
 };

@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use litellm_cost::generic_output::{calculate_output_cost, resolve_reasoning_token_cost};
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;

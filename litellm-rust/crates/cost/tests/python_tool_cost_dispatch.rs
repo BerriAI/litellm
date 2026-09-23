@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use litellm_cost::tool_call_cost_tracking::{DefaultToolRates, ResponseKind};
 use litellm_cost::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
 use litellm_cost::usage_dispatch::get_usage_object;

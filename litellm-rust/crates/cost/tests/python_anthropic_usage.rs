@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use litellm_cost::anthropic_usage::{
     is_anthropic_usage_object, transform_anthropic_usage_to_chat_usage,
 };

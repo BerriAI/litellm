@@ -1,5 +1,5 @@
 {
- "python_commit": "492ac2e9c43ed8fc9ae18650f6d41987ff7ae0fc",
+ "python_commit": "a8725892a4d1986e09e6db7a736f872083479de1",
  "generic": [
   {
    "id": "audio_mixed_modalities",
@@ -2122,5 +2122,373 @@
     }
    }
   }
- ]
+ ],
+ "pinning": {
+  "thresholds": [
+   {
+    "key": "input_cost_per_token_above_128k_tokens",
+    "threshold": 128000.0
+   },
+   {
+    "key": "input_cost_per_token_above_200k_tokens",
+    "threshold": 200000.0
+   },
+   {
+    "key": "input_cost_per_token_above_256k_tokens",
+    "threshold": 256000.0
+   },
+   {
+    "key": "input_cost_per_token_above_272k_tokens",
+    "threshold": 272000.0
+   },
+   {
+    "key": "input_cost_per_token_above_512k_tokens",
+    "threshold": 512000.0
+   },
+   {
+    "key": "input_cost_per_token_above_1k_tokens",
+    "threshold": 1000.0
+   },
+   {
+    "key": "input_cost_per_token_above_500_tokens",
+    "threshold": 500.0
+   },
+   {
+    "key": "cache_creation_input_token_cost_above_1hr_above_200k_tokens",
+    "error": "ValueError"
+   },
+   {
+    "key": "cache_creation_input_token_cost_above_1hr",
+    "error": "ValueError"
+   },
+   {
+    "key": "input_cost_per_video_per_second_above_15s_interval",
+    "error": "ValueError"
+   },
+   {
+    "key": "input_cost_per_token",
+    "error": "IndexError"
+   }
+  ],
+  "service_tier_suffixes": [
+   "_ultrafast",
+   "_priority",
+   "_auto",
+   "_flex",
+   "_fast"
+  ],
+  "batch_tier_key": "^(input_cost_per_token|output_cost_per_token|cache_read_input_token_cost|cache_creation_input_token_cost)_above_(\\d+k?)_tokens_batches$",
+  "cost_per_unit": [
+   {
+    "model_info": {
+     "input_cost_per_token": 3e-06
+    },
+    "cost_key": "input_cost_per_token",
+    "default": null,
+    "result": 3e-06
+   },
+   {
+    "model_info": {
+     "input_cost_per_token": 3
+    },
+    "cost_key": "input_cost_per_token",
+    "default": null,
+    "result": 3.0
+   },
+   {
+    "model_info": {
+     "input_cost_per_token": true
+    },
+    "cost_key": "input_cost_per_token",
+    "default": null,
+    "result": 1.0
+   },
+   {
+    "model_info": {
+     "input_cost_per_token": false
+    },
+    "cost_key": "input_cost_per_token",
+    "default": null,
+    "result": 0.0
+   },
+   {
+    "model_info": {
+     "input_cost_per_token": " 0.5 "
+    },
+    "cost_key": "input_cost_per_token",
+    "default": null,
+    "result": 0.5
+   },
+   {
+    "model_info": {
+     "input_cost_per_token": "garbage"
+    },
+    "cost_key": "input_cost_per_token",
+    "default": null,
+    "result": null
+   },
+   {
+    "model_info": {
+     "input_cost_per_token": "garbage"
+    },
+    "cost_key": "input_cost_per_token",
+    "default": 0.0,
+    "result": 0.0
+   },
+   {
+    "model_info": {},
+    "cost_key": "input_cost_per_token",
+    "default": null,
+    "result": null
+   },
+   {
+    "model_info": {},
+    "cost_key": "input_cost_per_token",
+    "default": 0.0,
+    "result": 0.0
+   },
+   {
+    "model_info": {
+     "input_cost_per_token": null
+    },
+    "cost_key": "input_cost_per_token",
+    "default": null,
+    "result": null
+   },
+   {
+    "model_info": {
+     "input_cost_per_token": [
+      1
+     ]
+    },
+    "cost_key": "input_cost_per_token",
+    "default": null,
+    "result": null
+   },
+   {
+    "model_info": {
+     "input_cost_per_token": 1.0
+    },
+    "cost_key": "input_cost_per_token_priority",
+    "default": null,
+    "result": 1.0
+   },
+   {
+    "model_info": {
+     "input_cost_per_token": 1.0
+    },
+    "cost_key": "input_cost_per_token_auto",
+    "default": null,
+    "result": 1.0
+   },
+   {
+    "model_info": {
+     "input_cost_per_token": 1.0
+    },
+    "cost_key": "input_cost_per_token_flex",
+    "default": null,
+    "result": 1.0
+   },
+   {
+    "model_info": {
+     "input_cost_per_token_priority": 2.0
+    },
+    "cost_key": "input_cost_per_token_priority",
+    "default": null,
+    "result": 2.0
+   },
+   {
+    "model_info": {
+     "input_cost_per_token_flex": 2.0
+    },
+    "cost_key": "input_cost_per_token_priority",
+    "default": null,
+    "result": null
+   },
+   {
+    "model_info": {
+     "input_cost_per_token": 1.0,
+     "input_cost_per_token_priority": 2.0
+    },
+    "cost_key": "input_cost_per_token_priority",
+    "default": null,
+    "result": 2.0
+   },
+   {
+    "model_info": {
+     "input_cost_per_token_ultrafast": 2.0
+    },
+    "cost_key": "input_cost_per_token_fast",
+    "default": null,
+    "result": null
+   }
+  ]
+ },
+ "model_info_projection": {
+  "registered": [
+   "cache_read_input_token_cost",
+   "input_cost_per_gadget",
+   "input_cost_per_token",
+   "input_cost_per_token_above_128k_tokens",
+   "input_cost_per_token_above_128k_tokens_priority",
+   "litellm_provider",
+   "made_up_capability",
+   "max_input_tokens",
+   "max_output_tokens",
+   "max_tokens",
+   "mode",
+   "output_cost_per_token",
+   "rpm",
+   "supports_function_calling"
+  ],
+  "projected": [
+   "annotation_cost_per_page",
+   "annotation_cost_per_page_batches",
+   "bedrock_converse_supports_strict_tools",
+   "bedrock_output_config_effort_ceiling",
+   "cache_creation_input_token_cost",
+   "cache_creation_input_token_cost_above_1hr",
+   "cache_creation_input_token_cost_above_200k_tokens",
+   "cache_creation_input_token_cost_above_272k_tokens",
+   "cache_creation_input_token_cost_above_272k_tokens_batches",
+   "cache_creation_input_token_cost_above_272k_tokens_flex",
+   "cache_creation_input_token_cost_above_272k_tokens_priority",
+   "cache_creation_input_token_cost_batches",
+   "cache_creation_input_token_cost_flex",
+   "cache_creation_input_token_cost_priority",
+   "cache_creation_input_token_cost_ultrafast",
+   "cache_read_input_audio_token_cost",
+   "cache_read_input_token_cost",
+   "cache_read_input_token_cost_above_200k_tokens",
+   "cache_read_input_token_cost_above_200k_tokens_priority",
+   "cache_read_input_token_cost_above_272k_tokens",
+   "cache_read_input_token_cost_above_272k_tokens_batches",
+   "cache_read_input_token_cost_above_272k_tokens_flex",
+   "cache_read_input_token_cost_above_272k_tokens_priority",
+   "cache_read_input_token_cost_above_512k_tokens",
+   "cache_read_input_token_cost_batches",
+   "cache_read_input_token_cost_flex",
+   "cache_read_input_token_cost_priority",
+   "cache_read_input_token_cost_ultrafast",
+   "citation_cost_per_token",
+   "default_reasoning_effort",
+   "google_maps_grounding_cost_per_query",
+   "input_cost_per_audio_per_second",
+   "input_cost_per_audio_token",
+   "input_cost_per_audio_token_batches",
+   "input_cost_per_character",
+   "input_cost_per_image",
+   "input_cost_per_image_token",
+   "input_cost_per_image_token_batches",
+   "input_cost_per_query",
+   "input_cost_per_second",
+   "input_cost_per_token",
+   "input_cost_per_token_above_128k_tokens",
+   "input_cost_per_token_above_200k_tokens",
+   "input_cost_per_token_above_200k_tokens_priority",
+   "input_cost_per_token_above_272k_tokens",
+   "input_cost_per_token_above_272k_tokens_batches",
+   "input_cost_per_token_above_272k_tokens_flex",
+   "input_cost_per_token_above_272k_tokens_priority",
+   "input_cost_per_token_above_512k_tokens",
+   "input_cost_per_token_batches",
+   "input_cost_per_token_flex",
+   "input_cost_per_token_priority",
+   "input_cost_per_token_ultrafast",
+   "input_cost_per_video_per_second",
+   "input_cost_per_video_token",
+   "input_cost_per_video_token_batches",
+   "key",
+   "litellm_provider",
+   "max_input_tokens",
+   "max_output_tokens",
+   "max_tokens",
+   "mode",
+   "ocr_cost_per_credit",
+   "ocr_cost_per_page",
+   "ocr_cost_per_page_batches",
+   "off_peak_pricing",
+   "output_cost_per_audio_token",
+   "output_cost_per_character",
+   "output_cost_per_character_above_128k_tokens",
+   "output_cost_per_image",
+   "output_cost_per_image_token",
+   "output_cost_per_pixel",
+   "output_cost_per_reasoning_token",
+   "output_cost_per_reasoning_token_flex",
+   "output_cost_per_reasoning_token_priority",
+   "output_cost_per_second",
+   "output_cost_per_second_1080p",
+   "output_cost_per_second_2k",
+   "output_cost_per_second_480p",
+   "output_cost_per_second_4k",
+   "output_cost_per_second_720p",
+   "output_cost_per_second_768p",
+   "output_cost_per_token",
+   "output_cost_per_token_above_128k_tokens",
+   "output_cost_per_token_above_200k_tokens",
+   "output_cost_per_token_above_200k_tokens_priority",
+   "output_cost_per_token_above_272k_tokens",
+   "output_cost_per_token_above_272k_tokens_batches",
+   "output_cost_per_token_above_272k_tokens_flex",
+   "output_cost_per_token_above_272k_tokens_priority",
+   "output_cost_per_token_above_512k_tokens",
+   "output_cost_per_token_batches",
+   "output_cost_per_token_flex",
+   "output_cost_per_token_priority",
+   "output_cost_per_token_ultrafast",
+   "output_cost_per_video_per_second",
+   "output_cost_per_video_token",
+   "output_vector_size",
+   "prompt_cache_min_tokens",
+   "provider_specific_entry",
+   "reasoning_effort_levels",
+   "regional_endpoint_uplift_multiplier",
+   "regional_processing_uplift_multiplier_eu",
+   "regional_processing_uplift_multiplier_us",
+   "rpm",
+   "search_context_cost_per_query",
+   "supported_audio_formats",
+   "supported_endpoints",
+   "supported_openai_params",
+   "supports_adaptive_thinking",
+   "supports_anthropic_compaction",
+   "supports_anthropic_thinking_payload",
+   "supports_assistant_prefill",
+   "supports_audio_input",
+   "supports_audio_output",
+   "supports_computer_use",
+   "supports_embedding_image_input",
+   "supports_function_calling",
+   "supports_image_size",
+   "supports_legacy_thinking",
+   "supports_low_reasoning_effort",
+   "supports_max_reasoning_effort",
+   "supports_mid_conversation_system",
+   "supports_minimal_reasoning_effort",
+   "supports_native_streaming",
+   "supports_native_structured_output",
+   "supports_none_reasoning_effort",
+   "supports_parallel_function_calling",
+   "supports_pdf_input",
+   "supports_prompt_cache_breakpoint",
+   "supports_prompt_caching",
+   "supports_reasoning",
+   "supports_response_schema",
+   "supports_system_messages",
+   "supports_thinking_cache_preservation",
+   "supports_tool_choice",
+   "supports_tool_search",
+   "supports_url_context",
+   "supports_vision",
+   "supports_web_search",
+   "supports_xhigh_reasoning_effort",
+   "thinking_always_on",
+   "tiered_pricing",
+   "tpm",
+   "uses_embed_content",
+   "vertex_ai_audio_api",
+   "web_search_billing_unit"
+  ]
+ }
 }

@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use litellm_cost::tiered_pricing::{select_tier_for_input, tier_rate};
 use rstest::rstest;
 use serde_json::{Value, json};

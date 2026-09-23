@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use litellm_cost::retrieval_cost::{rerank_cost, vector_store_search_cost};
 use rstest::rstest;
 use serde_json::json;

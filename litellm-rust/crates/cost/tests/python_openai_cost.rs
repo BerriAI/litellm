@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use litellm_cost::non_token::Error;
 use litellm_cost::openai_cost::{
     cost_router, video_generation_cost, video_output_cost_per_second,

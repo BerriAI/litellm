@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use jiff::Timestamp;
 use litellm_cost::generic_cost::{
     ResolvedTokenRates, billable_prompt_details, calculate_generic_cost_from_model_info,

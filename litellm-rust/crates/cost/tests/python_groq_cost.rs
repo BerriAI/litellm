@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use litellm_cost::groq_cost::cost_per_web_search_request;
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;

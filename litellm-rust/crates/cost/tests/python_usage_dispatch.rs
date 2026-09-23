@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
 use serde_json::{Value, json};

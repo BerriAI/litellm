@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use litellm_cost::transcription_usage::{
     is_transcription_usage_object, transform_transcription_usage_object,
 };

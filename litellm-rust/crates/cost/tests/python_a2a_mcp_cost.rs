@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use litellm_cost::a2a_cost::calculate_a2a_cost;
 use litellm_cost::mcp_cost::calculate_mcp_tool_call_cost;
 use rstest::rstest;

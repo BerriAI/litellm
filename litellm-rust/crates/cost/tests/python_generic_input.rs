@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use litellm_cost::generic_input::{
     InputBaseRates, calculate_cache_writing_cost, calculate_cost_component, calculate_input_cost,
     get_cost_per_unit,

@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use litellm_cost::ptu_pricing::{
     MAX_COST_PER_PTU_PER_HOUR, MAX_PTU_COUNT, PTU_ZEROED_PRICING_FIELDS, SEARCH_CONTEXT_SIZES,
     azure_spillover, declares_ptu, is_spilled_over_ptu_request, ptu_config_error,

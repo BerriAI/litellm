@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use jiff::Timestamp;
 use litellm_cost::base_rate_selection::get_token_base_cost;
 use litellm_cost::off_peak::{

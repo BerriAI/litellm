@@ -21,7 +21,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     get_billed_token_rates,
 )
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.utils import register_model
+from litellm.utils import get_model_info, register_model
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 from openai.types.images_response import ImagesResponse
 
@@ -1057,6 +1057,95 @@ def billed_rates_surface() -> list[dict[str, Any]]:
     return rows
 
 
+def pinning_threshold_cases() -> list[str]:
+    return [
+        "input_cost_per_token_above_128k_tokens",
+        "input_cost_per_token_above_200k_tokens",
+        "input_cost_per_token_above_256k_tokens",
+        "input_cost_per_token_above_272k_tokens",
+        "input_cost_per_token_above_512k_tokens",
+        "input_cost_per_token_above_1k_tokens",
+        "input_cost_per_token_above_500_tokens",
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens",
+        "cache_creation_input_token_cost_above_1hr",
+        "input_cost_per_video_per_second_above_15s_interval",
+        "input_cost_per_token",
+    ]
+
+
+PINNING_COST_PER_UNIT_CASES: tuple[tuple[dict[str, Any], str, float | None], ...] = (
+    ({"input_cost_per_token": 3e-6}, "input_cost_per_token", None),
+    ({"input_cost_per_token": 3}, "input_cost_per_token", None),
+    ({"input_cost_per_token": True}, "input_cost_per_token", None),
+    ({"input_cost_per_token": False}, "input_cost_per_token", None),
+    ({"input_cost_per_token": " 0.5 "}, "input_cost_per_token", None),
+    ({"input_cost_per_token": "garbage"}, "input_cost_per_token", None),
+    ({"input_cost_per_token": "garbage"}, "input_cost_per_token", 0.0),
+    ({}, "input_cost_per_token", None),
+    ({}, "input_cost_per_token", 0.0),
+    ({"input_cost_per_token": None}, "input_cost_per_token", None),
+    ({"input_cost_per_token": [1]}, "input_cost_per_token", None),
+    ({"input_cost_per_token": 1.0}, "input_cost_per_token_priority", None),
+    ({"input_cost_per_token": 1.0}, "input_cost_per_token_auto", None),
+    ({"input_cost_per_token": 1.0}, "input_cost_per_token_flex", None),
+    ({"input_cost_per_token_priority": 2.0}, "input_cost_per_token_priority", None),
+    ({"input_cost_per_token_flex": 2.0}, "input_cost_per_token_priority", None),
+    ({"input_cost_per_token": 1.0, "input_cost_per_token_priority": 2.0}, "input_cost_per_token_priority", None),
+    ({"input_cost_per_token_ultrafast": 2.0}, "input_cost_per_token_fast", None),
+)
+
+
+def pinning_surface() -> dict[str, Any]:
+    from litellm.litellm_core_utils.llm_cost_calc import utils as cost_utils
+
+    thresholds: list[dict[str, Any]] = []
+    for key in pinning_threshold_cases():
+        try:
+            thresholds.append({"key": key, "threshold": cost_utils._parse_above_token_threshold(key)})
+        except Exception as error:
+            thresholds.append({"key": key, "error": type(error).__name__})
+
+    cost_per_unit: list[dict[str, Any]] = []
+    for model_info, cost_key, default in PINNING_COST_PER_UNIT_CASES:
+        result = cost_utils._get_cost_per_unit(model_info, cost_key, default)
+        cost_per_unit.append(
+            {
+                "model_info": model_info,
+                "cost_key": cost_key,
+                "default": default,
+                "result": result,
+            }
+        )
+    return {
+        "thresholds": thresholds,
+        "service_tier_suffixes": list(cost_utils._SERVICE_TIER_SUFFIXES),
+        "batch_tier_key": cost_utils._BATCH_TIER_KEY.pattern,
+        "cost_per_unit": cost_per_unit,
+    }
+
+
+def model_info_projection_surface() -> dict[str, Any]:
+    entry = {
+        "max_tokens": 4_096,
+        "max_input_tokens": 4_096,
+        "max_output_tokens": 1_024,
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_token_above_128k_tokens": 5e-7,
+        "input_cost_per_token_above_128k_tokens_priority": 6e-7,
+        "cache_read_input_token_cost": 1e-7,
+        "litellm_provider": "synthetic",
+        "mode": "chat",
+        "supports_function_calling": True,
+        "rpm": 100,
+        "made_up_capability": "x",
+        "input_cost_per_gadget": 0.5,
+    }
+    register_model({"synthetic-pinning-model": entry})
+    info = get_model_info(model="synthetic-pinning-model", custom_llm_provider="synthetic")
+    return {"registered": sorted(entry.keys()), "projected": sorted(info.keys())}
+
+
 def main() -> None:
     revision = subprocess.check_output(("git", "rev-parse", "HEAD"), text=True).strip()
     fixture = {
@@ -1070,10 +1159,16 @@ def main() -> None:
         "anthropic_usage": anthropic_usage_surface(),
         "wire_usage": wire_usage_surface(),
         "wire_response": wire_response_surface(),
+        "pinning": pinning_surface(),
+        "model_info_projection": model_info_projection_surface(),
     }
     target = Path(__file__).parent / "python_fixtures.json"
     target.write_text(json.dumps(fixture, indent=1) + "\n")
-    counts = {key: len(value) for key, value in fixture.items() if isinstance(value, list)}
+    counts = {
+        key: len(value)
+        for key, value in fixture.items()
+        if isinstance(value, (list, dict)) and key != "model_info_projection"
+    }
     print(json.dumps(counts))
 
 

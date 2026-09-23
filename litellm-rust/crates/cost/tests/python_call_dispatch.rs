@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use std::collections::HashMap;
 
 use litellm_cost::catalog::{CatalogCallError, CostCall, ModelCostRequest, ModelInfoCatalog};

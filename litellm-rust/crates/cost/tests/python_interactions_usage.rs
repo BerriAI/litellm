@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use litellm_cost::interactions_usage::{
     is_interactions_usage_object, transform_interactions_usage_object,
 };
