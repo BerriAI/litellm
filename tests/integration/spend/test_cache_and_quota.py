@@ -345,7 +345,9 @@ def test_different_system_messages_do_not_share_a_cached_response(gateway: Gatew
             )
             assert response.status_code == 200 and response.json()["usage"]["total_tokens"] == 40, response.text
             calls: Final = upstream.get("/__observations").json()["requests"]
-            assert len(calls) == expected_calls, calls
+            assert [call["body"]["messages"] for call in calls] == [
+                [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+            ] * expected_calls, calls
             return response.json()["id"]
 
         first_policy_id: Final = completion_id("first policy", 1)
