@@ -2064,6 +2064,9 @@
         ],
         "tests/integration/spend/test_spend_log_write_batching.py::test_prompt_carrying_spend_rows_flushed_together_are_written_in_byte_bounded_statements": [
             "quota_management.spend_tracking.prompt_rows_are_written_in_byte_bounded_statements"
+        ],
+        "tests/integration/authorization/test_access_group_model_listing.py::test_team_key_lists_models_granted_through_team_access_group": [
+            "authorization.access_groups.team_key_lists_models_granted_through_team_access_group"
         ]
     },
     "browser": {
