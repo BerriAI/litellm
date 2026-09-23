@@ -8,7 +8,7 @@ import logging
 import os
 import queue
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePath
@@ -5283,23 +5283,31 @@ async def test_wrapper_async_does_not_fire_failure_hook_for_post_success_error(
 ) -> None:
     """Regression: an error raised after the deployment call already succeeded (e.g. inside
     async_post_call_success_deployment_hook or post_call_processing) is not a deployment
-    attempt failure and must not reach async_post_call_failure_deployment_hook."""
+    attempt failure and must not reach async_post_call_failure_deployment_hook. The raising
+    callback is a guardrail because a plain logger's success hook error is isolated and
+    logged instead of propagating out of the call."""
 
-    class ExplodingSuccessLogger(CustomLogger):
+    class ExplodingSuccessGuardrail(CustomGuardrail):
         def __init__(self) -> None:
-            super().__init__()
-            self.failure_calls: list[Exception] = []
+            super().__init__(guardrail_name="exploding")
+            self.failure_calls: tuple[Exception, ...] = ()
 
-        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+        async def async_post_call_success_deployment_hook(
+            self, request_data: Mapping[str, object], response: LLMResponseTypes, call_type: CallTypes | None
+        ) -> LLMResponseTypes | None:
             raise RuntimeError("boom in success hook, model call itself succeeded")
 
         async def async_post_call_failure_deployment_hook(
-            self, request_data, exception, call_type, fallback_depth=None
-        ):
-            self.failure_calls.append(exception)
+            self,
+            request_data: Mapping[str, object],
+            exception: Exception,
+            call_type: CallTypes | None,
+            fallback_depth: int | None = None,
+        ) -> None:
+            self.failure_calls = (*self.failure_calls, exception)
 
-    exploding_logger = ExplodingSuccessLogger()
-    monkeypatch.setattr(litellm, "callbacks", [exploding_logger])
+    exploding_guardrail: Final = ExplodingSuccessGuardrail()
+    monkeypatch.setattr(litellm, "callbacks", [exploding_guardrail])
 
     with pytest.raises(RuntimeError, match="boom in success hook"):
         await litellm.acompletion(
@@ -5308,7 +5316,7 @@ async def test_wrapper_async_does_not_fire_failure_hook_for_post_success_error(
             mock_response="this call succeeds",
         )
 
-    assert exploding_logger.failure_calls == []
+    assert exploding_guardrail.failure_calls == ()
 
 
 @pytest.mark.asyncio
