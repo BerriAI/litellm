@@ -55214,10 +55214,10 @@
         "max_tokens": 16384,
         "mode": "audio_speech",
         "output_cost_per_audio_token": 9e-06,
-        "output_cost_per_audio_token_batches": 4.5e-06,
-        "output_cost_per_audio_token_flex": 4.5e-06,
-        "output_cost_per_audio_token_priority": 1.62e-05,
         "output_cost_per_token": 9e-06,
+        "output_cost_per_token_batches": 4.5e-06,
+        "output_cost_per_token_flex": 4.5e-06,
+        "output_cost_per_token_priority": 1.62e-05,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/audio/speech"
@@ -55238,10 +55238,10 @@
         "max_tokens": 16384,
         "mode": "audio_speech",
         "output_cost_per_audio_token": 6e-06,
-        "output_cost_per_audio_token_batches": 3e-06,
-        "output_cost_per_audio_token_flex": 3e-06,
-        "output_cost_per_audio_token_priority": 1.08e-05,
         "output_cost_per_token": 6e-06,
+        "output_cost_per_token_batches": 3e-06,
+        "output_cost_per_token_flex": 3e-06,
+        "output_cost_per_token_priority": 1.08e-05,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/audio/speech"
