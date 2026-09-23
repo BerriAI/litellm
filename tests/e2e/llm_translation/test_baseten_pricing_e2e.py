@@ -155,7 +155,7 @@ class TestBasetenGlm53FastPricing:
         assert response_id, f"chat completion returned no id: {completion!r}"
 
         row = _poll_breakdown_row(proxy, response_id)
-        assert row.metadata and row.metadata.cost_breakdown  # guaranteed by the poll
+        assert row.metadata and row.metadata.cost_breakdown, f"poll returned a row without a breakdown: {row}"
         breakdown = row.metadata.cost_breakdown
 
         prompt = row.prompt_tokens or 0
