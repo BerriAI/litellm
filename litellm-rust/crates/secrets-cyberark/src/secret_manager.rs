@@ -83,7 +83,7 @@ impl CyberArkSecretManager {
         let api_key = environment.get(CYBERARK_API_KEY).unwrap_or_default();
         let cert = environment.get(CYBERARK_CLIENT_CERT).unwrap_or_default();
         let key = environment.get(CYBERARK_CLIENT_KEY).unwrap_or_default();
-        if api_key.is_empty() {
+        if api_key.is_empty() && (cert.is_empty() || key.is_empty()) {
             return Err(Error::MissingCredentials);
         }
         if !enterprise_enabled {

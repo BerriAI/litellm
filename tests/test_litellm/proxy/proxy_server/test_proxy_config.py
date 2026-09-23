@@ -16,6 +16,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
@@ -2070,6 +2071,30 @@ def test_ProxyConfig__load_environment_variables_blocks_dangerous_keys(monkeypat
 # ---------------------------------------------------------------------------
 # ProxyConfig.load_config
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag", ("null", "false"))
+async def test_load_config_disabled_google_kms_does_not_initialize_a_manager(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str
+) -> None:
+    config_file: Final = tmp_path / "disabled-kms.yaml"
+    config_file.write_text(f"model_list: []\ngeneral_settings:\n  use_google_kms: {flag}\n")
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+
+    _router, model_list, general_settings = await ProxyConfig().load_config(
+        router=None, config_file_path=str(config_file)
+    )
+
+    assert model_list == []
+    assert general_settings["use_google_kms"] is (None if flag == "null" else False)
+    assert litellm.secret_manager_client is None
+    assert litellm._key_management_system is None
 
 
 @pytest.mark.asyncio

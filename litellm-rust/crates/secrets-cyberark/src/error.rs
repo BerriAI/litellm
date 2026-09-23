@@ -12,7 +12,9 @@ pub enum Error {
     AuthStatus(u16),
     #[error("CyberArk Conjur returned HTTP {0}")]
     Status(u16),
-    #[error("CyberArk credentials are missing: set CYBERARK_API_KEY")]
+    #[error(
+        "CyberArk credentials are missing: set CYBERARK_API_KEY or both CYBERARK_CLIENT_CERT and CYBERARK_CLIENT_KEY"
+    )]
     MissingCredentials,
     #[error("CyberArk client certificate could not be loaded")]
     ClientCertificate,

@@ -591,7 +591,7 @@ fn new_validates_credentials_before_license_and_configuration() {
 }
 
 #[rstest]
-fn certificate_without_api_key_is_rejected_before_loading_files() {
+fn certificate_only_credentials_are_validated_as_a_client_identity() {
     let result = CyberArkSecretManager::new(
         Arc::new(|name: &str| match name {
             "CYBERARK_CLIENT_CERT" => Some("/missing/cert".into()),
@@ -601,7 +601,7 @@ fn certificate_without_api_key_is_rejected_before_loading_files() {
         true,
     );
 
-    assert!(matches!(result, Err(Error::MissingCredentials)));
+    assert!(matches!(result, Err(Error::ClientCertificate)));
 }
 
 #[rstest]
