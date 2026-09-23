@@ -34,6 +34,7 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     VirtualKeyEvent,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.openai_error_payload import error_status_code
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.utils import PrismaClient, hash_token, jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
@@ -813,18 +814,25 @@ async def _emit_management_endpoint_otel_span(
     if exception is None and result is not None:
         try:
             raw: Final[Mapping[str, object]] = dict(result)
-            _response = {k: v for k, v in raw.items() if k not in _CREDENTIAL_FIELDS}
+            _response = redact_management_kwargs({k: v for k, v in raw.items() if k not in _CREDENTIAL_FIELDS})
             _redact_env_var_values(_response)
         except Exception:
             _response = None
 
     logging_payload: Final = ManagementEndpointLoggingPayload(
         route=route,
-        request_data=request_body,
+        request_data=redact_management_kwargs(request_body),
         response=_response,
         start_time=start_time,
         end_time=end_time,
-        exception=exception,
+        exception=(
+            HTTPException(
+                status_code=error_status_code(exception, error_status_code(getattr(exception, "response", None), 500)),
+                detail=type(exception).__name__,
+            )
+            if exception is not None
+            else None
+        ),
     )
 
     if exception is None:
@@ -868,7 +876,7 @@ def management_endpoint_wrapper(func):
                 if parent_otel_span is not None:
                     await _emit_management_endpoint_otel_span(
                         func=func,
-                        kwargs=redact_management_kwargs(kwargs),
+                        kwargs=kwargs,
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,

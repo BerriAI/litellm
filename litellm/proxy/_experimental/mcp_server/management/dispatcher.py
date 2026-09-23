@@ -27,6 +27,7 @@ from starlette.types import ASGIApp, ExceptionHandler, Receive, Scope, Send
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.management.catalog import (
     ManagementCatalog,
     ManagementTool,
@@ -63,6 +64,7 @@ class ManagementRequestContext:
     root_path: str
     litellm_changed_by: str | None
     request_id: str | None
+    forwarded_for: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,11 +90,19 @@ def build_management_client(internal_app: ASGIApp) -> httpx.AsyncClient:
     async def scoped_app(scope: Scope, receive: Receive, send: Send) -> None:
         ctx: Final = _call_context.get()
         if ctx is not None:
-            scope["client"] = ctx.client or ("127.0.0.1", 0)
+            scope["client"] = ctx.client
             scope["root_path"] = ctx.root_path
         await internal_app(scope, receive, send)
 
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=scoped_app), base_url=_INTERNAL_BASE_URL)
+    client: Final = get_async_httpx_client(
+        llm_provider="management_mcp",
+        params={  # mutable-ok: existing HTTP factory accepts a parameter dict
+            "transport": httpx.ASGITransport(app=scoped_app),
+            "follow_redirects": False,
+        },
+    ).client
+    client.base_url = _INTERNAL_BASE_URL
+    return client
 
 
 def set_dispatch(dispatch: Dispatch | None) -> Dispatch | None:
@@ -213,6 +223,8 @@ def _forwarded_headers(ctx: ManagementRequestContext) -> dict[str, str]:
         "content-type": "application/json",
         ctx.credential_header: ctx.credential_value,
     }
+    if ctx.forwarded_for is not None:
+        headers["x-forwarded-for"] = ctx.forwarded_for
     if ctx.litellm_changed_by is not None:
         headers["litellm-changed-by"] = ctx.litellm_changed_by
     if ctx.request_id is not None:

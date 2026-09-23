@@ -222,3 +222,23 @@ def test_inventory_command_writes_current_catalog(tmp_path, monkeypatch, capsys)
     assert inventory.main(["--write"]) == 0
     assert json.loads(target.read_text()) == catalog_inventory(build_catalog(app.openapi()))
     assert str(target) in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "path", ["/apply_guardrail", "/guardrails/apply_guardrail", "/v1/a2a/discover", "/policy/templates/enrich/stream"]
+)
+def test_data_plane_execution_is_excluded_from_management(path):
+    spec = _spec(
+        {
+            path: {
+                "post": _operation(
+                    operationId="execute_guardrail",
+                    tags=["Guardrails"],
+                    requestBody={"content": {"application/json": {"schema": {"type": "object"}}}},
+                )
+            }
+        }
+    )
+    catalog = build_catalog(spec)
+    assert not catalog.tools
+    assert f"POST {path}" in catalog.exclusions

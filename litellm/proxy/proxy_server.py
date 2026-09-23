@@ -1534,8 +1534,6 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         shutdown_management_mcp_server,
     )
 
-    await shutdown_management_mcp_server()
-
     if model_info_scheduler is not None and model_info_scheduler.running:
         model_info_scheduler.remove_job("refresh_model_info")
         if model_info_scheduler is not scheduler:
@@ -1549,6 +1547,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
     GracefulShutdownManager.start_shutdown()
     await GracefulShutdownManager.wait_for_drain()
+    await shutdown_management_mcp_server()
 
     # Shutdown event - close shared aiohttp session
     if shared_aiohttp_session is not None:

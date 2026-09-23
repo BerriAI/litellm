@@ -12,7 +12,6 @@ ALLOWED_FILES = [
     "../../litellm/llms/custom_httpx/httpx_handler.py",
     "../../litellm/llms/openai/common_utils.py",
     "../../litellm/experimental_mcp_client/client.py",
-    "../../litellm/proxy/_experimental/mcp_server/management/dispatcher.py",
     # when running on ci/cd
     "./litellm/__init__.py",
     "./litellm/llms/custom_httpx/http_handler.py",
@@ -23,7 +22,6 @@ ALLOWED_FILES = [
     "./litellm/llms/custom_httpx/httpx_handler.py",
     "./litellm/llms/openai/common_utils.py",
     "./litellm/experimental_mcp_client/client.py",
-    "./litellm/proxy/_experimental/mcp_server/management/dispatcher.py",
 ]
 
 warning_msg = (

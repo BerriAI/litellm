@@ -1428,3 +1428,48 @@ async def test_add_new_member_runs_every_write_on_the_caller_transaction(new_mem
     prisma_client.db.assert_not_called()
     prisma_client.get_data.assert_not_awaited()
     prisma_client.insert_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fails", [False, True], ids=["success", "failure"])
+async def test_management_otel_redacts_raw_body_nested_results_and_errors(monkeypatch, fails):
+    from starlette.requests import Request
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_helpers import utils as mgmt_utils
+
+    captured = []
+
+    class Logger:
+        async def async_management_endpoint_success_hook(self, logging_payload, parent_otel_span):
+            captured.append(logging_payload)
+
+        async def async_management_endpoint_failure_hook(self, logging_payload, parent_otel_span):
+            captured.append(logging_payload)
+
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", Logger())
+    monkeypatch.setattr(mgmt_utils, "is_otel_v2_enabled", lambda: False)
+    body = {"nested": {"api_key": "private-provider-value"}, "team_id": "team-readable"}
+
+    async def receive():
+        return {"type": "http.request", "body": json.dumps(body).encode(), "more_body": False}
+
+    request = Request({"type": "http", "path": "/model/new", "headers": []}, receive)
+    result = {"items": [{"password": "private-result-value", "team_id": "team-readable"}]}
+    from fastapi import HTTPException
+
+    error = HTTPException(status_code=403, detail="private-error-value") if fails else None
+    await mgmt_utils._emit_management_endpoint_otel_span(
+        func=lambda: None, kwargs={"http_request": request}, parent_otel_span=object(),
+        start_time=datetime.now(), end_time=datetime.now(), result=result, exception=error,
+    )
+    assert len(captured) == 1
+    serialized = str(captured[0])
+    assert "private-provider-value" not in serialized
+    assert "private-result-value" not in serialized
+    assert "private-error-value" not in serialized
+    assert captured[0].request_data["team_id"] == "team-readable"
+    if fails:
+        assert captured[0].exception.status_code == 403
+    assert json.loads(await request.body()) == body
+    assert result["items"][0]["password"] == "private-result-value"

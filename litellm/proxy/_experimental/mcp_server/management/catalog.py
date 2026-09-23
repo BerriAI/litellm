@@ -32,7 +32,7 @@ _EXCLUDED_ROUTE_GROUPS: Final = (
     frozenset(LiteLLMRoutes.llm_api_routes.value)
     .union(LiteLLMRoutes.mcp_routes.value, LiteLLMRoutes.ui_routes.value)
     .difference(LiteLLMRoutes.management_routes.value, LiteLLMRoutes.info_routes.value)
-    .union(LiteLLMRoutes.public_routes.value)
+    .union(LiteLLMRoutes.public_routes.value, LiteLLMRoutes.apply_guardrail_routes.value, ("/apply_guardrail",))
 )
 
 _EXCLUDED_TAGS: Final = frozenset(
@@ -114,6 +114,7 @@ _EXCLUDED_PATH_PREFIXES: Final = (
     "/agents/",
     "/v1/agents/",
     "/a2a",
+    "/v1/a2a",
     "/public/",
     "/memory",
     "/v1/memory",
@@ -180,6 +181,8 @@ def _exclusion_reason(path: str, method: str, operation: Mapping[str, object]) -
         return "data plane, public or ui route group"
     if path.rstrip("/").endswith("/mcp"):
         return "MCP transport endpoint"
+    if path.rstrip("/").endswith("/stream"):
+        return "streaming endpoint"
     matching_tag: Final = next(
         iter(sorted(tag for tag in _json_seq(operation.get("tags")) if isinstance(tag, str) and tag in _EXCLUDED_TAGS)),
         None,

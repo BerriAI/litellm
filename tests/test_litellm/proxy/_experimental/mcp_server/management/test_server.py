@@ -27,10 +27,17 @@ def _fixture_app() -> FastAPI:
 
     @app.get("/admin/keys", operation_id="list_admin_keys")
     async def list_admin_keys(request: FastAPIRequest):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.auth.auth_utils import _get_request_ip_address
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
         return {
             "keys": [],
             "caller": request.headers.get("x-litellm-api-key") or request.headers.get("authorization"),
-            "client_ip": request.client.host,
+            "client_ip": _get_request_ip_address(
+                request, use_x_forwarded_for=proxy_server.general_settings.get("use_x_forwarded_for") is True
+            ),
+            "mcp_client_ip": IPAddressUtils.get_mcp_client_ip(request),
         }
 
     return app
@@ -222,14 +229,21 @@ async def test_allowed_routes_mcp_routes_denied_management_routes_admitted(monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("use_forwarded", [True, False])
-async def test_in_process_mcp_client_end_to_end(monkeypatch, use_forwarded):
+@pytest.mark.parametrize(
+    "use_forwarded,trusted",
+    [(True, False), (False, False), (True, True)],
+    ids=["untrusted-forwarding", "direct-peer", "trusted-hop-chain"],
+)
+async def test_in_process_mcp_client_end_to_end(monkeypatch, use_forwarded, trusted):
     """Drive the real Streamable HTTP transport behind admission control:
     initialize, list the catalog tools, call one, and prove two concurrent
     callers reusing one transport only ever see their own credential."""
     from litellm.proxy import proxy_server
 
-    monkeypatch.setattr(proxy_server, "general_settings", {"use_x_forwarded_for": use_forwarded})
+    settings = {"use_x_forwarded_for": use_forwarded}
+    if trusted:
+        settings.update({"mcp_trusted_proxy_ranges": ["127.0.0.0/8"], "mcp_xff_num_trusted_hops": 1})
+    monkeypatch.setattr(proxy_server, "general_settings", settings)
     await mgmt_server.start_management_mcp_server({"enable_management_mcp": True}, _fixture_app())
 
     async def _auth(request, api_key, **kwargs):
@@ -274,11 +288,15 @@ async def test_in_process_mcp_client_end_to_end(monkeypatch, use_forwarded):
                     assert result.is_error is not True, result.content
                     return json.loads(result.content[0].text)
 
-    (res_a, res_b) = await asyncio.gather(_call("sk-admin-a", "203.0.113.1"), _call("sk-admin-b", "203.0.113.2"))
+    forwarded_a = "10.0.0.1, 203.0.113.1" if trusted else "203.0.113.1"
+    forwarded_b = "10.0.0.1, 203.0.113.2" if trusted else "203.0.113.2"
+    (res_a, res_b) = await asyncio.gather(_call("sk-admin-a", forwarded_a), _call("sk-admin-b", forwarded_b))
     assert res_a["caller"] == "sk-admin-a"
     assert res_b["caller"] == "sk-admin-b"
-    assert res_a["client_ip"] == ("203.0.113.1" if use_forwarded else "127.0.0.1")
-    assert res_b["client_ip"] == ("203.0.113.2" if use_forwarded else "127.0.0.1")
+    assert res_a["client_ip"] == (forwarded_a if use_forwarded else "127.0.0.1")
+    assert res_b["client_ip"] == (forwarded_b if use_forwarded else "127.0.0.1")
+    assert res_a["mcp_client_ip"] == ("203.0.113.1" if trusted else ("" if use_forwarded else "127.0.0.1"))
+    assert res_b["mcp_client_ip"] == ("203.0.113.2" if trusted else ("" if use_forwarded else "127.0.0.1"))
 
     await mgmt_server.shutdown_management_mcp_server()
 
@@ -376,3 +394,62 @@ def test_disabled_flag_404_and_dynamic_alias_route_via_fastapi_app():
         assert client.post("/nonexistent-alias/mcp", content=b"{}").status_code == 404
     finally:
         mgmt_server._active_server = None
+
+
+@pytest.mark.asyncio
+async def test_configured_credential_header_admission_and_forwarding(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-configured-header")
+    monkeypatch.setattr(proxy_server, "general_settings", {"litellm_key_header_name": "X-Company-Key"})
+    await mgmt_server.start_management_mcp_server({"enable_management_mcp": True}, _fixture_app())
+    observed = []
+
+    async def bridge(handle_fn, scope, receive):
+        observed.append(mgmt_server._request_context.get())
+        return httpx.Response(200)
+
+    monkeypatch.setattr(proxy_server, "_stream_mcp_asgi_response", bridge)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/litellm-management/mcp",
+            "headers": [(b"x-company-key", b"Bearer sk-configured-header")],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("127.0.0.1", 1234),
+            "root_path": "",
+        }
+    )
+    try:
+        response = await mgmt_server.handle_management_mcp_request(request)
+        assert response.status_code == 200
+        assert observed[0].credential_header == "x-company-key"
+        assert observed[0].credential_value == "Bearer sk-configured-header"
+    finally:
+        await mgmt_server.shutdown_management_mcp_server()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("manager_fails", [False, True], ids=["clean-close", "failed-close"])
+async def test_shutdown_closes_manager_before_client(monkeypatch, manager_fails):
+    from litellm.proxy._experimental.mcp_server.management import dispatcher
+
+    await mgmt_server.start_management_mcp_server({"enable_management_mcp": True}, _fixture_app())
+    server = mgmt_server._active_server
+    client = dispatcher._active_dispatch.http_client
+
+    async def close_manager():
+        assert not client.is_closed
+        if manager_fails:
+            raise RuntimeError("manager close failed")
+
+    monkeypatch.setattr(server, "close", close_manager)
+    if manager_fails:
+        with pytest.raises(RuntimeError, match="manager close failed"):
+            await mgmt_server.shutdown_management_mcp_server()
+    else:
+        await mgmt_server.shutdown_management_mcp_server()
+    assert client.is_closed

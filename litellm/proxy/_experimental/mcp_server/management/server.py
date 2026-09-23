@@ -36,9 +36,6 @@ from litellm.proxy._experimental.mcp_server.management.dispatcher import (
     set_dispatch,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import (
-    _get_request_ip_address,  # pyright: ignore[reportPrivateUsage]  # preserve the same IP policy used by REST auth
-)
 
 MANAGEMENT_MCP_PATH: Final = "/litellm-management/mcp"
 
@@ -138,18 +135,25 @@ async def shutdown_management_mcp_server() -> None:
     server: Final = _active_server
     _active_server = None
     dispatch: Final = set_dispatch(None)
-    if dispatch is not None:
-        await dispatch.http_client.aclose()
-    if server is not None:
-        await server.close()
+    try:
+        if server is not None:
+            await server.close()
+    finally:
+        if dispatch is not None:
+            await dispatch.http_client.aclose()
+
+
+def _caller_credential_header(request: Request) -> str:
+    from litellm.proxy.proxy_server import general_settings
+
+    configured_header: Final = general_settings.get("litellm_key_header_name")
+    if isinstance(configured_header, str):
+        return configured_header.lower()
+    return "x-litellm-api-key" if request.headers.get("x-litellm-api-key") else "authorization"
 
 
 def _caller_api_key(request: Request) -> str:
-    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-        MCPRequestHandler,
-    )
-
-    return MCPRequestHandler.get_litellm_api_key_from_headers(request.headers) or ""
+    return request.headers.get(_caller_credential_header(request)) or ""
 
 
 async def _authenticate_admission(request: Request) -> UserAPIKeyAuth:
@@ -194,14 +198,12 @@ async def handle_management_mcp_request(request: Request) -> Response:
 
     await _authenticate_admission(request)
 
-    credential_header: Final = "x-litellm-api-key" if request.headers.get("x-litellm-api-key") else "authorization"
-    client_ip: Final = _get_request_ip_address(
-        request, use_x_forwarded_for=proxy_server.general_settings.get("use_x_forwarded_for") is True
-    )
+    credential_header: Final = _caller_credential_header(request)
     caller_ctx: Final = ManagementRequestContext(
         credential_header=credential_header,
         credential_value=_caller_api_key(request),
-        client=(client_ip, request.client.port if request.client else 0) if client_ip else None,
+        client=(request.client.host, request.client.port) if request.client else None,
+        forwarded_for=request.headers.get("x-forwarded-for"),
         root_path=str(request.scope.get("root_path") or ""),
         litellm_changed_by=request.headers.get("litellm-changed-by"),
         request_id=request.headers.get("x-request-id"),

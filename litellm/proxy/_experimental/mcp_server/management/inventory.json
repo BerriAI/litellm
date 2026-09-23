@@ -1527,7 +1527,7 @@
     "excluded": "excluded path prefix"
   },
   "POST /apply_guardrail": {
-    "tool": "apply_guardrail_apply_guardrail_post"
+    "excluded": "data plane, public or ui route group"
   },
   "POST /assemblyai/{endpoint}": {
     "excluded": "tag:llm_passthrough"
@@ -1983,7 +1983,7 @@
     "tool": "enrich_policy_template_policy_templates_enrich_post"
   },
   "POST /policy/templates/enrich/stream": {
-    "tool": "enrich_policy_template_stream_policy_templates_enrich_stream_post"
+    "excluded": "streaming endpoint"
   },
   "POST /policy/templates/suggest": {
     "tool": "suggest_policy_templates_policy_templates_suggest_post"
@@ -2199,7 +2199,7 @@
     "excluded": "data plane, public or ui route group"
   },
   "POST /v1/a2a/discover": {
-    "tool": "discover_agent_card_v1_a2a_discover_post"
+    "excluded": "excluded path prefix"
   },
   "POST /v1/a2a/{agent_id}/message/send": {
     "excluded": "tag:a2a"
