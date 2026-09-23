@@ -1,0 +1,13 @@
+# litellm-cost port rules
+
+- This crate is a standalone port of Python's cost calculation. Prices, usage, model metadata, response kinds, and feature flags are caller-supplied; there is no Python bridge, no proxy integration, no network, and no env or secret resolution
+- Every Rust function maps to a named Python function in `litellm/cost_calculator.py`, `litellm/litellm_core_utils/llm_cost_calc/`, or a provider `cost_calculator.py`/`cost_calculation.py`. Python entry points that also look up models, normalize responses, or choose providers correspond to Rust functions starting from already-selected inputs; `ModelInfoCatalog` supplies the selection layer Python does inline
+- Module `foo_cost.rs` mirrors the calculation portion of the matching Python module; `tests/python_foo_cost.rs` carries the mapping evidence, with each test naming the Python test it mirrors (`tests/test_litellm/` mirrors `litellm/` per the repo-root AGENTS.md)
+- Preserve Python's precedence and fallback orders exactly: cache hit before provider-reported before calculated cost, discount before margin, wall-clock pricing before provider totals, quality and size key selection order, model-key selection order including duplicate provider prefixes and regional aliases
+- Diverge only where Python is observably wrong, and pin each divergence with a test that would fail if either side changed
+- Where Python relies on class identity (response kind, usage format, transcription type), Rust takes a serialized `type` tag or a caller-supplied enum because JSON does not preserve identity
+- Never pin vendor prices, upstream defaults, or today's date as literals. Fixtures use synthetic rates we own and record only Python-computed outputs, stamped with the generating commit
+- Two differential harnesses pin executed-Python behavior: `tests/generate_python_reference.py` -> `tests/python_reference.tsv` for `generic_cost_per_token`, and `tests/generate_python_fixtures.py` -> `tests/python_fixtures.json`, replayed by `tests/python_fixture_replay.rs` across seven surfaces. Regenerate after porting new behavior; numeric rows must stay byte-identical unless the change is intentional
+- Every new test must fail on mutated code; mutation-check meaningful cases before pushing
+- Shared predicates live in one home: `base_rate_selection::uses_inclusive_token_thresholds` is the only copy of Python's `_INCLUSIVE_THRESHOLD_PROVIDERS`, and `image_cost_router` deployment pricing reads exactly the `CustomPricingLiteLLMParams` field set Python iterates. Reuse an existing shared helper before writing per-surface parsing
+- General repo rules (comments, immutability, typing, commits) are in the repo-root AGENTS.md and apply here
