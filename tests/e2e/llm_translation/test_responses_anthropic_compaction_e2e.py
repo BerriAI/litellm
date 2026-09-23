@@ -36,15 +36,6 @@ class _ContextManagementEdit(BaseModel):
     compact_threshold: int
 
 
-class _ResponsesInputItem(BaseModel):
-    model_config = {"extra": "allow"}
-    type: str | None = None
-    role: str | None = None
-    content: object | None = None
-    id: str | None = None
-    encrypted_content: str | None = None
-
-
 class _ResponsesBody(BaseModel):
     model_config = {"extra": "allow"}
     model: str
@@ -142,7 +133,7 @@ class TestResponsesAnthropicCompaction:
         resources.defer(lambda: proxy.delete_model(model_id))
         return model
 
-    @pytest.mark.covers("llm.responses.anthropic.compaction.nonstream.output_item")
+    @pytest.mark.covers("llm.responses.bedrock_invoke.compaction.nonstream.output_item")
     def test_nonstream_returns_compaction_output_item(
         self, proxy: ProxyClient, resources: ResourceManager, anthropic_model: str
     ) -> None:
@@ -154,7 +145,7 @@ class TestResponsesAnthropicCompaction:
         assert items, f"no compaction item in output: {result.body[:800]}"
         assert all(item.encrypted_content for item in items), f"empty encrypted_content: {result.body[:800]}"
 
-    @pytest.mark.covers("llm.responses.anthropic.compaction.stream.output_item")
+    @pytest.mark.covers("llm.responses.bedrock_invoke.compaction.stream.output_item")
     def test_stream_returns_compaction_item_events(
         self, proxy: ProxyClient, resources: ResourceManager, anthropic_model: str
     ) -> None:
@@ -172,7 +163,7 @@ class TestResponsesAnthropicCompaction:
             f"no response.output_item.done compaction item with encrypted_content: {result.stream_events[-6:]}"
         )
 
-    @pytest.mark.covers("llm.responses.anthropic.compaction.replay.shrinks_input")
+    @pytest.mark.covers("llm.responses.bedrock_invoke.compaction.replay.shrinks_input")
     def test_replaying_compaction_item_shrinks_next_input(
         self, proxy: ProxyClient, resources: ResourceManager, anthropic_model: str
     ) -> None:
