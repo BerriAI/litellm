@@ -82,6 +82,9 @@
     "tests/integration/authorization/test_warmed_policy.py::test_expiry_and_explicit_clear_reach_both_warmed_workers": [
       "mgmt.key.update.expiry_changes_reach_warmed_workers"
     ],
+    "tests/integration/authorization/test_access_group_model_listing.py::test_team_key_lists_models_granted_through_team_access_group": [
+      "authorization.access_groups.team_key_lists_models_granted_through_team_access_group"
+    ],
     "tests/integration/database/test_partition_transactions.py::test_real_partition_ddl_survives_witnessed_lock_and_is_idempotent": [
       "other.database.partitions.lock_wait_outlives_transaction_default",
       "other.database.partitions.repeat_preserves_rows"
