@@ -6731,7 +6731,7 @@ class TestMCPServerManager:
         # Create mock client that tracks call_tool usage
         mock_client = AsyncMock()
 
-        async def mock_call_tool(params, host_progress_callback=None):
+        async def mock_call_tool(params, host_progress_callback=None, persistent_session=None):
             # Return a mock CallToolResult
             result = MagicMock(spec=CallToolResult)
             result.content = [{"type": "text", "text": "Tool executed successfully"}]
