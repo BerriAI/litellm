@@ -494,6 +494,12 @@ async fn unsafe_names_fail_before_http_calls(#[case] name: &str) {
     let server = MockServer::start().await;
     let manager = manager(&server, Duration::from_secs(60));
     assert!(matches!(
+        manager.async_read_secret(name).await,
+        Err(Error::Operation(
+            litellm_secrets_types::Error::UnsafeSecretName
+        ))
+    ));
+    assert!(matches!(
         manager
             .async_write_secret(name, &SecretValue::new("v"), None)
             .await,
@@ -703,4 +709,55 @@ fn parity_fixture_matches_authentication_contract(parity_fixture: ParityFixture)
         parity_fixture.secrets[1].policy_body,
         "- !variable \"team/app/key\"\n"
     );
+}
+
+#[rstest]
+#[tokio::test]
+#[ignore]
+async fn live_conjur_round_trip() {
+    let endpoint: reqwest::Url = std::env::var("CYBERARK_API_BASE").unwrap().parse().unwrap();
+    let account = std::env::var("CYBERARK_ACCOUNT").unwrap();
+    let username = std::env::var("CYBERARK_USERNAME").unwrap();
+    let api_key = SecretValue::new(std::env::var("CYBERARK_API_KEY").unwrap());
+    let name = format!(
+        "{}-{}",
+        std::env::var("LITELLM_CONJUR_LIVE_SECRET_NAME").unwrap(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let manager = CyberArkSecretManager::with_client(
+        reqwest::Client::new(),
+        endpoint.clone(),
+        account.clone(),
+        username.clone(),
+        api_key.clone(),
+        Some(Duration::from_secs(60)),
+    );
+
+    assert!(manager.async_read_secret(&name).await.unwrap().is_none());
+    for expected in ["first-π\n", " second-π "] {
+        manager
+            .async_write_secret(&name, &SecretValue::new(expected), None)
+            .await
+            .unwrap();
+        let verifier = CyberArkSecretManager::with_client(
+            reqwest::Client::new(),
+            endpoint.clone(),
+            account.clone(),
+            username.clone(),
+            api_key.clone(),
+            Some(Duration::from_secs(60)),
+        );
+        assert_eq!(
+            verifier
+                .async_read_secret(&name)
+                .await
+                .unwrap()
+                .unwrap()
+                .expose(),
+            expected
+        );
+    }
 }

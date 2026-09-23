@@ -1013,6 +1013,15 @@ async fn live_vault_round_trip() {
         manager.async_read_secret(&name).await.unwrap().unwrap(),
         value
     );
+    let replacement = SecretValue::new("replacement-π\n");
+    manager
+        .async_write_secret(&name, replacement.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        manager.async_read_secret(&name).await.unwrap().unwrap(),
+        replacement
+    );
     manager.async_delete_secret(&name).await.unwrap();
     assert!(manager.async_read_secret(&name).await.unwrap().is_none());
 }

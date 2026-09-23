@@ -45,6 +45,23 @@ async fn reads_secret_with_bearer_token_and_api_version() {
 
 #[rstest]
 #[tokio::test]
+async fn preserves_secret_contents_and_redacts_debug_output() {
+    let server = MockServer::start().await;
+    let value = " \tvalue-π\n";
+    Mock::given(path("/secrets/NAME"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"value": value})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let secret = manager(&server).get_secret("NAME").await.unwrap().unwrap();
+
+    assert_eq!(secret.as_str(), Some(value));
+    assert!(!format!("{secret:?}").contains(value));
+}
+
+#[rstest]
+#[tokio::test]
 async fn percent_encodes_secret_name_path_segment() {
     let server = MockServer::start().await;
     Mock::given(path("/secrets/name%2Fwith%20spaces"))

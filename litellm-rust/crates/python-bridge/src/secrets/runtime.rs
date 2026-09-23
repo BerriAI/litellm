@@ -130,10 +130,9 @@ impl NativeSecretManager {
                 ))
             })
             .collect::<PyResult<Vec<_>>>()?;
-        let settings = from_py::<serde_json::Map<String, serde_json::Value>>(
-            &config.getattr("settings")?,
-        )
-        .map_err(|_| PyValueError::new_err("invalid secret manager settings"))?;
+        let settings =
+            from_py::<serde_json::Map<String, serde_json::Value>>(&config.getattr("settings")?)
+                .map_err(|_| PyValueError::new_err("invalid secret manager settings"))?;
         let attributes = config
             .getattr("settings_attributes")?
             .extract::<Vec<String>>()?;

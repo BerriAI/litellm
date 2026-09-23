@@ -196,6 +196,7 @@ impl CyberArkSecretManager {
         name: &str,
         context: &CyberarkOperationContext,
     ) -> Result<Option<SecretValue>, Error> {
+        validate_secret_name(name)?;
         let read = self
             .secrets
             .read(name.to_owned(), self.read_uncached(name, context));
