@@ -390,46 +390,42 @@ class TestNewRelicKeyLoggingValidation:
         from fastapi import HTTPException
 
         from litellm.integrations.otel.model.config import is_otel_v2_enabled
-        from litellm.proxy.management_endpoints.key_management_endpoints import (
-            raise_on_invalid_key_logging_config,
-        )
+        from litellm.proxy.common_utils.callback_config_validation import raise_on_invalid_logging_metadata
 
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
         try:
             with pytest.raises(HTTPException) as exc:
-                raise_on_invalid_key_logging_config(self._metadata({"newrelic_api_key": "k"}))
+                raise_on_invalid_logging_metadata(self._metadata({"newrelic_api_key": "k"}))
             assert "LITELLM_OTEL_V2" in str(exc.value.detail)
 
             monkeypatch.setenv("LITELLM_OTEL_V2", "true")
             is_otel_v2_enabled.cache_clear()
             with pytest.raises(HTTPException) as exc:
-                raise_on_invalid_key_logging_config(
+                raise_on_invalid_logging_metadata(
                     self._metadata({"newrelic_api_key": "k", "newrelic_region": "mars"})
                 )
             assert "Unknown newrelic_region" in str(exc.value.detail)
             with pytest.raises(HTTPException) as exc:
-                raise_on_invalid_key_logging_config(self._metadata({"newrelic_region": "eu"}))
+                raise_on_invalid_logging_metadata(self._metadata({"newrelic_region": "eu"}))
             assert "requires newrelic_api_key" in str(exc.value.detail)
-            raise_on_invalid_key_logging_config(self._metadata({"newrelic_api_key": "k", "newrelic_region": "EU"}))
+            raise_on_invalid_logging_metadata(self._metadata({"newrelic_api_key": "k", "newrelic_region": "EU"}))
         finally:
             is_otel_v2_enabled.cache_clear()
 
     def test_ignores_metadata_without_newrelic_logging(self, monkeypatch):
         from litellm.integrations.otel.model.config import is_otel_v2_enabled
-        from litellm.proxy.management_endpoints.key_management_endpoints import (
-            raise_on_invalid_key_logging_config,
-        )
+        from litellm.proxy.common_utils.callback_config_validation import raise_on_invalid_logging_metadata
 
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
         try:
-            assert raise_on_invalid_key_logging_config(None) is None
-            assert raise_on_invalid_key_logging_config({"logging": "not-a-list"}) is None
-            assert raise_on_invalid_key_logging_config({"tags": ["a"]}) is None
-            assert raise_on_invalid_key_logging_config(self._metadata({})) is None
+            assert raise_on_invalid_logging_metadata(None) is None
+            assert raise_on_invalid_logging_metadata({"logging": "not-a-list"}) is None
+            assert raise_on_invalid_logging_metadata({"tags": ["a"]}) is None
+            assert raise_on_invalid_logging_metadata(self._metadata({})) is None
             assert (
-                raise_on_invalid_key_logging_config(
+                raise_on_invalid_logging_metadata(
                     {"logging": [{"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}}]}
                 )
                 is None

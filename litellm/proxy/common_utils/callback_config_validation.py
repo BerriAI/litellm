@@ -10,6 +10,8 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
+from fastapi import HTTPException
+
 _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
 _LANGFUSE_OTEL_CALLBACK: Final = "langfuse_otel"
@@ -252,6 +254,17 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
         ),
         None,
     )
+
+
+def raise_on_invalid_logging_metadata(metadata: Mapping[str, object] | None) -> None:
+    """Reject a metadata payload whose ``logging`` entries the runtime cannot honor.
+
+    Without this the same config the management surface rejects would be
+    accepted here and then silently ignored or misrouted at request time.
+    """
+    error: Final = logging_metadata_config_error(metadata)
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})  # mutable-ok: FastAPI detail contract
 
 
 def _entry_callback_name(entry: object) -> str | None:
