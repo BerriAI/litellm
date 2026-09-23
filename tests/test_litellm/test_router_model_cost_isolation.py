@@ -440,6 +440,19 @@ async def test_discovery_skips_deployments_whose_limits_are_already_configured(
     _invalidate_model_cost_lowercase_map()
 
 
+def test_deployment_token_limits_configured_predicate() -> None:
+    # Direct coverage for the guard predicate #42657 adds: discovery is skipped
+    # only when BOTH per-request limits are explicitly set, so a partially
+    # configured deployment still discovers the missing one.
+    assert Router._deployment_token_limits_configured(
+        {"max_input_tokens": 2048, "max_output_tokens": 1024}
+    )
+    assert not Router._deployment_token_limits_configured({"max_input_tokens": 2048})
+    assert not Router._deployment_token_limits_configured({"max_output_tokens": 1024})
+    assert not Router._deployment_token_limits_configured({})
+    assert not Router._deployment_token_limits_configured(None)
+
+
 def test_should_not_pollute_shared_key_with_zero_cost_pricing():
     """
     When deployment A has input_cost_per_token=0 and deployment B has no
