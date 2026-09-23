@@ -88,7 +88,9 @@ def test_official_client_session_lists_and_calls_through_gateway(
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
         path: Final = {"aggregate": "/mcp", "named": f"/{alias}/mcp", "legacy_sse": "/mcp/sse"}[path_kind]
         peer.drain()
-        listed, called = official_client_outcomes(gateway, key, path, f"{alias}-add", {"a": 20, "b": 22}, legacy_sse=legacy_sse)
+        listed, called = official_client_outcomes(
+            gateway, key, path, f"{alias}-add", {"a": 20, "b": 22}, legacy_sse=legacy_sse
+        )
         assert set(listed.tools) == {f"{alias}-add", f"{alias}-multiply", f"{alias}-fail"}, listed.tools
         assert called.ok and called.text == "42", called
         assert _peer_saw_call(peer_kind, peer.drain(), "add")
@@ -114,7 +116,13 @@ def test_prompts_resources_and_templates_are_proxied_from_rich_peer(gateway: Gat
         templated: Final = caller.rpc("resources/read", {"uri": "greeting://Bob"}).text
         assert "Hello, Bob" in templated, templated
         methods: Final = {item["body"].get("method") for item in peer.drain() if isinstance(item.get("body"), dict)}
-        assert {"prompts/list", "prompts/get", "resources/list", "resources/read", "resources/templates/list"} <= methods
+        assert {
+            "prompts/list",
+            "prompts/get",
+            "resources/list",
+            "resources/read",
+            "resources/templates/list",
+        } <= methods
 
 
 @pytest.mark.parametrize("peer_kind", ("http", "sse", "stdio"))

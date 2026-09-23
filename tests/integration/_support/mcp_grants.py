@@ -90,7 +90,10 @@ def grant(
         case "org":
             created: Final = gateway.post(
                 "/organization/new",
-                {"organization_alias": f"integration-{uuid.uuid4().hex[:10]}", "object_permission": _mcp_permission(granted)},
+                {
+                    "organization_alias": f"integration-{uuid.uuid4().hex[:10]}",
+                    "object_permission": _mcp_permission(granted),
+                },
             )
             org: Final = string_value(created["organization_id"])
             scenario.cleanups.callback(delete_organization, gateway, org)
@@ -106,9 +109,7 @@ def grant(
             )
             assert response.status_code == 200, response.text
             scenario.cleanups.callback(delete_end_user, gateway, end_user)
-            return Caller(
-                scenario.key(object_permission=_mcp_permission(ceiling)), {"x-litellm-end-user-id": end_user}
-            )
+            return Caller(scenario.key(object_permission=_mcp_permission(ceiling)), {"x-litellm-end-user-id": end_user})
         case "agent":
             agent: Final = gateway.post(
                 "/v1/agents",

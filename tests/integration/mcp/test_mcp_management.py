@@ -72,7 +72,9 @@ def test_secrets_never_appear_in_server_listing_or_detail(gateway: Gateway) -> N
         viewed: Final = gateway.client.get("/v1/mcp/server", headers={"x-litellm-api-key": viewer})
         assert header_secret not in viewed.text, viewed.text
         peer.drain()
-        assert call_tool(gateway, viewer, identity, tool_names(gateway, viewer, identity)["add"], ADD).status_code == 200
+        assert (
+            call_tool(gateway, viewer, identity, tool_names(gateway, viewer, identity)["add"], ADD).status_code == 200
+        )
         sent: Final = tool_calls(peer.drain())
         assert [call["headers"][b"authorization"] for call in sent] == [f"Bearer {secret}".encode()]
         assert [call["headers"][b"x-integration-secret"] for call in sent] == [header_secret.encode()]
@@ -226,7 +228,9 @@ def test_config_declared_server_behaves_like_database_server_but_is_read_only(ga
             assert response.status_code == 200 and response.json()["content"][0]["text"] == "9", response.text
             sent: Final = tool_calls(declared_peer.drain())
             assert [call["headers"][b"x-from"] for call in sent] == [b"config"]
-            edited: Final = candidate.request("PUT", "/v1/mcp/server", {"server_id": declared_id, "url": database_peer.url})
+            edited: Final = candidate.request(
+                "PUT", "/v1/mcp/server", {"server_id": declared_id, "url": database_peer.url}
+            )
             assert edited.status_code >= 400, edited.text
             deleted: Final = candidate.request("DELETE", f"/v1/mcp/server/{declared_id}")
             assert deleted.status_code >= 400, deleted.text

@@ -128,7 +128,9 @@ def test_server_scoped_caller_header_reaches_only_its_server(gateway: Gateway) -
         other_id: Final = register_mcp(scenario, other, other_alias)
         key: Final = scenario.key(object_permission={"mcp_servers": [identity, other_id]})
         token: Final = "user-" + uuid.uuid4().hex
-        caller: Final = McpCaller(gateway, key, "mcp", None, headers={f"x-mcp-{alias}-authorization": f"Bearer {token}"})
+        caller: Final = McpCaller(
+            gateway, key, "mcp", None, headers={f"x-mcp-{alias}-authorization": f"Bearer {token}"}
+        )
         peer.drain()
         other.drain()
         assert caller.call(f"{alias}-add", ADD).ok
@@ -166,9 +168,17 @@ def test_byok_server_uses_the_calling_users_stored_credential_and_fails_closed_w
         )
         assert stored.status_code in (200, 201), stored.text
         scenario.cleanups.callback(
-            gateway.client.delete, f"/v1/mcp/server/{identity}/user-credential", headers={"x-litellm-api-key": owner_key}
+            gateway.client.delete,
+            f"/v1/mcp/server/{identity}/user-credential",
+            headers={"x-litellm-api-key": owner_key},
         )
-        assert read_rows('SELECT credential_b64 FROM "LiteLLM_MCPUserCredentials" WHERE server_id = %s AND credential_b64 LIKE %s', (identity, f"%{secret}%")) == []
+        assert (
+            read_rows(
+                'SELECT credential_b64 FROM "LiteLLM_MCPUserCredentials" WHERE server_id = %s AND credential_b64 LIKE %s',
+                (identity, f"%{secret}%"),
+            )
+            == []
+        )
         name: Final = f"{alias}-add"
         peer.drain()
         granted: Final = call_tool(gateway, owner_key, identity, name, ADD)
