@@ -1,13 +1,15 @@
 import asyncio
 import json
 from typing import Final
+from unittest.mock import Mock
 
 import httpx
 import pytest
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
 
 import litellm
 from litellm.llms.openai.openai import OpenAIChatCompletion
+from litellm.types.utils import ImageResponse
 
 
 @pytest.mark.parametrize(
@@ -253,3 +255,98 @@ async def test_acompletion_streams_tool_call_arguments_over_injected_transport()
         assert tool_call.function.name == "get_weather"
         assert json.loads(tool_call.function.arguments) == {"city": "Paris"}
         assert rebuilt.choices[0].finish_reason == "tool_calls"
+
+
+_PROVIDER_HEADERS: Final = {"x-request-id": "req_openai", "x-ratelimit-remaining-requests": "41"}
+
+
+def _image_generation_transport() -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, json={"created": 1, "data": [{"b64_json": "abc"}]}, headers=_PROVIDER_HEADERS
+        )
+    )
+
+
+def _speech_transport() -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, content=b"audio-bytes", headers={**_PROVIDER_HEADERS, "content-type": "audio/mpeg"}
+        )
+    )
+
+
+def _assert_provider_headers_recorded(response) -> None:
+    assert response._hidden_params["headers"]["x-request-id"] == "req_openai"
+    assert response._hidden_params["additional_headers"]["llm_provider-x-request-id"] == "req_openai"
+    assert response._hidden_params["additional_headers"]["x-ratelimit-remaining-requests"] == "41"
+
+
+def _image_generation_kwargs() -> dict:
+    return {
+        "model": "gpt-image-2",
+        "prompt": "a cat",
+        "timeout": 10,
+        "optional_params": {},
+        "logging_obj": Mock(),
+        "api_key": "transport-only",
+        "model_response": ImageResponse(),
+    }
+
+
+def test_image_generation_records_provider_response_headers():
+    with httpx.Client(transport=_image_generation_transport()) as http_client:
+        response = OpenAIChatCompletion().image_generation(
+            client=OpenAI(api_key="transport-only", http_client=http_client), **_image_generation_kwargs()
+        )
+
+    _assert_provider_headers_recorded(response)
+
+
+@pytest.mark.asyncio
+async def test_aimage_generation_records_provider_response_headers():
+    async with httpx.AsyncClient(transport=_image_generation_transport()) as http_client:
+        response = await OpenAIChatCompletion().image_generation(
+            client=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+            aimg_generation=True,
+            **_image_generation_kwargs(),
+        )
+
+    _assert_provider_headers_recorded(response)
+
+
+def _audio_speech_kwargs() -> dict:
+    return {
+        "model": "gpt-4o-mini-tts",
+        "input": "hello",
+        "voice": "alloy",
+        "optional_params": {},
+        "api_key": "transport-only",
+        "api_base": None,
+        "organization": None,
+        "project": None,
+        "max_retries": 0,
+        "timeout": 10,
+        "logging_obj": Mock(),
+    }
+
+
+def test_audio_speech_records_provider_response_headers():
+    with httpx.Client(transport=_speech_transport()) as http_client:
+        response = OpenAIChatCompletion().audio_speech(
+            client=OpenAI(api_key="transport-only", http_client=http_client), **_audio_speech_kwargs()
+        )
+
+    _assert_provider_headers_recorded(response)
+
+
+@pytest.mark.asyncio
+async def test_async_audio_speech_records_provider_response_headers():
+    async with httpx.AsyncClient(transport=_speech_transport()) as http_client:
+        response = await OpenAIChatCompletion().audio_speech(
+            client=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+            aspeech=True,
+            **_audio_speech_kwargs(),
+        )
+
+    _assert_provider_headers_recorded(response)
