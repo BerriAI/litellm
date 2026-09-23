@@ -18,6 +18,7 @@ from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
 )
+from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -3030,12 +3031,14 @@ def handle_realtime_translation_cost_calculation(
         if isinstance(usage := result.get("usage"), dict)
     )
     input_seconds: Final = sum(
-        float(usage["input_seconds"]) for usage in usage_events if isinstance(usage.get("input_seconds"), (int, float))
+        seconds
+        for usage in usage_events
+        if (seconds := normalized_audio_duration_seconds(usage.get("input_seconds"))) is not None
     )
     output_seconds: Final = sum(
-        float(usage["output_seconds"])
+        seconds
         for usage in usage_events
-        if isinstance(usage.get("output_seconds"), (int, float))
+        if (seconds := normalized_audio_duration_seconds(usage.get("output_seconds"))) is not None
     )
     if input_seconds <= 0 and output_seconds <= 0:
         return 0.0

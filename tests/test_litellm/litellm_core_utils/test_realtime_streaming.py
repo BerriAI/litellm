@@ -3049,6 +3049,27 @@ def test_translation_retained_input_only_close_event_bills_captured_output(monke
     assert sum(usage.get("output_seconds", 0.0) for usage in usage_events) == 1.0
 
 
+@pytest.mark.parametrize("malformed_output", [-1.0, float("nan"), float("inf"), 10**1000])
+def test_translation_malformed_provider_duration_uses_captured_audio(malformed_output: float | int) -> None:
+    streaming = RealTimeStreaming(
+        websocket=MagicMock(),
+        backend_ws=MagicMock(),
+        logging_obj=MagicMock(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+    )
+    streaming._translation_output_audio_bytes = 48000
+
+    streaming._capture_translation_output_audio(
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 0.25, "output_seconds": malformed_output}}
+    )
+    streaming._finalize_translation_usage()
+
+    close_events: Final = tuple(event for event in streaming.messages if event.get("type") == "session.closed")
+    assert len(close_events) == 1
+    assert close_events[0]["usage"] == {"type": "duration", "input_seconds": 0.25, "output_seconds": 1.0}
+
+
 @pytest.mark.asyncio
 async def test_audio_delta_frame_parsed_at_most_once():
     client_ws = _beta_client_ws()
