@@ -7,9 +7,9 @@ use crate::errors::RustBridgeDeclined;
 
 #[pyfunction]
 pub(crate) fn embedding(
-    _request: Bound<'_, PyAny>,
-    _args: Bound<'_, PyTuple>,
-    _kwargs: Bound<'_, PyDict>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
 ) -> PyResult<Py<PyAny>> {
     Err(RustBridgeDeclined::new_err(
         "native embeddings route is not implemented",
@@ -18,9 +18,9 @@ pub(crate) fn embedding(
 
 #[pyfunction]
 pub(crate) fn aembedding(
-    _request: Bound<'_, PyAny>,
-    _args: Bound<'_, PyTuple>,
-    _kwargs: Bound<'_, PyDict>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
 ) -> PyResult<Py<PyAny>> {
     Err(RustBridgeDeclined::new_err(
         "native embeddings route is not implemented",
