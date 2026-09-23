@@ -7648,6 +7648,23 @@ def test_mid_conversation_system_list_content_with_cache_control():
     assert len(blocks) == 3
 
 
+@pytest.mark.parametrize(
+    "empty_content",
+    ["", [], None, [{"type": "image", "source": "x"}, {"type": "text", "text": ""}]],
+    ids=["empty-string", "empty-list", "none", "no-text-parts"],
+)
+def test_mid_conversation_system_entry_without_text_is_dropped(empty_content):
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": empty_content},
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages)
+    assert system_blocks == []
+    assert out_messages == [{"role": "user", "content": "hi"}, {"role": "user", "content": "done"}]
+
+
 def _thinking_reply(text: str) -> dict:
     return {
         "role": "assistant",

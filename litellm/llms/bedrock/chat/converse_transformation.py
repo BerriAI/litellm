@@ -7,7 +7,7 @@ import json
 import re
 import time
 import types
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
@@ -56,9 +56,11 @@ from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
+    ChatCompletionCachedContent,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
+    ChatCompletionTextObject,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -1368,20 +1370,22 @@ class AmazonConverseConfig(BaseConfig):
             and content[0].get("type") == "tool_result"
         )
 
-    def _system_run_before(self, messages: list, index: int) -> list:  # mutable-ok: input list boundary
+    def _system_run_before(self, messages: Sequence[AllMessageValues], index: int) -> Sequence[AllMessageValues]:
         start: Final = next(
             (j + 1 for j in range(index - 1, -1, -1) if not self._is_system_role_message(messages[j])),
             0,
         )
         return messages[start:index]
 
-    def _system_run_end(self, messages: list, index: int) -> int:  # mutable-ok: input list boundary
+    def _system_run_end(self, messages: Sequence[AllMessageValues], index: int) -> int:
         return next(
             (j for j in range(index, len(messages)) if not self._is_system_role_message(messages[j])),
             len(messages),
         )
 
-    def _reordered_around_tool_results(self, messages: list, index: int) -> tuple:  # mutable-ok: input list boundary
+    def _reordered_around_tool_results(
+        self, messages: Sequence[AllMessageValues], index: int
+    ) -> tuple[AllMessageValues, ...]:
         """Move a system run wedged between an assistant tool-call turn and its
         tool-result turn(s) to after the tool results.
 
@@ -1418,36 +1422,53 @@ class AmazonConverseConfig(BaseConfig):
             return ()
         return (message,)
 
-    def _system_role_message_as_user(self, message: Mapping) -> dict:  # mutable-ok: converted user dict
+    def _system_role_message_as_user(self, message: ChatCompletionSystemMessage) -> ChatCompletionUserMessage | None:
         """Convert a mid-conversation system entry to a user turn, in place.
 
         The Converse API only accepts user/assistant roles in ``messages``,
         so keeping the role is not an option. Hoisting it to the top-level
         ``system`` block would mutate the system prefix and collapse implicit
         prompt caching; converting in place keeps everything before the entry
-        byte-identical."""
-        content = message.get("content")
-        text_blocks: list[dict] = []  # mutable-ok: local accumulator
-        if isinstance(content, str) and content:
-            text_block: dict = {"type": "text", "text": content}  # mutable-ok: local block build
-            if message.get("cache_control") is not None:
-                text_block["cache_control"] = message["cache_control"]
-            text_blocks.append(text_block)
-        elif isinstance(content, list):
-            for m in content:
-                if isinstance(m, dict) and m.get("type") == "text" and m.get("text"):
-                    text_block = {"type": "text", "text": m["text"]}  # mutable-ok: per-entry text block
-                    if m.get("cache_control") is not None:
-                        text_block["cache_control"] = m["cache_control"]
-                    text_blocks.append(text_block)
-        converted: dict = {  # mutable-ok: converted message build
-            "role": "user",
-            "content": [  # mutable-ok: fresh Bedrock message body
-                {"type": "text", "text": CONVERTED_SYSTEM_NOTE}
-            ]
-            + text_blocks,
-        }
-        return cast(AllMessageValues, converted)  # cast-ok: narrow built dict to message type
+        byte-identical. An entry that carries no text becomes ``None``."""
+        text_blocks: Final = self._converted_text_blocks(message)
+        if not text_blocks:
+            return None
+        note: Final = ChatCompletionTextObject(type="text", text=CONVERTED_SYSTEM_NOTE)
+        body: Final = [
+            note,
+            *text_blocks,
+        ]  # mutable-ok: _bedrock_converse_messages_pt narrows content with isinstance(list)
+        return ChatCompletionUserMessage(role="user", content=body)
+
+    def _converted_or_kept(self, message: AllMessageValues) -> AllMessageValues | None:
+        if not self._is_system_role_message(message):
+            return message
+        return self._system_role_message_as_user(
+            cast(ChatCompletionSystemMessage, message)  # cast-ok: the role is checked on the line above
+        )
+
+    def _converted_text_blocks(self, message: ChatCompletionSystemMessage) -> tuple[ChatCompletionTextObject, ...]:
+        content: Final = message["content"]
+        if isinstance(content, str):
+            return (self._converted_text_block(content, message.get("cache_control")),) if content else ()
+        parts: Final[Sequence[object]] = content or ()
+        return tuple(
+            self._converted_text_block(part["text"], part.get("cache_control"))
+            for part in map(self._text_part, parts)
+            if part is not None
+        )
+
+    @staticmethod
+    def _text_part(part: object) -> ChatCompletionTextObject | None:
+        if not isinstance(part, dict) or part.get("type") != "text" or not part.get("text"):
+            return None
+        return cast(ChatCompletionTextObject, part)  # cast-ok: the shape is checked on the line above
+
+    @staticmethod
+    def _converted_text_block(text: str, cache_control: ChatCompletionCachedContent | None) -> ChatCompletionTextObject:
+        if cache_control is None:
+            return ChatCompletionTextObject(type="text", text=text)
+        return ChatCompletionTextObject(type="text", text=text, cache_control=cache_control)
 
     def _transform_system_message(
         self, messages: list[AllMessageValues], model: str | None = None
@@ -1479,17 +1500,9 @@ class AmazonConverseConfig(BaseConfig):
             for index in range(len(remaining))
             for message in self._reordered_around_tool_results(remaining, index)
         )
-        new_messages: Final[list[AllMessageValues]] = []  # mutable-ok: local accumulator
-        for message in reordered:
-            if self._is_system_role_message(message):
-                converted = self._system_role_message_as_user(
-                    cast(Mapping, message)  # cast-ok: narrow message to mapping
-                )
-                if len(converted["content"]) > 1:
-                    new_messages.append(converted)
-            else:
-                new_messages.append(cast(AllMessageValues, message))  # cast-ok: narrow passed-through message
-        return new_messages, system_content_blocks
+        converted: Final = tuple(self._converted_or_kept(message) for message in reordered)
+        kept: Final = [message for message in converted if message is not None]  # mutable-ok: converse pt takes a list
+        return kept, system_content_blocks
 
     def _transform_inference_params(self, inference_params: dict) -> InferenceConfig:
         if "top_k" in inference_params:
