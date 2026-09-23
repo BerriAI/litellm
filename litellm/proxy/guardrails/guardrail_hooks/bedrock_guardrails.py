@@ -132,6 +132,10 @@ _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS: Final[Mapping[str, str]] = MappingProxyTyp
         "input_audio": "input_audio",
     }
 )
+_TOOL_OUTPUT_ATTACHMENT_TYPES: Final[frozenset[str]] = frozenset(
+    ("input_file", "file", "document", "input_image", "image", "image_url", "video_url", "input_audio")
+)
+_TOOL_OUTPUT_METADATA_KEYS: Final[frozenset[str]] = frozenset(("type", "name", "filename"))
 _NO_TRACING_DETAIL: Final[GuardrailTracingDetail] = {}
 # Resource-less, detect-only InvokeGuardrailChecks API (no guardrail resource required).
 _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH: Final = "/guardrail-checks/invoke"
@@ -729,10 +733,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if not isinstance(content, str):
             return
         for part in _serialized_tool_output_parts(content):
-            if (
-                (payload_key := _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS.get(str(part.get("type")))) is not None
-                and part.get(payload_key)
-            ) or part.get("file_id"):
+            if part.get("type") in _TOOL_OUTPUT_ATTACHMENT_TYPES and any(
+                part.get(key) for key in part.keys() - _TOOL_OUTPUT_METADATA_KEYS
+            ):
                 self._handle_unscannable_attachment(reason="a tool output attachment cannot be scanned")
 
     async def _build_image_content_item(self, image_url: str) -> BedrockContentItem:

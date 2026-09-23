@@ -7405,7 +7405,7 @@ async def test_during_call_hook_tool_output_payloadless_shell_falls_through():
     mock_response.json.return_value = {"action": "NONE", "assessments": []}
     data = {
         "messages": [
-            {"role": "tool", "content": json.dumps([{"type": "input_file"}, {"type": "output_text", "text": "done"}])},
+            {"role": "tool", "content": json.dumps([{"type": "input_file"}, {"type": "output_text", "file_id": "f-1", "text": "done"}])},
             {"role": "user", "content": "summarize"},
         ]
     }
