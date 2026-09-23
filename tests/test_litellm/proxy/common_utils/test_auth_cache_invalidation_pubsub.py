@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from redis.asyncio import Redis
 
+import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
@@ -31,11 +32,16 @@ class _RecordingRedisClient(Redis):
 class _WedgedPublishRedisClient(Redis):
     def __init__(self) -> None:
         self.attempted: list[str] = []
+        self.in_flight = 0
+        self.max_in_flight = 0
         self.release = asyncio.Event()
 
     async def publish(self, channel: str, message: str) -> int:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
         self.attempted.append(message)
         await self.release.wait()
+        self.in_flight -= 1
         return 1
 
 
@@ -256,3 +262,28 @@ async def test_evict_and_broadcast_evicts_locally_and_returns_while_redis_publis
     assert client.attempted == [json.dumps({"cache_key": "user-wedged"})], "publish was not handed to redis"
     client.release.set()
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_publish_holds_at_most_sixteen_redis_connections_while_redis_is_wedged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    client = _WedgedPublishRedisClient()
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_FakeRedisCache(client=client),
+    ):
+        for i in range(64):
+            await publish_auth_cache_invalidation(cache_key=f"user-{i}")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert client.max_in_flight == 16, f"publish tasks held {client.max_in_flight} redis connections at once"
+        assert len(client.attempted) == 16, "waiters called publish before a semaphore slot freed"
+        client.release.set()
+        await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
+
+    assert len(client.attempted) == 64

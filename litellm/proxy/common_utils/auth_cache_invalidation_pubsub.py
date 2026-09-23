@@ -19,7 +19,9 @@ if TYPE_CHECKING:
 AUTH_CACHE_INVALIDATION_CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 _POLL_TIMEOUT_SECONDS: Final = 1.0
 _MAX_PENDING_PUBLISHES: Final = 1024
+_MAX_IN_FLIGHT_PUBLISHES: Final = 16
 _pending_publishes: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep background publishes alive
+_in_flight_publishes: Final = asyncio.Semaphore(_MAX_IN_FLIGHT_PUBLISHES)
 _BACKOFF_INITIAL_SECONDS: Final = 5.0
 _BACKOFF_MAX_SECONDS: Final = 60.0
 
@@ -78,7 +80,8 @@ async def _publish_to_redis(redis_cache: "RedisCache", cache_key: str, message: 
                 cache_key,
             )
             return
-        await client.publish(auth_cache_invalidation_channel(redis_cache), message)
+        async with _in_flight_publishes:
+            await client.publish(auth_cache_invalidation_channel(redis_cache), message)
     except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
         verbose_proxy_logger.warning("auth cache invalidation publish for %s failed: %s", cache_key, e)
 
@@ -101,7 +104,9 @@ async def publish_auth_cache_invalidation(
     publish has been handed to the event loop, so a Redis that accepts
     connections but never replies costs the caller nothing. The DB write has
     already committed and the local eviction already happened, so the caller
-    has nothing to do with the publish result.
+    has nothing to do with the publish result. At most 16 publishes hold a
+    Redis connection at once; the rest wait in the task set, so a wedge cannot
+    drain the shared connection pool.
     """
     redis_cache: Final = coordination_redis_cache()
     if redis_cache is None:
