@@ -250,7 +250,6 @@ def _benchmarks_group(gateway: Gateway, alias: str) -> dict | None:
     return None
 
 
-@pytest.mark.covers("other.routing.auto_router.semantic_match_turn_records_tier_decision_and_session_row")
 def test_a_matched_semantic_route_records_a_tier_decision_and_a_session_turn(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         alias, default_model, route_model = _semantic_setup(scenario, embeddings=_match_embeddings)
@@ -275,7 +274,6 @@ def test_a_matched_semantic_route_records_a_tier_decision_and_a_session_turn(gat
         assert session["tier_turns"] == {route_model: 1}, session
 
 
-@pytest.mark.covers("other.routing.auto_router.semantic_stream_fallback_turn_records_default_fallback")
 def test_a_streamed_semantic_fallback_records_a_default_fallback_decision(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         alias, default_model, route_model = _semantic_setup(scenario, embeddings=_nomatch_embeddings)
@@ -307,7 +305,6 @@ def test_a_streamed_semantic_fallback_records_a_default_fallback_decision(gatewa
         assert session["tier_turns"] == {}, session
 
 
-@pytest.mark.covers("other.routing.auto_router.semantic_anthropic_messages_turn_records_match_decision")
 def test_an_anthropic_messages_turn_records_a_semantic_decision(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         _passthrough_scenario(scenario)
@@ -337,7 +334,6 @@ def test_an_anthropic_messages_turn_records_a_semantic_decision(gateway: Gateway
         assert session["router_name"] == alias and session["router_type"] == "semantic", session
 
 
-@pytest.mark.covers("other.routing.auto_router.semantic_responses_turn_records_fallback_decision")
 def test_a_responses_turn_records_a_semantic_fallback_decision(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         _passthrough_scenario(scenario)
@@ -372,11 +368,6 @@ def test_a_responses_turn_records_a_semantic_fallback_decision(gateway: Gateway)
         assert session["router_name"] == alias and session["router_type"] == "semantic", session
 
 
-@pytest.mark.covers(
-    "other.routing.auto_router.semantic_stream_turns_feed_benchmarks_and_session_views",
-    "other.routing.auto_router.semantic_benchmarks_lists_the_router_idle_then_with_traffic",
-    "other.routing.auto_router.semantic_session_endpoint_reports_the_recorded_turns",
-)
 def test_streamed_semantic_turns_feed_the_benchmarks_and_session_views(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         default_model: Final = scenario.model(model="openai/gpt-4o-mini")
@@ -452,7 +443,6 @@ def test_streamed_semantic_turns_feed_the_benchmarks_and_session_views(gateway: 
         assert detail["router_type"] == "semantic" and detail["turns"] == 2, detail
 
 
-@pytest.mark.covers("other.routing.auto_router.semantic_broken_embedding_call_falls_back_and_is_counted")
 def test_a_broken_embedding_call_falls_back_and_is_counted(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         default_model: Final = scenario.model(model="openai/gpt-4o-mini")
@@ -491,7 +481,6 @@ def test_a_broken_embedding_call_falls_back_and_is_counted(gateway: Gateway) -> 
         assert session["router_name"] == alias and session["router_type"] == "semantic", session
 
 
-@pytest.mark.covers("other.routing.auto_router.semantic_session_id_edge_values_never_break_the_turn")
 def test_session_id_edge_values_never_break_a_semantic_turn(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         alias, default_model, route_model = _semantic_setup(scenario, embeddings=_match_embeddings)
@@ -523,7 +512,6 @@ def test_session_id_edge_values_never_break_a_semantic_turn(gateway: Gateway) ->
         assert read_rows('SELECT session_id FROM "LiteLLM_AutoRouterSession" WHERE session_id=%s', ("",)) == []
 
 
-@pytest.mark.covers("other.routing.auto_router.semantic_unauthenticated_turn_records_nothing")
 def test_an_unauthenticated_semantic_turn_records_nothing(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         alias, default_model, route_model = _semantic_setup(scenario, embeddings=_match_embeddings)
@@ -536,7 +524,6 @@ def test_an_unauthenticated_semantic_turn_records_nothing(gateway: Gateway) -> N
         assert read_rows('SELECT session_id FROM "LiteLLM_AutoRouterSession" WHERE session_id=%s', (session_id,)) == []
 
 
-@pytest.mark.covers("other.routing.auto_router.semantic_failed_turn_is_not_counted_and_the_next_success_is")
 def test_a_failed_semantic_turn_is_not_counted_but_the_next_success_is(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         default_model: Final = scenario.model(model="openai/gpt-4o-mini")
@@ -578,7 +565,6 @@ def test_a_failed_semantic_turn_is_not_counted_but_the_next_success_is(gateway: 
         )
 
 
-@pytest.mark.covers("other.routing.auto_router.semantic_rollup_counts_only_the_auto_routed_turn_in_a_shared_session")
 def test_a_shared_session_counts_only_the_auto_routed_turn(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         alias, default_model, route_model = _semantic_setup(scenario, embeddings=_match_embeddings)
@@ -606,7 +592,6 @@ def test_a_shared_session_counts_only_the_auto_routed_turn(gateway: Gateway) -> 
         assert session["router_name"] == alias and session["router_type"] == "semantic", session
 
 
-@pytest.mark.covers("other.routing.auto_router.complexity_router_decisions_are_unchanged_by_the_semantic_fix")
 def test_complexity_router_decisions_are_unchanged_by_the_semantic_fix(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         target: Final = scenario.model(model="openai/gpt-4o-mini")
@@ -639,7 +624,6 @@ def test_complexity_router_decisions_are_unchanged_by_the_semantic_fix(gateway: 
         assert session["router_name"] == alias and session["router_type"] == "complexity", session
 
 
-@pytest.mark.covers("other.routing.auto_router.semantic_mixed_endpoint_burst_records_every_turn_exactly_once")
 def test_a_mixed_endpoint_burst_records_every_turn_once(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         _passthrough_scenario(scenario)

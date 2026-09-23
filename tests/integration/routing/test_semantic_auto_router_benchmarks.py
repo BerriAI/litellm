@@ -2,12 +2,10 @@ import json
 import uuid
 from typing import Final
 
-import pytest
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 
 
-@pytest.mark.covers("other.routing.auto_router.semantic_traffic_lands_in_session_rollup_and_benchmarks")
 def test_semantic_auto_router_traffic_is_counted_by_the_benchmarks_endpoint(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         default_model: Final = scenario.model(
