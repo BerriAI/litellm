@@ -144,7 +144,7 @@ TEAM_MEMBER_MAX_BUDGET_ALERT_EMAIL_TEMPLATE: Final = """
                     <b>Alert Threshold:</b> {alert_threshold} ({percentage}%) <br />
 
                     <p style="color: #dc2626; font-weight: 500;">
-                    ⚠️ Warning: Once this member reaches their team member budget of {max_budget}, their requests in this team will be rejected.
+                    Warning: Once this member reaches their team member budget of {max_budget}, their requests in this team will be rejected.
                     </p>
 
                     You can view usage and manage team member budgets in the <a href="{base_url}">LiteLLM Dashboard</a>. <br /> <br />
