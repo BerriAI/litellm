@@ -52,6 +52,19 @@ fn parity_fixture() -> ParityFixture {
     serde_json::from_str(include_str!("fixtures/parity.json")).unwrap()
 }
 
+#[fixture]
+fn client_identity_directory() -> tempfile::TempDir {
+    let identity = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("client.crt"), identity.cert.pem()).unwrap();
+    std::fs::write(
+        directory.path().join("client.key"),
+        identity.signing_key.serialize_pem(),
+    )
+    .unwrap();
+    directory
+}
+
 fn manager(server: &MockServer, ttl: Duration) -> CyberArkSecretManager {
     CyberArkSecretManager::with_client(
         reqwest::Client::new(),
@@ -213,6 +226,39 @@ async fn rejected_cached_token_is_reauthenticated_once() {
         "second-value"
     );
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_rejected_refreshed_token_surfaces_the_error_without_another_retry() {
+    let server = MockServer::start().await;
+    mount_auth(&server, 2).await;
+    Mock::given(path("/secrets/acct/variable/first"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("first-value"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(path("/secrets/acct/variable/second"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let manager = manager(&server, Duration::from_secs(60));
+    assert_eq!(
+        manager
+            .async_read_secret("first")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "first-value"
+    );
+
+    let result = tokio::time::timeout(Duration::from_secs(5), manager.async_read_secret("second"))
+        .await
+        .expect("authentication retries must terminate");
+
+    assert!(matches!(result, Err(Error::Status(401))));
 }
 
 #[rstest]
@@ -602,6 +648,107 @@ fn certificate_only_credentials_are_validated_as_a_client_identity() {
     );
 
     assert!(matches!(result, Err(Error::ClientCertificate)));
+}
+
+#[rstest]
+#[case::certificate_only("")]
+#[case::certificate_and_api_key("k3y")]
+#[tokio::test]
+async fn configured_client_identity_preserves_auth_request_and_read_result(
+    client_identity_directory: tempfile::TempDir,
+    #[case] api_key: &'static str,
+) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/authn/default/admin/authenticate"))
+        .and(body_string(api_key))
+        .respond_with(ResponseTemplate::new(200).set_body_string(TOKEN_JSON))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/secrets/default/variable/key"))
+        .and(header(
+            "authorization",
+            format!("Token token=\"{}\"", STANDARD.encode(TOKEN_JSON)),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(" value\n"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let endpoint = server.uri();
+    let certificate = client_identity_directory.path().join("client.crt");
+    let key = client_identity_directory.path().join("client.key");
+    let manager = CyberArkSecretManager::new(
+        Arc::new(move |name: &str| match name {
+            "CYBERARK_API_BASE" => Some(endpoint.clone()),
+            "CYBERARK_API_KEY" => Some(api_key.into()),
+            "CYBERARK_CLIENT_CERT" => Some(certificate.to_str().unwrap().into()),
+            "CYBERARK_CLIENT_KEY" => Some(key.to_str().unwrap().into()),
+            _ => None,
+        }),
+        true,
+    )
+    .unwrap();
+
+    assert!(server.received_requests().await.unwrap().is_empty());
+    assert_eq!(
+        manager
+            .async_read_secret("key")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        " value\n"
+    );
+}
+
+#[rstest]
+#[case::certificate_only("", "client.crt")]
+#[case::key_only("", "client.key")]
+#[case::certificate_with_api_key("k3y", "client.crt")]
+#[case::key_with_api_key("k3y", "client.key")]
+fn invalid_client_identity_is_not_ignored(
+    client_identity_directory: tempfile::TempDir,
+    #[case] api_key: &'static str,
+    #[case] invalid_file: &str,
+) {
+    std::fs::write(
+        client_identity_directory.path().join(invalid_file),
+        "not PEM",
+    )
+    .unwrap();
+    let certificate = client_identity_directory.path().join("client.crt");
+    let key = client_identity_directory.path().join("client.key");
+
+    let result = CyberArkSecretManager::new(
+        Arc::new(move |name: &str| match name {
+            "CYBERARK_API_KEY" => Some(api_key.into()),
+            "CYBERARK_CLIENT_CERT" => Some(certificate.to_str().unwrap().into()),
+            "CYBERARK_CLIENT_KEY" => Some(key.to_str().unwrap().into()),
+            _ => None,
+        }),
+        true,
+    );
+
+    assert!(matches!(result, Err(Error::ClientCertificate)));
+}
+
+#[rstest]
+#[case::certificate_only("")]
+#[case::certificate_and_api_key("k3y")]
+fn client_identity_does_not_bypass_the_enterprise_requirement(#[case] api_key: &'static str) {
+    let result = CyberArkSecretManager::new(
+        Arc::new(move |name: &str| match name {
+            "CYBERARK_API_KEY" => Some(api_key.into()),
+            "CYBERARK_CLIENT_CERT" => Some("/missing/cert".into()),
+            "CYBERARK_CLIENT_KEY" => Some("/missing/key".into()),
+            _ => None,
+        }),
+        false,
+    );
+
+    assert!(matches!(result, Err(Error::EnterpriseRequired)));
 }
 
 #[rstest]

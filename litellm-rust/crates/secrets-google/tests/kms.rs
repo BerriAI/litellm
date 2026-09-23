@@ -42,15 +42,18 @@ async fn google_kms_decrypts_using_the_configured_resource() {
 #[case::unset(None)]
 #[case::disabled(Some(false))]
 #[tokio::test]
-async fn disabled_google_kms_loader_does_not_require_environment_configuration(
+async fn disabled_google_kms_loader_does_not_read_environment_configuration(
     #[case] enabled: Option<bool>,
 ) {
     use std::sync::Arc;
     assert!(
-        litellm_secrets_google::load_google_kms(enabled, Arc::new(|_: &str| None))
-            .await
-            .unwrap()
-            .is_none()
+        litellm_secrets_google::load_google_kms(
+            enabled,
+            Arc::new(|name: &str| panic!("disabled Google KMS read {name}")),
+        )
+        .await
+        .unwrap()
+        .is_none()
     );
 }
 
