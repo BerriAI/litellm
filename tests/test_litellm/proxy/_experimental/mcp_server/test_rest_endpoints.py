@@ -2705,7 +2705,7 @@ class TestCallToolRestAPI:
 
         pre_call_finished_at = {}
 
-        async def slow_pre_call_hook(user_api_key_dict, data, call_type):
+        async def slow_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             await asyncio.sleep(0.05)
             pre_call_finished_at["value"] = datetime.now()
             return data
@@ -2960,10 +2960,10 @@ class TestCallToolRestAPI:
                 message="Content blocked", model="mcp-tool-call", request_data={}, guardrail_name="block-all"
             )
 
-        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return data
 
-        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             raise guardrail_error
 
         async def fake_execute_mcp_tool(**kwargs):
@@ -3044,7 +3044,7 @@ class TestCallToolRestAPI:
         async def fake_add_litellm_data_to_request(**kwargs):
             return kwargs.get("data", {})
 
-        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             raise guardrail_error
 
         failure_logging = AsyncMock(side_effect=RuntimeError("spend log db down"))
@@ -3153,7 +3153,7 @@ class TestCallToolRestAPI:
         async def fake_add_litellm_data_to_request(**kwargs):
             return kwargs.get("data", {})
 
-        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             raise guardrail_error
 
         failure_logging = AsyncMock()
