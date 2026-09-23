@@ -23,6 +23,7 @@ pub mod image_response_cost;
 pub mod interactions_usage;
 pub mod non_token;
 pub mod off_peak;
+pub mod openai_image_cost;
 pub mod per_second;
 pub mod perplexity_cost;
 pub mod prompt_caching_savings;

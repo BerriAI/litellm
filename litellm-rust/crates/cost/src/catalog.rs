@@ -33,6 +33,7 @@ use crate::image_response_cost::{
     vertex_image_generation_cost,
 };
 use crate::non_token::{Error as NonTokenError, ImageRates, ImageUsage, calculate_image};
+use crate::openai_image_cost::cost_calculator as openai_image_cost_calculator;
 use crate::per_second::per_second_pricing_cost;
 use crate::perplexity_cost::cost_per_token as perplexity_cost_per_token;
 use crate::prompt_caching_savings::{
@@ -155,6 +156,7 @@ pub enum CatalogSpeechError {
 pub enum CatalogImageError {
     Catalog(CatalogError),
     Pricing(NonTokenError),
+    Usage(UsageError),
 }
 
 impl From<CatalogError> for CatalogImageError {
@@ -166,6 +168,12 @@ impl From<CatalogError> for CatalogImageError {
 impl From<NonTokenError> for CatalogImageError {
     fn from(value: NonTokenError) -> Self {
         Self::Pricing(value)
+    }
+}
+
+impl From<UsageError> for CatalogImageError {
+    fn from(value: UsageError) -> Self {
+        Self::Usage(value)
     }
 }
 
@@ -827,6 +835,27 @@ impl ModelInfoCatalog {
         let model_info = resolve_image_model_info(shared, supplied_model_info)
             .ok_or(CatalogError::ModelNotFound)?;
         Ok(flat_image_cost(image_response, &model_info))
+    }
+
+    pub fn openai_image_generation_cost(
+        &self,
+        model: &str,
+        provider: &str,
+        image_response: &Value,
+        supplied_model_info: Option<&Value>,
+        at: Timestamp,
+    ) -> Result<f64, CatalogImageError> {
+        let shared = self
+            .select_model_key(model, Some(provider), None)
+            .and_then(|key| self.entries.get(key));
+        let model_info = resolve_image_model_info(shared, supplied_model_info)
+            .ok_or(CatalogError::ModelNotFound)?;
+        Ok(openai_image_cost_calculator(
+            image_response,
+            &model_info,
+            provider,
+            at,
+        )?)
     }
 
     pub fn default_image_cost_calculator(

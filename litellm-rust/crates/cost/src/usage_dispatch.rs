@@ -14,7 +14,7 @@ use crate::transcription_usage::{
     is_transcription_usage_object, transform_transcription_usage_object,
 };
 
-fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
+pub fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
     let object = raw.as_object().ok_or(UsageError::InvalidShape)?;
     let count = |name: &str| {
         object

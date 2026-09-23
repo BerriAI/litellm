@@ -149,8 +149,16 @@ pub fn route_image_generation_cost_calculator(
                 pricing.as_ref(),
             )?),
         Some("bedrock" | "fal_ai") => Err(ImageCostRouteError::UnsupportedProvider),
-        Some("openai" | "azure") if request.model.to_ascii_lowercase().contains("gpt-image") => {
-            Err(ImageCostRouteError::UnsupportedProvider)
+        Some(provider @ ("openai" | "azure"))
+            if request.model.to_ascii_lowercase().contains("gpt-image") =>
+        {
+            Ok(catalog.openai_image_generation_cost(
+                request.model,
+                provider,
+                request.image_response,
+                pricing.as_ref(),
+                request.at,
+            )?)
         }
         _ => Ok(
             catalog.default_image_cost_calculator(DefaultImageCostRequest {

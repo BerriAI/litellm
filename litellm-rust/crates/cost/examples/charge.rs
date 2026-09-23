@@ -556,6 +556,10 @@ fn main() {
             json!({"input_cost_per_image": 0.06}),
         ),
         (
+            "openai/gpt-image-sample".to_owned(),
+            json!({"input_cost_per_token": 0.001, "output_cost_per_image_token": 0.003, "output_cost_per_image": 0.5}),
+        ),
+        (
             "low/1024-x-1024/default-sample".to_owned(),
             json!({"input_cost_per_image": 0.04}),
         ),
@@ -1055,4 +1059,21 @@ fn main() {
     )
     .unwrap();
     println!("default_image_generation={default_image:.3}");
+    let gpt_image = route_image_generation_cost_calculator(
+        &model_info_catalog,
+        ImageCostRouteRequest {
+            model: "gpt-image-sample",
+            provider: Some("openai"),
+            image_response: &json!({"data": [{}], "usage": {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "completion_tokens_details": {"image_tokens": 5, "text_tokens": 0}}}),
+            call_type: Some("image_generation"),
+            quality: None,
+            size: None,
+            n: None,
+            optional_params: &json!({}),
+            supplied_model_info: None,
+            at,
+        },
+    )
+    .unwrap();
+    println!("gpt_image_generation={gpt_image:.3}");
 }
