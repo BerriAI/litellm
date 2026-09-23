@@ -169,6 +169,78 @@
       "other.provider_wire.anthropic.tool_history_system_cache_and_internal_fields",
       "quota_management.spend_tracking.cache_tokens.disjoint_classes_use_explicit_rates"
     ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[False-False-openai]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[False-False-azure]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[False-False-anthropic]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[False-False-gemini]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[False-False-converse]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[False-False-invoke]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[False-True-openai]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[False-True-azure]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[False-True-anthropic]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[False-True-gemini]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[False-True-converse]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[False-True-invoke]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[True-False-openai]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[True-False-azure]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[True-False-anthropic]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[True-False-gemini]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[True-False-converse]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[True-False-invoke]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[True-True-openai]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[True-True-azure]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[True-True-anthropic]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[True-True-gemini]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[True-True-converse]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
+    "tests/integration/providers/test_stream_chunk_size_wire.py::test_stream_chunk_size_never_reaches_provider_body[True-True-invoke]": [
+      "other.provider_wire.stream_chunk_size_never_serialized"
+    ],
     "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_video_create_status_and_content_follow_queue_wire_contract": [
       "other.provider_wire.fal_ai.video_queue_create_status_and_content_download"
     ],
