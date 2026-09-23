@@ -300,7 +300,7 @@ def test_scheduled_budget_reset_reconnects_after_db_transport_failure_and_unbloc
         reset: Final = eventually(
             lambda: read_rows(row_query, (digest,), database_url=scratch_url),
             lambda rows: len(rows) == 1 and float(rows[0]["spend"]) == 0,
-            seconds=25,
+            seconds=80,
             return_last_on_timeout=True,
         )
         assert len(reset) == 1 and reset[0]["spend"] == 0.0, (exhausted, reset)

@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
-import psutil
 from pydantic import TypeAdapter
 
 PORT: Final = TypeAdapter(int)
@@ -16,14 +15,6 @@ def _free_port() -> int:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         return PORT.validate_python(reserve.getsockname()[1])
-
-
-def _client_pid(local_port: int, relay_port: int) -> int | None:
-    for connection in psutil.net_connections("tcp"):
-        if connection.laddr and connection.raddr and connection.laddr.port == local_port:
-            if connection.raddr.port == relay_port:
-                return connection.pid
-    return None
 
 
 class DatabaseRelay:
@@ -36,7 +27,6 @@ class DatabaseRelay:
         self._armed: Final = threading.Event()
         self.tripped: Final = threading.Event()
         self.refused = 0
-        self._banned: int | None = None
         self._writers: tuple[asyncio.StreamWriter, ...] = ()
         self._ready: Final = threading.Event()
         self._thread: Final = threading.Thread(target=self._run, daemon=True)
@@ -64,9 +54,7 @@ class DatabaseRelay:
         self._writers = ()
 
     async def _serve(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
-        peer_port: Final = PORT.validate_python(client_writer.get_extra_info("peername")[1])
-        pid: Final = _client_pid(peer_port, self.port)
-        if self.tripped.is_set() and (pid == self._banned or (self._banned is None and self.refused < 5)):
+        if self.tripped.is_set() and self.refused < 5:
             self.refused += 1
             client_writer.close()
             return
@@ -77,7 +65,6 @@ class DatabaseRelay:
             try:
                 while chunk := await reader.read(65536):
                     if inspect and self._armed.is_set() and not self.tripped.is_set() and self._trigger in chunk:
-                        self._banned = pid
                         self.tripped.set()
                         self._drop_all()
                         return
