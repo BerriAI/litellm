@@ -3766,3 +3766,262 @@ async def test_anthropic_cache_control_hook_marks_an_empty_tool_result(monkeypat
             }
         ],
     }
+
+
+def _anthropic_response_mock() -> MagicMock:
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [{"type": "text", "text": "Sure."}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    mock_response.status_code = 200
+    return mock_response
+
+
+async def _marked_messages(messages, points, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake_anthropic_key")
+    monkeypatch.setattr(litellm, "callbacks", [AnthropicCacheControlHook()])
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=_anthropic_response_mock()) as mock_post:
+        await litellm.acompletion(
+            model="anthropic/claude-sonnet-4-5",
+            messages=messages,
+            cache_control_injection_points=points,
+            client=client,
+        )
+        return mock_post.call_args.kwargs["json"]["messages"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_counts_the_index_within_the_role(monkeypatch: pytest.MonkeyPatch):
+    """
+    {"role": "assistant", "index": -1} means the last assistant turn. Counting the index
+    over every message instead marks whatever message happens to be last, so the turn the
+    point named is not cached.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "What is 2 + 2?"},
+            {"role": "assistant", "content": "The answer is 4."},
+            {"role": "user", "content": "Why?"},
+        ],
+        [{"location": "message", "role": "assistant", "index": -1}],
+        monkeypatch,
+    )
+
+    assert marked == [
+        {"role": "user", "content": [{"type": "text", "text": "What is 2 + 2?"}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "The answer is 4.", "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "Why?"}]},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_walks_back_off_a_tool_call_turn(monkeypatch: pytest.MonkeyPatch):
+    """
+    An assistant turn that said everything through tool_calls has no content to mark, and
+    it is the newest assistant turn at every step of an agent loop. Stopping there spends
+    the point and writes nothing, so the walk goes back to the turn before it.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "Open the file."},
+            {"role": "assistant", "content": "Opening it now."},
+            {"role": "user", "content": "Thanks."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "open_file", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "file contents"},
+        ],
+        [{"location": "message", "role": "assistant", "index": -1}],
+        monkeypatch,
+    )
+
+    assert marked[1] == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Opening it now.", "cache_control": {"type": "ephemeral"}}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_walk_back_stays_in_the_role(monkeypatch: pytest.MonkeyPatch):
+    """
+    The walk stays inside the role the point named, so an empty last user turn marks an
+    earlier user turn rather than the assistant turn between them.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "first question"},
+            {"role": "assistant", "content": "first answer"},
+            {"role": "user", "content": ""},
+        ],
+        [{"location": "message", "role": "user", "index": -1}],
+        monkeypatch,
+    )
+
+    assert marked[0] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "first question", "cache_control": {"type": "ephemeral"}}],
+    }
+    assert marked[1] == {"role": "assistant", "content": [{"type": "text", "text": "first answer"}]}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_bounds_the_index_by_the_role(monkeypatch: pytest.MonkeyPatch):
+    """
+    An index is in bounds when the role has that many turns, not when the message list
+    does. -3 against two assistant turns names no turn, so the point marks nothing.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "u2"},
+            {"role": "assistant", "content": "a2"},
+        ],
+        [{"location": "message", "role": "assistant", "index": -3}],
+        monkeypatch,
+    )
+
+    assert marked == [
+        {"role": "user", "content": [{"type": "text", "text": "u1"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "a1"}]},
+        {"role": "user", "content": [{"type": "text", "text": "u2"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "a2"}]},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_bounds_a_positive_index_by_the_role(monkeypatch: pytest.MonkeyPatch):
+    """
+    Index 3 names a fourth turn of the role. Two assistant turns among five messages is
+    out of bounds, and bounding it by the message list instead reads past the end of the
+    role's turns.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "u2"},
+            {"role": "assistant", "content": "a2"},
+            {"role": "user", "content": "u3"},
+        ],
+        [{"location": "message", "role": "assistant", "index": 3}],
+        monkeypatch,
+    )
+
+    assert marked == [
+        {"role": "user", "content": [{"type": "text", "text": "u1"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "a1"}]},
+        {"role": "user", "content": [{"type": "text", "text": "u2"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "a2"}]},
+        {"role": "user", "content": [{"type": "text", "text": "u3"}]},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_role_alone_skips_a_turn_with_nowhere_to_write(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    A point naming a role and no index marks every turn of that role that accepts a
+    marker. An empty turn would spend a breakpoint on a block the conversion replaces.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": ""},
+            {"role": "assistant", "content": "a2"},
+            {"role": "user", "content": "u3"},
+        ],
+        [{"location": "message", "role": "user"}],
+        monkeypatch,
+    )
+
+    assert marked[0] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "u1", "cache_control": {"type": "ephemeral"}}],
+    }
+    assert marked[2] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "[System: Empty message content sanitised to satisfy protocol]"}],
+    }
+    assert marked[4] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "u3", "cache_control": {"type": "ephemeral"}}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_marks_a_tool_turn_that_returned_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    A tool that returned nothing is the newest turn of an agent loop. Its empty content
+    reaches the provider inside the tool_result, so the marker goes on it rather than
+    walking back and leaving the tool_use outside the cached prefix.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "Search for it."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "search", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+        ],
+        [{"location": "message", "index": 2}],
+        monkeypatch,
+    )
+
+    assert marked[-1] == {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "call_1",
+                "content": "",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_walks_back_off_a_thinking_only_turn(monkeypatch: pytest.MonkeyPatch):
+    """
+    A turn whose only block is a thinking block has no block that accepts a marker, so
+    the walk goes back to the turn before it rather than spending the point there.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "q2"},
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": "t", "signature": "s"}]},
+        ],
+        [{"location": "message", "role": "assistant", "index": -1}],
+        monkeypatch,
+    )
+
+    assert marked[1] == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "a1", "cache_control": {"type": "ephemeral"}}],
+    }
+    assert marked[3] == {"role": "assistant", "content": [{"type": "thinking", "thinking": "t", "signature": "s"}]}

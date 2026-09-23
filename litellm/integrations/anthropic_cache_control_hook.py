@@ -165,6 +165,25 @@ def _index_of_block_accepting_cache_control(content: list[object], on_a_tool_mes
     return None
 
 
+def _message_accepts_cache_control(message: object) -> bool:
+    """Whether a cache_control marker written on this message reaches the provider.
+
+    Reads the same block rule as `_safe_insert_cache_control_in_message`, so the two
+    cannot disagree about where a marker goes. A message whose content is empty --
+    an assistant turn that said everything through ``tool_calls`` -- has nowhere to
+    put one.
+    """
+    if not isinstance(message, dict):
+        return False
+    on_a_tool_message: Final = message.get("role") == "tool"
+    content: Final = message.get("content")
+    if isinstance(content, str):
+        return content != "" or on_a_tool_message
+    if isinstance(content, list):
+        return _index_of_block_accepting_cache_control(content, on_a_tool_message) is not None
+    return False
+
+
 # Set by a caller whose message list is not the one that goes upstream -- today the
 # Responses API layer, whose `instructions` only becomes a system message further down.
 # Tells this hook to hand role-targeted points to the pass holding the final messages
@@ -471,28 +490,46 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         else:
             targetted_index = _targetted_index
 
-        # Case 1: Target by specific index
-        if targetted_index is not None:
-            original_index: Final = targetted_index
-            if targetted_index < 0:
-                targetted_index += len(messages)
+        # The messages the point names. A point with a role counts its index within
+        # that role's turns, so {role: assistant, index: -1} is the last assistant
+        # turn rather than the last message.
+        targetted_role: Final = point.get("role", None)
+        candidates: Final = [
+            index
+            for index, message in enumerate(messages)
+            if targetted_role is None or message.get("role") == targetted_role
+        ]
 
-            if 0 <= targetted_index < len(messages):
-                return [targetted_index]
+        # Case 1: Target by role alone
+        if targetted_index is None:
+            if targetted_role is None:
+                return []
+            return [index for index in candidates if _message_accepts_cache_control(messages[index])]
 
+        # Case 2: Target by index, within the role the point named
+        original_index: Final = targetted_index
+        if targetted_index < 0:
+            targetted_index += len(candidates)
+
+        if not 0 <= targetted_index < len(candidates):
             verbose_logger.warning(
                 "AnthropicCacheControlHook: Provided index %s is out of bounds for message list of length %s. Targeted index was %s. Skipping cache control injection for this point.",
                 original_index,
-                len(messages),
+                len(candidates),
                 targetted_index,
             )
             return []
 
-        # Case 2: Target by role
-        targetted_role: Final = point.get("role", None)
-        if targetted_role is not None:
-            return [idx for idx, msg in enumerate(messages) if msg.get("role") == targetted_role]
-
+        # The message it arrives at may have nowhere to write a marker -- an assistant
+        # turn that said everything through tool_calls is the common one -- so walk back
+        # to the nearest earlier turn that does. Stopping there would spend the point
+        # and write nothing.
+        position = targetted_index
+        while position >= 0:
+            index = candidates[position]
+            if _message_accepts_cache_control(messages[index]):
+                return [index]
+            position -= 1
         return []
 
     @staticmethod
