@@ -14,12 +14,14 @@ reqwest.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 veil.workspace = true
-tracing = "0.1"
+litellm-tracing.workspace = true
 percent-encoding = "2.3"
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+rcgen = "0.14.10"
 rstest.workspace = true
+tempfile = "3.27.0"
 tokio.workspace = true
 wiremock = "0.6.5"
 serde.workspace = true

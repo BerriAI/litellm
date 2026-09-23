@@ -2,6 +2,9 @@ from asyncio import Future
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from typing import Never, final
 
+import httpx
+from pydantic import JsonValue
+
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
@@ -11,6 +14,22 @@ class RustBridgeDeclined(Exception): ...
 class RustUpstreamError(Exception): ...
 class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
+
+@final
+class NativeDiagnosticProcessor:
+    def __new__(cls, minimum_custom_key_length: int) -> NativeDiagnosticProcessor: ...
+    def redact_text(self, text: str) -> str: ...
+    def redact_structured_text(self, key: str | None, text: str) -> str: ...
+    def redact_client_message(self, text: str) -> str: ...
+    def process_diagnostic(
+        self,
+        message: str,
+        exception: str | None,
+        stack: str | None,
+        leaves: Sequence[tuple[str | None, str]],
+        policy: tuple[bool, int, int],
+    ) -> tuple[str, str | None, str | None, list[str], bool]: ...
+    def scrub_access_arguments(self, arguments: Sequence[str]) -> list[str]: ...
 
 def ocr(
     request: LiteLLMOcrRequest,
@@ -335,6 +354,7 @@ def reserve_process_for_forking() -> None: ...
 __all__ = [
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
+    "NativeDiagnosticProcessor",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",
@@ -354,3 +374,42 @@ __all__ = [
     "reserve_process_for_forking",
     "transcription",
 ]
+
+@final
+class _SecretManagerRuntime:
+    @staticmethod
+    def from_config(
+        system: str,
+        environment: Mapping[str, str],
+        settings: Mapping[str, object] | None = None,
+        enterprise_enabled: bool = False,
+    ) -> _SecretManagerRuntime: ...
+    @staticmethod
+    def from_client(client: object) -> _SecretManagerRuntime | None: ...
+    @property
+    def system(self) -> str: ...
+    def read_secret(self, name: str, settings: Mapping[str, object] | None = None) -> JsonValue: ...
+    def read_secret_async(self, name: str, settings: Mapping[str, object] | None = None) -> Future[JsonValue]: ...
+    def async_write_secret(
+        self, secret_name: str, secret_value: str, description: str | None = None,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None, tags: object = None,
+    ) -> Future[dict[str, JsonValue]]: ...
+    def async_delete_secret(
+        self, secret_name: str, recovery_window_in_days: int | None = None,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Future[dict[str, JsonValue]]: ...
+    def async_rotate_secret(
+        self, current_secret_name: str, new_secret_name: str, new_secret_value: str,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Future[dict[str, JsonValue]]: ...
+    def sync_read_secret(
+        self, secret_name: str, optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None, primary_secret_name: str | None = None,
+    ) -> JsonValue: ...
+    def async_read_secret(
+        self, secret_name: str, optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None, primary_secret_name: str | None = None,
+    ) -> Future[JsonValue]: ...
