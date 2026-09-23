@@ -1,8 +1,9 @@
+use crate::logger::{run_async, run_sync};
 use litellm_core::chat_completions::{
     Error, chat_completions as run_chat_completions, chat_completions_decline_reason,
     types::ChatCompletionsRequest,
 };
-use litellm_host_python::{from_py_argument, run_async, run_sync};
+use litellm_host_python::from_py_argument;
 use litellm_types::utils::ChatCompletionsResponse;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};

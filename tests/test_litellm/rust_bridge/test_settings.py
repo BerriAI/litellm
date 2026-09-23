@@ -1,4 +1,3 @@
-import logging
 from typing import Final
 
 import httpx
@@ -10,6 +9,7 @@ from litellm.llms.custom_httpx.http_handler import default_user_agent
 from litellm.rust_bridge import settings
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
+
 
 def test_url_policy_reads_the_litellm_globals(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "user_url_validation", False)
@@ -55,13 +55,6 @@ def test_http_settings_ignores_environment_overrides(monkeypatch: pytest.MonkeyP
 
     assert result.user_agent == default_user_agent()
     assert result.ssl_verify is True
-
-
-def test_warn_reaches_the_litellm_logger(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        settings.warn("ssl_ecdh_curve 'secp521r1' is not supported")
-
-    assert [record.getMessage() for record in caplog.records] == ["ssl_ecdh_curve 'secp521r1' is not supported"]
 
 
 class _VaultSecrets(CustomSecretManager):

@@ -470,7 +470,7 @@ impl NativeResponseCache {
         match self {
             Self::Exact(_) | Self::QdrantSemantic(_) => {
                 let service = self.clone();
-                litellm_host_python::run_async(
+                crate::logger::run_async(
                     py,
                     async move {
                         service
@@ -495,7 +495,7 @@ impl NativeResponseCache {
         match self {
             Self::Exact(_) | Self::QdrantSemantic(_) => {
                 let service = self.clone();
-                litellm_host_python::run_async(
+                crate::logger::run_async(
                     py,
                     async move { service.async_lookup(&request, now()).await },
                     super::cache_error,
@@ -550,7 +550,7 @@ impl NativeResponseCache {
         match self {
             Self::Exact(_) | Self::QdrantSemantic(_) => {
                 let service = self.clone();
-                litellm_host_python::run_async(
+                crate::logger::run_async(
                     py,
                     async move { service.async_store(&request, response, now()).await },
                     super::cache_error,
@@ -619,7 +619,7 @@ impl NativeResponseCache {
         match self {
             Self::Exact(_) | Self::QdrantSemantic(_) => {
                 let service = self.clone();
-                litellm_host_python::run_async(
+                crate::logger::run_async(
                     py,
                     async move { service.async_store_batch(entries, now()).await },
                     super::cache_error,

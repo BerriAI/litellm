@@ -73,7 +73,7 @@ fn run_ocr(
         py,
         if asynchronous { ASYNC_SURFACE } else { SURFACE },
         PublicCall::capture(&request, &args, &kwargs)?,
-        ocr_machine(client),
+        crate::logger::LoggedMachine::new(ocr_machine(client)),
         OcrRouteHost::new(request.unbind()),
         asynchronous,
     )

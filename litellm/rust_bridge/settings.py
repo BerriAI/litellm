@@ -58,12 +58,6 @@ class SecretManagerBinding:
     settings_object: object
 
 
-def warn(message: str) -> None:
-    from litellm._logging import verbose_logger
-
-    verbose_logger.warning("%s", message)
-
-
 def secret_manager() -> SecretManager:
     from litellm.secret_managers.main import (
         _should_read_secret_from_secret_manager,  # pyright: ignore[reportPrivateUsage]  # canonical resolver is private

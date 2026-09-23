@@ -86,11 +86,25 @@ class SecretManagerRule:
         return isinstance(context, SecretManagerContext) and (self.systems is None or context.system in self.systems)
 
 
-Context: TypeAlias = RouteContext | CacheContext | SecretManagerContext
-Rule: TypeAlias = RouteRule | CacheRule | SecretManagerRule
+@dataclass(frozen=True, slots=True)
+class LoggerContext:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class LoggerRule:
+    rollout: Rollout
+
+    def matches(self, context: Context) -> bool:
+        return isinstance(context, LoggerContext)
+
+
+Context: TypeAlias = RouteContext | CacheContext | SecretManagerContext | LoggerContext
+Rule: TypeAlias = RouteRule | CacheRule | SecretManagerRule | LoggerRule
 Rules: TypeAlias = tuple[Rule, ...]
 
 RULES: Final[Rules] = (
+    LoggerRule(Rollout.RUST_OPT_IN),
     RouteRule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),
     RouteRule(Route.OCR, Rollout.RUST_OPT_OUT),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),

@@ -43,7 +43,7 @@ fn run_messages(
         py,
         SURFACE,
         PublicCall::capture(&request, &args, &kwargs)?,
-        messages_machine(),
+        crate::logger::LoggedMachine::new(messages_machine()),
         MessagesRouteHost::new(request.unbind()),
         asynchronous,
     )

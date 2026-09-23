@@ -1,7 +1,8 @@
+use crate::logger::run_async;
 use std::{collections::VecDeque, time::Duration};
 
 use litellm_cache::Error;
-use litellm_host_python::{Execution, ExecutionBody, ExecutionStep, run_async};
+use litellm_host_python::{Execution, ExecutionBody, ExecutionStep};
 use pyo3::{
     PyTraverseError, PyVisit,
     exceptions::{PyException, PyRuntimeError},

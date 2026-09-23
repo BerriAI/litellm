@@ -14,7 +14,7 @@ reqwest.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 veil.workspace = true
-tracing = "0.1"
+litellm-tracing.workspace = true
 percent-encoding = "2.3"
 tokio = { workspace = true, features = ["sync"] }
 

@@ -1,7 +1,8 @@
+use crate::logger::run_async;
 use std::sync::Arc;
 use std::{num::NonZero, thread::available_parallelism};
 
-use litellm_host_python::{enter_native, run_async};
+use litellm_host_python::enter_native;
 use litellm_token_counter::{
     CountableRequest, Error, InputTokenCount, TokenCounter as CoreTokenCounter,
 };

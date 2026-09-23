@@ -1,7 +1,8 @@
+use crate::logger::{run_async, run_sync};
 use litellm_core::audio_transcription::{
     Error, audio_transcription as run_audio_transcription, types::AudioTranscriptionRequest,
 };
-use litellm_host_python::{from_py_argument, run_async, run_sync};
+use litellm_host_python::from_py_argument;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 

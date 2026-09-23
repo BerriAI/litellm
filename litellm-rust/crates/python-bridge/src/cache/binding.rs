@@ -1,5 +1,6 @@
+use crate::logger::run_async;
 use litellm_cache_response::PartialHits;
-use litellm_host_python::{ExecutionStep, from_py, release_gil, run_async, to_py};
+use litellm_host_python::{ExecutionStep, from_py, release_gil, to_py};
 use pyo3::{
     PyTraverseError, PyVisit,
     exceptions::{PyRuntimeError, PyValueError},
