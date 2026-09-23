@@ -1987,6 +1987,9 @@
     "tests/integration/routing/test_priority_rate_limit_headers.py::test_non_streaming_v1_messages_success_carries_v3_priority_rate_limit_headers": [
       "other.routing.priority_rate_limits.v1_messages_success_exposes_v3_priority_headers"
     ],
+    "tests/integration/routing/test_priority_model_tpm_enforcement.py::test_tpm_only_model_returns_429_to_priority_key_once_recorded_tokens_reach_model_tpm": [
+      "other.routing.priority_rate_limits.tpm_only_model_rejects_priority_traffic_at_capacity"
+    ],
     "tests/integration/routing/test_stale_cost_map_boot.py::test_config_deployment_dropped_by_stale_boot_cost_map_is_restored_after_reload": [
       "other.routing.cost_map.config_deployment_dropped_by_stale_boot_map_is_restored_after_reload"
     ],
