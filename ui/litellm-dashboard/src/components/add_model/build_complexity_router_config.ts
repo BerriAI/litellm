@@ -53,12 +53,26 @@ import {
 export const normalizeClassifierLlmConfig = ({
   model,
   timeout_ms,
+  circuit_breaker_enabled,
+  circuit_breaker_cooldown_seconds,
   classification_rubric,
   system_prompt,
 }: ClassifierLLMConfig): ClassifierLLMConfig =>
   system_prompt?.trim()
-    ? { model, timeout_ms, system_prompt }
-    : { model, timeout_ms, ...(classification_rubric && { classification_rubric }) };
+    ? {
+        model,
+        timeout_ms,
+        ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
+        ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
+        system_prompt,
+      }
+    : {
+        model,
+        timeout_ms,
+        ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
+        ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
+        ...(classification_rubric && { classification_rubric }),
+      };
 
 interface ScorerKnobInputs {
   classifierType: ClassifierType;
@@ -285,7 +299,16 @@ export const customTierWireFields = (
     // classification_rubric beside tier_definitions, and both live inside this object rather than at
     // the top level the omit list covers. The opening instructions ride classification_prompt below.
     ...(classifierLlmConfig && {
-      classifier_llm_config: { model: classifierLlmConfig.model, timeout_ms: classifierLlmConfig.timeout_ms },
+      classifier_llm_config: {
+        model: classifierLlmConfig.model,
+        timeout_ms: classifierLlmConfig.timeout_ms,
+        ...(classifierLlmConfig.circuit_breaker_enabled !== undefined && {
+          circuit_breaker_enabled: classifierLlmConfig.circuit_breaker_enabled,
+        }),
+        ...(classifierLlmConfig.circuit_breaker_cooldown_seconds !== undefined && {
+          circuit_breaker_cooldown_seconds: classifierLlmConfig.circuit_breaker_cooldown_seconds,
+        }),
+      },
     }),
     session_affinity: false,
     ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
