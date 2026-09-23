@@ -14,7 +14,7 @@ cost, or error propagation fails here.
 import json
 import uuid
 from datetime import datetime
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -558,6 +558,39 @@ async def test_line_items_edge_shapes_and_edge_cases(recorder):
     file_ids_fetched = [call.kwargs.get("file_id") or call.args[0] for call in file_mock.call_args_list]
     assert "input-2" in file_ids_fetched and "output-2" in file_ids_fetched
     assert not any(file_id is None for file_id in file_ids_fetched)
+
+
+@pytest.mark.asyncio
+async def test_line_items_child_params_drop_parent_credentials(recorder):
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    file_mock: Final = AsyncMock(side_effect=_file_content)
+    parent: Final = _parent_logging_with_params(
+        {
+            "api_key": "sk-parent-secret",
+            "_litellm_internal_model_credentials": MappingProxyType({"api_key": "sk-parent-secret"}),
+            "api_base": "https://api.openai.com/v1",
+            "metadata": {"model_info": {"id": "dep-1"}, "model_group": "gpt-4o"},
+        }
+    )
+    batch: Final = _batch()
+    with (
+        patch("litellm.files.main.afile_content", file_mock),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_completed_batch(parent, batch)
+
+    line_events = [
+        e
+        for e in [*recorder.success_events, *recorder.failure_events]
+        if _hidden(e).get("batch_custom_id") is not None
+    ]
+    assert len(line_events) == 2
+    for event in line_events:
+        params = event["litellm_params"]
+        assert "api_key" not in params
+        assert "_litellm_internal_model_credentials" not in params
+        assert params["batch_parent_id"] == batch.id
+        assert params["metadata"]["model_group"] == "gpt-4o"
 
 
 @pytest.mark.asyncio

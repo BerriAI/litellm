@@ -7150,3 +7150,30 @@ async def test_success_tpm_accounting_keeps_the_admission_target_after_an_alias_
     charged: Final = {op["key"]: op["increment_value"] for op in ops}
     assert charged[admission_bucket] == 150 - stash.reserved_tokens
     assert not any(":target-b" in key for key in charged)
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_skips_batch_line_item_events():
+    """Per-line batch events already ran through the limiter as the aggregate
+    aretrieve_batch; children must not increment TPM or request counters."""
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+
+    await handler.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {"metadata": {"user_api_key_hash": hash_token("sk-line-item")}},
+            "litellm_params": {
+                "batch_parent_id": "batch_1",
+                "metadata": {"user_api_key_hash": hash_token("sk-line-item"), "model_group": "gpt-3.5-turbo"},
+            },
+            "model": "gpt-3.5-turbo",
+        },
+        response_obj=ModelResponse(
+            id="x", object="chat.completion", created=1, model="gpt-3.5-turbo",
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15), choices=[],
+        ),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert local_cache.in_memory_cache.cache_dict == {}

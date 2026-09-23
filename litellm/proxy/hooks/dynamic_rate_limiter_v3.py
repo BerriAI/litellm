@@ -14,6 +14,7 @@ from litellm import ModelResponse, Router
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
@@ -693,6 +694,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         - model_saturation_check: Model-wide token tracking
         - priority_model: Priority-specific token tracking
         """
+        if is_batch_line_item_event(kwargs):
+            return
         from litellm.litellm_core_utils.core_helpers import (
             _get_parent_otel_span_from_kwargs,
         )

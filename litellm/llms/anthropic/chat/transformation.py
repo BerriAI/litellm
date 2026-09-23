@@ -2797,7 +2797,9 @@ def anthropic_message_to_model_response(result: Mapping[str, object], speed: str
     result_id: Final = result.get("id")
     return AnthropicConfig().transform_parsed_response(
         completion_response=pydantic_result.model_dump(),
-        raw_response=httpx.Response(status_code=200, headers={}),
+        raw_response=httpx.Response(
+            status_code=200, headers={}
+        ),  # mutable-ok: httpx.Response wants a plain dict of headers
         model_response=ModelResponse(id=result_id if isinstance(result_id, str) and result_id else None),
         json_mode=None,
         speed=speed,

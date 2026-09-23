@@ -31,6 +31,20 @@ _BatchLineProvider: TypeAlias = Literal[
 
 _SUPPORTED_LINE_PROVIDERS: Final = frozenset(get_args(_BatchLineProvider))
 
+_SECRET_PARAM_KEYS: Final = frozenset(
+    {
+        "api_key",
+        "_litellm_internal_model_credentials",
+        "azure_ad_token",
+        "azure_ad_token_provider",
+        "vertex_credentials",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_web_identity_token",
+    }
+)
+
 
 def _supported_line_provider(value: str) -> _BatchLineProvider | None:
     if value in _SUPPORTED_LINE_PROVIDERS:
@@ -292,6 +306,10 @@ async def _emit_line_event(
         model=child.model,
         custom_llm_provider=custom_llm_provider,
     )
+    for secret_key in _SECRET_PARAM_KEYS:
+        child.litellm_params.pop(
+            secret_key, None
+        )  # mutable-ok: model_call_details holds this same dict  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped upstream
 
     now: Final = datetime.now()  # noqa: DTZ005  # naive to match the logging pipeline start_time
     if result is None:

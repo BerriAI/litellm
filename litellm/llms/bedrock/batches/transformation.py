@@ -106,7 +106,9 @@ def bedrock_batch_line_to_response(
         embedding: Final = model_output.get("embedding")
         return EmbeddingResponse(
             model=model,
-            data=[{"object": "embedding", "index": 0, "embedding": embedding if isinstance(embedding, list) else []}],
+            data=[
+                {"object": "embedding", "index": 0, "embedding": embedding if isinstance(embedding, list) else []}
+            ],  # mutable-ok: EmbeddingResponse takes a plain data list
             usage=titan_embedding_usage_from_batch_output(model_output),
         )
     if "output" in model_output:
@@ -114,14 +116,14 @@ def bedrock_batch_line_to_response(
 
         return AmazonConverseConfig()._transform_response(  # pyright: ignore[reportPrivateUsage]  # same reconstruction the converse chat path performs on the live response
             model=model,
-            response=Response(200, json=dict(model_output)),
+            response=Response(200, json=dict(model_output)),  # mutable-ok: httpx.Response json= wants a plain dict
             model_response=ModelResponse(),
             stream=False,
             logging_obj=None,
-            optional_params={},
+            optional_params={},  # mutable-ok: the converse transform signature takes a plain dict
             api_key=None,
             data="",
-            messages=[],
+            messages=[],  # mutable-ok: the converse transform signature takes a plain list
             encoding=None,
         )
     if "content" in model_output:
