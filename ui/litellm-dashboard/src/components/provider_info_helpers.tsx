@@ -23,6 +23,7 @@ import fireworksLogo from "../../public/assets/logos/fireworks.svg";
 import friendliLogo from "../../public/assets/logos/friendli.svg";
 import gigachatLogo from "../../public/assets/logos/gigachat.svg";
 import githubCopilotLogo from "../../public/assets/logos/github_copilot.svg";
+import gondolaLogo from "../../public/assets/logos/gondola.svg";
 import googleLogo from "../../public/assets/logos/google.svg";
 import groqLogo from "../../public/assets/logos/groq.svg";
 import huggingfaceLogo from "../../public/assets/logos/huggingface.svg";
@@ -114,6 +115,7 @@ export enum Providers {
   GALADRIEL = "Galadriel",
   GIGACHAT = "GigaChat",
   GITHUB_COPILOT = "Github Copilot",
+  GONDOLA = "Gondola",
   Google_AI_Studio = "Google AI Studio",
   GradientAI = "GradientAI",
   Groq = "Groq",
@@ -231,6 +233,7 @@ export const provider_map: Record<string, string> = {
   GALADRIEL: "galadriel",
   GIGACHAT: "gigachat",
   GITHUB_COPILOT: "github_copilot",
+  GONDOLA: "gondola",
   Google_AI_Studio: "gemini",
   GradientAI: "gradient_ai",
   Groq: "groq",
@@ -342,6 +345,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.FRIENDLIAI]: friendliLogo.src,
   [Providers.GIGACHAT]: gigachatLogo.src,
   [Providers.GITHUB_COPILOT]: githubCopilotLogo.src,
+  [Providers.GONDOLA]: gondolaLogo.src,
   [Providers.Google_AI_Studio]: googleLogo.src,
   [Providers.Groq]: groqLogo.src,
   [Providers.Hosted_Vllm]: vllmLogo.src,
@@ -442,6 +446,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.DeepInfra]: "deepinfra/<any-model-on-deepinfra>",
   [Providers.EDENAI]: "edenai/openai/gpt-mini-latest",
   [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
+  [Providers.GONDOLA]: "gondola/deepseek-v3.2",
   [Providers.Google_AI_Studio]: "gemini-pro",
   [Providers.JinaAI]: "jina_ai/",
   [Providers.NVIDIA_RIVA]: "nvidia_riva/nvidia/parakeet-ctc-1_1b-asr",
