@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 import litellm
 from litellm import Router
+from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.router import DeploymentTypedDict, FallbackAccessCheck, RoutingGroup, RoutingStrategy
 from litellm.utils import Rules, function_setup
@@ -2149,3 +2150,107 @@ async def test_caller_cannot_spoof_a_priority_group_to_bypass_fallback_gates(
             **{metadata_bucket: {"pre_routing_selected_model": "priority-group"}},
         )
     assert checked == ["priority-group"]
+
+
+def _sync_task_count() -> int:
+    return sum(
+        1
+        for t in asyncio.all_tasks()
+        if t.get_coro() is not None
+        and t.get_coro().__qualname__ == "BaseRoutingStrategy.periodic_sync_in_memory_spend_with_redis"
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_settings_same_routing_strategy_args_does_not_leak_sync_tasks(monkeypatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router: Final = Router(
+        model_list=_model_list(),
+        routing_strategy="usage-based-routing-v2",
+        routing_strategy_args={"ttl": 60},
+    )
+    try:
+        assert _sync_task_count() == 1
+        selector_before: Final = router.lowesttpm_logger_v2
+
+        for _ in range(5):
+            router.update_settings(routing_strategy_args={"ttl": 60})
+        await asyncio.sleep(0)
+        assert _sync_task_count() == 1
+        assert router.lowesttpm_logger_v2 is selector_before, "same routing_strategy_args must not rebuild the selector"
+
+        router.update_settings(routing_strategy_args={"ttl": 120})
+        await asyncio.sleep(0)
+        assert _sync_task_count() == 1
+        assert router.lowesttpm_logger_v2.routing_args.ttl == 120
+    finally:
+        for t in [
+            t
+            for t in asyncio.all_tasks()
+            if t.get_coro() is not None
+            and t.get_coro().__qualname__ == "BaseRoutingStrategy.periodic_sync_in_memory_spend_with_redis"
+        ]:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+
+
+class _RecordingRedisCache:
+    def __init__(self) -> None:
+        self.increment_lists: list[list[RedisPipelineIncrementOperation]] = []
+
+    async def async_increment_pipeline(self, increment_list: list[RedisPipelineIncrementOperation]) -> list[float]:
+        self.increment_lists.append(list(increment_list))
+        return [float(op["increment_value"]) for op in increment_list]
+
+
+@pytest.mark.asyncio
+async def test_update_settings_changed_routing_strategy_args_flushes_replaced_selector_queue(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router: Final = Router(
+        model_list=_model_list(),
+        routing_strategy="usage-based-routing-v2",
+        routing_strategy_args={"ttl": 60},
+    )
+    try:
+        redis_cache: Final = _RecordingRedisCache()
+        replaced: Final = router.lowesttpm_logger_v2
+        replaced.dual_cache.redis_cache = redis_cache
+        replaced.redis_increment_operation_queue.append(
+            RedisPipelineIncrementOperation(key="rpm-key", increment_value=3, ttl=60)
+        )
+
+        router.update_settings(routing_strategy_args={"ttl": 120})
+        await asyncio.sleep(0)
+        await asyncio.gather(
+            *(
+                t
+                for t in asyncio.all_tasks()
+                if t.get_coro() is not None
+                and t.get_coro().__qualname__ == "BaseRoutingStrategy._push_in_memory_increments_to_redis"
+            )
+        )
+
+        assert router.lowesttpm_logger_v2 is not replaced
+        assert redis_cache.increment_lists == [
+            [RedisPipelineIncrementOperation(key="rpm-key", increment_value=3, ttl=60)]
+        ]
+        assert replaced.redis_increment_operation_queue == []
+    finally:
+        for t in [
+            t
+            for t in asyncio.all_tasks()
+            if t.get_coro() is not None
+            and t.get_coro().__qualname__ == "BaseRoutingStrategy.periodic_sync_in_memory_spend_with_redis"
+        ]:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
