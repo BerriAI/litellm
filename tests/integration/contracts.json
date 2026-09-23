@@ -1915,6 +1915,12 @@
     "tests/integration/providers/test_bedrock_embedding_wire.py::test_cohere_embed_english_v3_accepts_encoding_format_and_dimensions": [
       "other.provider_wire.bedrock.cohere_embed_english_v3_accepts_encoding_format"
     ],
+    "tests/integration/providers/test_bedrock_deepseek_reasoning_wire.py::test_deepseek_r1_thinking_and_reasoning_effort_are_dropped_instead_of_leaking_into_converse": [
+      "providers.bedrock_converse.deepseek_r1_drops_thinking_and_reasoning_effort_before_provider"
+    ],
+    "tests/integration/providers/test_bedrock_deepseek_reasoning_wire.py::test_deepseek_v3_reasoning_effort_reaches_converse_raw_instead_of_as_anthropic_thinking": [
+      "providers.bedrock_converse.deepseek_v3_reasoning_effort_reaches_provider_raw"
+    ],
     "tests/integration/providers/test_bedrock_gpt5_reasoning_wire.py::test_gpt5_reasoning_effort_is_accepted_and_sent_as_converse_reasoning_effort": [
       "providers.bedrock_converse.gpt5_reasoning_effort_reaches_provider_as_reasoning_effort"
     ],
