@@ -1,122 +1,18 @@
-import json
 import uuid
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
 
 import pytest
-import yaml
+from _langfuse_otel import (
+    _generation_span_attributes,
+    _langfuse_proxy,
+    _sink,
+    _span_attributes_containing_marker,
+    _trace_user_span_attributes,
+    _upstream_reply,
+)
 from integration._support.client import Gateway, eventually
-from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
-from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
-from opentelemetry.proto.common.v1.common_pb2 import AnyValue
-
-
-def _attribute_value(value: AnyValue) -> object:
-    kind: Final = value.WhichOneof("value")
-    return getattr(value, kind) if kind is not None else None
-
-
-def _spans(body: bytes) -> tuple[tuple[str, dict[str, object]], ...]:
-    export: Final = trace_service_pb2.ExportTraceServiceRequest()
-    export.ParseFromString(body)
-    return tuple(
-        (
-            span.trace_id.hex(),
-            {attribute.key: _attribute_value(attribute.value) for attribute in span.attributes},
-        )
-        for resource in export.resource_spans
-        for scope in resource.scope_spans
-        for span in scope.spans
-    )
-
-
-def _upstream_reply(marker: str) -> Reply:
-    return Reply(
-        body=json.dumps(
-            {
-                "id": marker,
-                "object": "chat.completion",
-                "created": 1,
-                "model": "gpt-4o-mini",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": f"reply {marker}"},
-                        "finish_reason": "stop",
-                    }
-                ],
-                "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
-            }
-        ).encode()
-    )
-
-
-def _sink(_request: Request) -> Reply:
-    return Reply(body=b"", content_type="application/x-protobuf")
-
-
-def _drained_spans(sink: Wire, batches: list[bytes]) -> tuple[tuple[str, dict[str, object]], ...]:
-    batches.extend(request.body for request in sink.drain())
-    return tuple(span for body in batches for span in _spans(body))
-
-
-def _generation_span_attributes(sink: Wire, batches: list[bytes], marker: str) -> tuple[dict[str, object], ...]:
-    return tuple(
-        attributes
-        for _trace_id, attributes in _drained_spans(sink, batches)
-        if attributes.get("llm.response.id") == marker or attributes.get("gen_ai.response.id") == marker
-    )
-
-
-def _span_attributes_containing_marker(sink: Wire, batches: list[bytes], marker: str) -> tuple[dict[str, object], ...]:
-    return tuple(
-        attributes
-        for _trace_id, attributes in _drained_spans(sink, batches)
-        if any(isinstance(value, str) and marker in value for value in attributes.values())
-    )
-
-
-def _trace_user_span_attributes(sink: Wire, batches: list[bytes], marker: str) -> tuple[dict[str, object], ...]:
-    spans: Final = _drained_spans(sink, batches)
-    generation_trace: Final = next(
-        (
-            trace_id
-            for trace_id, attributes in spans
-            if attributes.get("llm.response.id") == marker or attributes.get("gen_ai.response.id") == marker
-        ),
-        None,
-    )
-    if generation_trace is None:
-        return ()
-    return tuple(
-        attributes for trace_id, attributes in spans if trace_id == generation_trace and "user.id" in attributes
-    )
-
-
-@contextmanager
-def _langfuse_proxy(
-    gateway: Gateway, directory: Path, collector_url: str, overrides: Mapping[str, str] | None = None
-) -> Iterator[Gateway]:
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["litellm_settings"].update({"callbacks": ["langfuse_otel"]})
-    path: Final = directory / "langfuse_otel.yaml"
-    path.write_text(yaml.safe_dump(config))
-    with owned_proxy(
-        gateway,
-        directory,
-        {
-            "LANGFUSE_PUBLIC_KEY": "pk-integration",
-            "LANGFUSE_SECRET_KEY": "sk-integration",
-            "LANGFUSE_HOST": collector_url,
-            "OTEL_BSP_SCHEDULE_DELAY": "100",
-            **(overrides or {}),
-        },
-        config=path,
-    ) as candidate:
-        yield candidate
+from integration._support.wire import Reply, Request, wire_server
 
 
 @pytest.mark.covers("other.observability.langfuse_otel.header_end_user_in_user_id_over_internal_user")

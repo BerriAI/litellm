@@ -2048,6 +2048,108 @@
       "mgmt.key.reset_spend.returns_promptly_with_wedged_coordination_redis",
       "mgmt.auth_cache_invalidation.publish_parked_by_short_redis_wedge_lands_after_recovery",
       "mgmt.auth_cache_invalidation.burst_with_worker_kill_keeps_serving_while_redis_wedged"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_surfaces.py::test_langfuse_otel_customer_id_header_lands_in_user_id": [
+      "other.observability.langfuse_otel.customer_id_header_end_user_in_user_id"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_surfaces.py::test_langfuse_otel_langfuse_trace_user_id_header_wins_over_the_end_user": [
+      "other.observability.langfuse_otel.langfuse_trace_user_id_header_wins"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_surfaces.py::test_langfuse_otel_no_end_user_never_exposes_the_internal_user": [
+      "other.observability.langfuse_otel.no_end_user_no_user_id"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_surfaces.py::test_langfuse_otel_team_key_end_user_keeps_the_litellm_attributes": [
+      "other.observability.langfuse_otel.team_key_end_user_with_team_attributes"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_surfaces.py::test_langfuse_otel_header_end_user_beats_the_body_user": [
+      "other.observability.langfuse_otel.header_end_user_beats_body_user"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_surfaces.py::test_langfuse_otel_openai_sdk_streaming_end_user": [
+      "other.observability.langfuse_otel.openai_sdk_streaming_end_user"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_surfaces.py::test_langfuse_otel_openai_async_sdk_end_user": [
+      "other.observability.langfuse_otel.openai_async_sdk_end_user"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_surfaces.py::test_langfuse_otel_responses_api_end_user": [
+      "other.observability.langfuse_otel.responses_api_end_user"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_surfaces.py::test_langfuse_otel_responses_api_async_streaming_end_user": [
+      "other.observability.langfuse_otel.responses_api_async_streaming_end_user"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_surfaces.py::test_langfuse_otel_anthropic_sdk_messages_end_user": [
+      "other.observability.langfuse_otel.anthropic_sdk_messages_end_user"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_surfaces.py::test_langfuse_otel_anthropic_async_streaming_messages_end_user": [
+      "other.observability.langfuse_otel.anthropic_async_streaming_messages_end_user"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_surfaces.py::test_langfuse_otel_v2_caller_trace_user_id_wins_over_the_end_user": [
+      "other.observability.langfuse_otel.v2_caller_trace_user_id_wins"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_surfaces.py::test_arize_phoenix_header_end_user_keeps_session_mapping": [
+      "other.observability.langfuse_otel.arize_phoenix_unchanged_header_end_user"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_surfaces.py::test_arize_phoenix_caller_session_id_stays_session": [
+      "other.observability.langfuse_otel.arize_phoenix_unchanged_caller_session"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_surfaces.py::test_langfuse_otel_and_arize_phoenix_together_keep_each_mapping": [
+      "other.observability.langfuse_otel.dual_callbacks_arize_unchanged"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_edges.py::test_langfuse_otel_five_kb_end_user_header_lands_in_user_id": [
+      "other.observability.langfuse_otel.end_user_5kb_header"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_edges.py::test_langfuse_otel_empty_end_user_header_writes_no_identity": [
+      "other.observability.langfuse_otel.empty_end_user_header"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_edges.py::test_langfuse_otel_integer_body_user_does_not_crash": [
+      "other.observability.langfuse_otel.integer_body_user"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_edges.py::test_langfuse_otel_list_body_user_does_not_crash": [
+      "other.observability.langfuse_otel.list_body_user"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_edges.py::test_langfuse_otel_integer_trace_user_id_does_not_crash": [
+      "other.observability.langfuse_otel.integer_trace_user_id"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_edges.py::test_langfuse_otel_null_metadata_still_maps_the_end_user": [
+      "other.observability.langfuse_otel.null_metadata"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_edges.py::test_langfuse_otel_duplicate_end_user_header_uses_the_first": [
+      "other.observability.langfuse_otel.duplicate_end_user_header"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_edges.py::test_langfuse_otel_bad_key_emits_no_generation_span": [
+      "other.observability.langfuse_otel.unauthenticated_no_span"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_edges.py::test_langfuse_otel_upstream_failure_never_invents_an_identity": [
+      "other.observability.langfuse_otel.upstream_failure_identity"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_edges.py::test_langfuse_otel_sink_rejections_do_not_drop_the_proxy": [
+      "other.observability.langfuse_otel.sink_rejections_survived"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_edges.py::test_langfuse_otel_unknown_model_error_reaches_the_caller": [
+      "other.observability.langfuse_otel.unknown_model"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_edges.py::test_langfuse_otel_empty_and_null_session_id_stay_absent": [
+      "other.observability.langfuse_otel.session_id_empty_null_missing"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_edges.py::test_langfuse_otel_empty_trace_user_id_falls_back_to_the_end_user": [
+      "other.observability.langfuse_otel.empty_trace_user_id"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_edges.py::test_langfuse_otel_three_identical_requests_each_land_the_end_user": [
+      "other.observability.langfuse_otel.three_identical_requests"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_edges.py::test_langfuse_otel_litellm_metadata_session_id_on_responses": [
+      "other.observability.langfuse_otel.litellm_metadata_session_on_responses"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_chaos.py::test_langfuse_otel_sink_outage_mid_burst_never_duplicates": [
+      "other.observability.langfuse_otel.burst_sink_outage"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_chaos.py::test_langfuse_otel_slow_sink_never_duplicates_or_loses": [
+      "other.observability.langfuse_otel.burst_slow_sink"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_chaos.py::test_langfuse_otel_worker_kill_mid_burst_keeps_every_marker": [
+      "other.observability.langfuse_otel.worker_kill_mid_burst"
+    ],
+    "tests/integration/observability/test_langfuse_otel_identity_chaos.py::test_langfuse_otel_proxy_restart_mid_burst_keeps_every_marker": [
+      "other.observability.langfuse_otel.proxy_restart_mid_burst"
     ]
   },
   "browser": {
