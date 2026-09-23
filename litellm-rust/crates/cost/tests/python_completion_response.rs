@@ -4,14 +4,23 @@ use litellm_cost::catalog::ModelInfoCatalog;
 use litellm_cost::completion_input::{CompletionInputRequest, ResponseKind};
 use litellm_cost::completion_response::{
     BuiltInToolCostConfig, CompletionResponseCostError, CompletionResponseCostRequest,
-    completion_cost_from_response, response_time_ms_for_cost,
+    CompletionTextInput, completion_cost_from_response, response_time_ms_for_cost,
 };
 use litellm_cost::model_selection::ModelSelectionRequest;
 use litellm_cost::tool_call_cost_tracking::{DefaultToolRates, ResponseKind as ToolResponseKind};
+use litellm_token_counter::{Error as TokenCounterError, TokenCounter, Tokenizer};
 use rstest::rstest;
 use serde_json::{Value, json};
 
 const PROVIDERS: &[&str] = &["anthropic", "exa_ai", "openai", "recraft"];
+
+struct CharacterTokenizer;
+
+impl Tokenizer for CharacterTokenizer {
+    fn count_tokens(&self, text: &str) -> Result<usize, TokenCounterError> {
+        Ok(text.chars().count())
+    }
+}
 
 fn request<'a>(
     response: Option<&'a Value>,
@@ -39,6 +48,7 @@ fn request<'a>(
             optional_params: None,
         },
         fallback_usage: None,
+        text_input: None,
         provider,
         region: None,
         data_residency: None,
@@ -60,6 +70,115 @@ fn request<'a>(
         margin_config: margin,
         logging_details: None,
     }
+}
+
+#[rstest]
+fn completion_cost_counts_prompt_and_completion_without_response() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/plain".to_owned(),
+        json!({"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}),
+    )]));
+    let counter = TokenCounter::new(CharacterTokenizer);
+    let empty = json!({});
+    let base = request(None, Some("plain"), Some("openai"), &empty, &empty);
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            text_input: Some(CompletionTextInput {
+                prompt: "hello",
+                messages: None,
+                completion: "yes",
+                counter: &counter,
+            }),
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.total - 0.11).abs() < 1e-12);
+}
+
+#[rstest]
+fn completion_cost_counts_messages_before_prompt_without_response() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/plain".to_owned(),
+        json!({"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}),
+    )]));
+    let counter = TokenCounter::new(CharacterTokenizer);
+    let messages = json!([{"role": "user", "content": "hello"}]);
+    let empty = json!({});
+    let base = request(None, Some("plain"), Some("openai"), &empty, &empty);
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            text_input: Some(CompletionTextInput {
+                prompt: "ignored",
+                messages: Some(&messages),
+                completion: "yes",
+                counter: &counter,
+            }),
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.total - 0.21).abs() < 1e-12);
+}
+
+#[rstest]
+fn invalid_messages_do_not_fall_back_to_prompt_pricing() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/plain".to_owned(),
+        json!({"input_cost_per_token": 0.01}),
+    )]));
+    let counter = TokenCounter::new(CharacterTokenizer);
+    let messages = json!({"role": "user", "content": "hello"});
+    let empty = json!({});
+    let base = request(None, Some("plain"), Some("openai"), &empty, &empty);
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            text_input: Some(CompletionTextInput {
+                prompt: "cheap",
+                messages: Some(&messages),
+                completion: "",
+                counter: &counter,
+            }),
+            ..base
+        },
+    );
+    assert_eq!(result, Err(CompletionResponseCostError::TokenCount));
+}
+
+#[rstest]
+#[case(json!({"model": "plain"}))]
+#[case(json!({"model": "plain", "usage": null}))]
+fn response_without_usage_does_not_count_request_text(#[case] response: Value) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/plain".to_owned(),
+        json!({"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}),
+    )]));
+    let counter = TokenCounter::new(CharacterTokenizer);
+    let empty = json!({});
+    let base = request(
+        Some(&response),
+        Some("plain"),
+        Some("openai"),
+        &empty,
+        &empty,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            text_input: Some(CompletionTextInput {
+                prompt: "hello",
+                messages: None,
+                completion: "yes",
+                counter: &counter,
+            }),
+            ..base
+        },
+    )
+    .unwrap();
+    assert_eq!(result.cost.total, 0.0);
 }
 
 #[rstest]

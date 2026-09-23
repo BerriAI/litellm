@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+litellm-token-counter = { path = "../token-counter", default-features = false }
 jiff = "=0.2.37"
 regex = "=1.13.1"
 

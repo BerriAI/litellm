@@ -1,4 +1,5 @@
 use jiff::Timestamp;
+use litellm_token_counter::{CountableRequest, TokenCounter};
 use serde_json::Value;
 
 use crate::a2a_cost::{A2ACostError, calculate_a2a_cost};
@@ -27,10 +28,19 @@ pub struct BuiltInToolCostConfig<'a> {
     pub defaults: DefaultToolRates,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
+pub struct CompletionTextInput<'a> {
+    pub prompt: &'a str,
+    pub messages: Option<&'a Value>,
+    pub completion: &'a str,
+    pub counter: &'a TokenCounter,
+}
+
+#[derive(Clone, Copy)]
 pub struct CompletionResponseCostRequest<'a> {
     pub input: CompletionInputRequest<'a>,
     pub fallback_usage: Option<&'a ChatUsage>,
+    pub text_input: Option<CompletionTextInput<'a>>,
     pub provider: Option<&'a str>,
     pub region: Option<&'a str>,
     pub data_residency: Option<&'a str>,
@@ -72,6 +82,7 @@ pub enum CompletionResponseCostError {
     Video(CatalogImageError),
     Realtime(CatalogError),
     A2A(A2ACostError),
+    TokenCount,
 }
 
 impl From<UsageError> for CompletionResponseCostError {
@@ -124,6 +135,49 @@ fn number(value: Option<&Value>) -> Option<f64> {
         Value::String(value) => value.parse().ok(),
         _ => None,
     }
+}
+
+fn count_text_usage(
+    input: CompletionTextInput<'_>,
+) -> Result<ChatUsage, CompletionResponseCostError> {
+    let prompt = match input.messages {
+        Some(Value::Array(messages)) if !messages.is_empty() => {
+            let body = serde_json::to_vec(&serde_json::json!({"messages": messages}))
+                .map_err(|_| CompletionResponseCostError::TokenCount)?;
+            let request = CountableRequest::parse(&body)
+                .map_err(|_| CompletionResponseCostError::TokenCount)?;
+            input
+                .counter
+                .count_request(&request)
+                .map_err(|_| CompletionResponseCostError::TokenCount)?
+                .input_tokens
+        }
+        Some(Value::Array(_)) | None => input
+            .counter
+            .count_text(input.prompt)
+            .map_err(|_| CompletionResponseCostError::TokenCount)?,
+        Some(_) => return Err(CompletionResponseCostError::TokenCount),
+    };
+    let completion = input
+        .counter
+        .count_text(input.completion)
+        .map_err(|_| CompletionResponseCostError::TokenCount)?;
+    let prompt_tokens = u64::try_from(prompt)
+        .map_err(|_| CompletionResponseCostError::Usage(UsageError::TokenCountOverflow))?;
+    let completion_tokens = u64::try_from(completion)
+        .map_err(|_| CompletionResponseCostError::Usage(UsageError::TokenCountOverflow))?;
+    let total_tokens =
+        prompt_tokens
+            .checked_add(completion_tokens)
+            .ok_or(CompletionResponseCostError::Usage(
+                UsageError::TokenCountOverflow,
+            ))?;
+    Ok(ChatUsage {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        ..ChatUsage::default()
+    })
 }
 
 pub fn response_time_ms_for_cost(response: Option<&Value>, fallback: Option<f64>) -> Option<f64> {
@@ -563,7 +617,7 @@ pub fn completion_cost_from_response(
         };
         return price_responses_websocket(catalog, request, prepared, provider, region);
     }
-    if matches!(
+    let needs_token_usage = matches!(
         prepared.call_type.as_str(),
         "completion"
             | "acompletion"
@@ -579,8 +633,21 @@ pub fn completion_cost_from_response(
             | "agenerate_content"
             | "retrieve_batch"
             | "aretrieve_batch"
-    ) && prepared.usage.is_none()
+    );
+    let counted_usage = if needs_token_usage
+        && request.input.model_selection.response.is_none()
+        && prepared.usage.is_none()
         && request.fallback_usage.is_none()
+    {
+        request.text_input.map(count_text_usage).transpose()?
+    } else {
+        None
+    };
+    if needs_token_usage
+        && request.input.model_selection.response.is_none()
+        && prepared.usage.is_none()
+        && request.fallback_usage.is_none()
+        && counted_usage.is_none()
     {
         return Err(CompletionResponseCostError::MissingUsage);
     }
@@ -589,6 +656,7 @@ pub fn completion_cost_from_response(
         .usage
         .as_ref()
         .or(request.fallback_usage)
+        .or(counted_usage.as_ref())
         .unwrap_or(&empty_usage);
     let empty_params = Value::Null;
     let call = cost_call(&prepared.call_type, request, &empty_params)?;

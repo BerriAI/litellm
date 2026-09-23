@@ -2979,6 +2979,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "jiff",
+ "litellm-token-counter",
  "proptest",
  "regex",
  "rstest",
