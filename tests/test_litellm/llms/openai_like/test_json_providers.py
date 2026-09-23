@@ -2,9 +2,14 @@
 Tests for JSON-based provider configuration system.
 """
 
+import json
 import os
 import sys
+from typing import Final
 from unittest.mock import patch
+
+import httpx
+from openai import OpenAI
 
 try:
     import pytest
@@ -17,6 +22,55 @@ workspace_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../
 sys.path.insert(0, workspace_path)
 
 import litellm
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_tiyuvta_routes_completion_endpoint(legacy: bool) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        endpoint: Final = "completions" if legacy else "chat/completions"
+        assert str(request.url) == f"https://api.tiyuvta.ai/v1/{endpoint}"
+        assert request.headers["authorization"] == "Bearer test-tiyuvta-key"
+        payload: Final = json.loads(request.content)
+        assert payload["model"] == "test-model"
+        if legacy:
+            assert payload["prompt"] == "Say hello"
+            assert "messages" not in payload
+        else:
+            assert payload["messages"] == [{"role": "user", "content": "Say hello"}]
+            assert "prompt" not in payload
+        return httpx.Response(
+            200,
+            json={
+                "id": "completion-test",
+                "object": "text_completion" if legacy else "chat.completion",
+                "created": 1,
+                "model": "test-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        **({"text": "hello"} if legacy else {"message": {"role": "assistant", "content": "hello"}}),
+                    }
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+            },
+        )
+
+    with OpenAI(
+        api_key="test-tiyuvta-key",
+        base_url="https://api.tiyuvta.ai/v1",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+        max_retries=0,
+    ) as client:
+        response: Final = (
+            litellm.text_completion(model="tiyuvta/test-model", prompt="Say hello", client=client)
+            if legacy
+            else litellm.completion(
+                model="tiyuvta/test-model", messages=[{"role": "user", "content": "Say hello"}], client=client
+            )
+        )
+        assert response.choices[0].finish_reason == "stop"
+        assert (response.choices[0].text if legacy else response.choices[0].message.content) == "hello"
 
 
 class TestJSONProviderLoader:
