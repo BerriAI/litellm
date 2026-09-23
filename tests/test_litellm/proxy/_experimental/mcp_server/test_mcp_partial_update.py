@@ -34,6 +34,14 @@ def _mock_prisma():
     )
     mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=row)
     mock_prisma.db.litellm_mcpservertable.create = AsyncMock(return_value=row)
+    mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=None)
+    tx_client = MagicMock()
+    tx_client.execute_raw = AsyncMock()
+    tx_client.litellm_mcpservertable = mock_prisma.db.litellm_mcpservertable
+    tx = MagicMock()
+    tx.__aenter__ = AsyncMock(return_value=tx_client)
+    tx.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma.db.tx = MagicMock(return_value=tx)
     return mock_prisma
 
 
@@ -917,3 +925,124 @@ async def test_toolset_partial_update_ignores_a_null_name():
     assert await _run_toolset_update({"toolset_id": "ts-1", "toolset_name": None, "description": "kept"}) == {
         "description": "kept"
     }
+
+
+def _conflict_row(server_id: str = "other-server"):
+    return models.LiteLLM_MCPServerTable.model_construct(
+        server_id=server_id, server_name="taken", alias="taken", transport="http", env={}, env_vars=[]
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_identifier_conflict_matches_alias_against_either_column():
+    """An incoming alias equal to a stored server_name or alias is a conflict:
+    both columns feed get_server_prefix, so a hit on either means a shared prefix."""
+    from litellm.proxy._experimental.mcp_server.db import (
+        find_mcp_server_identifier_conflict,
+    )
+
+    mock_prisma = _mock_prisma()
+    mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=_conflict_row())
+
+    conflict = await find_mcp_server_identifier_conflict(
+        mock_prisma, server_name="new-name", alias="taken", exclude_server_id="my-server"
+    )
+
+    assert conflict is not None
+    assert conflict.field == "alias"
+    assert conflict.value == "taken"
+    assert conflict.server_id == "other-server"
+
+    where = mock_prisma.db.litellm_mcpservertable.find_first.call_args[1]["where"]
+    identifier_or = where["AND"][0]["OR"]
+    assert identifier_or == [
+        {"server_name": {"equals": "taken", "mode": "insensitive"}},
+        {"alias": {"equals": "taken", "mode": "insensitive"}},
+    ]
+    assert {"NOT": [{"server_id": "my-server"}]} in where["AND"]
+
+
+@pytest.mark.asyncio
+async def test_find_identifier_conflict_reports_server_name_second():
+    """alias is checked first so the reported field is deterministic; a clean
+    alias does not mask a colliding server_name."""
+    from litellm.proxy._experimental.mcp_server.db import (
+        find_mcp_server_identifier_conflict,
+    )
+
+    mock_prisma = _mock_prisma()
+    mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(side_effect=[None, _conflict_row()])
+
+    conflict = await find_mcp_server_identifier_conflict(
+        mock_prisma, server_name="taken", alias="free", exclude_server_id=None
+    )
+
+    assert conflict is not None
+    assert conflict.field == "server_name"
+    assert mock_prisma.db.litellm_mcpservertable.find_first.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_find_identifier_conflict_excludes_drafts_and_returns_none_when_free():
+    from litellm.proxy._experimental.mcp_server.db import (
+        find_mcp_server_identifier_conflict,
+    )
+
+    mock_prisma = _mock_prisma()
+
+    conflict = await find_mcp_server_identifier_conflict(
+        mock_prisma, server_name="fresh", alias="fresh", exclude_server_id=None
+    )
+
+    assert conflict is None
+    where = mock_prisma.db.litellm_mcpservertable.find_first.call_args[1]["where"]
+    assert {"OR": [{"approval_status": None}, {"approval_status": {"not": "draft"}}]} in where["AND"]
+
+
+@pytest.mark.asyncio
+async def test_update_writing_alias_returns_conflict_instead_of_row():
+    from litellm.proxy._experimental.mcp_server.db import McpIdentifierConflict
+
+    mock_prisma = _mock_prisma()
+    mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=_conflict_row())
+
+    result = await update_mcp_server(
+        mock_prisma,
+        UpdateMCPServerRequest(server_id="my-test-server", alias="taken"),
+        "test-user",
+    )
+
+    assert isinstance(result, McpIdentifierConflict)
+    mock_prisma.db.litellm_mcpservertable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_without_identifier_fields_skips_lock_and_check():
+    mock_prisma = _mock_prisma()
+
+    result = await update_mcp_server(
+        mock_prisma,
+        UpdateMCPServerRequest(server_id="my-test-server", allowed_tools=["foo"]),
+        "test-user",
+    )
+
+    assert result is not None
+    mock_prisma.db.tx.assert_not_called()
+    mock_prisma.db.litellm_mcpservertable.find_first.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_writing_free_alias_locks_and_writes_via_transaction():
+    mock_prisma = _mock_prisma()
+
+    result = await update_mcp_server(
+        mock_prisma,
+        UpdateMCPServerRequest(server_id="my-test-server", alias="fresh-alias"),
+        "test-user",
+    )
+
+    assert result is not None
+    mock_prisma.db.tx.assert_called_once()
+    tx_client = mock_prisma.db.tx.return_value.__aenter__.return_value
+    assert tx_client.execute_raw.await_count == 1
+    mock_prisma.db.litellm_mcpservertable.update.assert_awaited_once()
