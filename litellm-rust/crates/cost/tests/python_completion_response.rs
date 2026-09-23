@@ -13,7 +13,7 @@ use litellm_token_counter::{Error as TokenCounterError, TokenCounter, Tokenizer}
 use rstest::rstest;
 use serde_json::{Value, json};
 
-const PROVIDERS: &[&str] = &["anthropic", "exa_ai", "openai", "recraft"];
+const PROVIDERS: &[&str] = &["anthropic", "exa_ai", "openai", "recraft", "replicate"];
 
 struct CharacterTokenizer;
 
@@ -51,6 +51,7 @@ fn request<'a>(
         fallback_usage: None,
         text_input: None,
         custom_cost: CustomPricing::NONE,
+        replicate_rate_per_second: None,
         provider,
         region: None,
         data_residency: None,
@@ -310,6 +311,74 @@ fn custom_cache_rates_match_python_anthropic_usage() {
     )
     .unwrap();
     assert!((result.cost.total - 0.284).abs() < 1e-12);
+}
+
+#[rstest]
+fn unregistered_replicate_response_uses_time_and_skips_margin() {
+    let catalog = ModelInfoCatalog::new(HashMap::new());
+    let response = json!({
+        "model": "replicate/unregistered",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 2}
+    });
+    let discount = json!({"replicate": 0.5});
+    let margin = json!({"global": {"fixed_amount": 0.1}});
+    let base = request(
+        Some(&response),
+        Some("replicate/unregistered"),
+        Some("replicate"),
+        &discount,
+        &margin,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            response_time_ms: Some(2500.0),
+            replicate_rate_per_second: Some(0.02),
+            custom_cost: CustomPricing {
+                token: Some(CustomTokenRates {
+                    input: 1.0,
+                    output: 1.0,
+                    cache_read: None,
+                    cache_creation: None,
+                }),
+                per_second: None,
+            },
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.total - 0.05).abs() < 1e-12);
+    assert_eq!(result.cost.margin_fixed_amount, 0.0);
+}
+
+#[rstest]
+fn registered_replicate_model_uses_catalog_rates() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "replicate/mapped".to_owned(),
+        json!({"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}),
+    )]));
+    let response = json!({
+        "model": "replicate/mapped",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 2}
+    });
+    let empty = json!({});
+    let base = request(
+        Some(&response),
+        Some("replicate/mapped"),
+        Some("replicate"),
+        &empty,
+        &empty,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            response_time_ms: Some(2500.0),
+            replicate_rate_per_second: Some(0.02),
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.total - 0.14).abs() < 1e-12, "{result:?}");
 }
 
 #[rstest]

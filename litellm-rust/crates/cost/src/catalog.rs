@@ -404,6 +404,10 @@ impl ModelInfoCatalog {
         select_model_key(&self.entries, model, provider, region)
     }
 
+    pub fn contains_exact_model(&self, model: &str) -> bool {
+        self.entries.contains_key(model)
+    }
+
     pub fn select_model_name_for_cost_calc(
         &self,
         request: ModelSelectionRequest<'_>,

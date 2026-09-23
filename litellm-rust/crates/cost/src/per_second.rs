@@ -1,5 +1,22 @@
 use serde_json::Value;
 
+pub const DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: f64 = 0.0014;
+
+pub fn get_replicate_completion_pricing(
+    total_time_ms: f64,
+    created_seconds: Option<f64>,
+    ended_seconds: Option<f64>,
+    now_seconds: f64,
+    price_per_second: f64,
+) -> f64 {
+    let duration_ms = if total_time_ms == 0.0 {
+        ended_seconds.unwrap_or(now_seconds) - created_seconds.unwrap_or(now_seconds)
+    } else {
+        total_time_ms
+    };
+    price_per_second * duration_ms / 1000.0
+}
+
 pub fn has_token_or_tiered_pricing(model_info: &Value) -> bool {
     model_info
         .get("input_cost_per_token")

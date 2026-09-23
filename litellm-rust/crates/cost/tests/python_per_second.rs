@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use jiff::Timestamp;
 use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog};
+use litellm_cost::per_second::get_replicate_completion_pricing;
 use litellm_cost::per_second::{
     bills_wall_clock_seconds, has_token_or_tiered_pricing, per_second_pricing_cost,
 };
@@ -99,4 +100,24 @@ fn wall_clock_pricing_precedes_provider_reported_cost(#[case] provider: &str) {
             .unwrap(),
         (1.0, 2.0)
     );
+}
+#[rstest]
+#[case(2500.0, None, None, 100.0, 0.05)]
+#[case(0.0, Some(100.0), Some(102.0), 200.0, 0.00004)]
+#[case(0.0, None, None, 200.0, 0.0)]
+fn replicate_completion_pricing_matches_python_duration_units(
+    #[case] total_time_ms: f64,
+    #[case] created_seconds: Option<f64>,
+    #[case] ended_seconds: Option<f64>,
+    #[case] now_seconds: f64,
+    #[case] expected: f64,
+) {
+    let actual = get_replicate_completion_pricing(
+        total_time_ms,
+        created_seconds,
+        ended_seconds,
+        now_seconds,
+        0.02,
+    );
+    assert!((actual - expected).abs() < 1e-12);
 }

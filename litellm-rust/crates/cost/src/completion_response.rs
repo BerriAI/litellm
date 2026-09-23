@@ -14,6 +14,7 @@ use crate::image_cost_router::{
     route_image_generation_cost_calculator,
 };
 use crate::mcp_cost::calculate_mcp_tool_call_cost;
+use crate::per_second::{DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND, get_replicate_completion_pricing};
 use crate::realtime_cost::{
     collect_and_combine_usage_from_realtime_stream_results, combine_usage_objects, event_usage,
     partition_results_by_service_tier,
@@ -43,6 +44,7 @@ pub struct CompletionResponseCostRequest<'a> {
     pub fallback_usage: Option<&'a ChatUsage>,
     pub text_input: Option<CompletionTextInput<'a>>,
     pub custom_cost: CustomPricing,
+    pub replicate_rate_per_second: Option<f64>,
     pub provider: Option<&'a str>,
     pub region: Option<&'a str>,
     pub data_residency: Option<&'a str>,
@@ -407,6 +409,37 @@ fn price_video_response(
     Ok(flat_priced(prepared, model, total))
 }
 
+fn unregistered_replicate_cost(
+    catalog: &ModelInfoCatalog,
+    request: CompletionResponseCostRequest<'_>,
+    prepared: &PreparedCompletionInput,
+    provider: Option<&str>,
+) -> Option<(String, f64)> {
+    let model = prepared.model_candidates.iter().flatten().next()?;
+    if !(provider == Some("replicate") || model.contains("replicate"))
+        || catalog.contains_exact_model(model)
+    {
+        return None;
+    }
+    let total_time_ms = response_time_ms_for_cost(
+        request.input.model_selection.response,
+        request.response_time_ms,
+    )
+    .unwrap_or(0.0);
+    let response = request.input.model_selection.response;
+    let now_seconds = request.at.as_nanosecond() as f64 / 1_000_000_000.0;
+    let total = get_replicate_completion_pricing(
+        total_time_ms,
+        number(response.and_then(|response| response.get("created"))),
+        number(response.and_then(|response| response.get("ended"))),
+        now_seconds,
+        request
+            .replicate_rate_per_second
+            .unwrap_or(DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND),
+    );
+    Some((model.clone(), total))
+}
+
 fn realtime_results(
     request: CompletionResponseCostRequest<'_>,
 ) -> Result<&[Value], CompletionResponseCostError> {
@@ -650,6 +683,12 @@ pub fn completion_cost_from_response(
                 .or(request.region)
         };
         return price_responses_websocket(catalog, request, prepared, provider, region);
+    }
+    if !matches!(prepared.call_type.as_str(), "search" | "asearch")
+        && let Some((model, total)) =
+            unregistered_replicate_cost(catalog, request, &prepared, provider)
+    {
+        return Ok(flat_priced(prepared, model, total));
     }
     let needs_token_usage = matches!(
         prepared.call_type.as_str(),
