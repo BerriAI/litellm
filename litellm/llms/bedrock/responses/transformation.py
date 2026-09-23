@@ -17,6 +17,13 @@ Converse bridge dropped that tool silently (Converse has no web search either),
 so this config drops every tool type the endpoint rejects the same way. The
 supported set is the one bedrock-runtime's own validation error names.
 
+Parity with the Converse bridge on what it used to accept: ``background`` never
+reached Converse (the bridge answered synchronously), while bedrock-runtime rejects
+it with "The background parameter is not supported.", so it is dropped here. The
+bridge also downloaded ``input_image`` http(s) URLs for Converse, while
+bedrock-runtime only accepts ``data:`` and ``s3://`` image URLs, so remote image
+URLs are fetched and inlined as data URIs before the request is signed.
+
 Auth: Bearer token (litellm_params.api_key or the standard AWS_BEARER_TOKEN_BEDROCK)
 when present; otherwise AWS SigV4 (service "bedrock") over the standard credential
 chain, signed via BaseAWSLLM._sign_request once the body is final.
@@ -26,12 +33,19 @@ inference profile, so the model is named ``us.openai.gpt-5.6-sol`` or
 ``global.openai.gpt-5.6-sol``; there is no in-Region form.
 """
 
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_convert_url_to_base64,
+    convert_url_to_base64,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -56,14 +70,78 @@ BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES: Final = (
 BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
     {"function", "mcp", "custom", "apply_patch", "namespace", "tool_search", "computer"}
 )
+BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS: Final = frozenset({"background"})
+REMOTE_IMAGE_URL_SCHEMES: Final = ("http://", "https://")
 
 
 def resolve_bedrock_bearer_token(api_key: str | None) -> str | None:
     return api_key or get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
 
 
+def _remote_image_url(block: object) -> str | None:
+    if not isinstance(block, dict) or block.get("type") != "input_image":
+        return None
+    image_url: Final = block.get("image_url")
+    if not isinstance(image_url, str) or not image_url.startswith(REMOTE_IMAGE_URL_SCHEMES):
+        return None
+    return image_url
+
+
+def _content_blocks(item: object) -> "tuple[object, ...]":
+    if not isinstance(item, dict):
+        return ()
+    content: Final = item.get("content")
+    return tuple(content) if isinstance(content, list) else ()
+
+
+def collect_remote_image_urls(input: "str | ResponseInputParam") -> "tuple[str, ...]":
+    """The distinct http(s) ``input_image`` URLs in ``input``, in first-seen order."""
+    if not isinstance(input, list):
+        return ()
+    return tuple(
+        dict.fromkeys(
+            url for item in input for block in _content_blocks(item) if (url := _remote_image_url(block)) is not None
+        )
+    )
+
+
+def _inline_block(block: object, inlined: "Mapping[str, str]") -> object:
+    url: Final = _remote_image_url(block)
+    if url is None or not isinstance(block, dict):
+        return block
+    return {**block, "image_url": inlined[url]}  # mutable-ok: outgoing JSON request item
+
+
+def _inline_item(item: object, inlined: "Mapping[str, str]") -> object:
+    if not isinstance(item, dict) or not isinstance(item.get("content"), list):
+        return item
+    return {  # mutable-ok: outgoing JSON request item
+        **item,
+        "content": [_inline_block(block, inlined) for block in item["content"]],  # mutable-ok: same
+    }
+
+
+def inline_remote_image_urls(
+    input: "str | ResponseInputParam", inlined: "Mapping[str, str]"
+) -> "str | ResponseInputParam":
+    """``input`` with every http(s) ``input_image`` URL replaced by its entry in ``inlined``."""
+    if not isinstance(input, list) or not inlined:
+        return input
+    items: Final = [_inline_item(item, inlined) for item in input]  # mutable-ok: downstream narrows on isinstance(list)
+    return items  # pyright: ignore[reportReturnType]  # items keep the caller's input union
+
+
 class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
     """Responses API config for the OpenAI models on the bedrock-runtime endpoint."""
+
+    def __init__(
+        self,
+        fetch_image: "Callable[[str], str]" = convert_url_to_base64,
+        async_fetch_image: "Callable[[str], Awaitable[str]]" = async_convert_url_to_base64,
+    ) -> None:
+        super().__init__()
+        self.fetch_image = fetch_image
+        self.async_fetch_image = async_fetch_image
 
     @classmethod
     def for_model(cls, model: str | None) -> "BedrockOpenAIResponsesConfig | None":
@@ -156,9 +234,18 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         model: str,
         drop_params: bool,
     ) -> dict:  # mutable-ok: signature fixed by the override contract
-        params: Final = super().map_openai_params(
+        mapped: Final = super().map_openai_params(
             response_api_optional_params=response_api_optional_params, model=model, drop_params=drop_params
         )
+        unsupported: Final = tuple(sorted(BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS & mapped.keys()))
+        if unsupported:
+            verbose_logger.warning(
+                "Bedrock Runtime Responses API: dropping unsupported parameter(s) %s that the endpoint rejects.",
+                unsupported,
+            )
+        params: Final = {  # mutable-ok: outgoing JSON request params
+            key: value for key, value in mapped.items() if key not in unsupported
+        }
         tools: Final = params.get("tools")
         if not isinstance(tools, list):
             return params
@@ -176,6 +263,41 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         return {**without_tools, "tools": list(kept)}
 
     def transform_responses_api_request(
+        self,
+        model: str,
+        input: "str | ResponseInputParam",
+        response_api_optional_request_params: dict,  # mutable-ok: signature fixed by the override contract
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,  # mutable-ok: same
+    ) -> dict:  # mutable-ok: same
+        inlined: Final = MappingProxyType({url: self.fetch_image(url) for url in collect_remote_image_urls(input)})
+        return self._transform_inlined_request(
+            model=model,
+            input=inline_remote_image_urls(input, inlined),
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+    async def async_transform_responses_api_request(
+        self,
+        model: str,
+        input: "str | ResponseInputParam",
+        response_api_optional_request_params: dict,  # mutable-ok: signature fixed by the override contract
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,  # mutable-ok: same
+    ) -> dict:  # mutable-ok: same
+        remote_urls: Final = collect_remote_image_urls(input)
+        data_uris: Final = await asyncio.gather(*(self.async_fetch_image(url) for url in remote_urls))
+        return self._transform_inlined_request(
+            model=model,
+            input=inline_remote_image_urls(input, MappingProxyType(dict(zip(remote_urls, data_uris, strict=True)))),
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+    def _transform_inlined_request(
         self,
         model: str,
         input: "str | ResponseInputParam",

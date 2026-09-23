@@ -280,3 +280,138 @@ class TestCodexHistoryNormalization:
             headers={},
         )
         assert body["input"] == original
+
+
+class TestBackgroundDrop:
+    """The Converse bridge answered `background` requests synchronously; bedrock-runtime 400s the parameter."""
+
+    def test_background_is_dropped_with_a_warning(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            params = _cfg().map_openai_params(
+                response_api_optional_params={"background": True, "max_output_tokens": 64},
+                model=MODEL,
+                drop_params=False,
+            )
+        assert params == {"max_output_tokens": 64}
+        dropped = [r.getMessage() for r in caplog.records if "dropping unsupported parameter" in r.getMessage()]
+        assert len(dropped) == 1 and "background" in dropped[0]
+
+    def test_without_background_nothing_is_dropped_or_logged(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            params = _cfg().map_openai_params(
+                response_api_optional_params={"max_output_tokens": 64}, model=MODEL, drop_params=False
+            )
+        assert params == {"max_output_tokens": 64}
+        assert not [r for r in caplog.records if "dropping unsupported parameter" in r.getMessage()]
+
+
+def _never_fetch(url: str) -> str:
+    raise AssertionError(f"unexpected sync fetch of {url}")
+
+
+async def _never_fetch_async(url: str) -> str:
+    raise AssertionError(f"unexpected async fetch of {url}")
+
+
+class TestRemoteImageInlining:
+    """The Converse bridge downloaded http(s) image URLs; bedrock-runtime accepts only data: and s3://."""
+
+    _REMOTE = "https://example.com/grapes.png"
+    _DATA_URI = "data:image/png;base64,QUJD"
+    _INLINED = "data:image/png;base64,ZmV0Y2hlZA=="
+
+    def _input(self, remote: str) -> list[dict]:
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "What is this?"},
+                    {"type": "input_image", "image_url": remote, "detail": "auto"},
+                    {"type": "input_image", "image_url": remote},
+                    {"type": "input_image", "image_url": self._DATA_URI},
+                    {"type": "input_image", "image_url": "s3://bucket/grapes.png"},
+                    {"type": "input_image", "file_id": "file-1"},
+                ],
+            },
+            {"role": "assistant", "content": "plain string content"},
+        ]
+
+    def test_sync_transform_fetches_each_remote_url_once_and_inlines_it(self):
+        fetched: list[str] = []
+
+        def fetch(url: str) -> str:
+            fetched.append(url)
+            return self._INLINED
+
+        body = BedrockOpenAIResponsesConfig(
+            fetch_image=fetch, async_fetch_image=_never_fetch_async
+        ).transform_responses_api_request(
+            model=MODEL,
+            input=self._input(self._REMOTE),
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["input"] == self._input(self._INLINED)
+        assert fetched == [self._REMOTE]
+
+    @pytest.mark.asyncio
+    async def test_async_transform_fetches_with_the_async_fetcher(self):
+        fetched: list[str] = []
+
+        async def fetch(url: str) -> str:
+            fetched.append(url)
+            return self._INLINED
+
+        body = await BedrockOpenAIResponsesConfig(
+            fetch_image=_never_fetch, async_fetch_image=fetch
+        ).async_transform_responses_api_request(
+            model=MODEL,
+            input=self._input(self._REMOTE),
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["input"] == self._input(self._INLINED)
+        assert fetched == [self._REMOTE]
+
+    @pytest.mark.asyncio
+    async def test_inputs_without_remote_images_never_fetch(self):
+        cfg = BedrockOpenAIResponsesConfig(fetch_image=_never_fetch, async_fetch_image=_never_fetch_async)
+        local_only = self._input(self._DATA_URI)
+        sync_body = cfg.transform_responses_api_request(
+            model=MODEL,
+            input=local_only,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        async_body = await cfg.async_transform_responses_api_request(
+            model=MODEL,
+            input="a plain string prompt",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert sync_body["input"] == local_only
+        assert async_body["input"] == "a plain string prompt"
+
+    @pytest.mark.asyncio
+    async def test_inlining_runs_before_codex_history_normalization(self):
+        async def fetch(url: str) -> str:
+            return self._INLINED
+
+        body = await BedrockOpenAIResponsesConfig(
+            fetch_image=_never_fetch, async_fetch_image=fetch
+        ).async_transform_responses_api_request(
+            model=MODEL,
+            input=[
+                {"type": "agent_message", "content": [{"type": "output_text", "text": "prior"}]},
+                {"role": "user", "content": [{"type": "input_image", "image_url": self._REMOTE}]},
+            ],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert [i.get("type") or i.get("role") for i in body["input"]] == ["message", "user"]
+        assert body["input"][1]["content"] == [{"type": "input_image", "image_url": self._INLINED}]
