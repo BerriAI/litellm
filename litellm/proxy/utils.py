@@ -980,10 +980,11 @@ def _failure_usage_to_lift(
 _EMPTY_LIFT: Final = MappingProxyType({})
 
 
-def _reached_deployment(model_call_details: Mapping[str, object]) -> bool:
+def _reached_deployment(litellm_logging_obj: Logging) -> bool:
     """A provider handoff or a cached response both mean the router selected a deployment."""
-    return (
-        model_call_details.get("first_api_call_start_time") is not None or model_call_details.get("cache_hit") is True
+    caching_details: Final = litellm_logging_obj.caching_details
+    return litellm_logging_obj.model_call_details.get("first_api_call_start_time") is not None or (
+        caching_details is not None and caching_details.get("cache_hit") is True
     )
 
 
@@ -3327,7 +3328,7 @@ class ProxyLogging:
                 _litellm_params,
                 request_data.get("model"),
                 user_api_key_dict.team_id,
-                dispatched=_reached_deployment(litellm_logging_obj.model_call_details),
+                dispatched=_reached_deployment(litellm_logging_obj),
             )
 
             litellm_logging_obj.update_environment_variables(

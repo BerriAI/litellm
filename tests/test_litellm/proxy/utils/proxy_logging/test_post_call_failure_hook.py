@@ -18,6 +18,7 @@ from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.utils import CachingDetails
 
 
 @pytest.fixture(autouse=True)
@@ -289,7 +290,7 @@ async def test_post_call_failure_hook_keeps_deployment_attribution_for_cache_hit
     logging_obj, request_data = litellm.utils.function_setup(
         original_function="acompletion", rules_obj=litellm.utils.Rules(), start_time=datetime.now(), **request_data
     )
-    logging_obj.model_call_details["cache_hit"] = True
+    logging_obj.caching_details = CachingDetails(cache_hit=True, cache_duration_ms=1.0)
     request_data["litellm_logging_obj"] = logging_obj
 
     await proxy_logging.post_call_failure_hook(
