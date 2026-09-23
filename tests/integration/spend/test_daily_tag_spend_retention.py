@@ -1,20 +1,24 @@
 import os
+import signal
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
 
+import psutil
 import psycopg
 import pytest
 import yaml
 from pydantic import JsonValue, TypeAdapter
 
-from tests.integration._support.client import Gateway, eventually
+from tests.integration._support.client import Gateway, eventually, string_value
 from tests.integration._support.database import read_rows
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import owned_proxy, owned_proxy_process
 
 CLEANUP_EVERY_MINUTE: Final = "* * * * *"
+RETENTION_SETTING: Final = "maximum_daily_tag_spend_retention_period"
 _MAPPING: Final = TypeAdapter(dict[str, JsonValue])
+_SETTINGS: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
 def _day(days_ago: int) -> str:
@@ -54,6 +58,26 @@ def _spend_log_present(request_id: str) -> bool:
     return bool(read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (request_id,)))
 
 
+def _forget_stored_retention_setting() -> None:
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection:
+        connection.execute(
+            'UPDATE "LiteLLM_Config" SET param_value = param_value - %s WHERE param_name = %s',
+            (RETENTION_SETTING, "general_settings"),
+        )
+
+
+def _listed_retention_value(gateway: Gateway) -> JsonValue:
+    listed: Final = _SETTINGS.validate_json(
+        gateway.request("GET", "/config/list", params={"config_type": "general_settings"}).content
+    )
+    matching: Final = tuple(entry for entry in listed if entry["field_name"] == RETENTION_SETTING)
+    return matching[0]["field_value"] if matching else "not listed"
+
+
+def _completion_id(gateway: Gateway, model: str) -> str:
+    return string_value(gateway.chat(model, text=f"retention audit {uuid.uuid4().hex}")["id"])
+
+
 def _cleanup_config(tmp_path: Path, retention: dict[str, JsonValue]) -> Path:
     base: Final = _MAPPING.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     config: Final = {
@@ -84,6 +108,97 @@ def test_daily_tag_spend_retention_prunes_only_rows_older_than_the_period(gatewa
                 seconds=150,
             )
         assert remaining == (on_the_cutoff, today), remaining
+    finally:
+        _delete_daily_tag_spend(tag)
+
+
+@pytest.mark.covers("spend.daily_tag_spend.runtime_config_update_enables_cleanup_on_a_multi_worker_proxy")
+def test_config_update_turns_on_daily_tag_spend_cleanup_without_a_restart(gateway: Gateway, tmp_path: Path) -> None:
+    tag: Final = f"integration-retention-{uuid.uuid4().hex}"
+    expired, yesterday_of_cutoff, on_the_cutoff, today = _day(200), _day(31), _day(30), _day(0)
+    _seed_daily_tag_spend(tag, (expired, yesterday_of_cutoff, on_the_cutoff, today))
+    _forget_stored_retention_setting()
+    try:
+        config: Final = _cleanup_config(tmp_path, {})
+        with owned_proxy(gateway, tmp_path, {}, config=config, workers=2) as owned, owned.scenario() as scenario:
+            model: Final = scenario.model()
+            assert _listed_retention_value(owned) is None
+            owned.post("/config/update", {"general_settings": {RETENTION_SETTING: "30d"}})
+            assert _listed_retention_value(owned) == "30d"
+            remaining: Final = eventually(
+                lambda: _remaining_days(tag),
+                lambda days: yesterday_of_cutoff not in days,
+                seconds=150,
+            )
+            assert remaining == (on_the_cutoff, today), remaining
+            assert _completion_id(owned, model).startswith("chatcmpl-")
+    finally:
+        _forget_stored_retention_setting()
+        _delete_daily_tag_spend(tag)
+
+
+@pytest.mark.covers("spend.daily_tag_spend.invalid_retention_value_keeps_rows_and_leaves_the_proxy_serving")
+def test_unparseable_daily_tag_spend_retention_deletes_nothing_and_keeps_serving(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    tag: Final = f"integration-retention-{uuid.uuid4().hex}"
+    request_id: Final = f"integration-retention-{uuid.uuid4().hex}"
+    _seed_daily_tag_spend(tag, (_day(200),))
+    _seed_old_spend_log(request_id, days_ago=200)
+    try:
+        config: Final = _cleanup_config(
+            tmp_path, {RETENTION_SETTING: "soon", "maximum_spend_logs_retention_period": "30d"}
+        )
+        with owned_proxy(gateway, tmp_path, {}, config=config) as owned, owned.scenario() as scenario:
+            model: Final = scenario.model()
+            eventually(lambda: _spend_log_present(request_id), lambda present: not present, seconds=150)
+            assert _remaining_days(tag) == (_day(200),)
+            assert _completion_id(owned, model).startswith("chatcmpl-")
+    finally:
+        _delete_daily_tag_spend(tag)
+
+
+@pytest.mark.covers("spend.daily_tag_spend.retention_horizon_is_independent_of_the_spend_log_horizon")
+def test_daily_tag_spend_keeps_days_the_shorter_spend_log_horizon_already_pruned(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    tag: Final = f"integration-retention-{uuid.uuid4().hex}"
+    request_id: Final = f"integration-retention-{uuid.uuid4().hex}"
+    _seed_daily_tag_spend(tag, (_day(200), _day(60)))
+    _seed_old_spend_log(request_id, days_ago=60)
+    try:
+        config: Final = _cleanup_config(
+            tmp_path, {RETENTION_SETTING: "90d", "maximum_spend_logs_retention_period": "30d"}
+        )
+        with owned_proxy(gateway, tmp_path, {}, config=config):
+            eventually(lambda: _spend_log_present(request_id), lambda present: not present, seconds=150)
+            remaining: Final = eventually(lambda: _remaining_days(tag), lambda days: _day(200) not in days, seconds=150)
+        assert remaining == (_day(60),), remaining
+    finally:
+        _delete_daily_tag_spend(tag)
+
+
+@pytest.mark.covers("spend.daily_tag_spend.cleanup_and_serving_survive_losing_one_of_two_workers")
+def test_daily_tag_spend_cleanup_completes_after_one_of_two_workers_is_killed(gateway: Gateway, tmp_path: Path) -> None:
+    tag: Final = f"integration-retention-{uuid.uuid4().hex}"
+    _seed_daily_tag_spend(tag, (_day(200), _day(0)))
+    try:
+        config: Final = _cleanup_config(tmp_path, {RETENTION_SETTING: "30d"})
+        with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
+            with owned.gateway.scenario() as scenario:
+                model: Final = scenario.model()
+                workers: Final = eventually(
+                    lambda: psutil.Process(owned.process.pid).children(recursive=True),
+                    lambda children: len(children) >= 2,
+                    seconds=30,
+                )
+                workers[0].send_signal(signal.SIGKILL)
+                ids: Final = tuple(_completion_id(owned.gateway, model) for _ in range(6))
+                assert len(set(ids)) == 6 and all(identity.startswith("chatcmpl-") for identity in ids), ids
+                remaining: Final = eventually(
+                    lambda: _remaining_days(tag), lambda days: _day(200) not in days, seconds=150
+                )
+                assert remaining == (_day(0),), remaining
     finally:
         _delete_daily_tag_spend(tag)
 
