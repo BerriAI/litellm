@@ -123,3 +123,5 @@ def test_store_sync_never_raises_when_the_cache_is_missing(monkeypatch: pytest.M
 
     call_cache.store_sync(_CALL_TYPE, _kwargs(), _RESPONSE)
     call_cache.store(_CALL_TYPE, _kwargs(), _RESPONSE)
+
+    assert litellm.cache is None
