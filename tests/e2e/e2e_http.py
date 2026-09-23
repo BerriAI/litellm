@@ -49,6 +49,7 @@ class AnthropicHeaders(AuthHeaders):
     on its own internal calls."""
 
     anthropic_version: str = Field(default="2023-06-01", alias="anthropic-version")
+    x_litellm_session_id: str | None = Field(default=None, serialization_alias="x-litellm-session-id")
 
 
 class PartialBody(BaseModel):
@@ -128,9 +129,9 @@ class ProbeResult(BaseModel):
 
 
 class ExternalWrite(BaseModel):
-    """Outcome of a write to a non-proxy API (an identity provider's admin API)
-    that answers with a status and, on create, a Location header naming the new
-    resource rather than a JSON body."""
+    """Outcome of a call to a non-proxy API (an identity provider's admin API, a
+    secret manager) that answers with a status, on create a Location header naming
+    the new resource, and a body kept as text rather than parsed as JSON."""
 
     status_code: int
     location: str = ""
@@ -488,6 +489,30 @@ def post_json_external(
         location=resp.headers.get("Location", ""),
         body=resp.text,
     )
+
+
+def send_text_external(
+    method: Literal["GET", "POST", "PATCH"],
+    url: str,
+    *,
+    headers: BaseModel,
+    content: str | None = None,
+    timeout: float = 30.0,
+) -> ExternalWrite:
+    """Send an absolute URL outside the proxy a raw text body (or none) and keep the
+    answer as text, for an API that takes and returns neither JSON nor forms: CyberArk
+    Conjur takes a secret value or a YAML policy and returns a secret as its raw value."""
+    try:
+        resp = requests.request(
+            method,
+            url,
+            headers=_headers(headers),
+            data=content.encode() if content is not None else None,
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return ExternalWrite(status_code=-1, body=str(exc))
+    return ExternalWrite(status_code=resp.status_code, body=resp.text)
 
 
 def delete_external(url: str, *, headers: BaseModel, timeout: float = 30.0) -> ExternalWrite:

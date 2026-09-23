@@ -13,12 +13,7 @@ use pyo3::{
 
 use super::{identity::BackendIdentity, native::NativeResponseCache, request::duration};
 
-#[allow(dead_code, reason = "consumed by the cache activation follow-up")]
 pub(super) struct CachePolicy {
-    pub(super) mode: String,
-    pub(super) ttl: Option<Duration>,
-    pub(super) namespace: Option<String>,
-    pub(super) supported_call_types: Option<Vec<String>>,
     pub(super) redis_flush_size: Option<usize>,
     pub(super) semantic_cache_scope: String,
 }
@@ -46,7 +41,6 @@ pub(super) enum CertificateRequirement {
     Required,
 }
 
-#[allow(dead_code, reason = "consumed by the cache activation follow-up")]
 pub(super) struct RedisTlsConfig {
     pub(super) certificate_requirement: CertificateRequirement,
     pub(super) check_hostname: bool,
@@ -56,7 +50,6 @@ pub(super) struct RedisTlsConfig {
     pub(super) client_key: Option<String>,
 }
 
-#[allow(dead_code, reason = "consumed by the cache activation follow-up")]
 pub(super) struct RedisConnectionConfig {
     pub(super) host: String,
     pub(super) port: u16,
@@ -73,7 +66,6 @@ pub(super) struct RedisConnectionConfig {
     pub(super) tls: Option<RedisTlsConfig>,
 }
 
-#[allow(dead_code, reason = "consumed by the cache activation follow-up")]
 pub(super) struct RedisCacheConfig {
     pub(super) default_ttl: Duration,
     pub(super) namespace: Option<String>,
@@ -94,17 +86,10 @@ pub(super) struct AzureBlobCacheConfig {
     pub(super) container: String,
 }
 
-#[allow(
-    dead_code,
-    reason = "embedding settings are projected so drift falls back to Python"
-)]
 pub(super) struct RedisSemanticCacheConfig {
     pub(super) redis_url: String,
     pub(super) index_name: String,
     pub(super) similarity_threshold: f64,
-    pub(super) embedding_model: String,
-    pub(super) embedding_max_input_tokens: Option<u64>,
-    pub(super) embedding_timeout: Option<f64>,
 }
 
 struct RedisClientProjection<'py> {
@@ -118,11 +103,13 @@ struct RedisClientProjection<'py> {
 
 const REDIS_PY_DEFAULT_MAX_CONNECTIONS: usize = 1 << 31;
 
-#[allow(dead_code, reason = "consumed by the cache activation follow-up")]
+/// The read and write timeout every native Redis connection uses, which is also `RedisCache`'s
+/// default `socket_timeout`.
+const NATIVE_REDIS_SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub(super) struct ValkeySemanticCacheConfig {
     pub(super) similarity_threshold: f64,
     pub(super) index_name: String,
-    pub(super) embedding_model: String,
     pub(super) connection: RedisConnectionConfig,
 }
 
@@ -147,6 +134,93 @@ impl QdrantSemanticCacheConfig {
     }
 }
 
+impl RedisTlsConfig {
+    /// Whether redis-rs with rustls behaves like this redis-py `SSLConnection`: it verifies the
+    /// certificate chain against the system roots and always checks the hostname.
+    fn native(&self) -> Result<(), UnsupportedCacheConfig> {
+        if self.ca_certificate.is_some()
+            || self.ca_data.is_some()
+            || self.client_certificate.is_some()
+            || self.client_key.is_some()
+        {
+            return Err(UnsupportedCacheConfig::RedisTlsCertificates);
+        }
+        if self.certificate_requirement == CertificateRequirement::None || !self.check_hostname {
+            return Err(UnsupportedCacheConfig::RedisTlsVerification);
+        }
+        Ok(())
+    }
+}
+
+impl RedisConnectionConfig {
+    /// The redis-rs URL for this connection, or the first setting the native client cannot
+    /// honor. The native pool and socket timeouts are fixed, so only redis-py's unbounded pool,
+    /// its unset timeouts and `RedisCache`'s five-second `socket_timeout` map onto them.
+    pub(super) fn native_url(&self) -> Result<String, UnsupportedCacheConfig> {
+        if self.pool_size != REDIS_PY_DEFAULT_MAX_CONNECTIONS {
+            return Err(UnsupportedCacheConfig::RedisPoolSize);
+        }
+        if self
+            .read_timeout
+            .is_some_and(|timeout| timeout != NATIVE_REDIS_SOCKET_TIMEOUT)
+            || self.connect_timeout.is_some()
+        {
+            return Err(UnsupportedCacheConfig::RedisTimeout);
+        }
+        if self.socket_keepalive == Some(true) {
+            return Err(UnsupportedCacheConfig::RedisKeepalive);
+        }
+        if !self.health_check_interval.is_zero() {
+            return Err(UnsupportedCacheConfig::RedisHealthCheck);
+        }
+        if self.client_name.is_some() {
+            return Err(UnsupportedCacheConfig::RedisClientName);
+        }
+        let scheme = match &self.tls {
+            None => "redis",
+            Some(tls) => {
+                tls.native()?;
+                "rediss"
+            }
+        };
+        let host = if self.host.contains(':') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
+        let mut url = url::Url::parse(&format!(
+            "{scheme}://{host}:{}/{}",
+            self.port, self.database
+        ))
+        .map_err(|_| UnsupportedCacheConfig::RedisConnection)?;
+        if let Some(username) = &self.username {
+            url.set_username(username)
+                .map_err(|()| UnsupportedCacheConfig::RedisConnection)?;
+        }
+        if let Some(password) = &self.password {
+            url.set_password(Some(password))
+                .map_err(|()| UnsupportedCacheConfig::RedisConnection)?;
+        }
+        if self.protocol == RedisProtocol::Resp3 {
+            url.set_query(Some("protocol=resp3"));
+        }
+        Ok(url.into())
+    }
+}
+
+impl RedisSemanticCacheConfig {
+    /// redisvl hands `redis_url` to redis-py, which reads TLS and socket options from the URL;
+    /// redis-rs ignores those, so only a plain URL keeps its meaning.
+    pub(super) fn native_url(&self) -> Result<&str, UnsupportedCacheConfig> {
+        let url = url::Url::parse(&self.redis_url)
+            .map_err(|_| UnsupportedCacheConfig::RedisSemanticUrl)?;
+        if !matches!(url.scheme(), "redis" | "unix") || url.query().is_some() {
+            return Err(UnsupportedCacheConfig::RedisSemanticUrl);
+        }
+        Ok(&self.redis_url)
+    }
+}
+
 pub(super) enum CacheBackendConfig {
     Memory(MemoryCacheConfig),
     Redis(Box<RedisCacheConfig>),
@@ -159,7 +233,6 @@ pub(super) enum CacheBackendConfig {
     QdrantSemantic(Box<QdrantSemanticCacheConfig>),
 }
 
-#[allow(dead_code, reason = "consumed by the cache activation follow-up")]
 pub(super) struct NativeCacheConfig {
     pub(super) policy: CachePolicy,
     pub(super) backend: CacheBackendConfig,
@@ -178,6 +251,15 @@ pub(super) enum UnsupportedCacheConfig {
     DiskStore,
     QdrantEndpoint,
     SemanticEmbedding,
+    RedisPoolSize,
+    RedisTimeout,
+    RedisKeepalive,
+    RedisHealthCheck,
+    RedisClientName,
+    RedisTlsCertificates,
+    RedisTlsVerification,
+    RedisSemanticUrl,
+    ValkeyTls,
 }
 
 impl UnsupportedCacheConfig {
@@ -197,6 +279,28 @@ impl UnsupportedCacheConfig {
                 "native Qdrant requires the default REST port so the gRPC port can be derived"
             }
             Self::SemanticEmbedding => "native semantic embedding requires Python",
+            Self::RedisPoolSize => {
+                "native Redis uses a fixed connection pool; max_connections requires Python"
+            }
+            Self::RedisTimeout => {
+                "native Redis uses fixed socket timeouts; socket_timeout and \
+                 socket_connect_timeout require Python"
+            }
+            Self::RedisKeepalive => "native Redis does not support socket_keepalive",
+            Self::RedisHealthCheck => "native Redis does not support health_check_interval",
+            Self::RedisClientName => "native Redis does not support client_name",
+            Self::RedisTlsCertificates => {
+                "native Redis TLS does not support ssl_ca_certs, ssl_ca_data, ssl_certfile or \
+                 ssl_keyfile"
+            }
+            Self::RedisTlsVerification => {
+                "native Redis TLS always verifies the certificate and hostname; \
+                 ssl_cert_reqs=none and ssl_check_hostname=false require Python"
+            }
+            Self::RedisSemanticUrl => {
+                "native Redis semantic cache does not support TLS or query options in redis_url"
+            }
+            Self::ValkeyTls => "native Valkey semantic cache does not support TLS connections",
         }
     }
 }
@@ -211,12 +315,6 @@ impl NativeCacheConfig {
     pub(super) fn project(facade: &Bound<'_, PyAny>) -> PyResult<CacheConfigProjection> {
         let backend_name = facade.getattr("type")?.extract::<String>()?;
         let policy = CachePolicy {
-            mode: facade.getattr("mode")?.extract::<String>()?,
-            ttl: optional_duration(facade.getattr("ttl")?)?,
-            namespace: optional_string(facade.getattr("namespace")?)?,
-            supported_call_types: facade
-                .getattr("supported_call_types")?
-                .extract::<Option<Vec<String>>>()?,
             redis_flush_size: facade
                 .getattr("redis_flush_size")?
                 .extract::<Option<usize>>()?,
@@ -475,13 +573,6 @@ pub(super) fn project_redis_semantic(
             .extract::<Option<String>>()?
             .unwrap_or_else(|| "litellm_semantic_cache_index".into()),
         similarity_threshold: backend.getattr("similarity_threshold")?.extract::<f64>()?,
-        embedding_model: backend.getattr("embedding_model")?.extract::<String>()?,
-        embedding_max_input_tokens: backend
-            .getattr("embedding_max_input_tokens")?
-            .extract::<Option<u64>>()?,
-        embedding_timeout: backend
-            .getattr("embedding_timeout")?
-            .extract::<Option<f64>>()?,
     })
 }
 
@@ -592,35 +683,46 @@ fn project_redis(
     if has_value(&resolved, "credential_provider")? {
         return Ok(Err(UnsupportedCacheConfig::RedisCredentials));
     }
-
-    let protocol = match optional_i64(&resolved, "protocol")?.unwrap_or(2) {
-        2 => RedisProtocol::Resp2,
-        3 => RedisProtocol::Resp3,
-        _ => return Err(PyValueError::new_err("unsupported Redis protocol version")),
-    };
-    let health_check_interval =
-        duration(optional_f64(&resolved, "health_check_interval")?.unwrap_or(0.0))?;
     Ok(Ok(RedisCacheConfig {
         default_ttl: duration(backend.getattr("default_ttl")?.extract::<f64>()?)?,
         namespace: optional_attribute_string(backend, "namespace")?,
         flush_size: backend.getattr("redis_flush_size")?.extract::<usize>()?,
         topology,
-        connection: RedisConnectionConfig {
-            host,
-            port,
-            database: optional_i64(&resolved, "db")?.unwrap_or(0),
-            username: optional_dict_string(&resolved, "username")?,
-            password: optional_dict_string(&resolved, "password")?,
-            protocol,
-            pool_size,
-            read_timeout: optional_dict_duration(&resolved, "socket_timeout")?,
-            connect_timeout: optional_dict_duration(&resolved, "socket_connect_timeout")?,
-            socket_keepalive: optional_bool(&resolved, "socket_keepalive")?,
-            health_check_interval,
-            client_name: optional_dict_string(&resolved, "client_name")?,
-            tls,
-        },
+        connection: resolved_connection(&resolved, host, port, pool_size, tls)?,
     }))
+}
+
+/// The connection settings redis-py resolved for one client's pool.
+#[inline(never)]
+fn resolved_connection(
+    resolved: &Bound<'_, PyDict>,
+    host: String,
+    port: u16,
+    pool_size: usize,
+    tls: Option<RedisTlsConfig>,
+) -> PyResult<RedisConnectionConfig> {
+    let protocol = match optional_i64(resolved, "protocol")?.unwrap_or(2) {
+        2 => RedisProtocol::Resp2,
+        3 => RedisProtocol::Resp3,
+        _ => return Err(PyValueError::new_err("unsupported Redis protocol version")),
+    };
+    Ok(RedisConnectionConfig {
+        host,
+        port,
+        database: optional_i64(resolved, "db")?.unwrap_or(0),
+        username: optional_dict_string(resolved, "username")?,
+        password: optional_dict_string(resolved, "password")?,
+        protocol,
+        pool_size,
+        read_timeout: optional_dict_duration(resolved, "socket_timeout")?,
+        connect_timeout: optional_dict_duration(resolved, "socket_connect_timeout")?,
+        socket_keepalive: optional_bool(resolved, "socket_keepalive")?,
+        health_check_interval: duration(
+            optional_f64(resolved, "health_check_interval")?.unwrap_or(0.0),
+        )?,
+        client_name: optional_dict_string(resolved, "client_name")?,
+        tls,
+    })
 }
 
 #[inline(never)]
@@ -831,31 +933,22 @@ fn project_valkey_semantic(
         }
     }
     if is_tls {
+        return Ok(Err(UnsupportedCacheConfig::ValkeyTls));
+    }
+    let host = required_string(&resolved, "host")?;
+    if host.is_empty() {
         return Ok(Err(UnsupportedCacheConfig::RedisConnection));
     }
-    let connection = RedisConnectionConfig {
-        host: required_string(&resolved, "host")?,
-        port: u16::try_from(required_i64(&resolved, "port")?)
-            .map_err(|_| PyValueError::new_err("invalid Redis port"))?,
-        database: optional_i64(&resolved, "db")?.unwrap_or(0),
-        username: optional_dict_string(&resolved, "username")?,
-        password: optional_dict_string(&resolved, "password")?,
-        protocol: RedisProtocol::Resp2,
-        pool_size: pool.getattr("max_connections")?.extract::<usize>()?,
-        read_timeout: None,
-        connect_timeout: None,
-        socket_keepalive: None,
-        health_check_interval: Duration::ZERO,
-        client_name: None,
-        tls: None,
-    };
-    if connection.host.is_empty() {
-        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
-    }
+    let connection = resolved_connection(
+        &resolved,
+        host,
+        port(required_i64(&resolved, "port")?)?,
+        pool.getattr("max_connections")?.extract::<usize>()?,
+        None,
+    )?;
     Ok(Ok(ValkeySemanticCacheConfig {
         similarity_threshold: backend.getattr("similarity_threshold")?.extract()?,
         index_name: backend.getattr("index_name")?.extract()?,
-        embedding_model: backend.getattr("embedding_model")?.extract()?,
         connection,
     }))
 }
@@ -944,11 +1037,6 @@ fn class_is(value: &Bound<'_, PyAny>, module: &str, name: &str) -> PyResult<bool
             .cast_into::<PyString>()?
             .to_str()?
             == name)
-}
-
-#[inline(never)]
-fn optional_duration(value: Bound<'_, PyAny>) -> PyResult<Option<Duration>> {
-    value.extract::<Option<f64>>()?.map(duration).transpose()
 }
 
 #[inline(never)]
@@ -1070,16 +1158,17 @@ fn optional_dict_duration(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Opt
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::CString;
-
-    use pyo3::{prelude::*, types::PyDict};
+    use std::{ffi::CString, time::Duration};
 
     use litellm_cache_redis::{RedisNode, RedisTopology};
     use litellm_cache_redis_semantic::RedisSemanticConfig;
+    use pyo3::{prelude::*, types::PyDict};
+    use rstest::{fixture, rstest};
 
     use super::{
         CacheBackendConfig, CacheConfigProjection, CachePolicy, CertificateRequirement,
-        GcsCacheConfig, NativeCacheConfig, RedisProtocol, UnsupportedCacheConfig,
+        GcsCacheConfig, NativeCacheConfig, REDIS_PY_DEFAULT_MAX_CONNECTIONS, RedisConnectionConfig,
+        RedisProtocol, RedisSemanticCacheConfig, RedisTlsConfig, UnsupportedCacheConfig,
     };
     use crate::cache::{embedder::PythonEmbedder, native::NativeResponseCache};
 
@@ -1114,34 +1203,74 @@ mod tests {
         locals.get_item("facade").unwrap().unwrap()
     }
 
-    #[test]
-    fn projects_effective_memory_configuration() {
+    fn native(facade: &Bound<'_, PyAny>) -> NativeCacheConfig {
+        match NativeCacheConfig::project(facade).unwrap() {
+            CacheConfigProjection::Native(config) => *config,
+            CacheConfigProjection::Unsupported(reason) => panic!("{}", reason.message()),
+        }
+    }
+
+    fn unsupported(facade: &Bound<'_, PyAny>) -> UnsupportedCacheConfig {
+        match NativeCacheConfig::project(facade).unwrap() {
+            CacheConfigProjection::Native(_) => panic!("configuration must stay on Python"),
+            CacheConfigProjection::Unsupported(reason) => reason,
+        }
+    }
+
+    #[fixture]
+    fn interpreter() {
         Python::initialize();
+    }
+
+    #[fixture]
+    fn connection() -> RedisConnectionConfig {
+        RedisConnectionConfig {
+            host: "cache.internal".into(),
+            port: 6380,
+            database: 4,
+            username: None,
+            password: None,
+            protocol: RedisProtocol::Resp2,
+            pool_size: REDIS_PY_DEFAULT_MAX_CONNECTIONS,
+            read_timeout: None,
+            connect_timeout: None,
+            socket_keepalive: None,
+            health_check_interval: Duration::ZERO,
+            client_name: None,
+            tls: None,
+        }
+    }
+
+    fn verified_tls() -> RedisTlsConfig {
+        RedisTlsConfig {
+            certificate_requirement: CertificateRequirement::Required,
+            check_hostname: true,
+            ca_certificate: None,
+            ca_data: None,
+            client_certificate: None,
+            client_key: None,
+        }
+    }
+
+    #[rstest]
+    fn projects_effective_memory_configuration(_interpreter: ()) {
         Python::attach(|py| {
             let facade = facade(
                 py,
                 "backend = SimpleNamespace(default_ttl=913, max_size_in_memory=37, max_size_per_item=8)\n\
                  facade = SimpleNamespace(type='local', mode='default-on', ttl=11.5, namespace=None, supported_call_types=['completion'], redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
             );
-            let CacheConfigProjection::Native(config) =
-                NativeCacheConfig::project(&facade).unwrap()
-            else {
-                panic!("memory cache should be supported");
-            };
-            assert_eq!(
-                config.policy.ttl.unwrap(),
-                std::time::Duration::from_secs_f64(11.5)
-            );
+            let config = native(&facade);
+            assert_eq!(config.policy.semantic_cache_scope, "key");
+            assert_eq!(config.policy.redis_flush_size, None);
             let CacheBackendConfig::Memory(memory) = config.backend else {
                 panic!("expected memory configuration");
             };
-            assert_eq!(memory.default_ttl, std::time::Duration::from_secs(913));
+            assert_eq!(memory.default_ttl, Duration::from_secs(913));
             assert_eq!(memory.capacity, 37);
             assert_eq!(memory.max_entry_bytes, 8192);
-            let matching =
-                NativeResponseCache::memory(37, std::time::Duration::from_secs(913), 8192);
-            let mismatched =
-                NativeResponseCache::memory(37, std::time::Duration::from_secs(913), 8191);
+            let matching = NativeResponseCache::memory(37, Duration::from_secs(913), 8192);
+            let mismatched = NativeResponseCache::memory(37, Duration::from_secs(913), 8191);
             let matching_config = NativeCacheConfig {
                 policy: config.policy,
                 backend: CacheBackendConfig::Memory(memory),
@@ -1154,9 +1283,8 @@ mod tests {
         });
     }
 
-    #[test]
-    fn redis_semantic_service_mismatch_accepts_backend_precision_threshold() {
-        Python::initialize();
+    #[rstest]
+    fn redis_semantic_service_mismatch_accepts_backend_precision_threshold(_interpreter: ()) {
         Python::attach(|py| {
             let facade = facade(
                 py,
@@ -1165,12 +1293,7 @@ mod tests {
             );
             let backend = facade.getattr("cache").unwrap();
             let embedder = PythonEmbedder::new(backend.clone().unbind());
-            let CacheConfigProjection::Native(config) =
-                NativeCacheConfig::project(&facade).unwrap()
-            else {
-                panic!("Redis semantic cache should be supported");
-            };
-            let CacheBackendConfig::RedisSemantic(config) = config.backend else {
+            let CacheBackendConfig::RedisSemantic(config) = native(&facade).backend else {
                 panic!("expected Redis semantic configuration");
             };
             let service = NativeResponseCache::redis_semantic(
@@ -1184,10 +1307,6 @@ mod tests {
             .unwrap();
             let matching_config = NativeCacheConfig {
                 policy: CachePolicy {
-                    mode: "default-on".into(),
-                    ttl: None,
-                    namespace: None,
-                    supported_call_types: None,
                     redis_flush_size: None,
                     semantic_cache_scope: "key".into(),
                 },
@@ -1197,9 +1316,8 @@ mod tests {
         });
     }
 
-    #[test]
-    fn projects_resolved_redis_tls_configuration() {
-        Python::initialize();
+    #[rstest]
+    fn projects_resolved_redis_tls_configuration(_interpreter: ()) {
         Python::attach(|py| {
             let facade = facade(
                 py,
@@ -1211,15 +1329,12 @@ mod tests {
                  backend = SimpleNamespace(default_ttl=777, namespace='team', redis_flush_size=31, redis_kwargs={}, redis_client=client)\n\
                  facade = SimpleNamespace(type='redis', mode='default-off', ttl=None, namespace='team', supported_call_types=None, redis_flush_size=31, semantic_cache_scope='key', cache=backend)",
             );
-            let CacheConfigProjection::Native(config) =
-                NativeCacheConfig::project(&facade).unwrap()
-            else {
-                panic!("Redis cache should be supported");
-            };
+            let config = native(&facade);
+            assert_eq!(config.policy.redis_flush_size, Some(31));
             let CacheBackendConfig::Redis(redis) = config.backend else {
                 panic!("expected Redis configuration");
             };
-            assert_eq!(redis.default_ttl, std::time::Duration::from_secs(777));
+            assert_eq!(redis.default_ttl, Duration::from_secs(777));
             assert_eq!(redis.namespace.as_deref(), Some("team"));
             assert_eq!(redis.flush_size, 31);
             assert_eq!(redis.connection.host, "cache.internal");
@@ -1227,7 +1342,21 @@ mod tests {
             assert_eq!(redis.connection.database, 4);
             assert_eq!(redis.connection.protocol, RedisProtocol::Resp3);
             assert_eq!(redis.connection.pool_size, 29);
-            let tls = redis.connection.tls.unwrap();
+            assert_eq!(
+                redis.connection.read_timeout,
+                Some(Duration::from_secs_f64(7.5))
+            );
+            assert_eq!(
+                redis.connection.connect_timeout,
+                Some(Duration::from_secs(2))
+            );
+            assert_eq!(redis.connection.socket_keepalive, Some(true));
+            assert_eq!(
+                redis.connection.health_check_interval,
+                Duration::from_secs(15)
+            );
+            assert_eq!(redis.connection.client_name.as_deref(), Some("litellm"));
+            let tls = redis.connection.tls.as_ref().unwrap();
             assert_eq!(
                 tls.certificate_requirement,
                 CertificateRequirement::Optional
@@ -1237,123 +1366,89 @@ mod tests {
             assert_eq!(tls.ca_data.as_deref(), Some("CA DATA"));
             assert_eq!(tls.client_certificate.as_deref(), Some("/client.pem"));
             assert_eq!(tls.client_key.as_deref(), Some("/client.key"));
+            assert!(matches!(
+                redis.connection.native_url(),
+                Err(UnsupportedCacheConfig::RedisPoolSize)
+            ));
         });
     }
 
-    #[test]
-    fn projects_valkey_semantic_configuration() {
-        Python::initialize();
+    #[rstest]
+    fn projects_valkey_semantic_configuration(_interpreter: ()) {
         Python::attach(|py| {
             let facade = facade(
                 py,
                 "pool = ConnectionPool()\n\
                  pool.connection_class = Connection\n\
                  pool.max_connections = 12\n\
-                 pool.connection_kwargs = {'host': 'cache.internal', 'port': 6390, 'db': 2}\n\
+                 pool.connection_kwargs = {'host': 'cache.internal', 'port': 6390, 'db': 2, 'socket_timeout': 3}\n\
                  client = SimpleNamespace(connection_pool=pool)\n\
                  backend = SimpleNamespace(similarity_threshold=0.85, index_name='semantic_idx', embedding_model='text-embedding-3-small', sync_client=client)\n\
                  facade = SimpleNamespace(type='valkey-semantic', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
             );
-            let CacheConfigProjection::Native(config) =
-                NativeCacheConfig::project(&facade).unwrap()
-            else {
-                panic!("Valkey semantic cache should be supported");
-            };
-            let CacheBackendConfig::ValkeySemantic(valkey) = config.backend else {
+            let CacheBackendConfig::ValkeySemantic(valkey) = native(&facade).backend else {
                 panic!("expected Valkey semantic configuration");
             };
             assert_eq!(valkey.similarity_threshold, 0.85);
             assert_eq!(valkey.index_name, "semantic_idx");
-            assert_eq!(valkey.embedding_model, "text-embedding-3-small");
             assert_eq!(valkey.connection.host, "cache.internal");
             assert_eq!(valkey.connection.port, 6390);
             assert_eq!(valkey.connection.database, 2);
             assert_eq!(valkey.connection.pool_size, 12);
             assert_eq!(valkey.connection.protocol, RedisProtocol::Resp2);
+            assert_eq!(valkey.connection.read_timeout, Some(Duration::from_secs(3)));
             assert!(valkey.connection.tls.is_none());
         });
     }
 
-    #[test]
-    fn valkey_semantic_tls_stays_on_python() {
-        Python::initialize();
+    #[rstest]
+    #[case::valkey_tls(
+        "pool = ConnectionPool()\n\
+         pool.connection_class = SSLConnection\n\
+         pool.connection_kwargs = {'host': 'cache.internal', 'port': 6390}\n\
+         client = SimpleNamespace(connection_pool=pool)\n\
+         backend = SimpleNamespace(similarity_threshold=0.85, index_name='semantic_idx', embedding_model='text-embedding-3-small', sync_client=client)\n\
+         facade = SimpleNamespace(type='valkey-semantic', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+        "native Valkey semantic cache does not support TLS connections"
+    )]
+    #[case::valkey_dynamic_auth(
+        "pool = ConnectionPool()\n\
+         pool.connection_class = Connection\n\
+         pool.connection_kwargs = {'host': 'cache.internal', 'port': 6390, 'credential_provider': object()}\n\
+         client = SimpleNamespace(connection_pool=pool)\n\
+         backend = SimpleNamespace(similarity_threshold=0.85, index_name='semantic_idx', embedding_model='text-embedding-3-small', sync_client=client)\n\
+         facade = SimpleNamespace(type='valkey-semantic', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+        "native Redis credentials require Python"
+    )]
+    #[case::redis_dynamic_auth(
+        "backend = SimpleNamespace(redis_kwargs={'credential_provider': object()})\n\
+         facade = SimpleNamespace(type='redis', mode='default-on', ttl=None, namespace=None, supported_call_types=[], redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+        "native Redis credentials require Python"
+    )]
+    #[case::gcs_without_bucket(
+        "backend = SimpleNamespace(bucket_name=None, key_prefix='', path_service_account=None)\n\
+         facade = SimpleNamespace(type='gcs', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+        "native GCS cache requires a configured bucket name"
+    )]
+    fn configurations_that_stay_on_python(
+        _interpreter: (),
+        #[case] body: &str,
+        #[case] message: &str,
+    ) {
         Python::attach(|py| {
-            let facade = facade(
-                py,
-                "pool = ConnectionPool()\n\
-                 pool.connection_class = SSLConnection\n\
-                 pool.connection_kwargs = {'host': 'cache.internal', 'port': 6390}\n\
-                 client = SimpleNamespace(connection_pool=pool)\n\
-                 backend = SimpleNamespace(similarity_threshold=0.85, index_name='semantic_idx', embedding_model='text-embedding-3-small', sync_client=client)\n\
-                 facade = SimpleNamespace(type='valkey-semantic', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
-            );
-            let CacheConfigProjection::Unsupported(reason) =
-                NativeCacheConfig::project(&facade).unwrap()
-            else {
-                panic!("TLS Valkey semantic cache should stay on Python");
-            };
-            assert_eq!(
-                reason.message(),
-                "native Redis connection type is not implemented"
-            );
+            assert_eq!(unsupported(&facade(py, body)).message(), message);
         });
     }
 
-    #[test]
-    fn valkey_semantic_dynamic_auth_stays_on_python() {
-        Python::initialize();
-        Python::attach(|py| {
-            let facade = facade(
-                py,
-                "pool = ConnectionPool()\n\
-                 pool.connection_class = Connection\n\
-                 pool.connection_kwargs = {'host': 'cache.internal', 'port': 6390, 'credential_provider': object()}\n\
-                 client = SimpleNamespace(connection_pool=pool)\n\
-                 backend = SimpleNamespace(similarity_threshold=0.85, index_name='semantic_idx', embedding_model='text-embedding-3-small', sync_client=client)\n\
-                 facade = SimpleNamespace(type='valkey-semantic', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
-            );
-            let CacheConfigProjection::Unsupported(reason) =
-                NativeCacheConfig::project(&facade).unwrap()
-            else {
-                panic!("dynamic Valkey authentication must stay on Python");
-            };
-            assert_eq!(reason.message(), "native Redis credentials require Python");
-        });
-    }
-
-    #[test]
-    fn dynamic_redis_auth_stays_on_python() {
-        Python::initialize();
-        Python::attach(|py| {
-            let facade = facade(
-                py,
-                "backend = SimpleNamespace(redis_kwargs={'credential_provider': object()})\n\
-                 facade = SimpleNamespace(type='redis', mode='default-on', ttl=None, namespace=None, supported_call_types=[], redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
-            );
-            let CacheConfigProjection::Unsupported(reason) =
-                NativeCacheConfig::project(&facade).unwrap()
-            else {
-                panic!("dynamic authentication must stay on Python");
-            };
-            assert_eq!(reason.message(), "native Redis credentials require Python");
-        });
-    }
-
-    #[test]
-    fn projects_cluster_startup_nodes_as_redis_topology() {
-        Python::initialize();
+    #[rstest]
+    fn projects_cluster_startup_nodes_as_redis_topology(_interpreter: ()) {
         Python::attach(|py| {
             let facade = cluster_facade(
                 py,
                 "[{'host': 'node-a', 'port': 7000}, {'host': 'node-b', 'port': 7001}]",
                 "client.on_connect",
             );
-            let CacheConfigProjection::Native(config) =
-                NativeCacheConfig::project(&facade).unwrap()
-            else {
-                panic!("cluster startup nodes should project natively");
-            };
-            let CacheBackendConfig::Redis(redis) = &config.backend else {
+            let CacheBackendConfig::Redis(redis) = native(&facade).backend else {
                 panic!("expected Redis configuration");
             };
             let expected = RedisTopology::Cluster {
@@ -1382,23 +1477,22 @@ mod tests {
                     .certificate_requirement,
                 CertificateRequirement::None
             );
+            assert!(matches!(
+                redis.connection.native_url(),
+                Err(UnsupportedCacheConfig::RedisTlsVerification)
+            ));
         });
     }
 
-    #[test]
-    fn projects_gcs_configuration() {
-        Python::initialize();
+    #[rstest]
+    fn projects_gcs_configuration(_interpreter: ()) {
         Python::attach(|py| {
             let facade = facade(
                 py,
                 "backend = SimpleNamespace(bucket_name='bucket', key_prefix='cache/', path_service_account='credentials.json')\n\
                  facade = SimpleNamespace(type='gcs', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
             );
-            let CacheConfigProjection::Native(config) =
-                NativeCacheConfig::project(&facade).unwrap()
-            else {
-                panic!("GCS cache should be supported");
-            };
+            let config = native(&facade);
             let CacheBackendConfig::Gcs(gcs) = config.backend else {
                 panic!("expected GCS configuration");
             };
@@ -1417,9 +1511,9 @@ mod tests {
                     path_service_account: Some("credentials.json".into()),
                     endpoint: litellm_cache_gcs::DEFAULT_ENDPOINT.into(),
                 },
+                reqwest::Client::new(),
                 Some("token".into()),
-            )
-            .unwrap();
+            );
             let matching_config = NativeCacheConfig {
                 policy: config.policy,
                 backend: CacheBackendConfig::Gcs(gcs),
@@ -1428,62 +1522,194 @@ mod tests {
         });
     }
 
-    #[test]
-    fn rejects_gcs_without_a_bucket_name() {
-        Python::initialize();
+    #[rstest]
+    #[case::extra_node_field(
+        "[{'host': 'node-a', 'port': 7000, 'server_type': 'primary'}]",
+        "client.on_connect",
+        "native Redis topology is not implemented"
+    )]
+    #[case::non_numeric_port(
+        "[{'host': 'node-a', 'port': 'seven'}]",
+        "client.on_connect",
+        "native Redis topology is not implemented"
+    )]
+    #[case::empty("[]", "client.on_connect", "native Redis topology is not implemented")]
+    #[case::foreign_hook(
+        "[{'host': 'node-a', 'port': 7000}]",
+        "lambda connection: None",
+        "native Redis credentials require Python"
+    )]
+    fn malformed_startup_nodes_and_foreign_connect_hooks_stay_on_python(
+        _interpreter: (),
+        #[case] startup_nodes: &str,
+        #[case] hook: &str,
+        #[case] message: &str,
+    ) {
         Python::attach(|py| {
-            let facade = facade(
-                py,
-                "backend = SimpleNamespace(bucket_name=None, key_prefix='', path_service_account=None)\n\
-                 facade = SimpleNamespace(type='gcs', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
-            );
-            let CacheConfigProjection::Unsupported(reason) =
-                NativeCacheConfig::project(&facade).unwrap()
-            else {
-                panic!("GCS cache without a bucket should be unsupported");
-            };
-            assert!(matches!(&reason, UnsupportedCacheConfig::GcsBucket));
-            assert_eq!(
-                reason.message(),
-                "native GCS cache requires a configured bucket name"
-            );
+            let facade = cluster_facade(py, startup_nodes, hook);
+            assert_eq!(unsupported(&facade).message(), message);
         });
     }
 
-    #[test]
-    fn malformed_startup_nodes_and_foreign_connect_hooks_stay_on_python() {
-        Python::initialize();
-        Python::attach(|py| {
-            for (startup_nodes, hook, message) in [
-                (
-                    "[{'host': 'node-a', 'port': 7000, 'server_type': 'primary'}]",
-                    "client.on_connect",
-                    "native Redis topology is not implemented",
-                ),
-                (
-                    "[{'host': 'node-a', 'port': 'seven'}]",
-                    "client.on_connect",
-                    "native Redis topology is not implemented",
-                ),
-                (
-                    "[]",
-                    "client.on_connect",
-                    "native Redis topology is not implemented",
-                ),
-                (
-                    "[{'host': 'node-a', 'port': 7000}]",
-                    "lambda connection: None",
-                    "native Redis credentials require Python",
-                ),
-            ] {
-                let facade = cluster_facade(py, startup_nodes, hook);
-                let CacheConfigProjection::Unsupported(reason) =
-                    NativeCacheConfig::project(&facade).unwrap()
-                else {
-                    panic!("{startup_nodes} with {hook} must stay on Python");
-                };
-                assert_eq!(reason.message(), message, "{startup_nodes} with {hook}");
+    #[rstest]
+    #[case::plain(|_: &mut RedisConnectionConfig| {}, "redis://cache.internal:6380/4")]
+    #[case::credentials(
+        |connection: &mut RedisConnectionConfig| {
+            connection.username = Some("user".into());
+            connection.password = Some("p@ss:word".into());
+        },
+        "redis://user:p%40ss%3Aword@cache.internal:6380/4"
+    )]
+    #[case::password_only(
+        |connection: &mut RedisConnectionConfig| connection.password = Some("secret".into()),
+        "redis://:secret@cache.internal:6380/4"
+    )]
+    #[case::resp3(
+        |connection: &mut RedisConnectionConfig| connection.protocol = RedisProtocol::Resp3,
+        "redis://cache.internal:6380/4?protocol=resp3"
+    )]
+    #[case::ipv6(
+        |connection: &mut RedisConnectionConfig| connection.host = "::1".into(),
+        "redis://[::1]:6380/4"
+    )]
+    #[case::verified_tls(
+        |connection: &mut RedisConnectionConfig| connection.tls = Some(verified_tls()),
+        "rediss://cache.internal:6380/4"
+    )]
+    #[case::optional_certificate(
+        |connection: &mut RedisConnectionConfig| {
+            connection.tls = Some(RedisTlsConfig {
+                certificate_requirement: CertificateRequirement::Optional,
+                ..verified_tls()
+            });
+        },
+        "rediss://cache.internal:6380/4"
+    )]
+    #[case::keepalive_off(
+        |connection: &mut RedisConnectionConfig| connection.socket_keepalive = Some(false),
+        "redis://cache.internal:6380/4"
+    )]
+    #[case::redis_cache_socket_timeout(
+        |connection: &mut RedisConnectionConfig| {
+            connection.read_timeout = Some(Duration::from_secs(5));
+        },
+        "redis://cache.internal:6380/4"
+    )]
+    fn native_url_encodes_the_resolved_connection(
+        mut connection: RedisConnectionConfig,
+        #[case] configure: fn(&mut RedisConnectionConfig),
+        #[case] expected: &str,
+    ) {
+        configure(&mut connection);
+        assert_eq!(connection.native_url().ok().as_deref(), Some(expected));
+    }
+
+    #[rstest]
+    #[case::pool_size(
+        |connection: &mut RedisConnectionConfig| connection.pool_size = 50,
+        "native Redis uses a fixed connection pool; max_connections requires Python"
+    )]
+    #[case::socket_timeout(
+        |connection: &mut RedisConnectionConfig| {
+            connection.read_timeout = Some(Duration::from_millis(100));
+        },
+        "native Redis uses fixed socket timeouts; socket_timeout and socket_connect_timeout require Python"
+    )]
+    #[case::connect_timeout(
+        |connection: &mut RedisConnectionConfig| {
+            connection.connect_timeout = Some(Duration::from_secs(1));
+        },
+        "native Redis uses fixed socket timeouts; socket_timeout and socket_connect_timeout require Python"
+    )]
+    #[case::keepalive(
+        |connection: &mut RedisConnectionConfig| connection.socket_keepalive = Some(true),
+        "native Redis does not support socket_keepalive"
+    )]
+    #[case::health_check(
+        |connection: &mut RedisConnectionConfig| {
+            connection.health_check_interval = Duration::from_secs(25);
+        },
+        "native Redis does not support health_check_interval"
+    )]
+    #[case::client_name(
+        |connection: &mut RedisConnectionConfig| connection.client_name = Some("litellm".into()),
+        "native Redis does not support client_name"
+    )]
+    #[case::custom_ca(
+        |connection: &mut RedisConnectionConfig| {
+            connection.tls = Some(RedisTlsConfig {
+                ca_certificate: Some("/ca.pem".into()),
+                ..verified_tls()
+            });
+        },
+        "native Redis TLS does not support ssl_ca_certs, ssl_ca_data, ssl_certfile or ssl_keyfile"
+    )]
+    #[case::client_certificate(
+        |connection: &mut RedisConnectionConfig| {
+            connection.tls = Some(RedisTlsConfig {
+                client_certificate: Some("/client.pem".into()),
+                client_key: Some("/client.key".into()),
+                ..verified_tls()
+            });
+        },
+        "native Redis TLS does not support ssl_ca_certs, ssl_ca_data, ssl_certfile or ssl_keyfile"
+    )]
+    #[case::unverified(
+        |connection: &mut RedisConnectionConfig| {
+            connection.tls = Some(RedisTlsConfig {
+                certificate_requirement: CertificateRequirement::None,
+                check_hostname: false,
+                ..verified_tls()
+            });
+        },
+        "native Redis TLS always verifies the certificate and hostname; ssl_cert_reqs=none and ssl_check_hostname=false require Python"
+    )]
+    #[case::hostname_unchecked(
+        |connection: &mut RedisConnectionConfig| {
+            connection.tls = Some(RedisTlsConfig {
+                check_hostname: false,
+                ..verified_tls()
+            });
+        },
+        "native Redis TLS always verifies the certificate and hostname; ssl_cert_reqs=none and ssl_check_hostname=false require Python"
+    )]
+    fn native_url_declines_settings_the_native_client_cannot_honor(
+        mut connection: RedisConnectionConfig,
+        #[case] configure: fn(&mut RedisConnectionConfig),
+        #[case] message: &str,
+    ) {
+        configure(&mut connection);
+        let Err(reason) = connection.native_url() else {
+            panic!("{message}");
+        };
+        assert_eq!(reason.message(), message);
+    }
+
+    #[rstest]
+    #[case::plain("redis://:secret@127.0.0.1:6379", true)]
+    #[case::database("redis://127.0.0.1:6379/2", true)]
+    #[case::unix("unix:///tmp/redis.sock", true)]
+    #[case::tls("rediss://cache.internal:6380", false)]
+    #[case::query_options("redis://127.0.0.1:6379?socket_timeout=1", false)]
+    #[case::malformed("not a url", false)]
+    fn redis_semantic_native_url_accepts_only_plain_urls(#[case] url: &str, #[case] native: bool) {
+        let config = RedisSemanticCacheConfig {
+            redis_url: url.into(),
+            index_name: "idx".into(),
+            similarity_threshold: 0.8,
+        };
+        match config.native_url() {
+            Ok(value) => {
+                assert!(native, "{url} must decline");
+                assert_eq!(value, url);
             }
-        });
+            Err(reason) => {
+                assert!(!native, "{url} must be native");
+                assert_eq!(
+                    reason.message(),
+                    "native Redis semantic cache does not support TLS or query options in redis_url"
+                );
+            }
+        }
     }
 }

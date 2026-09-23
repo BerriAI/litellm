@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -37,6 +38,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     ui_view_users,
 )
 from litellm.proxy.proxy_server import app
+from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
 from tests.test_litellm.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
@@ -117,6 +119,70 @@ async def test_ui_view_users_proxy_admin_no_org_filter(mocker):
         page=1,
         page_size=50,
     )
+
+
+UserWhereCondition = InsensitiveContains | Sequence[Mapping[str, InsensitiveContains]]
+
+
+def _matches_user_where(row: LiteLLM_UserTableFiltered, where: Mapping[str, UserWhereCondition]) -> bool:
+    def matches(field: str, condition: UserWhereCondition) -> bool:
+        if not isinstance(condition, Mapping):
+            return any(_matches_user_where(row, branch) for branch in condition)
+        value: Final = {"user_id": row.user_id, "user_email": row.user_email}[field]
+        return value is not None and condition["contains"].lower() in value.lower()
+
+    return all(matches(field, condition) for field, condition in where.items())
+
+
+@pytest.mark.parametrize(
+    "params, expected_user_ids",
+    [
+        ({"search": "SVC"}, ["svc-bot"]),
+        ({"search": "ali"}, ["alice-admin"]),
+        ({"search": "example.com"}, ["alice-admin"]),
+        ({"search": "admin"}, ["alice-admin"]),
+        ({"user_email": "svc"}, []),
+        ({"user_id": "svc"}, ["svc-bot"]),
+        ({"search": "ali", "user_id": "svc"}, []),
+    ],
+)
+def test_ui_view_users_search_matches_user_id_or_email(
+    mocker: MockerFixture, params: Mapping[str, str], expected_user_ids: list[str]
+):
+    """
+    search= returns users whose user_id or user_email contains the value (case-insensitive),
+    including users with no email; user_id=/user_email= keep filtering a single field and AND with search.
+    """
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    users = (
+        LiteLLM_UserTableFiltered(user_id="alice-admin", user_email="alice@example.com"),
+        LiteLLM_UserTableFiltered(user_id="svc-bot", user_email=None),
+        LiteLLM_UserTableFiltered(user_id="bob", user_email="bob@corp.io"),
+    )
+
+    async def mock_find_many(*, where: Mapping[str, UserWhereCondition], **_: object):
+        return [user for user in users if _matches_user_where(user, where)]
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
+    mocker.patch(  # test-quality-ok: endpoint reads settings via module global; same seam as sibling tests
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
+        return_value={},
+    )
+    mocker.patch(  # test-quality-ok: endpoint reads prisma_client via module global; same seam as sibling tests
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get("/user/filter/ui", params=params)
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert [user["user_id"] for user in response.json()] == expected_user_ids
 
 
 @pytest.mark.asyncio
