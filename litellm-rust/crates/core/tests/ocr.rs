@@ -11,7 +11,6 @@ use litellm_http::{
     HttpClientPool, HttpSettings, Resolution,
     media::{PublicDnsResolver, UrlPolicy},
 };
-use litellm_llms::base_llm::inference::secrets::{SecretSource, Secrets};
 use litellm_llms::base_llm::ocr::{
     error::Error as OcrError,
     handler::OcrClient,
@@ -20,6 +19,7 @@ use litellm_llms::base_llm::ocr::{
         BaseOcrConfig, LiteLLMOcrResponse, OCR_RESPONSE_MAX_BYTES, OcrTransportConfig,
     },
 };
+use litellm_secrets::source::SecretSource;
 use rstest::rstest;
 use serde_json::{Value, json};
 
@@ -32,27 +32,27 @@ use super::{
 use crate::ocr::route::{LocalOcrHost, OcrOp, OcrOpResult, ocr_machine};
 
 struct RecordingSecretSource {
-    names: Arc<Mutex<Vec<&'static str>>>,
+    names: Arc<Mutex<Vec<String>>>,
     values: &'static [(&'static str, &'static str)],
     api_base: String,
 }
 
 impl SecretSource for RecordingSecretSource {
-    fn resolve<'a>(
+    fn get_secret_str<'a>(
         &'a self,
-        names: &'a [&'static str],
-    ) -> BoxFuture<'a, Result<Secrets, litellm_secrets::Error>> {
-        *self.names.lock().unwrap() = names.to_vec();
-        let values = self.values;
-        let api_base = self.api_base.clone();
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<litellm_secrets::SecretValue>, litellm_secrets::Error>> {
+        self.names.lock().unwrap().push(name.to_owned());
         Box::pin(async move {
-            Ok(Arc::new(move |name: &str| match name {
-                "MISTRAL_AZURE_API_BASE" => Some(api_base.clone()),
-                _ => values
+            Ok(match name {
+                "MISTRAL_AZURE_API_BASE" => Some(self.api_base.clone()),
+                _ => self
+                    .values
                     .iter()
                     .find(|(key, _)| *key == name)
                     .map(|(_, value)| value.to_string()),
-            }) as Secrets)
+            }
+            .map(litellm_secrets::SecretValue::new))
         })
     }
 }
@@ -289,7 +289,7 @@ async fn ocr_client_uses_the_injected_http_pool_configuration() {
         UrlPolicy::default(),
         VertexAuth::default(),
         OcrSettings::default(),
-        Arc::new(litellm_llms::base_llm::inference::secrets::EnvironmentSecrets),
+        Arc::new(litellm_secrets::source::EnvironmentSecrets::default()),
     )
     .unwrap();
     crate::ocr::client::perform(&client, wire_request("mistral/model", &base, json!({})))

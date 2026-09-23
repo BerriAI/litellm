@@ -3222,7 +3222,7 @@ workflows:
           cron: "17 0,6,12,18 * * *"
           filters:
             branches:
-              only: litellm_internal_staging
+              only: main
     jobs: *migration_jobs
   integration:
     unless: << pipeline.parameters.run_migration_tests >>
@@ -3231,7 +3231,7 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, extensions, sdk, cost, browser]
+              suite: [management, accounting, database, providers, extensions, mcp, sdk, cost, browser]
           filters:
             branches:
               only:

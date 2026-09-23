@@ -38,6 +38,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.videos.main import VideoObject
+from litellm.utils import supports_prompt_caching
 
 
 @pytest.fixture
@@ -4536,3 +4537,163 @@ def test_cost_per_token_bedrock_nemotron_super_3_uses_eu_west_2_entry_not_us_rat
 
     assert prompt_usd == pytest.approx(prompt_tokens * regional["input_cost_per_token"])
     assert completion_usd == pytest.approx(completion_tokens * regional["output_cost_per_token"])
+
+
+GPT_REALTIME_2_FAMILY: Final = (
+    "azure/gpt-realtime-2.1",
+    "azure/gpt-realtime-2.1-mini",
+    "gpt-realtime-2",
+    "gpt-realtime-2.1",
+    "gpt-realtime-2.1-mini",
+)
+
+
+def test_gpt_realtime_2_family_prices_audio_cache_writes_and_reads_alike(_local_model_cost_map: None) -> None:
+    audio_cache_rates: Final = {
+        model: (
+            litellm.model_cost[model].get("cache_read_input_audio_token_cost"),
+            litellm.model_cost[model].get("cache_creation_input_audio_token_cost"),
+        )
+        for model in GPT_REALTIME_2_FAMILY
+    }
+
+    # Azure publishes one cached-audio meter per gpt-realtime-2 deployment,
+    # https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/, checked 2026-09-23
+    assert all(read is not None and write == read for read, write in audio_cache_rates.values()), audio_cache_rates
+    assert len(audio_cache_rates) == len(GPT_REALTIME_2_FAMILY)
+
+
+GEMINI_LIVE_NATIVE_AUDIO_CASES: Final = (
+    ("gemini-live-2.5-flash-native-audio", "vertex_ai"),
+    ("gemini-live-2.5-flash-preview-native-audio-09-2025", "vertex_ai"),
+    ("gemini/gemini-live-2.5-flash-preview-native-audio-09-2025", "gemini"),
+)
+
+
+@pytest.mark.parametrize(("model", "provider"), GEMINI_LIVE_NATIVE_AUDIO_CASES)
+def test_gemini_live_native_audio_carries_no_cached_input_rate(
+    _local_model_cost_map: None, model: str, provider: str
+) -> None:
+    # the Vertex pricing table prints N/A for cached input on every Live row,
+    # https://cloud.google.com/vertex-ai/generative-ai/pricing, checked 2026-09-23
+    assert litellm.get_model_info(model, custom_llm_provider=provider)["cache_read_input_token_cost"] is None
+
+    prompt_usd, _ = cost_per_token(
+        model=model,
+        prompt_tokens=101_000,
+        completion_tokens=0,
+        custom_llm_provider=provider,
+        usage_object=Usage(
+            prompt_tokens=101_000,
+            completion_tokens=0,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100_000),
+        ),
+    )
+    fresh_usd, _ = cost_per_token(
+        model=model,
+        prompt_tokens=101_000,
+        completion_tokens=0,
+        custom_llm_provider=provider,
+        usage_object=Usage(prompt_tokens=101_000, completion_tokens=0),
+    )
+
+    assert prompt_usd == pytest.approx(fresh_usd), (
+        "with no cached rate the cached tokens bill at the input rate, so a phantom discount cannot appear"
+    )
+    assert prompt_usd > 0
+
+
+@pytest.mark.parametrize(("model", "provider"), GEMINI_LIVE_NATIVE_AUDIO_CASES)
+def test_gemini_live_native_audio_declares_prompt_caching_unsupported(
+    _local_model_cost_map: None, model: str, provider: str
+) -> None:
+    # the Vertex context-caching supported-model lists contain no Live model while 2.5 Flash is listed,
+    # https://cloud.google.com/vertex-ai/generative-ai/docs/context-cache/context-cache-overview, checked 2026-09-23
+    assert litellm.get_model_info(model, custom_llm_provider=provider)["supports_prompt_caching"] is False
+    assert supports_prompt_caching(model=model, custom_llm_provider=provider) is False
+    assert supports_prompt_caching(model="gemini-2.5-flash", custom_llm_provider="vertex_ai") is True, (
+        "control: the helper swallows a lookup error into False, so without this a broken lookup reads as a pass"
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["gemini-live-2.5-flash-native-audio", "vertex_ai/gemini-live-2.5-flash-native-audio"],
+)
+def test_gemini_live_native_audio_limits_and_capabilities_match_vendor_model_card(
+    _local_model_cost_map: None, model: str
+) -> None:
+    info = litellm.get_model_info(model)
+
+    # the Vertex model card for gemini-live-2.5-flash-native-audio publishes these limits and flags,
+    # https://cloud.google.com/vertex-ai/generative-ai/docs/models, checked 2026-09-23
+    assert info["max_input_tokens"] == 131072
+    assert info["max_output_tokens"] == 65536
+    assert info["max_tokens"] == 65536
+    assert info["supports_response_schema"] is False
+    assert info["supports_url_context"] is False
+    assert info["supports_pdf_input"] is False
+
+
+def test_baseten_glm_5_3_fast_is_priced_from_registry(_local_model_cost_map: None) -> None:
+    model: Final = "baseten/zai-org/GLM-5.3-Fast"
+    prompt_tokens: Final = 1000
+    completion_tokens: Final = 500
+
+    prompt_usd, completion_usd = litellm.cost_per_token(
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+
+    entry: Final = litellm.model_cost[model]
+    assert prompt_usd == pytest.approx(prompt_tokens * entry["input_cost_per_token"])
+    assert completion_usd == pytest.approx(completion_tokens * entry["output_cost_per_token"])
+    assert prompt_usd > 0
+    assert completion_usd > 0
+
+
+def test_completion_cost_charges_explicit_per_token_rates_over_registered_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "smoke-priced-model",
+        {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "litellm_provider": "openai", "mode": "chat"},
+    )
+    response: Final = ModelResponse(
+        model="smoke-priced-model",
+        choices=[],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="smoke-priced-model",
+        custom_llm_provider="openai",
+        custom_cost_per_token={"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+    )
+
+    assert cost == pytest.approx(100 * 0.001 + 50 * 0.002)
+
+
+def test_completion_cost_is_zero_when_explicit_rates_are_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "smoke-priced-model",
+        {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "litellm_provider": "openai", "mode": "chat"},
+    )
+    response: Final = ModelResponse(
+        model="smoke-priced-model",
+        choices=[],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="smoke-priced-model",
+        custom_llm_provider="openai",
+        custom_cost_per_token={"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+    )
+
+    assert cost == 0.0

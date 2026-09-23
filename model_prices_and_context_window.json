@@ -348,7 +348,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-writer-palmyra-vision-7b.html",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_vision": true
     },
     "amazon.nova-lite-v1:0": {
@@ -3810,6 +3810,104 @@
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
     },
+    "azure_ai/gpt-6-luna": {
+        "cache_creation_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-08,
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_token_above_272k_tokens": 2e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "output_cost_per_token_above_272k_tokens": 7.5e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "source": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_cache_breakpoint": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "azure_ai/gpt-6-sol": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-07,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "source": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_cache_breakpoint": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
     "azure_ai/gpt-5.5": {
         "deprecation_date": "2027-10-26",
         "cache_read_input_token_cost": 5e-07,
@@ -3894,6 +3992,7 @@
     "azure_ai/gpt-image-2": {
         "cache_read_input_image_token_cost": 2e-06,
         "cache_read_input_token_cost": 1.25e-06,
+        "deprecation_date": "2027-10-21",
         "input_cost_per_image_token": 8e-06,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",
@@ -7799,6 +7898,198 @@
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
     },
+    "azure/gpt-6-luna": {
+        "cache_creation_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-08,
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_token_above_272k_tokens": 2e-07,
+        "litellm_provider": "azure",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "output_cost_per_token_above_272k_tokens": 7.5e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "source": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "azure/gpt-6-luna-2026-09-22": {
+        "cache_creation_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-08,
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_token_above_272k_tokens": 2e-07,
+        "litellm_provider": "azure",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "output_cost_per_token_above_272k_tokens": 7.5e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "source": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "azure/gpt-6-sol": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-07,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "source": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "azure/gpt-6-sol-2026-09-22": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-07,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "source": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
     "azure/gpt-chat-latest": {
         "cache_read_input_token_cost": 5e-07,
         "deprecation_date": "2026-12-02",
@@ -8129,6 +8420,102 @@
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "azure/us/gpt-6-luna": {
+        "cache_creation_input_token_cost": 1.375e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.75e-07,
+        "cache_read_input_token_cost": 1.1e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 2.2e-08,
+        "input_cost_per_token": 1.1e-07,
+        "input_cost_per_token_above_272k_tokens": 2.2e-07,
+        "litellm_provider": "azure",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5.5e-07,
+        "output_cost_per_token_above_272k_tokens": 8.25e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "source": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "azure/us/gpt-6-sol": {
+        "cache_creation_input_token_cost": 2.75e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
+        "cache_read_input_token_cost": 2.2e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4.4e-07,
+        "input_cost_per_token": 2.2e-06,
+        "input_cost_per_token_above_272k_tokens": 4.4e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.65e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "source": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
         "supports_none_reasoning_effort": true,
@@ -12583,13 +12970,14 @@
         "supports_tool_choice": true
     },
     "bedrock/eu-west-3/mistral.mistral-large-2402-v1:0": {
-        "input_cost_per_token": 1.04e-05,
+        "input_cost_per_token": 5.2e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 32000,
         "max_output_tokens": 8191,
         "max_tokens": 8191,
         "mode": "chat",
-        "output_cost_per_token": 3.12e-05,
+        "output_cost_per_token": 1.56e-05,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true
     },
     "bedrock/eu-west-3/mistral.mixtral-8x7b-instruct-v0:1": {
@@ -12897,13 +13285,14 @@
         "supports_tool_choice": true
     },
     "bedrock/us-east-1/mistral.mistral-large-2402-v1:0": {
-        "input_cost_per_token": 8e-06,
+        "input_cost_per_token": 4e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 32000,
         "max_output_tokens": 8191,
         "max_tokens": 8191,
         "mode": "chat",
-        "output_cost_per_token": 2.4e-05,
+        "output_cost_per_token": 1.2e-05,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true
     },
     "bedrock/us-east-1/mistral.mixtral-8x7b-instruct-v0:1": {
@@ -13526,13 +13915,14 @@
         "supports_tool_choice": true
     },
     "bedrock/us-west-2/mistral.mistral-large-2402-v1:0": {
-        "input_cost_per_token": 8e-06,
+        "input_cost_per_token": 4e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 32000,
         "max_output_tokens": 8191,
         "max_tokens": 8191,
         "mode": "chat",
-        "output_cost_per_token": 2.4e-05,
+        "output_cost_per_token": 1.2e-05,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true
     },
     "bedrock/us-west-2/mistral.mixtral-8x7b-instruct-v0:1": {
@@ -21058,6 +21448,7 @@
         "max_tokens": 81920,
         "mode": "chat",
         "output_cost_per_token": 1.68e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -26039,7 +26430,7 @@
         "mode": "realtime",
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 2e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/vertex_ai/live",
             "/v1/realtime"
@@ -26075,7 +26466,6 @@
         "input_cost_per_image_token": 3e-06
     },
     "gemini-live-2.5-flash-preview-native-audio-09-2025": {
-        "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "vertex_ai-language-models",
@@ -26104,7 +26494,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
-        "supports_prompt_caching": true,
+        "supports_prompt_caching": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -26120,7 +26510,6 @@
         "input_cost_per_image_token": 3e-06
     },
     "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025": {
-        "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
@@ -26150,7 +26539,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
-        "supports_prompt_caching": true,
+        "supports_prompt_caching": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -34169,6 +34558,7 @@
         "supports_vision": true
     },
     "groq/llama-guard-3-8b": {
+        "deprecation_date": "2025-06-06",
         "input_cost_per_token": 2e-07,
         "litellm_provider": "groq",
         "max_input_tokens": 8192,
@@ -36035,16 +36425,18 @@
         "max_tokens": 8191,
         "mode": "chat",
         "output_cost_per_token": 2e-07,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_tool_choice": true
     },
     "mistral.mistral-large-2402-v1:0": {
-        "input_cost_per_token": 8e-06,
+        "input_cost_per_token": 4e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 32000,
         "max_output_tokens": 8191,
         "max_tokens": 8191,
         "mode": "chat",
-        "output_cost_per_token": 2.4e-05,
+        "output_cost_per_token": 1.2e-05,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true
     },
     "mistral.mistral-large-2407-v1:0": {
@@ -36076,12 +36468,15 @@
     },
     "mistral.mistral-small-2402-v1:0": {
         "input_cost_per_token": 1e-06,
+        "input_cost_per_token_batches": 5e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 32000,
         "max_output_tokens": 8191,
         "max_tokens": 8191,
         "mode": "chat",
         "output_cost_per_token": 3e-06,
+        "output_cost_per_token_batches": 1.5e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true
     },
     "mistral.mixtral-8x7b-instruct-v0:1": {
@@ -36092,6 +36487,7 @@
         "max_tokens": 8191,
         "mode": "chat",
         "output_cost_per_token": 7e-07,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_tool_choice": true
     },
     "mistral.voxtral-mini-3b-2507": {
@@ -39301,6 +39697,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -39314,6 +39711,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 3e-07,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -39848,21 +40246,21 @@
         "supports_web_search": false
     },
     "openrouter/deepseek/deepseek-v4-pro": {
-        "input_cost_per_token": 8.92272e-07,
+        "input_cost_per_token": 8.8044e-07,
         "input_cost_per_token_cache_hit": 4.4e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
-        "output_cost_per_token": 1.784544e-06,
+        "output_cost_per_token": 1.76088e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "cache_read_input_token_cost": 7.4356e-08,
+        "cache_read_input_token_cost": 7.337e-08,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_vision": false,
@@ -39874,10 +40272,10 @@
         "cache_read_input_token_cost": 6e-09,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 384000,
-        "max_tokens": 384000,
+        "max_output_tokens": 943718,
+        "max_tokens": 943718,
         "mode": "chat",
-        "off_peak_pricing": {"windows":[{"weekdays":["saturday","sunday"],"hours_utc":"00:00-00:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"00:00-01:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"04:00-06:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"10:00-00:00"}],"input_cost_per_token":1.5e-7,"output_cost_per_token":6e-7,"cache_read_input_token_cost":3e-9},
+        "off_peak_pricing": {"windows":[{"weekdays":["saturday","sunday"],"hours_utc":"00:00-00:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"00:00-01:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"04:00-06:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"10:00-00:00"}],"input_cost_per_token":3e-7,"output_cost_per_token":0.0000012,"cache_read_input_token_cost":6e-9},
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -39905,7 +40303,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "cache_read_input_token_cost": 4.4e-08,
-        "off_peak_pricing": {"windows":[{"weekdays":["saturday","sunday"],"hours_utc":"00:00-00:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"00:00-01:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"04:00-06:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"10:00-00:00"}],"input_cost_per_token":6.6e-7,"output_cost_per_token":0.00000198,"cache_read_input_token_cost":2.2e-8},
+        "off_peak_pricing": {"windows":[{"weekdays":["saturday","sunday"],"hours_utc":"00:00-00:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"00:00-01:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"04:00-06:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"10:00-00:00"}],"input_cost_per_token":0.00000132,"output_cost_per_token":0.00000396,"cache_read_input_token_cost":4.4e-8},
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_vision": false,
@@ -45224,6 +45622,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 5.4e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": false,
         "supports_reasoning": true,
         "supports_tool_choice": false
@@ -45400,6 +45799,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 6e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
         "supports_tool_choice": false
     },
@@ -46722,16 +47122,20 @@
         "deprecation_date": "2026-10-15",
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
+        "cache_creation_input_token_cost_batches": 6.25e-07,
         "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_batches": 5e-08,
         "input_cost_per_token": 1e-06,
+        "input_cost_per_token_batches": 5e-07,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
+        "output_cost_per_token_batches": 2.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/haiku-4-5",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -46747,16 +47151,20 @@
         "deprecation_date": "2026-10-15",
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
+        "cache_creation_input_token_cost_batches": 6.25e-07,
         "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_batches": 5e-08,
         "input_cost_per_token": 1e-06,
+        "input_cost_per_token_batches": 5e-07,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
+        "output_cost_per_token_batches": 2.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/haiku-4-5",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -46879,14 +47287,18 @@
         "deprecation_date": "2026-11-24",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_creation_input_token_cost_batches": 3.125e-06,
         "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_batches": 2.5e-07,
         "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token_batches": 1.25e-05,
         "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
@@ -46903,20 +47315,25 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_output_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-4-5@20251101": {
         "deprecation_date": "2026-11-24",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_creation_input_token_cost_batches": 3.125e-06,
         "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_batches": 2.5e-07,
         "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token_batches": 1.25e-05,
         "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
@@ -46934,7 +47351,8 @@
         "supports_vision": true,
         "supports_native_streaming": true,
         "supports_output_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-4-6": {
         "deprecation_date": "2027-02-05",
@@ -46943,14 +47361,18 @@
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_creation_input_token_cost_batches": 3.125e-06,
         "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_batches": 2.5e-07,
         "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token_batches": 1.25e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -46967,7 +47389,8 @@
         "supports_vision": true,
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-4-6@default": {
         "deprecation_date": "2027-02-05",
@@ -46976,14 +47399,18 @@
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_creation_input_token_cost_batches": 3.125e-06,
         "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_batches": 2.5e-07,
         "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token_batches": 1.25e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -47000,7 +47427,8 @@
         "supports_vision": true,
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-4-7": {
         "deprecation_date": "2027-04-16",
@@ -47008,14 +47436,18 @@
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_creation_input_token_cost_batches": 3.125e-06,
         "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_batches": 2.5e-07,
         "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token_batches": 1.25e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -47033,7 +47465,8 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "prompt_cache_min_tokens": 2048
+        "prompt_cache_min_tokens": 2048,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-4-7@default": {
         "deprecation_date": "2027-04-16",
@@ -47041,14 +47474,18 @@
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_creation_input_token_cost_batches": 3.125e-06,
         "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_batches": 2.5e-07,
         "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token_batches": 1.25e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -47066,7 +47503,8 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "prompt_cache_min_tokens": 2048
+        "prompt_cache_min_tokens": 2048,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-fable-5": {
         "deprecation_date": "2027-06-08",
@@ -47074,14 +47512,18 @@
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
+        "cache_creation_input_token_cost_batches": 6.25e-06,
         "cache_read_input_token_cost": 1e-06,
+        "cache_read_input_token_cost_batches": 5e-07,
         "input_cost_per_token": 1e-05,
+        "input_cost_per_token_batches": 5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 5e-05,
+        "output_cost_per_token_batches": 2.5e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -47101,14 +47543,17 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "prompt_cache_min_tokens": 512
+        "prompt_cache_min_tokens": 512,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-fable-5-1": {
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
+        "cache_creation_input_token_cost_batches": 6.25e-06,
         "cache_read_input_token_cost": 2.5e-07,
+        "cache_read_input_token_cost_batches": 1.25e-07,
         "input_cost_per_token": 1e-05,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
@@ -47138,7 +47583,10 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
         "prompt_cache_min_tokens": 512,
-        "deprecation_date": "2027-03-01"
+        "deprecation_date": "2027-03-01",
+        "input_cost_per_token_batches": 5e-06,
+        "output_cost_per_token_batches": 2.5e-05,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-fable-5@default": {
         "deprecation_date": "2027-06-08",
@@ -47146,14 +47594,18 @@
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
+        "cache_creation_input_token_cost_batches": 6.25e-06,
         "cache_read_input_token_cost": 1e-06,
+        "cache_read_input_token_cost_batches": 5e-07,
         "input_cost_per_token": 1e-05,
+        "input_cost_per_token_batches": 5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 5e-05,
+        "output_cost_per_token_batches": 2.5e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -47173,14 +47625,17 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "prompt_cache_min_tokens": 512
+        "prompt_cache_min_tokens": 512,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-fable-5-1@default": {
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
+        "cache_creation_input_token_cost_batches": 6.25e-06,
         "cache_read_input_token_cost": 2.5e-07,
+        "cache_read_input_token_cost_batches": 1.25e-07,
         "input_cost_per_token": 1e-05,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
@@ -47210,7 +47665,10 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
         "prompt_cache_min_tokens": 512,
-        "deprecation_date": "2027-03-01"
+        "deprecation_date": "2027-03-01",
+        "input_cost_per_token_batches": 5e-06,
+        "output_cost_per_token_batches": 2.5e-05,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-5": {
         "deprecation_date": "2027-01-24",
@@ -47219,14 +47677,18 @@
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_creation_input_token_cost_batches": 3.125e-06,
         "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_batches": 2.5e-07,
         "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token_batches": 1.25e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -47244,7 +47706,8 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "prompt_cache_min_tokens": 512
+        "prompt_cache_min_tokens": 512,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-5@default": {
         "deprecation_date": "2027-01-24",
@@ -47253,14 +47716,18 @@
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_creation_input_token_cost_batches": 3.125e-06,
         "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_batches": 2.5e-07,
         "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token_batches": 1.25e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -47278,21 +47745,26 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "prompt_cache_min_tokens": 512
+        "prompt_cache_min_tokens": 512,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-5-5": {
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_above_1hr": 8e-06,
+        "cache_creation_input_token_cost_batches": 2.5e-06,
         "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_batches": 1e-07,
         "input_cost_per_token": 4e-06,
+        "input_cost_per_token_batches": 2.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2e-05,
+        "output_cost_per_token_batches": 1.25e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -47314,21 +47786,26 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "prompt_cache_min_tokens": 512
+        "prompt_cache_min_tokens": 512,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-5-5@default": {
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_above_1hr": 8e-06,
+        "cache_creation_input_token_cost_batches": 2.5e-06,
         "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_batches": 1e-07,
         "input_cost_per_token": 4e-06,
+        "input_cost_per_token_batches": 2.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2e-05,
+        "output_cost_per_token_batches": 1.25e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -47350,7 +47827,8 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "prompt_cache_min_tokens": 512
+        "prompt_cache_min_tokens": 512,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-4-8": {
         "deprecation_date": "2027-05-28",
@@ -47359,14 +47837,18 @@
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_creation_input_token_cost_batches": 3.125e-06,
         "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_batches": 2.5e-07,
         "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token_batches": 1.25e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -47384,7 +47866,8 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-4-8@default": {
         "deprecation_date": "2027-05-28",
@@ -47393,14 +47876,18 @@
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
+        "cache_creation_input_token_cost_batches": 3.125e-06,
         "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_batches": 2.5e-07,
         "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token_batches": 1.25e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -47418,18 +47905,21 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-sonnet-4-5": {
         "deprecation_date": "2026-09-29",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
         "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
         "cache_read_input_token_cost_above_200k_tokens": 6e-07,
+        "cache_read_input_token_cost_batches": 1.5e-07,
         "input_cost_per_token_batches": 1.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
@@ -47448,7 +47938,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-sonnet-5": {
         "deprecation_date": "2026-12-24",
@@ -47458,12 +47949,14 @@
         "cache_creation_input_token_cost_above_1hr": 4e-06,
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 2e-06,
+        "input_cost_per_token_batches": 1e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
+        "output_cost_per_token_batches": 5e-06,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -47482,7 +47975,8 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-sonnet-4-6": {
         "regional_endpoint_uplift_multiplier": 1.1,
@@ -47490,14 +47984,18 @@
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
+        "cache_creation_input_token_cost_batches": 1.88e-06,
         "cache_read_input_token_cost": 3e-07,
+        "cache_read_input_token_cost_batches": 1.5e-07,
         "input_cost_per_token": 3e-06,
+        "input_cost_per_token_batches": 1.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token_batches": 7.5e-06,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -47514,18 +48012,21 @@
             "search_context_size_medium": 0.01
         },
         "supports_output_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-sonnet-4-5@20250929": {
         "deprecation_date": "2026-09-29",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
         "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
         "cache_read_input_token_cost_above_200k_tokens": 6e-07,
+        "cache_read_input_token_cost_batches": 1.5e-07,
         "input_cost_per_token_batches": 1.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
@@ -47545,7 +48046,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_native_streaming": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/mistralai/codestral-2@001": {
         "input_cost_per_token": 3e-07,
@@ -47555,6 +48057,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 9e-07,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -47566,6 +48069,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 9e-07,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -47577,6 +48081,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 9e-07,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -47588,6 +48093,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 9e-07,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -47625,14 +48131,17 @@
         "supports_tool_choice": true
     },
     "vertex_ai/deepseek-ai/deepseek-v3.1-maas": {
+        "cache_read_input_token_cost": 6e-08,
         "input_cost_per_token": 6e-07,
+        "input_cost_per_token_batches": 3e-07,
         "litellm_provider": "vertex_ai-deepseek_models",
         "max_input_tokens": 163840,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 1.7e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "output_cost_per_token_batches": 8.5e-07,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_regions": [
             "us-central1"
         ],
@@ -47643,6 +48152,7 @@
         "supports_tool_choice": true
     },
     "vertex_ai/deepseek-ai/deepseek-v3.2-maas": {
+        "cache_read_input_token_cost": 5.6e-08,
         "input_cost_per_token": 5.6e-07,
         "input_cost_per_token_batches": 2.8e-07,
         "litellm_provider": "vertex_ai-deepseek_models",
@@ -47652,7 +48162,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.68e-06,
         "output_cost_per_token_batches": 8.4e-07,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_regions": [
             "global"
         ],
@@ -47664,13 +48174,15 @@
     },
     "vertex_ai/deepseek-ai/deepseek-r1-0528-maas": {
         "input_cost_per_token": 1.35e-06,
+        "input_cost_per_token_batches": 6.75e-07,
         "litellm_provider": "vertex_ai-deepseek_models",
         "max_input_tokens": 65336,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 5.4e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "output_cost_per_token_batches": 2.7e-06,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_regions": [
             "us-central1"
         ],
@@ -48246,13 +48758,15 @@
     },
     "vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas": {
         "input_cost_per_token": 3.5e-07,
+        "input_cost_per_token_batches": 1.75e-07,
         "litellm_provider": "vertex_ai-llama_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "max_tokens": 1000000,
         "mode": "chat",
         "output_cost_per_token": 1.15e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "output_cost_per_token_batches": 5.75e-07,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_modalities": [
             "text",
             "image"
@@ -48306,13 +48820,15 @@
     },
     "vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas": {
         "input_cost_per_token": 2.5e-07,
+        "input_cost_per_token_batches": 1.25e-07,
         "litellm_provider": "vertex_ai-llama_models",
         "max_input_tokens": 10000000,
         "max_output_tokens": 10000000,
         "max_tokens": 10000000,
         "mode": "chat",
         "output_cost_per_token": 7e-07,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "output_cost_per_token_batches": 3.5e-07,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_modalities": [
             "text",
             "image"
@@ -48358,6 +48874,7 @@
         "supports_tool_choice": true
     },
     "vertex_ai/minimaxai/minimax-m2-maas": {
+        "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "vertex_ai-minimax_models",
         "max_input_tokens": 196608,
@@ -48365,11 +48882,12 @@
         "max_tokens": 196608,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
     "vertex_ai/moonshotai/kimi-k2-thinking-maas": {
+        "cache_read_input_token_cost": 6e-08,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "vertex_ai-moonshot_models",
         "max_input_tokens": 256000,
@@ -48377,12 +48895,13 @@
         "max_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
     "vertex_ai/zai-org/glm-4.7-maas": {
+        "cache_read_input_token_cost": 6e-08,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "vertex_ai-zai_models",
         "max_input_tokens": 200000,
@@ -48390,7 +48909,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.2e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_regions": [
             "global"
         ],
@@ -48407,7 +48926,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 3.2e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#glm-models",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_regions": [
             "global"
         ],
@@ -48424,6 +48943,7 @@
         "max_tokens": 8191,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -48435,6 +48955,7 @@
         "max_tokens": 8191,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -48446,6 +48967,7 @@
         "max_tokens": 8191,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -48457,6 +48979,7 @@
         "max_tokens": 8191,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -48537,7 +49060,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/mistral-small-2503@001": {
         "input_cost_per_token": 1e-07,
@@ -48549,7 +49072,7 @@
         "output_cost_per_token": 3e-07,
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/mistral-ocr-2505": {
         "litellm_provider": "vertex_ai",
@@ -48566,7 +49089,7 @@
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
         "ocr_cost_per_page": 0.0003,
-        "source": "https://cloud.google.com/vertex-ai/pricing",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_regions": [
             "us-central1"
         ]
@@ -48589,13 +49112,15 @@
     },
     "vertex_ai/openai/gpt-oss-120b-maas": {
         "input_cost_per_token": 9e-08,
+        "input_cost_per_token_batches": 4.5e-08,
         "litellm_provider": "vertex_ai-openai_models",
         "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 3.6e-07,
-        "source": "https://console.cloud.google.com/vertex-ai/publishers/openai/model-garden/gpt-oss-120b-maas",
+        "output_cost_per_token_batches": 1.8e-07,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_reasoning": true
     },
     "vertex_ai/openai/gpt-oss-20b-maas": {
@@ -48606,9 +49131,11 @@
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 2.5e-07,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_reasoning": true,
-        "cache_read_input_token_cost": 7e-09
+        "cache_read_input_token_cost": 7e-09,
+        "input_cost_per_token_batches": 3.5e-08,
+        "output_cost_per_token_batches": 1.25e-07
     },
     "vertex_ai/xai/grok-4.1-fast-non-reasoning": {
         "cache_read_input_token_cost": 5e-08,
@@ -48619,7 +49146,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
-        "source": "https://docs.x.ai/developers/models",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
@@ -48636,7 +49163,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
-        "source": "https://docs.x.ai/developers/models",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -48728,13 +49255,15 @@
     },
     "vertex_ai/qwen/qwen3-235b-a22b-instruct-2507-maas": {
         "input_cost_per_token": 2.2e-07,
+        "input_cost_per_token_batches": 1.1e-07,
         "litellm_provider": "vertex_ai-qwen_models",
         "max_input_tokens": 262144,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 8.8e-07,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "output_cost_per_token_batches": 4.4e-07,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_regions": [
             "global",
             "us-south1"
@@ -48743,14 +49272,17 @@
         "supports_tool_choice": true
     },
     "vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas": {
+        "cache_read_input_token_cost": 2.2e-08,
         "input_cost_per_token": 2.2e-07,
+        "input_cost_per_token_batches": 1.1e-07,
         "litellm_provider": "vertex_ai-qwen_models",
         "max_input_tokens": 262144,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 1.8e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "output_cost_per_token_batches": 9e-07,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_regions": [
             "global"
         ],
@@ -48765,7 +49297,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_regions": [
             "global"
         ],
@@ -48780,7 +49312,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_regions": [
             "global"
         ],
@@ -54667,6 +55199,54 @@
         "supports_response_schema": false,
         "supports_web_search": false
     },
+    "gemini/gemini-3.8-flash-tts": {
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_batches": 6.25e-08,
+        "cache_read_input_token_cost_flex": 2.5e-08,
+        "cache_read_input_token_cost_priority": 2.25e-07,
+        "input_cost_per_token": 5e-07,
+        "input_cost_per_token_batches": 2.5e-07,
+        "input_cost_per_token_flex": 2.5e-07,
+        "input_cost_per_token_priority": 9e-07,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "audio_speech",
+        "output_cost_per_audio_token": 9e-06,
+        "output_cost_per_token": 9e-06,
+        "output_cost_per_token_batches": 4.5e-06,
+        "output_cost_per_token_flex": 4.5e-06,
+        "output_cost_per_token_priority": 1.62e-05,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "gemini/gemini-3.8-flash-lite-tts": {
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_batches": 6.25e-08,
+        "cache_read_input_token_cost_flex": 2.5e-08,
+        "cache_read_input_token_cost_priority": 2.25e-07,
+        "input_cost_per_token": 5e-07,
+        "input_cost_per_token_batches": 2.5e-07,
+        "input_cost_per_token_flex": 2.5e-07,
+        "input_cost_per_token_priority": 9e-07,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "audio_speech",
+        "output_cost_per_audio_token": 6e-06,
+        "output_cost_per_token": 6e-06,
+        "output_cost_per_token_batches": 3e-06,
+        "output_cost_per_token_flex": 3e-06,
+        "output_cost_per_token_priority": 1.08e-05,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
     "gemini-2.5-flash-preview-tts": {
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
@@ -54981,12 +55561,14 @@
         "cache_creation_input_token_cost_above_1hr": 4e-06,
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 2e-06,
+        "input_cost_per_token_batches": 1e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
+        "output_cost_per_token_batches": 5e-06,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -55005,7 +55587,8 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-sonnet-4-6@default": {
         "regional_endpoint_uplift_multiplier": 1.1,
@@ -55013,14 +55596,18 @@
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
+        "cache_creation_input_token_cost_batches": 1.88e-06,
         "cache_read_input_token_cost": 3e-07,
+        "cache_read_input_token_cost_batches": 1.5e-07,
         "input_cost_per_token": 3e-06,
+        "input_cost_per_token_batches": 1.5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token_batches": 7.5e-06,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -55037,7 +55624,8 @@
             "search_context_size_medium": 0.01
         },
         "supports_output_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "duckduckgo/search": {
         "litellm_provider": "duckduckgo",
@@ -55230,14 +55818,14 @@
         "supports_vision": true
     },
     "bedrock_mantle/openai.gpt-daybreak-blue-5.6-sol": {
-        "input_cost_per_token": 5.5e-06,
-        "input_cost_per_token_above_272k_tokens": 1.1e-05,
-        "cache_creation_input_token_cost": 6.875e-06,
-        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
-        "cache_read_input_token_cost": 5.5e-07,
-        "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
-        "output_cost_per_token": 3.3e-05,
-        "output_cost_per_token_above_272k_tokens": 4.95e-05,
+        "input_cost_per_token": 4.4e-06,
+        "input_cost_per_token_above_272k_tokens": 8.8e-06,
+        "cache_creation_input_token_cost": 5.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.1e-05,
+        "cache_read_input_token_cost": 4.4e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 8.8e-07,
+        "output_cost_per_token": 2.2e-05,
+        "output_cost_per_token_above_272k_tokens": 3.3e-05,
         "litellm_provider": "bedrock_mantle",
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
@@ -55320,6 +55908,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_modalities": [
             "text",
             "image"
@@ -55350,6 +55939,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_modalities": [
             "text",
             "image"
@@ -55380,6 +55970,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_modalities": [
             "text",
             "image"
@@ -55410,6 +56001,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_modalities": [
             "text",
             "image"
@@ -55440,6 +56032,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_modalities": [
             "text",
             "image"
@@ -55470,6 +56063,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_modalities": [
             "text",
             "image"
@@ -55524,6 +56118,82 @@
         "supports_vision": true,
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html"
     },
+    "bedrock_mantle/openai.gpt-6-sol": {
+        "input_cost_per_token": 2.2e-06,
+        "input_cost_per_token_above_272k_tokens": 4.4e-06,
+        "cache_creation_input_token_cost": 2.75e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
+        "cache_read_input_token_cost": 2.2e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4.4e-07,
+        "output_cost_per_token": 1.1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.65e-05,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "use_openai_responses_path": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_vision": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards-openai.html"
+    },
+    "bedrock_mantle/openai.gpt-6-luna": {
+        "input_cost_per_token": 1.1e-07,
+        "input_cost_per_token_above_272k_tokens": 2.2e-07,
+        "cache_creation_input_token_cost": 1.375e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.75e-07,
+        "cache_read_input_token_cost": 1.1e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 2.2e-08,
+        "output_cost_per_token": 5.5e-07,
+        "output_cost_per_token_above_272k_tokens": 8.25e-07,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "use_openai_responses_path": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_vision": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards-openai.html"
+    },
     "us.openai.gpt-6-astra": {
         "input_cost_per_token": 1.1e-05,
         "input_cost_per_token_above_272k_tokens": 2.2e-05,
@@ -55554,7 +56224,71 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html"
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "us.openai.gpt-6-sol": {
+        "input_cost_per_token": 2.2e-06,
+        "input_cost_per_token_above_272k_tokens": 4.4e-06,
+        "cache_creation_input_token_cost": 2.75e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
+        "cache_read_input_token_cost": 2.2e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4.4e-07,
+        "output_cost_per_token": 1.1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.65e-05,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_vision": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "us.openai.gpt-6-luna": {
+        "input_cost_per_token": 1.1e-07,
+        "input_cost_per_token_above_272k_tokens": 2.2e-07,
+        "cache_creation_input_token_cost": 1.375e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.75e-07,
+        "cache_read_input_token_cost": 1.1e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 2.2e-08,
+        "output_cost_per_token": 5.5e-07,
+        "output_cost_per_token_above_272k_tokens": 8.25e-07,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_vision": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.openai.gpt-6-astra": {
         "input_cost_per_token": 1e-05,
@@ -55586,7 +56320,135 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html"
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "openai.gpt-6-sol": {
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-07,
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.5e-05,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_vision": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "global.openai.gpt-6-sol": {
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-07,
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.5e-05,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_vision": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "openai.gpt-6-luna": {
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_token_above_272k_tokens": 2e-07,
+        "cache_creation_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-08,
+        "output_cost_per_token": 5e-07,
+        "output_cost_per_token_above_272k_tokens": 7.5e-07,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_vision": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "global.openai.gpt-6-luna": {
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_token_above_272k_tokens": 2e-07,
+        "cache_creation_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-08,
+        "output_cost_per_token": 5e-07,
+        "output_cost_per_token_above_272k_tokens": 7.5e-07,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_vision": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock_mantle/openai.gpt-5.5": {
         "input_cost_per_token": 5.5e-06,
@@ -55800,6 +56662,7 @@
         "max_output_tokens": 500000,
         "max_tokens": 500000,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
         "supports_prompt_caching": false,
         "supports_reasoning": true,
@@ -55815,6 +56678,7 @@
         "max_output_tokens": 500000,
         "max_tokens": 500000,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
         "supports_prompt_caching": false,
         "supports_reasoning": true,
@@ -63263,6 +64127,30 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "baseten/zai-org/GLM-5.3-Fast": {
+        "cache_read_input_token_cost": 2.1e-07,
+        "input_cost_per_token": 2.1e-06,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 6.6e-06,
+        "source": "https://inference.baseten.co/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "openrouter/minimax/minimax-m3": {
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
@@ -63533,6 +64421,24 @@
         "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_web_search": false
+    },
+    "openrouter/qwen/qwen3.8-max-prime": {
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 1.2e-05,
+        "cache_read_input_token_cost": 5e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_video_input": true,
+        "supports_prompt_caching": true
     },
     "openrouter/deepseek/deepseek-v4-flash-0731": {
         "input_cost_per_token": 4e-08,
@@ -66061,6 +66967,32 @@
         "output_cost_per_token": 9e-06,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
+    "vertex_ai/gemini-omni-1.1-flash-preview": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "vertex_ai",
+        "max_output_tokens": 57920,
+        "max_tokens": 57920,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 9e-06,
+        "output_cost_per_token": 9e-06,
+        "output_cost_per_video_token": 1.75e-05,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_endpoints": [
+            "/v1beta/interactions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "video"
+        ],
+        "supports_reasoning": true,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
     "vertex_ai/gemma-4-26b-a4b-it": {
         "cache_read_input_token_cost": 1.5e-08,
         "input_cost_per_token": 1.5e-07,
@@ -66361,6 +67293,102 @@
         "output_cost_per_token": 5.5e-05,
         "output_cost_per_token_above_272k_tokens": 8.25e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+    },
+    "azure/eu/gpt-6-luna": {
+        "cache_creation_input_token_cost": 1.5e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 3e-07,
+        "cache_read_input_token_cost": 1.2e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 2.4e-08,
+        "input_cost_per_token": 1.2e-07,
+        "input_cost_per_token_above_272k_tokens": 2.4e-07,
+        "litellm_provider": "azure",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "output_cost_per_token_above_272k_tokens": 9e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "source": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "azure/eu/gpt-6-sol": {
+        "cache_creation_input_token_cost": 3e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 6e-06,
+        "cache_read_input_token_cost": 2.4e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4.8e-07,
+        "input_cost_per_token": 2.4e-06,
+        "input_cost_per_token_above_272k_tokens": 4.8e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-05,
+        "output_cost_per_token_above_272k_tokens": 1.8e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "source": "https://azure.microsoft.com/en-us/blog/gpt-6-astra-sol-and-luna-for-production-agents-in-microsoft-foundry/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "azure/eu/o1-mini": {
         "cache_read_input_token_cost": 6.05e-07,
@@ -67984,14 +69012,14 @@
         "supports_web_search": true
     },
     "openrouter/~deepseek/deepseek-flash-latest": {
-        "cache_read_input_token_cost": 3.6e-09,
-        "input_cost_per_token": 1.2e-07,
+        "cache_read_input_token_cost": 6e-09,
+        "input_cost_per_token": 3e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
         "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 4.8e-07,
+        "output_cost_per_token": 1.2e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -68004,14 +69032,15 @@
         "supports_web_search": false
     },
     "openrouter/~deepseek/deepseek-pro-latest": {
-        "cache_read_input_token_cost": 1.2726e-08,
-        "input_cost_per_token": 3.9996e-07,
+        "cache_read_input_token_cost": 4.4e-08,
+        "input_cost_per_token": 1.32e-06,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 393216,
-        "max_tokens": 393216,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
         "mode": "chat",
-        "output_cost_per_token": 1.19988e-06,
+        "off_peak_pricing": {"windows":[{"weekdays":["saturday","sunday"],"hours_utc":"00:00-00:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"00:00-01:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"04:00-06:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"10:00-00:00"}],"input_cost_per_token":6.6e-7,"output_cost_per_token":0.00000198,"cache_read_input_token_cost":2.2e-8},
+        "output_cost_per_token": 3.96e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -68024,14 +69053,14 @@
         "supports_web_search": false
     },
     "openrouter/~deepseek/deepseek-v4-flash-latest": {
-        "cache_read_input_token_cost": 8e-09,
-        "input_cost_per_token": 3e-08,
+        "cache_read_input_token_cost": 1.6e-08,
+        "input_cost_per_token": 4e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1310720,
         "max_output_tokens": 943718,
         "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 8e-07,
+        "output_cost_per_token": 6.4e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -68094,13 +69123,13 @@
     },
     "openrouter/~moonshotai/kimi-latest": {
         "cache_read_input_token_cost": 3e-07,
-        "input_cost_per_token": 1.4989e-06,
+        "input_cost_per_token": 3e-06,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
         "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 1.0758e-05,
+        "output_cost_per_token": 1.5e-05,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -68256,14 +69285,14 @@
         "supports_web_search": true
     },
     "openrouter/~z-ai/glm-flash-latest": {
-        "cache_read_input_token_cost": 1.5e-08,
-        "input_cost_per_token": 7.5e-08,
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 1.5e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1310720,
         "max_output_tokens": 943718,
         "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 5e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -68299,7 +69328,7 @@
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 8e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 1048576,
+        "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
@@ -68319,7 +69348,7 @@
         "cache_read_input_token_cost": 7.5e-07,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 1048576,
+        "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
@@ -68339,7 +69368,47 @@
         "cache_read_input_token_cost": 1.8e-07,
         "input_cost_per_token": 7e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 1048576,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-06,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false,
+        "supports_web_search": false
+    },
+    "openrouter/aion-labs/aion-3.5": {
+        "cache_read_input_token_cost": 7.5e-07,
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false,
+        "supports_web_search": false
+    },
+    "openrouter/aion-labs/aion-3.5-mini": {
+        "cache_read_input_token_cost": 1.8e-07,
+        "input_cost_per_token": 7e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 262144,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
@@ -71231,6 +72300,22 @@
         "supports_vision": false,
         "supports_web_search": false
     },
+    "openrouter/stealth/space-bunny-alpha": {
+        "deprecation_date": "2098-12-31",
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
     "openrouter/stepfun/step-3.5-flash": {
         "input_cost_per_token": 1e-07,
         "litellm_provider": "openrouter",
@@ -71604,6 +72689,26 @@
         "supports_vision": false,
         "supports_web_search": false
     },
+    "openrouter/upstage/solar-mini4": {
+        "cache_read_input_token_cost": 5e-09,
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 524288,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2e-07,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false,
+        "supports_web_search": false
+    },
     "openrouter/writer/palmyra-x5": {
         "input_cost_per_token": 6e-07,
         "litellm_provider": "openrouter",
@@ -71707,6 +72812,7 @@
     },
     "openrouter/z-ai/glm-5.3-flashx": {
         "cache_read_input_token_cost": 7.5e-08,
+        "deprecation_date": "2098-12-31",
         "input_cost_per_token": 3.7e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
@@ -72659,6 +73765,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+<<<<<<< HEAD
     },
     "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro": {
         "cache_read_input_token_cost": 6e-07,
@@ -72708,5 +73815,250 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+||||||| 5dfaa8d620
+=======
+    },
+    "openrouter/anthropic/claude-opus-5.5:batch": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_1hr": 4e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "openrouter/cohere/command-a-plus": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 192000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": false,
+        "supports_vision": true,
+        "supports_web_search": false
+    },
+    "openrouter/deepseek/deepseek-v4.1-flash:batch": {
+        "cache_read_input_token_cost": 3.36e-09,
+        "input_cost_per_token": 1.12e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 3.36e-07,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": false
+    },
+    "openrouter/openai/gpt-6-luna-pro:batch": {
+        "cache_creation_input_token_cost": 6.25e-08,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.25e-07,
+        "cache_read_input_token_cost": 5e-09,
+        "cache_read_input_token_cost_above_272k_tokens": 1e-08,
+        "input_cost_per_token": 5e-08,
+        "input_cost_per_token_above_272k_tokens": 1e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "output_cost_per_token_above_272k_tokens": 3.75e-07,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "openrouter/openai/gpt-6-luna:batch": {
+        "cache_creation_input_token_cost": 6.25e-08,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.25e-07,
+        "cache_read_input_token_cost": 5e-09,
+        "cache_read_input_token_cost_above_272k_tokens": 1e-08,
+        "input_cost_per_token": 5e-08,
+        "input_cost_per_token_above_272k_tokens": 1e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "output_cost_per_token_above_272k_tokens": 3.75e-07,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "openrouter/openai/gpt-6-sol-pro:batch": {
+        "cache_creation_input_token_cost": 1.25e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-07,
+        "input_cost_per_token": 1e-06,
+        "input_cost_per_token_above_272k_tokens": 2e-06,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-06,
+        "output_cost_per_token_above_272k_tokens": 7.5e-06,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "openrouter/openai/gpt-6-sol:batch": {
+        "cache_creation_input_token_cost": 1.25e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-07,
+        "input_cost_per_token": 1e-06,
+        "input_cost_per_token_above_272k_tokens": 2e-06,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-06,
+        "output_cost_per_token_above_272k_tokens": 7.5e-06,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "openrouter/openai/gpt-oss-20b:batch": {
+        "input_cost_per_token": 2.4e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 117964,
+        "max_tokens": 117964,
+        "mode": "chat",
+        "output_cost_per_token": 1.12e-07,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": false,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false,
+        "supports_web_search": false
+    },
+    "openrouter/qwen/qwen3.8-omni-flash": {
+        "cache_read_input_token_cost": 1.6e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 4.7e-07,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": false
+    },
+    "vertex_ai/gemini-2.0-flash": {
+        "input_cost_per_audio_token": 1e-06,
+        "input_cost_per_audio_token_batches": 5e-07,
+        "input_cost_per_character": 3.75e-08,
+        "input_cost_per_token": 1.5e-07,
+        "input_cost_per_token_batches": 7.5e-08,
+        "litellm_provider": "vertex_ai",
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "output_cost_per_token_batches": 3e-07,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+    },
+    "vertex_ai/gemini-2.0-flash-lite": {
+        "input_cost_per_audio_token": 7.5e-08,
+        "input_cost_per_audio_token_batches": 3.75e-08,
+        "input_cost_per_character": 1.875e-08,
+        "input_cost_per_token": 7.5e-08,
+        "input_cost_per_token_batches": 3.75e-08,
+        "litellm_provider": "vertex_ai",
+        "mode": "chat",
+        "output_cost_per_token": 3e-07,
+        "output_cost_per_token_batches": 1.5e-07,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+    },
+    "vertex_ai/zai-org/glm-5.2-maas": {
+        "cache_read_input_token_cost": 1.4e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "vertex_ai-zai_models",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_regions": ["global"],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+>>>>>>> origin/main
     }
 }
