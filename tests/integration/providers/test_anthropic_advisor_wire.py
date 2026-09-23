@@ -16,17 +16,20 @@ _ADVICE: Final = "use the composite index on (tenant_id, created_at)"
 _FINAL_ANSWER: Final = "done, the composite index is the right one"
 
 
-_ADVISOR_CALL_MESSAGE: Final = {
-    "role": "assistant",
-    "content": None,
-    "tool_calls": [
-        {
-            "id": "advisor-call",
-            "type": "function",
-            "function": {"name": "advisor", "arguments": json.dumps({"question": _QUESTION})},
-        }
-    ],
-}
+def _advisor_call_message(question: str) -> dict[str, object]:
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "advisor-call",
+                "type": "function",
+                "function": {"name": "advisor", "arguments": json.dumps({"question": question})},
+            }
+        ],
+    }
+
+
 _FINAL_MESSAGE: Final = {"role": "assistant", "content": _FINAL_ANSWER}
 
 
@@ -45,7 +48,7 @@ def _chat_completion(identity: str, message: dict[str, object], finish_reason: s
     )
 
 
-def _executor_reply(body: dict[str, object], identity: str) -> Reply:
+def _executor_reply(body: dict[str, object], identity: str, question: str) -> Reply:
     messages: Final = body["messages"]
     assert isinstance(messages, list)
     if any(message.get("role") == "tool" for message in messages):
@@ -54,7 +57,7 @@ def _executor_reply(body: dict[str, object], identity: str) -> Reply:
     tools: Final = body["tools"]
     assert isinstance(tools, list)
     assert tools[0]["function"]["name"] == "advisor"
-    return _chat_completion(identity, _ADVISOR_CALL_MESSAGE, "tool_calls")
+    return _chat_completion(identity, _advisor_call_message(question), "tool_calls")
 
 
 @pytest.mark.covers("providers.anthropic_messages_advisor.sub_call_uses_the_configured_advisor_deployment")
@@ -62,18 +65,20 @@ def test_advisor_sub_call_reaches_the_router_deployment_with_its_key_instead_of_
     gateway: Gateway,
 ) -> None:
     identity: Final = "advisor-wire-" + uuid.uuid4().hex
+    migration: Final = "please plan the migration " + identity
+    question: Final = _QUESTION + " " + identity
 
     def respond(request: Request) -> Reply:
         body: Final = json.loads(request.body)
         if request.target == "/v1/chat/completions":
             assert request.headers["authorization"] == "Bearer integration-provider-key"
-            return _executor_reply(body, identity)
+            return _executor_reply(body, identity, question)
         assert request.target == "/v1/messages"
         assert request.headers["x-api-key"] == _ADVISOR_KEY
         assert body["model"] == "claude-opus-4-1-20250805"
         assert body["messages"] == [
-            {"role": "user", "content": "please plan the migration"},
-            {"role": "user", "content": _QUESTION},
+            {"role": "user", "content": migration},
+            {"role": "user", "content": question},
         ]
         assert "tools" not in body
         return Reply(
@@ -102,7 +107,7 @@ def test_advisor_sub_call_reaches_the_router_deployment_with_its_key_instead_of_
             {
                 "model": executor,
                 "max_tokens": 64,
-                "messages": [{"role": "user", "content": "please plan the migration"}],
+                "messages": [{"role": "user", "content": migration}],
                 "tools": [{"type": "advisor_20260301", "name": "advisor", "model": advisor}],
             },
         )
