@@ -12,51 +12,39 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import React from "react";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
-import OpeningPromptEditor, { type OpeningPromptSelection } from "./OpeningPromptEditor";
+import CustomTierPromptEditor from "./CustomTierPromptEditor";
 import { RestrictedSection, restrictedBy } from "./TierRestrictions";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
-import ClassifierReasoningEffortSelect from "./ClassifierReasoningEffortSelect";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
-import ClassifierVisionConfig from "./ClassifierVisionConfig";
-import type { ReasoningEffort } from "./complexity_router_tiers";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
-  ClassificationFrequency,
   ClassifierFallback,
-  ClassifierLLMConfig,
   ClassifierType,
   ComplexityRouterConfigValue,
-  classificationFrequency,
-  withClassificationFrequency,
   DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS,
   MIN_QUOTED_CONTEXT_TURN_CHARS,
   DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
   DEFAULT_CLASSIFIER_FALLBACK,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
   DEFAULT_CLASSIFICATION_RUBRIC,
+  CLASSIFICATION_RUBRIC_DESCRIPTIONS,
+  CLASSIFICATION_RUBRIC_KEYS,
   ClassificationRubric,
   effectiveTierLabel,
   heuristicScoringRole,
   usesLlmClassifier,
   usesClassifierContext,
-  DEFAULT_HYBRID_BOUNDARY_MARGIN,
   HEURISTIC_FIRST_MAX_TIER_KEYS,
   effectiveClassifierType,
 } from "./ComplexityRouterConfig";
 
 const DEFAULT_SCORING_EXPLANATION =
-  "The router scores each request across 7 built-in dimensions: token count, code presence, reasoning markers, technical " +
-  "terms, simple indicators, multi-step patterns, and question complexity, plus any custom dimensions you add. " +
-  "The weighted score determines the tier:";
-
-const HEURISTIC_V2_EXPLANATION =
-  "The router estimates success probability for all four tiers with the bundled calibrated model, then selects " +
-  "the first tier that meets its trained threshold. It runs locally with no classifier API call.";
+  "The router scores each request across 7 dimensions: token count, code presence, reasoning markers, technical " +
+  "terms, simple indicators, multi-step patterns, and question complexity. The weighted score determines the tier:";
 
 const CLASSIFIER_TIMEOUT_ID = "classifier-timeout-ms";
 const CLASSIFIER_CONTEXT_WINDOW_SIZE_ID = "classifier-context-window-size";
 const CLASSIFIER_CONTEXT_BUDGET_CHARS_ID = "classifier-context-budget-chars";
-const HYBRID_BOUNDARY_MARGIN_ID = "hybrid-boundary-margin";
 
 const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
   "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
@@ -73,7 +61,6 @@ const CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK =
  * at all, so the panel must not keep implying a score is involved on either router.
  */
 const scoringExplanation = (value: ComplexityRouterConfigValue): string => {
-  if (value.classifier_type === "heuristic_v2") return HEURISTIC_V2_EXPLANATION;
   const usesCustomPrompt =
     usesLlmClassifier(value.classifier_type) && Boolean(value.classifier_llm_config?.system_prompt?.trim());
   if (!usesCustomPrompt) return DEFAULT_SCORING_EXPLANATION;
@@ -126,7 +113,7 @@ const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> =
         <strong className="block mb-2 font-semibold">How Classification Works</strong>
         <span className="text-[13px] text-muted-foreground">{scoringExplanation(value)}</span>
         {scorerRuns && ranges && (
-          <ul className="mt-2 pl-5 text-[13px] text-muted-foreground">
+          <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, color: "rgba(0, 0, 0, 0.45)" }}>
             <li>
               <strong>{effectiveTierLabel("SIMPLE", value.tier_labels)}</strong>: Score &lt; {ranges.simpleMedium}
             </li>
@@ -159,7 +146,6 @@ interface ClassificationMethodConfigProps {
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
   modelOptions: { value: string; label: string }[];
-  effortOptionsByModel: Record<string, string[] | null | undefined>;
   customTechnicalKeywords?: string[];
   onCustomTechnicalKeywordsChange?: (keywords: string[]) => void;
   showValidationErrors?: boolean;
@@ -192,17 +178,6 @@ const ClassifierTypeRadios: React.FC<{
             </span>
           </Label>
         </SimpleTooltip>
-        <SimpleTooltip content={scorerLockedReason}>
-          <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
-            <RadioGroupItem value="heuristic_v2" className="mt-0.5" disabled={scorerLocked} />
-            <span>
-              <strong className="font-semibold">Heuristic v2</strong>{" "}
-              <span className="text-muted-foreground">
-                uses bundled calibrated four-tier probabilities with no API call
-              </span>
-            </span>
-          </Label>
-        </SimpleTooltip>
         <Label className="items-start font-normal leading-normal">
           <RadioGroupItem value="llm" className="mt-0.5" />
           <span>
@@ -228,18 +203,6 @@ const ClassifierTypeRadios: React.FC<{
             </span>
           </Label>
         </SimpleTooltip>
-        <SimpleTooltip content={scorerLockedReason}>
-          <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
-            <RadioGroupItem value="hybrid" className="mt-0.5" disabled={scorerLocked} />
-            <span>
-              <strong className="font-semibold">Hybrid</strong>{" "}
-              <span className="text-muted-foreground">
-                keeps the local score at any tier, and only pays for the classifier when that score lands near a tier
-                boundary
-              </span>
-            </span>
-          </Label>
-        </SimpleTooltip>
       </div>
     </RadioGroup>
   );
@@ -249,7 +212,6 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   value,
   onChange,
   modelOptions,
-  effortOptionsByModel,
   customTechnicalKeywords,
   onCustomTechnicalKeywordsChange,
   showValidationErrors = false,
@@ -258,16 +220,12 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const [draft, setDraft] = React.useState<{ id: string; raw: string } | null>(null);
   const hasDefaultModel = Boolean(defaultModel);
   const classifierType = effectiveClassifierType(value);
-  const sessionFrequencyRestriction = restrictedBy(value, "sessionAffinity");
   const classifierModelMissing =
     showValidationErrors && usesLlmClassifier(classifierType) && !value.classifier_llm_config?.model;
   const usesCustomPrompt = Boolean(value.classifier_llm_config?.system_prompt?.trim());
   const contextBudget = value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS;
   const contextBudgetQuotesNothing = contextBudget > 0 && contextBudget < MIN_QUOTED_CONTEXT_TURN_CHARS;
   const classificationRubric = value.classifier_llm_config?.classification_rubric ?? DEFAULT_CLASSIFICATION_RUBRIC;
-  const classifierModel = value.classifier_llm_config?.model ?? "";
-  const classifierReasoningEffort = value.classifier_llm_config?.reasoning_effort;
-  const explicitlySupportedClassifierEfforts = effortOptionsByModel[classifierModel];
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
     onChange(transitionClassifierType(value, classifierType));
@@ -277,62 +235,18 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     onChange({ ...value, heuristic_first_max_tier: tier });
   };
 
-  const handleHybridBoundaryMarginChange = (raw: string) => {
-    setDraft({ id: HYBRID_BOUNDARY_MARGIN_ID, raw });
-    const parsed = Number(raw);
-    if (raw.trim() === "" || !Number.isFinite(parsed)) return;
-    onChange({ ...value, hybrid_boundary_margin: Math.min(1, Math.max(0, parsed)) });
+  const handleClassificationPromptChange = (classificationPrompt: string | undefined) => {
+    onChange({ ...value, classification_prompt: classificationPrompt });
   };
 
-  // One write for everything the prompt dialog owns. The rubric arrives here rather than through the
-  // rubric handler because two onChange calls in one tick would both spread this render's `value`,
-  // so whichever landed second would drop the other's edit.
-  const handleClassificationPromptChange = ({
-    classificationPrompt,
-    classificationExamples,
-    classificationRubric: selectedRubric,
-  }: OpeningPromptSelection) => {
-    const rubricConfig: ClassifierLLMConfig = {
-      ...value.classifier_llm_config,
-      model: value.classifier_llm_config?.model ?? "",
-      timeout_ms: value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
-      classification_rubric: selectedRubric,
-    };
-    const nextValue: ComplexityRouterConfigValue = {
-      ...value,
-      ...(selectedRubric && { classifier_llm_config: rubricConfig }),
-      classification_prompt: classificationPrompt,
-      classification_examples: classificationExamples,
-    };
-    onChange(nextValue);
-  };
-
-  const handleClassifierModelChange = (model: string | null) => {
-    if (model === null) return;
-    if (model === value.classifier_llm_config?.model) return;
-    const { reasoning_effort: _reasoningEffort, ...classifierLlmConfig } = value.classifier_llm_config ?? {
-      model: "",
-      timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS,
-    };
+  const handleClassifierModelChange = (model: string) => {
     onChange({
       ...value,
       classifier_llm_config: {
-        ...classifierLlmConfig,
+        ...value.classifier_llm_config,
         model,
-        timeout_ms: classifierLlmConfig.timeout_ms,
+        timeout_ms: value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
       },
-    });
-  };
-
-  const handleClassifierReasoningEffortChange = (reasoningEffort: ReasoningEffort | undefined) => {
-    if (!value.classifier_llm_config) return;
-    const { reasoning_effort: _reasoningEffort, ...classifierLlmConfig } = value.classifier_llm_config;
-    onChange({
-      ...value,
-      classifier_llm_config:
-        reasoningEffort === undefined
-          ? classifierLlmConfig
-          : { ...classifierLlmConfig, reasoning_effort: reasoningEffort },
     });
   };
 
@@ -373,10 +287,6 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
 
   const handleClassifierFallbackChange = (fallback: ClassifierFallback) => {
     onChange({ ...value, classifier_fallback: fallback });
-  };
-
-  const handleClassificationFrequencyChange = (frequency: ClassificationFrequency) => {
-    onChange(withClassificationFrequency(value, frequency));
   };
 
   const handleClassifierContextWindowSizeChange = (windowSize: number) => {
@@ -441,73 +351,6 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </div>
       )}
 
-      {classifierType === "hybrid" && (
-        <div className="mt-4 space-y-2">
-          <strong className="block font-semibold">Boundary margin</strong>
-          <Input
-            id={HYBRID_BOUNDARY_MARGIN_ID}
-            type="text"
-            inputMode="decimal"
-            value={
-              draft?.id === HYBRID_BOUNDARY_MARGIN_ID
-                ? draft.raw
-                : String(value.hybrid_boundary_margin ?? DEFAULT_HYBRID_BOUNDARY_MARGIN)
-            }
-            onChange={(event) => handleHybridBoundaryMarginChange(event.target.value)}
-            onBlur={() => setDraft(null)}
-            className="w-full"
-          />
-          <p className="text-sm text-muted-foreground">
-            A score further than this from every tier boundary routes on the scorer&apos;s own tier, however expensive
-            that tier is. A score closer than this, and anything the scorer found no signal for at all, goes to the
-            classifier to break the tie
-          </p>
-        </div>
-      )}
-
-      <div className="mt-4 space-y-2">
-        <strong className="block font-semibold">How often to classify</strong>
-        <RadioGroup
-          value={classificationFrequency(value)}
-          onValueChange={(frequency: unknown) =>
-            handleClassificationFrequencyChange(frequency as ClassificationFrequency)
-          }
-        >
-          <div className="inline-flex flex-col gap-2">
-            <Label className="items-start font-normal leading-normal">
-              <RadioGroupItem value="every_request" className="mt-0.5" />
-              <span>
-                <span>Every request</span>{" "}
-                <span className="text-muted-foreground">: score every turn, tool-result continuations included</span>
-              </span>
-            </Label>
-            <Label className="items-start font-normal leading-normal">
-              <RadioGroupItem value="user_turn" className="mt-0.5" />
-              <span>
-                <span>Every new user message</span>{" "}
-                <span className="text-muted-foreground">
-                  : score each new human ask, then hold that tier for the tool calls that follow it
-                </span>
-              </span>
-            </Label>
-            <Label className="items-start font-normal leading-normal">
-              <RadioGroupItem value="session" className="mt-0.5" disabled={Boolean(sessionFrequencyRestriction)} />
-              <span>
-                <span>Once per session</span>{" "}
-                <span className="text-muted-foreground">
-                  {sessionFrequencyRestriction?.reason ??
-                    ": score the first turn only, then hold that tier and its deployment for the whole session"}
-                </span>
-              </span>
-            </Label>
-          </div>
-        </RadioGroup>
-        <p className="text-sm text-muted-foreground">
-          Holding the tier keeps an agent on one model for a whole tool loop and cuts scoring cost. A turn the router
-          cannot match to a held decision, such as one with no session id or an expired one, is scored again
-        </p>
-      </div>
-
       {classifierType === "jev" && <JevClassifierConfig value={value} onChange={onChange} />}
       {usesLlmClassifier(classifierType) && (
         <div className="mt-4 space-y-3">
@@ -525,12 +368,6 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             />
             {classifierModelMissing && <span className="text-xs text-destructive">A classifier model is required</span>}
           </div>
-          <ClassifierReasoningEffortSelect
-            model={classifierModel}
-            value={classifierReasoningEffort}
-            explicitlySupported={explicitlySupportedClassifierEfforts}
-            onChange={handleClassifierReasoningEffortChange}
-          />
           <div>
             <Label htmlFor={CLASSIFIER_TIMEOUT_ID} className="block mb-1 font-semibold">
               Timeout (ms)
@@ -563,41 +400,66 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             value={value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS }}
             onChange={(classifier_llm_config) => onChange({ ...value, classifier_llm_config })}
           />
-          <ClassifierVisionConfig
-            value={value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS }}
-            onChange={(classifier_llm_config) => onChange({ ...value, classifier_llm_config })}
-          />
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <strong className="font-semibold">Classifier Prompt</strong>
-              <SimpleTooltip content="Every rubric uses the same four tiers. They differ in the worked examples that show the classifier where the boundary between tiers sits, and the Business rubric also rewrites the tier definitions for business traffic. Pick the rubric, and write your own opening instructions and calibration examples, inside the prompt editor.">
+              <strong className="font-semibold">Classification Rubric</strong>
+              <SimpleTooltip content="Every rubric uses the same four tiers. They differ in the worked examples that show the classifier where the boundary between tiers sits, and the Business rubric also rewrites the tier definitions for business traffic.">
                 <Info className="size-4 text-muted-foreground" />
               </SimpleTooltip>
             </div>
-            {!value.custom_tier_set && usesCustomPrompt ? (
+            <SimpleTooltip
+              content={
+                restrictedBy(value, "classificationRubric")?.reason ??
+                (usesCustomPrompt ? "Your custom prompt replaces the built-in rubric entirely" : undefined)
+              }
+              className="w-full"
+            >
+              <Select
+                items={CLASSIFICATION_RUBRIC_KEYS.map((preset) => ({
+                  value: preset,
+                  label: CLASSIFICATION_RUBRIC_DESCRIPTIONS[preset].label,
+                }))}
+                value={classificationRubric}
+                onValueChange={(preset: ClassificationRubric | null) =>
+                  preset && handleClassificationRubricChange(preset)
+                }
+                disabled={usesCustomPrompt || Boolean(value.custom_tier_set)}
+              >
+                <SelectTrigger aria-label="Classification Rubric" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CLASSIFICATION_RUBRIC_KEYS.map((preset) => (
+                    <SelectItem key={preset} value={preset}>
+                      {CLASSIFICATION_RUBRIC_DESCRIPTIONS[preset].label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </SimpleTooltip>
+            <span className="block text-xs text-muted-foreground">
+              {restrictedBy(value, "classificationRubric")?.reason ??
+                (usesCustomPrompt
+                  ? "Not in use: the custom prompt below is the classifier's entire rubric."
+                  : CLASSIFICATION_RUBRIC_DESCRIPTIONS[classificationRubric].description)}
+            </span>
+          </div>
+          <div>
+            <strong className="block mb-1 font-semibold">Classifier Prompt</strong>
+            {value.custom_tier_set ? (
+              <CustomTierPromptEditor
+                classificationPrompt={value.classification_prompt}
+                onChange={handleClassificationPromptChange}
+                tierRows={value.custom_tier_set.tiers}
+                contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
+              />
+            ) : (
               <ClassifierPromptEditor
                 systemPrompt={value.classifier_llm_config?.system_prompt}
                 onChange={handleClassifierSystemPromptChange}
                 contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
                 tierLabels={value.tier_labels}
                 classificationRubric={classificationRubric}
-              />
-            ) : (
-              <OpeningPromptEditor
-                classificationPrompt={value.classification_prompt}
-                classificationExamples={value.classification_examples}
-                onChange={handleClassificationPromptChange}
-                tierSource={
-                  value.custom_tier_set
-                    ? { kind: "custom", tierRows: value.custom_tier_set.tiers }
-                    : {
-                        kind: "builtIn",
-                        tierLabels: value.tier_labels,
-                        classificationRubric,
-                        rubricRestriction: restrictedBy(value, "classificationRubric")?.reason,
-                      }
-                }
-                contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
               />
             )}
           </div>
@@ -666,9 +528,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               className="w-full"
             />
             <span className="text-xs text-muted-foreground">
-              Number of prior user turns sent to the classifier provider, excluding tool output and harness reminders.
-              LLM and JEV default to 3 turns; JEV sends them to the configured TypeSafe endpoint. Set to 0 to omit
-              conversation history. The current message and selected system text are still sent.
+              Number of prior user turns (tool output and harness reminders excluded) sent to the classifier as context,
+              so a referring follow-up like &quot;now do the same for the streaming path&quot; is classified against
+              what it refers to. Set to 0 to send only the current message.
             </span>
           </div>
           <div>

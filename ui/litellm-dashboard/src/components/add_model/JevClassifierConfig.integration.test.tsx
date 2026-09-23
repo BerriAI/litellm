@@ -98,16 +98,12 @@ describe("JEV classifier editor", () => {
   it("uses built-in JEV without a license and preserves custom tiers and context through reload", () => {
     renderWithProviders(<Form />);
     expect(screen.getByLabelText("Classifier Model")).toBeInTheDocument();
-    expect(screen.getByText("Reasoning Effort")).toBeInTheDocument();
     expect(screen.getByText("Classifier Prompt")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Use images for classification" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("radio", { name: /JEV Classifier/ }));
     expect(screen.getByLabelText("JEV Model")).toHaveValue("jev-latest");
     expect(screen.getByLabelText("JEV Instructions")).toBeDisabled();
     expect(screen.queryByLabelText("Classifier Model")).not.toBeInTheDocument();
-    expect(screen.queryByText("Reasoning Effort")).not.toBeInTheDocument();
     expect(screen.queryByText("Classifier Prompt")).not.toBeInTheDocument();
-    expect(screen.queryByRole("switch", { name: "Use images for classification" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("JEV Model"), { target: { value: "jev-test" } });
     fireEvent.change(screen.getByLabelText("JEV Timeout (ms)"), { target: { value: "4200" } });
     fireEvent.change(screen.getByLabelText("Context Window Size"), { target: { value: "6" } });

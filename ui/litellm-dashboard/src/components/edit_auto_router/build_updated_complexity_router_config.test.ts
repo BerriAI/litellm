@@ -622,7 +622,12 @@ describe("managed keys survive an untouched open-and-save", () => {
   // tier_definitions, fallback_tier and classification_prompt cannot sit beside heuristic_first, which
   // this fixture uses, so no single stored config can hold every managed key. They get their own round
   // trip below.
-  const CUSTOM_TIER_ONLY_KEYS = new Set(["tier_definitions", "fallback_tier", "classification_prompt"]);
+  const CUSTOM_TIER_ONLY_KEYS = new Set([
+    "tier_definitions",
+    "fallback_tier",
+    "classification_prompt",
+    "jev_classifier_config",
+  ]);
 
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
