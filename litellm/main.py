@@ -5640,6 +5640,7 @@ def completion(
             max_retries=max_retries,
             timeout=timeout,
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
+            stream_chunk_size=kwargs.get("stream_chunk_size"),
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
