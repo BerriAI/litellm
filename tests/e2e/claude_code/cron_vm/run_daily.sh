@@ -221,40 +221,27 @@ git -C "${WORKTREE}" clean -fdx -e .venv -e .uv-bin -e .uv-python
 git -C "${WORKTREE}" checkout --force "${LITELLM_VERSION}"
 
 # Always rebuild tests/e2e/ in the worktree from the dev checkout,
-# regardless of what the resolved ${LITELLM_VERSION} tag ships. Two
-# reasons:
+# regardless of what the resolved ${LITELLM_VERSION} tag ships: the
+# matrix populator's job is to exercise *today's* tests against the
+# latest stable proxy, and the dev checkout carries the most recent
+# test fixes that haven't yet rolled into a stable release.
 #
-#   * The matrix populator's job is to exercise *today's* tests against
-#     the latest stable proxy. The dev checkout carries the most recent
-#     test fixes that haven't yet rolled into a stable release, and we
-#     want every cron run to pick those up the moment they land on
-#     ${LITELLM_REPO}, not whenever the next stable release happens.
-#   * The tag's own tests/e2e/ ships the full EKS e2e harness, whose
-#     top-level conftest.py imports modules (e2e_db, lifecycle,
-#     otel_client, ...) that the stable venv does not install. Copying
-#     the whole tree would make pytest collection blow up on those
-#     imports.
-#
-# So the shim is a fresh `rm -rf` of tests/e2e/ followed by copying ONLY
-# the claude_code suite plus the shared transport helpers it imports.
+# The whole tree is copied rather than an allowlist of the helpers the
+# suite imports: the helpers import each other (proxy_client ->
+# e2e_config -> fixture_mode -> ...), so a new edge in that graph turned
+# an allowlist into a ModuleNotFoundError at conftest load. The tree's
+# top-level conftest.py pulls in the full EKS harness (e2e_db,
+# lifecycle, ...), which the stable venv does not install, so the pytest
+# run below points --confcutdir at claude_code/ and never loads it.
 # pytest puts tests/e2e/ itself on sys.path (it has no __init__.py, while
 # claude_code/ does), which is what resolves both the `claude_code.*`
 # and the bare `proxy_client` / `e2e_http` imports inside the suite.
-E2E_HELPER_FILES=(proxy_client.py e2e_http.py models.py e2e_config.py transport.py)
-if [[ ! -d "${LITELLM_REPO}/tests/e2e/claude_code" ]]; then
-  die "no shim source at ${LITELLM_REPO}/tests/e2e/claude_code"
-fi
-for helper in "${E2E_HELPER_FILES[@]}"; do
-  [[ -f "${LITELLM_REPO}/tests/e2e/${helper}" ]] \
-    || die "missing shim helper: ${LITELLM_REPO}/tests/e2e/${helper}"
-done
-log "shimming tests/e2e/claude_code/ + helpers from ${LITELLM_REPO} (always-overwrite)"
+[[ -d "${LITELLM_REPO}/tests/e2e/claude_code" ]] \
+  || die "no shim source at ${LITELLM_REPO}/tests/e2e/claude_code"
+log "shimming tests/e2e/ from ${LITELLM_REPO} (always-overwrite)"
 rm -rf "${WORKTREE}/tests/e2e"
 mkdir -p "${WORKTREE}/tests/e2e"
-cp -r "${LITELLM_REPO}/tests/e2e/claude_code" "${WORKTREE}/tests/e2e/"
-for helper in "${E2E_HELPER_FILES[@]}"; do
-  cp "${LITELLM_REPO}/tests/e2e/${helper}" "${WORKTREE}/tests/e2e/"
-done
+cp -r "${LITELLM_REPO}/tests/e2e/." "${WORKTREE}/tests/e2e/"
 
 # litellm pins an exact uv version in pyproject.toml's [tool.uv]
 # `required-version` field, so a system uv that's newer or older
@@ -367,6 +354,7 @@ RESULTS_JSON="${WORKDIR}/compat-results.json"
 # the cron skips them if/when they land in the suite.
 PYTEST_ARGS=(
   tests/e2e/claude_code/
+  --confcutdir=tests/e2e/claude_code
   "--ignore-glob=*_unit_tests*"
 )
 if [[ -n "${PYTEST_K}" ]]; then

@@ -46,13 +46,12 @@ than as a GitHub Action or on a dedicated VM. Trade-offs:
    test is the published PyPI wheel (what users install) rather than a
    source build: the tag builds a Rust extension through maturin, and
    the image ships no C or Rust toolchain. Then **shims the test suite**:
-   `tests/e2e/` in the worktree is rebuilt from the image's copy of
-   this tree — the `claude_code/` suite plus the five shared transport
-   helpers it imports (`proxy_client.py`, `e2e_http.py`, `models.py`,
-   `e2e_config.py`, `transport.py`) — so the cron always runs *today's*
-   tests against the latest stable proxy. The tag's own `tests/e2e/`
-   tree (including the EKS-harness `conftest.py`, whose imports the
-   stable venv doesn't install) is deliberately not used.
+   `tests/e2e/` in the worktree is replaced by the image's copy of this
+   whole tree, so the cron always runs *today's* tests against the
+   latest stable proxy, and pytest runs with `--confcutdir` pointed at
+   `claude_code/` so the tree's EKS-harness `conftest.py` (whose imports
+   the stable venv doesn't install) is never loaded. The tag's own
+   `tests/e2e/` is deliberately not used.
 4. **Boots the proxy** as a `setsid` background process on port `4100`
    bound to loopback, then polls `/health/liveliness` until it's up.
 5. **Runs pytest** on `tests/e2e/claude_code/` with `LITELLM_PROXY_URL`
