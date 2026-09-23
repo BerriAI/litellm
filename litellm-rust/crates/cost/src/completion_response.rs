@@ -1,6 +1,7 @@
 use jiff::Timestamp;
 use serde_json::Value;
 
+use crate::a2a_cost::{A2ACostError, calculate_a2a_cost};
 use crate::catalog::{
     CatalogCallError, CatalogError, CatalogImageError, CostCall, ModelCostRequest, ModelInfoCatalog,
 };
@@ -10,6 +11,7 @@ use crate::image_cost_router::{
     ImageCostRouteError, ImageCostRouteRequest, call_type_has_image_response,
     route_image_generation_cost_calculator,
 };
+use crate::mcp_cost::calculate_mcp_tool_call_cost;
 use crate::realtime_cost::{
     collect_and_combine_usage_from_realtime_stream_results, combine_usage_objects, event_usage,
     partition_results_by_service_tier,
@@ -38,6 +40,7 @@ pub struct CompletionResponseCostRequest<'a> {
     pub additional_costs: &'a [f64],
     pub discount_config: &'a Value,
     pub margin_config: &'a Value,
+    pub logging_details: Option<&'a Value>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -58,6 +61,7 @@ pub enum CompletionResponseCostError {
     Image(ImageCostRouteError),
     Video(CatalogImageError),
     Realtime(CatalogError),
+    A2A(A2ACostError),
 }
 
 impl From<UsageError> for CompletionResponseCostError {
@@ -462,6 +466,32 @@ pub fn completion_cost_from_response(
         .custom_pricing
         .then_some(request.deployment_info)
         .flatten();
+    if matches!(
+        prepared.call_type.as_str(),
+        "send_message" | "asend_message"
+    ) {
+        let model = prepared
+            .model_candidates
+            .iter()
+            .flatten()
+            .next()
+            .cloned()
+            .unwrap_or_default();
+        let total = calculate_a2a_cost(request.logging_details)
+            .map_err(CompletionResponseCostError::A2A)?;
+        return Ok(flat_priced(prepared, model, total));
+    }
+    if prepared.call_type == "call_mcp_tool" {
+        let model = prepared
+            .model_candidates
+            .iter()
+            .flatten()
+            .next()
+            .cloned()
+            .ok_or(CompletionResponseCostError::MissingModel)?;
+        let total = calculate_mcp_tool_call_cost(request.logging_details);
+        return Ok(flat_priced(prepared, model, total));
+    }
     if call_type_has_image_response(&prepared.call_type)
         && request.input.response_kind == Some(ResponseKind::ImageGeneration)
     {

@@ -1,3 +1,4 @@
+pub mod a2a_cost;
 pub mod anthropic_cost;
 pub mod anthropic_usage;
 pub mod azure_ai_cost;
@@ -26,6 +27,7 @@ pub mod guardrail_cost;
 pub mod image_cost_router;
 pub mod image_response_cost;
 pub mod interactions_usage;
+pub mod mcp_cost;
 pub mod model_selection;
 pub mod non_token;
 pub mod ocr_cost;

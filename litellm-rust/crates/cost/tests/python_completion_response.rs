@@ -55,7 +55,36 @@ fn request<'a>(
         additional_costs: &[],
         discount_config: discount,
         margin_config: margin,
+        logging_details: None,
     }
+}
+
+#[rstest]
+#[case("send_message", None, json!({"litellm_params": {"cost_per_query": 0.04}}), 0.04)]
+#[case("asend_message", None, json!({"litellm_params": {"input_cost_per_token": 0.01}, "usage": {"prompt_tokens": 4}}), 0.04)]
+#[case("call_mcp_tool", Some("tool"), json!({"mcp_tool_call_metadata": {"name": "search", "mcp_server_cost_info": {"tool_name_to_cost_per_query": {"search": 0.07}}}}), 0.07)]
+fn metadata_priced_calls_use_logging_details_without_catalog_pricing(
+    #[case] call_type: &str,
+    #[case] model: Option<&str>,
+    #[case] details: Value,
+    #[case] expected: f64,
+) {
+    let catalog = ModelInfoCatalog::new(HashMap::new());
+    let empty = json!({});
+    let base = request(Some(&empty), model, None, &empty, &empty);
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                call_type: Some(call_type),
+                ..base.input
+            },
+            logging_details: Some(&details),
+            ..base
+        },
+    )
+    .unwrap();
+    assert_eq!(result.cost.total, expected);
 }
 
 #[rstest]
