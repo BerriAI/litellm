@@ -7,7 +7,7 @@ use litellm_auth_aws::{
     resolve_credentials,
 };
 use litellm_core_utils::settings::Lookup;
-use litellm_secrets_types::KeyManagementSettings;
+use litellm_secrets_types::{AwsOperationContext, KeyManagementSettings};
 
 use crate::Error;
 
@@ -22,8 +22,28 @@ impl Credentials {
         settings: &KeyManagementSettings,
         environment: Arc<dyn Lookup + Send + Sync>,
     ) -> Self {
+        Self::with_context(settings, environment, &AwsOperationContext::default())
+    }
+
+    pub(crate) fn with_context(
+        settings: &KeyManagementSettings,
+        environment: Arc<dyn Lookup + Send + Sync>,
+        context: &AwsOperationContext,
+    ) -> Self {
         Self {
             config: AwsAuthConfig {
+                access_key_id: context
+                    .access_key_id
+                    .as_ref()
+                    .map(|value| value.expose().to_owned()),
+                secret_access_key: context
+                    .secret_access_key
+                    .as_ref()
+                    .map(|value| value.expose().to_owned()),
+                session_token: context
+                    .session_token
+                    .as_ref()
+                    .map(|value| value.expose().to_owned()),
                 region_name: region(settings, environment.as_ref()).ok(),
                 role_name: settings.aws_role_name.clone(),
                 session_name: settings.aws_session_name.clone(),
@@ -37,7 +57,6 @@ impl Credentials {
                     .as_ref()
                     .map(|v| v.expose().to_owned()),
                 sts_endpoint: settings.aws_sts_endpoint.clone(),
-                ..Default::default()
             },
             environment,
         }

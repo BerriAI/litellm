@@ -1,0 +1,1 @@
+- https://docs.cyberark.com/conjur-open-source/latest/en/content/developer/conjur_api_retrieve_secret.htm

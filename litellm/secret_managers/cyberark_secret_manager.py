@@ -15,6 +15,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import KeyManagementSystem
+from litellm.rust_bridge.secret_manager import resolve_native_provider_reader, resolve_native_provider_writer
 
 from .base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
 from .main import str_to_bool
@@ -186,6 +187,10 @@ class CyberArkSecretManager(BaseSecretManager):
         Returns:
             Optional[str]: The secret value if found, None otherwise
         """
+        native: Final = resolve_native_provider_reader(self, "cyberark")
+        if native is not None:
+            return await native.async_read_secret(secret_name, optional_params, timeout)
+
         # Check cache first
         if self.cache.get_cache(secret_name) is not None:
             return self.cache.get_cache(secret_name)
@@ -232,6 +237,10 @@ class CyberArkSecretManager(BaseSecretManager):
         Returns:
             Optional[str]: The secret value if found, None otherwise
         """
+        native: Final = resolve_native_provider_reader(self, "cyberark")
+        if native is not None:
+            return native.sync_read_secret(secret_name, optional_params, timeout)
+
         # Check cache first
         if self.cache.get_cache(secret_name) is not None:
             return self.cache.get_cache(secret_name)
@@ -281,6 +290,12 @@ class CyberArkSecretManager(BaseSecretManager):
         Returns:
             dict: Response containing status and details of the operation
         """
+        native: Final = resolve_native_provider_writer(self, "cyberark")
+        if native is not None:
+            return await native.async_write_secret(
+                secret_name, secret_value, description, optional_params, timeout, tags
+            )
+
         async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"ssl_verify": self.ssl_verify},
@@ -326,6 +341,10 @@ class CyberArkSecretManager(BaseSecretManager):
         Returns:
             dict: Response indicating operation not supported
         """
+        native: Final = resolve_native_provider_writer(self, "cyberark")
+        if native is not None:
+            return await native.async_delete_secret(secret_name, recovery_window_in_days, optional_params, timeout)
+
         verbose_logger.warning(
             "CyberArk Conjur does not support direct secret deletion. Secrets must be removed through policy updates."
         )
@@ -337,3 +356,28 @@ class CyberArkSecretManager(BaseSecretManager):
             "status": "not_supported",
             "message": "CyberArk Conjur does not support direct secret deletion. Use policy updates to remove variables.",
         }
+
+    async def async_rotate_secret(
+        self,
+        current_secret_name: str,
+        new_secret_name: str,
+        new_secret_value: str,
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> dict:
+        native: Final = resolve_native_provider_writer(self, "cyberark")
+        if native is not None:
+            return await native.async_rotate_secret(
+                current_secret_name,
+                new_secret_name,
+                new_secret_value,
+                optional_params,
+                timeout,
+            )
+        return await super().async_rotate_secret(
+            current_secret_name,
+            new_secret_name,
+            new_secret_value,
+            optional_params,
+            timeout,
+        )

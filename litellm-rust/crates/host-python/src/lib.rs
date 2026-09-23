@@ -27,7 +27,9 @@ pub use execution::{
 pub use fork_gate::RuntimeAlreadyStarted;
 pub use gil::{release_count, release_gil};
 pub use handle::{Execution, ExecutionBody, ExecutionStep};
-pub use marshal::{Pythonized, from_py, from_py_argument, panic_to_pyerr, to_py};
+pub use marshal::{
+    Pythonized, from_py, from_py_argument, json_loads, json_object_field, panic_to_pyerr, to_py,
+};
 
 /// Starts the interpreter and imports the standard modules the tests share, once, so
 /// parallel test threads never race a first import of `asyncio`.
