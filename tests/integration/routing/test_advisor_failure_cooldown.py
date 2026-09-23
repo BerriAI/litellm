@@ -75,7 +75,7 @@ def test_advisor_sub_call_401_leaves_the_executor_deployment_serving_the_next_re
         owned_proxy(gateway, tmp_path, {}, config=_cooldowns_enabled_config(tmp_path)) as candidate,
         candidate.scenario() as scenario,
     ):
-        executor: Final = scenario.model(model="hosted_vllm/llama-3.3-70b", api_base=wire.url + "/v1")
+        executor: Final = scenario.model(model="hosted_vllm/gpt-4o-mini", api_base=wire.url + "/v1")
         advisor: Final = scenario.model(
             model="anthropic/claude-opus-4-1-20250805", api_base=wire.url, api_key=_ADVISOR_KEY
         )

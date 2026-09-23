@@ -97,7 +97,7 @@ def test_advisor_sub_call_reaches_the_router_deployment_with_its_key_instead_of_
         )
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        executor: Final = scenario.model(model="hosted_vllm/llama-3.3-70b", api_base=wire.url + "/v1")
+        executor: Final = scenario.model(model="hosted_vllm/gpt-4o-mini", api_base=wire.url + "/v1")
         advisor: Final = scenario.model(
             model="anthropic/claude-opus-4-1-20250805", api_base=wire.url, api_key=_ADVISOR_KEY
         )
@@ -163,7 +163,7 @@ def test_advisor_api_base_without_api_key_is_rejected_before_the_proxy_anthropic
         owned_proxy(gateway, tmp_path, {"ANTHROPIC_API_KEY": _PROXY_ANTHROPIC_KEY}, config=path) as candidate,
         candidate.scenario() as scenario,
     ):
-        model: Final = scenario.model(model="hosted_vllm/llama-3.3-70b", api_base=executor_wire.url + "/v1")
+        model: Final = scenario.model(model="hosted_vllm/gpt-4o-mini", api_base=executor_wire.url + "/v1")
         response: Final = candidate.request(
             "POST",
             "/v1/messages",
