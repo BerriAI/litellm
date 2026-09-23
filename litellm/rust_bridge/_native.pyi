@@ -47,14 +47,14 @@ def aocr(
     kwargs: dict[str, object],
 ) -> Coroutine[object, object, OCRResponse]: ...
 def embedding(
-    request: LiteLLMEmbeddingRequest,
-    args: tuple[object, ...],
-    kwargs: Mapping[str, object],
+    _request: LiteLLMEmbeddingRequest,
+    _args: tuple[object, ...],
+    _kwargs: Mapping[str, object],
 ) -> EmbeddingResponse: ...
 def aembedding(
-    request: LiteLLMEmbeddingRequest,
-    args: tuple[object, ...],
-    kwargs: Mapping[str, object],
+    _request: LiteLLMEmbeddingRequest,
+    _args: tuple[object, ...],
+    _kwargs: Mapping[str, object],
 ) -> Coroutine[object, object, EmbeddingResponse]: ...
 def transcription(
     model: str,
@@ -77,24 +77,24 @@ def atranscription(
     timeout_seconds: float | None = None,
 ) -> Future[dict[str, object]]: ...
 def completion(
-    request: LiteLLMChatCompletionsRequest,
-    args: tuple[object, ...],
-    kwargs: Mapping[str, object],
+    _request: LiteLLMChatCompletionsRequest,
+    _args: tuple[object, ...],
+    _kwargs: Mapping[str, object],
 ) -> ModelResponse: ...
 def acompletion(
-    request: LiteLLMChatCompletionsRequest,
-    args: tuple[object, ...],
-    kwargs: Mapping[str, object],
+    _request: LiteLLMChatCompletionsRequest,
+    _args: tuple[object, ...],
+    _kwargs: Mapping[str, object],
 ) -> Coroutine[object, object, ModelResponse]: ...
 def responses(
-    request: LiteLLMResponsesRequest,
-    args: tuple[object, ...],
-    kwargs: Mapping[str, object],
+    _request: LiteLLMResponsesRequest,
+    _args: tuple[object, ...],
+    _kwargs: Mapping[str, object],
 ) -> ResponsesAPIResponse: ...
 def aresponses(
-    request: LiteLLMResponsesRequest,
-    args: tuple[object, ...],
-    kwargs: Mapping[str, object],
+    _request: LiteLLMResponsesRequest,
+    _args: tuple[object, ...],
+    _kwargs: Mapping[str, object],
 ) -> Coroutine[object, object, ResponsesAPIResponse]: ...
 def messages(
     request: LiteLLMMessagesRequest,
@@ -405,6 +405,7 @@ __all__ = [
     "Tokenizer",
     "achat_completions",
     "acompletion",
+    "aembedding",
     "amessages",
     "aocr",
     "aresponses",
@@ -412,6 +413,7 @@ __all__ = [
     "chat_completions",
     "chat_completions_decline",
     "completion",
+    "embedding",
     "gil_stats",
     "messages",
     "ocr",
@@ -437,25 +439,40 @@ class _SecretManagerRuntime:
     def read_secret(self, name: str, settings: Mapping[str, object] | None = None) -> JsonValue: ...
     def read_secret_async(self, name: str, settings: Mapping[str, object] | None = None) -> Future[JsonValue]: ...
     def async_write_secret(
-        self, secret_name: str, secret_value: str, description: str | None = None,
+        self,
+        secret_name: str,
+        secret_value: str,
+        description: str | None = None,
         optional_params: Mapping[str, object] | None = None,
-        timeout: float | httpx.Timeout | None = None, tags: object = None,
+        timeout: float | httpx.Timeout | None = None,
+        tags: object = None,
     ) -> Future[dict[str, JsonValue]]: ...
     def async_delete_secret(
-        self, secret_name: str, recovery_window_in_days: int | None = None,
+        self,
+        secret_name: str,
+        recovery_window_in_days: int | None = None,
         optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> Future[dict[str, JsonValue]]: ...
     def async_rotate_secret(
-        self, current_secret_name: str, new_secret_name: str, new_secret_value: str,
+        self,
+        current_secret_name: str,
+        new_secret_name: str,
+        new_secret_value: str,
         optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> Future[dict[str, JsonValue]]: ...
     def sync_read_secret(
-        self, secret_name: str, optional_params: Mapping[str, object] | None = None,
-        timeout: float | httpx.Timeout | None = None, primary_secret_name: str | None = None,
+        self,
+        secret_name: str,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        primary_secret_name: str | None = None,
     ) -> JsonValue: ...
     def async_read_secret(
-        self, secret_name: str, optional_params: Mapping[str, object] | None = None,
-        timeout: float | httpx.Timeout | None = None, primary_secret_name: str | None = None,
+        self,
+        secret_name: str,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        primary_secret_name: str | None = None,
     ) -> Future[JsonValue]: ...
