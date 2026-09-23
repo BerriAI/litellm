@@ -3,7 +3,7 @@ import uuid
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast, get_args
 
 from litellm._logging import verbose_logger
 from litellm.batches.batch_utils import (
@@ -26,6 +26,15 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
 _BatchLineProvider: TypeAlias = Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"]
+
+_SUPPORTED_LINE_PROVIDERS: Final = frozenset(get_args(_BatchLineProvider))
+
+
+def _supported_line_provider(value: str) -> _BatchLineProvider | None:
+    if value in _SUPPORTED_LINE_PROVIDERS:
+        return cast("_BatchLineProvider", value)  # cast-ok: membership in the literal's args was just checked
+    return None
+
 
 _CALL_TYPE_BY_BATCH_URL: Final = MappingProxyType(
     {
@@ -291,7 +300,7 @@ async def _fetch_managed_file_or_empty(
 
 async def log_batch_line_items(
     batch: LiteLLMBatch,
-    custom_llm_provider: _BatchLineProvider,
+    custom_llm_provider: str,
     parent: "Logging",
     model_name: str | None,
     litellm_params: dict[str, object] | None,  # mutable-ok: the logging object's shared litellm_params dict
@@ -303,6 +312,14 @@ async def log_batch_line_items(
     aretrieve_batch event still bills the batch, so per-line events carry
     ``batch_parent_id`` and never update spend themselves. Any failure here
     is logged and swallowed: aggregate accounting must be unaffected."""
+    line_provider: Final = _supported_line_provider(custom_llm_provider)
+    if line_provider is None:
+        verbose_logger.warning(
+            "batch line-item callbacks are not supported for provider %s, skipping. batch_id=%s",
+            custom_llm_provider,
+            batch.id,
+        )
+        return 0
     emitted = 0  # rebind-ok: loop accumulator for emitted line count
     try:
         internal_credentials: Final = parent._litellm_internal_model_credentials  # pyright: ignore[reportPrivateUsage]  # declared transport attribute on Logging
@@ -313,17 +330,11 @@ async def log_batch_line_items(
             else litellm_params
         )
 
-        input_file_content: Final = await _fetch_managed_file_or_empty(
-            batch.input_file_id, custom_llm_provider, fetch_params
-        )
+        input_file_content: Final = await _fetch_managed_file_or_empty(batch.input_file_id, line_provider, fetch_params)
         requests_by_id: Final = _requests_by_custom_id(input_file_content)
 
-        output_content: Final = await _fetch_managed_file_or_empty(
-            batch.output_file_id, custom_llm_provider, fetch_params
-        )
-        error_content: Final = await _fetch_managed_file_or_empty(
-            batch.error_file_id, custom_llm_provider, fetch_params
-        )
+        output_content: Final = await _fetch_managed_file_or_empty(batch.output_file_id, line_provider, fetch_params)
+        error_content: Final = await _fetch_managed_file_or_empty(batch.error_file_id, line_provider, fetch_params)
         for content in (output_content, error_content):
             for entry in _output_entries(content):
                 try:
@@ -331,7 +342,7 @@ async def log_batch_line_items(
                         entry=entry,
                         requests_by_id=requests_by_id,
                         batch=batch,
-                        custom_llm_provider=custom_llm_provider,
+                        custom_llm_provider=line_provider,
                         parent=parent,
                         model_name=model_name,
                         model_info=model_info,

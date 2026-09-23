@@ -134,7 +134,7 @@ def recorder():
     litellm._async_failure_callback = saved_failure  # test-quality-ok: teardown restoring the value set above
 
 
-def _parent_logging() -> Logging:
+def _parent_logging(custom_llm_provider: str = "openai") -> Logging:
     logging_obj = Logging(
         model="gpt-4o",
         messages=[{"role": "user", "content": "<retrieve_batch>"}],
@@ -147,7 +147,7 @@ def _parent_logging() -> Logging:
     logging_obj.update_environment_variables(
         litellm_params={"metadata": {"model_info": {"id": "dep-1"}, "model_group": "gpt-4o"}},
         optional_params={},
-        custom_llm_provider="openai",
+        custom_llm_provider=custom_llm_provider,
     )
     return logging_obj
 
@@ -221,6 +221,20 @@ async def test_flag_off_emits_only_aggregate(recorder):
     assert len(recorder.success_events) == 1
     assert len(recorder.failure_events) == 0
     file_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_line_items_skipped_for_unsupported_provider(recorder):
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    file_mock: Final = AsyncMock(side_effect=_file_content)
+    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        await _log_completed_batch(_parent_logging(custom_llm_provider="bedrock"), _batch())
+
+    file_mock.assert_not_awaited()
+    assert len(recorder.success_events) == 1
+    assert _payload(recorder.success_events[0])["response_cost"] == 1.5
+    assert "batch_custom_id" not in _hidden(recorder.success_events[0])
+    assert len(recorder.failure_events) == 0
 
 
 @pytest.mark.asyncio
