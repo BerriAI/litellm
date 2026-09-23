@@ -1049,12 +1049,15 @@ class TestAutoRouterBenchmarks:
     def test_the_listed_kinds_match_the_router_types_traffic_can_record(self):
         """Pinned against both declarations: a kind the rollup can record must be listable,
         and a kind it cannot must not be."""
-        from typing import get_args, get_type_hints
+        from typing import get_args, get_origin, get_type_hints
+
+        from typing_extensions import ReadOnly
 
         from litellm.router_utils.auto_router_model_naming import StrategyRouterKind
         from litellm.types.utils import StandardLoggingRoutingDecision
 
-        recorded = set(get_args(get_type_hints(StandardLoggingRoutingDecision)["router_type"]))
+        hint = get_type_hints(StandardLoggingRoutingDecision, include_extras=True)["router_type"]
+        recorded = set(get_args(get_args(hint)[0] if get_origin(hint) is ReadOnly else hint))
         assert set(get_args(StrategyRouterKind)) == recorded
 
 
