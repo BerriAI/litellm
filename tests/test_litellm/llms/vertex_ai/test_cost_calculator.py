@@ -8,17 +8,28 @@ from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 
 @pytest.mark.parametrize(
-    ("text_tokens", "expected_prompt_cost"),
+    ("text_tokens", "cache_read_tokens", "cache_creation_tokens", "expected_prompt_cost"),
     [
-        (140_000, 140_000 * 0.002 + 120_000 * 0.0005),
-        (120_000, 120_000 * 0.001 + 120_000 * 0.0005),
+        (140_000, 0, 120_000, 140_000 * 0.002 + 120_000 * 0.0005),
+        (120_000, 0, 120_000, 120_000 * 0.001 + 120_000 * 0.0005),
+        (100_000, 50_000, 0, 100_000 * 0.002 + 50_000 * 0.00025),
+        (100_000, 0, 120_000, 100_000 * 0.001 + 120_000 * 0.0005),
     ],
-    ids=["creation_tokens_do_not_change_the_tier_rate", "creation_tokens_cannot_push_the_tier_threshold"],
+    ids=[
+        "creation_tokens_do_not_change_the_tier_rate",
+        "creation_tokens_cannot_push_the_tier_threshold",
+        "cache_read_tokens_count_toward_the_tier",
+        "small_text_plus_creation_stays_below_the_tier",
+    ],
 )
-def test_above_128k_pricing_splits_cache_creation_tokens_out_of_the_prompt(
-    monkeypatch: pytest.MonkeyPatch, text_tokens: int, expected_prompt_cost: float
+def test_above_128k_pricing_splits_cache_tokens_out_of_the_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    text_tokens: int,
+    cache_read_tokens: int,
+    cache_creation_tokens: int,
+    expected_prompt_cost: float,
 ) -> None:
-    """Cache creation tokens bill at the cache-creation rate and never count toward the above-128k tier."""
+    """Cache reads count toward the above-128k tier, cache creation bills at the cache-creation rate."""
     model: Final = "vertex_ai/fake-above-128k-model"
     monkeypatch.setitem(
         litellm.model_cost,
@@ -27,16 +38,20 @@ def test_above_128k_pricing_splits_cache_creation_tokens_out_of_the_prompt(
             "litellm_provider": "vertex_ai",
             "input_cost_per_token": 0.001,
             "input_cost_per_token_above_128k_tokens": 0.002,
+            "cache_read_input_token_cost": 0.00025,
             "cache_creation_input_token_cost": 0.0005,
             "output_cost_per_token": 0.003,
         },
     )
 
     usage: Final = Usage(
-        prompt_tokens=text_tokens + 120_000,
+        prompt_tokens=text_tokens + cache_read_tokens + cache_creation_tokens,
         completion_tokens=10,
-        total_tokens=text_tokens + 120_010,
-        prompt_tokens_details=PromptTokensDetailsWrapper(cache_creation_tokens=120_000),
+        total_tokens=text_tokens + cache_read_tokens + cache_creation_tokens + 10,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cache_read_tokens or 0,
+            cache_creation_tokens=cache_creation_tokens or 0,
+        ),
     )
     prompt_cost, completion_cost = cost_per_token(
         model=model,
