@@ -1,5 +1,3 @@
-"""Create the litellm_writer / litellm_reader roles the replica integration mode proxies connect with."""
-
 from __future__ import annotations
 
 import os
