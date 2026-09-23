@@ -174,7 +174,11 @@ async def _authenticate_admission(request: Request) -> UserAPIKeyAuth:
     credential: Final = _caller_api_key(request)
     if not credential:
         raise HTTPException(status_code=401, detail="Management MCP requires a LiteLLM credential")
-    return await user_api_key_auth(request=admission_request, api_key=credential)
+    return await user_api_key_auth(
+        request=admission_request,
+        api_key=credential,
+        custom_litellm_key_header=request.headers.get("x-litellm-api-key") or None,
+    )
 
 
 async def handle_management_mcp_request(request: Request) -> Response:

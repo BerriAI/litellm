@@ -129,6 +129,39 @@ async def test_admission_preserves_authenticated_role(monkeypatch, role):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"authorization": "Bearer sk-header-parity"},
+        {"x-litellm-api-key": "sk-header-parity"},
+        {"x-litellm-api-key": "Bearer sk-header-parity"},
+        {"x-litellm-api-key": "sk-header-parity", "authorization": "Bearer sk-wrong"},
+    ],
+    ids=["authorization", "raw-custom-header", "bearer-custom-header", "custom-header-precedence"],
+)
+async def test_admission_uses_rest_credential_header_parsing(monkeypatch, headers):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-header-parity")
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/litellm-management/mcp",
+            "headers": [(key.encode(), value.encode()) for key, value in headers.items()],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("127.0.0.1", 1234),
+            "root_path": "",
+        }
+    )
+    authenticated = await mgmt_server._authenticate_admission(request)
+    assert authenticated.user_role == LitellmUserRoles.PROXY_ADMIN
+    assert dict(request.headers) == headers
+
+
+@pytest.mark.asyncio
 async def test_allowed_routes_mcp_routes_denied_management_routes_admitted(monkeypatch):
     """Use the real RouteChecks gate to prove the two groups split correctly."""
     await mgmt_server.start_management_mcp_server({"enable_management_mcp": True}, _fixture_app())

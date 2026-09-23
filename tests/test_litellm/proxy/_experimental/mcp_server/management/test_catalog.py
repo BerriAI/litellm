@@ -7,6 +7,7 @@ from litellm.proxy._experimental.mcp_server.management.inventory import (
     INVENTORY_PATH,
     catalog_inventory,
 )
+from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 
 def _spec(paths, components=None):
@@ -161,10 +162,18 @@ def test_toolless_path_and_query_sections_omitted():
 
 
 def test_inventory_matches_checked_in_file():
-    from litellm.proxy.proxy_server import app
-
+    # Other suites warm lazy routers on the global app, changing diagnostic
+    # tags and WebSocket stubs. Compare the same cold startup as the generator.
+    script = """
+from litellm.proxy.proxy_server import app
+from litellm.proxy._experimental.mcp_server.management.catalog import build_catalog
+from litellm.proxy._experimental.mcp_server.management.inventory import render_inventory
+print(render_inventory(build_catalog(app.openapi())))
+"""
+    result = run_child_interpreter(script, timeout=90)
+    assert result.returncode == 0, result.stderr
     expected = json.loads(INVENTORY_PATH.read_text())
-    actual = catalog_inventory(build_catalog(app.openapi()))
+    actual = json.loads(result.stdout)
     assert actual == expected, (
         "management MCP inventory drifted from the live OpenAPI spec; "
         "regenerate it with: python -m litellm.proxy._experimental.mcp_server.management.inventory --write"
