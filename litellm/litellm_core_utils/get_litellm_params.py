@@ -41,6 +41,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "timeout",
             "client_side_timeout",
             "gcs_bucket_name",
+            "s3_bucket_name",
             "bucket_name",
             "s3_endpoint_url",
             "s3_region_name",
