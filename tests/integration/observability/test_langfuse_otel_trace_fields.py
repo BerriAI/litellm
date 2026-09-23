@@ -1,8 +1,11 @@
 import json
+import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from queue import SimpleQueue
 from typing import Final
 
 import pytest
@@ -13,6 +16,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 
 REPLY_TEXT: Final = "langfuse-otel scripted reply"
+_SINK_OUTAGE: Final = threading.Event()
+_ACCEPTED: Final[SimpleQueue[Request]] = SimpleQueue()
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +49,29 @@ def _span_records(body: bytes) -> tuple[SpanRecord, ...]:
 def _otlp_sink(request: Request) -> Reply:
     if request.target.endswith("/v1/traces"):
         assert request.headers.get("x-langfuse-ingestion-version") == "4", request.headers
+        if _SINK_OUTAGE.is_set():
+            return Reply(status=503, body=b'{"error": "scripted outage"}')
+        _ACCEPTED.put(request)
     return Reply(body=b"")
+
+
+def _scripted_upstream(suffix: str, reply: Reply) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        if request.target.endswith(suffix):
+            return reply
+        return Reply(body=b'{"object": "list", "data": []}')
+
+    return respond
+
+
+def _chaos_upstream(request: Request) -> Reply:
+    if not request.target.endswith("/chat/completions"):
+        return Reply(body=b'{"object": "list", "data": []}')
+    body: Final = json.loads(request.body)
+    marker: Final = body["messages"][0]["content"]
+    if body.get("stream"):
+        return Reply(content_type="text/event-stream", chunks=_chat_stream(marker))
+    return Reply(body=_chat_completion(marker))
 
 
 def _chat_completion(marker: str) -> bytes:
@@ -190,9 +217,7 @@ def langfuse_v2_proxy(langfuse_sink: Wire, tmp_path_factory: pytest.TempPathFact
 def test_chat_completion_derives_trace_name_input_and_output(langfuse_v1_proxy: Gateway, langfuse_sink: Wire) -> None:
     marker: Final = "lit8281-chat-" + uuid.uuid4().hex
 
-    def upstream(request: Request) -> Reply:
-        assert request.target.endswith("/chat/completions"), request.target
-        return Reply(body=_chat_completion(marker))
+    upstream: Final = _scripted_upstream("/chat/completions", Reply(body=_chat_completion(marker)))
 
     with wire_server(upstream) as provider, langfuse_v1_proxy.scenario() as scenario:
         model: Final = scenario.model(api_base=provider.url + "/v1")
@@ -218,9 +243,7 @@ def test_parented_chat_completion_derives_trace_fields_inside_inbound_trace(
     trace_id: Final = uuid.uuid4().hex
     parent_id: Final = uuid.uuid4().hex[:16]
 
-    def upstream(request: Request) -> Reply:
-        assert request.target.endswith("/chat/completions"), request.target
-        return Reply(body=_chat_completion(marker))
+    upstream: Final = _scripted_upstream("/chat/completions", Reply(body=_chat_completion(marker)))
 
     with wire_server(upstream) as provider, langfuse_v1_proxy.scenario() as scenario:
         model: Final = scenario.model(api_base=provider.url + "/v1")
@@ -241,11 +264,14 @@ def test_parented_chat_completion_derives_trace_fields_inside_inbound_trace(
 def test_streaming_chat_completion_derives_trace_fields(langfuse_v1_proxy: Gateway, langfuse_sink: Wire) -> None:
     marker: Final = "lit8281-stream-" + uuid.uuid4().hex
 
-    def upstream(request: Request) -> Reply:
-        assert request.target.endswith("/chat/completions"), request.target
-        return Reply(content_type="text/event-stream", chunks=_chat_stream(marker))
-
-    with wire_server(upstream) as provider, langfuse_v1_proxy.scenario() as scenario:
+    with (
+        wire_server(
+            _scripted_upstream(
+                "/chat/completions", Reply(content_type="text/event-stream", chunks=_chat_stream(marker))
+            )
+        ) as provider,
+        langfuse_v1_proxy.scenario() as scenario,
+    ):
         model: Final = scenario.model(api_base=provider.url + "/v1")
         response: Final = langfuse_v1_proxy.request(
             "POST",
@@ -267,9 +293,7 @@ def test_streaming_chat_completion_derives_trace_fields(langfuse_v1_proxy: Gatew
 def test_caller_supplied_trace_name_and_tags_are_emitted(langfuse_v1_proxy: Gateway, langfuse_sink: Wire) -> None:
     marker: Final = "lit8281-caller-" + uuid.uuid4().hex
 
-    def upstream(request: Request) -> Reply:
-        assert request.target.endswith("/chat/completions"), request.target
-        return Reply(body=_chat_completion(marker))
+    upstream: Final = _scripted_upstream("/chat/completions", Reply(body=_chat_completion(marker)))
 
     with wire_server(upstream) as provider, langfuse_v1_proxy.scenario() as scenario:
         model: Final = scenario.model(api_base=provider.url + "/v1")
@@ -293,9 +317,7 @@ def test_caller_supplied_trace_name_and_tags_are_emitted(langfuse_v1_proxy: Gate
 def test_responses_call_derives_trace_fields(langfuse_v1_proxy: Gateway, langfuse_sink: Wire) -> None:
     marker: Final = "lit8281-resp-" + uuid.uuid4().hex
 
-    def upstream(request: Request) -> Reply:
-        assert request.target.endswith("/responses"), request.target
-        return Reply(body=_responses_result(marker))
+    upstream: Final = _scripted_upstream("/responses", Reply(body=_responses_result(marker)))
 
     with wire_server(upstream) as provider, langfuse_v1_proxy.scenario() as scenario:
         model: Final = scenario.model(api_base=provider.url + "/v1")
@@ -313,9 +335,7 @@ def test_responses_call_derives_trace_fields(langfuse_v1_proxy: Gateway, langfus
 def test_otel_v2_derives_trace_name_input_and_output(langfuse_v2_proxy: Gateway, langfuse_sink: Wire) -> None:
     marker: Final = "lit8281-v2-" + uuid.uuid4().hex
 
-    def upstream(request: Request) -> Reply:
-        assert request.target.endswith("/chat/completions"), request.target
-        return Reply(body=_chat_completion(marker))
+    upstream: Final = _scripted_upstream("/chat/completions", Reply(body=_chat_completion(marker)))
 
     with wire_server(upstream) as provider, langfuse_v2_proxy.scenario() as scenario:
         model: Final = scenario.model(api_base=provider.url + "/v1")
@@ -326,4 +346,66 @@ def test_otel_v2_derives_trace_name_input_and_output(langfuse_v2_proxy: Gateway,
         )
         assert response.status_code == 200, response.text
         span: Final = _generation_span(langfuse_sink, marker)
+        _assert_derived_trace_fields(span, "acompletion")
+
+
+@pytest.mark.covers("other.observability.langfuse_otel.sink_outage_mid_burst_lands_every_span_exactly_once")
+def test_sink_outage_mid_burst_lands_every_generation_span_exactly_once(
+    langfuse_v1_proxy: Gateway, langfuse_sink: Wire
+) -> None:
+    markers: Final = tuple("lit8281-chaos-" + uuid.uuid4().hex for _ in range(24))
+    landed: list[Request] = []  # mutable-ok: accumulated across eventually() polls
+
+    try:
+        _SINK_OUTAGE.set()
+        with wire_server(_chaos_upstream) as provider, langfuse_v1_proxy.scenario() as scenario:
+            model: Final = scenario.model(api_base=provider.url + "/v1")
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                futures: Final = tuple(
+                    pool.submit(
+                        langfuse_v1_proxy.request,
+                        "POST",
+                        "/v1/chat/completions",
+                        {
+                            "model": model,
+                            "messages": [{"role": "user", "content": marker}],
+                            **({"stream": True} if index % 2 else {}),
+                        },
+                    )
+                    for index, marker in enumerate(markers)
+                )
+                responses: Final = tuple(future.result() for future in futures)
+            for index, response in enumerate(responses):
+                assert response.status_code == 200, response.text
+                if index % 2:
+                    assert "scripted reply" in response.text, response.text
+            refused_requests: Final = eventually(
+                lambda: tuple(r for r in langfuse_sink.drain() if r.target.endswith("/v1/traces")),
+                lambda rs: len(rs) >= 1,
+                seconds=70,
+            )
+            refused: Final = len(refused_requests)
+            _SINK_OUTAGE.clear()
+
+            def accepted() -> tuple[SpanRecord, ...]:
+                landed.extend(tuple(_ACCEPTED.get_nowait() for _ in range(_ACCEPTED.qsize())))
+                return tuple(
+                    record
+                    for request in landed
+                    for record in _span_records(request.body)
+                    if record.attributes.get("langfuse.observation.type") == "generation"
+                    and record.attributes.get("llm.response.id") in markers
+                )
+
+            landed_spans: Final = eventually(accepted, lambda records: len(records) == 24, seconds=120)
+    finally:
+        _SINK_OUTAGE.clear()
+
+    counts: Final = {
+        marker: sum(1 for record in landed_spans if record.attributes["llm.response.id"] == marker)
+        for marker in markers
+    }
+    assert counts == {marker: 1 for marker in markers}, counts
+    assert refused >= 1, refused
+    for span in landed_spans:
         _assert_derived_trace_fields(span, "acompletion")

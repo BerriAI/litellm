@@ -2045,6 +2045,9 @@
       "mgmt.key.reset_spend.returns_promptly_with_wedged_coordination_redis",
       "mgmt.auth_cache_invalidation.publish_parked_by_short_redis_wedge_lands_after_recovery",
       "mgmt.auth_cache_invalidation.burst_with_worker_kill_keeps_serving_while_redis_wedged"
+    ],
+    "tests/integration/observability/test_langfuse_otel_trace_fields.py::test_sink_outage_mid_burst_lands_every_generation_span_exactly_once": [
+      "other.observability.langfuse_otel.sink_outage_mid_burst_lands_every_span_exactly_once"
     ]
   },
   "browser": {
