@@ -17,11 +17,14 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio
 from litellm.proxy.video_endpoints.utils import (
+    assert_video_owner,
     encode_character_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
     infer_video_provider_from_model,
     resolve_video_request_model,
+    stamp_video_owner,
+    video_owner_from_key,
     video_reference_to_id,
 )
 from litellm.types.videos.utils import (
@@ -91,7 +94,7 @@ async def video_generation(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        result = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -109,6 +112,9 @@ async def video_generation(
             user_api_base=user_api_base,
             version=version,
         )
+        return _stamp_generated_video_owner(
+            result, video_owner_from_key(user_api_key_dict.token, user_api_key_dict.api_key)
+        )
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -116,6 +122,16 @@ async def video_generation(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+
+
+def _stamp_generated_video_owner(result: object, owner: str | None) -> object:
+    video_id: Final = getattr(result, "id", None)
+    if isinstance(video_id, str):
+        result.id = stamp_video_owner(video_id, owner)  # mutable-ok: response object id is rewritten before return
+        return result
+    if isinstance(result, dict) and isinstance(result.get("id"), str):
+        result["id"] = stamp_video_owner(result["id"], owner)  # mutable-ok: JSON response body
+    return result
 
 
 @router.get(
@@ -247,6 +263,8 @@ async def video_status(
         version,
     )
 
+    assert_video_owner(video_id, video_owner_from_key(user_api_key_dict.token, user_api_key_dict.api_key))
+
     # Create data with video_id
     data: Final[dict[str, object]] = {"video_id": video_id}
 
@@ -347,6 +365,8 @@ async def video_content(
         user_temperature,
         version,
     )
+
+    assert_video_owner(video_id, video_owner_from_key(user_api_key_dict.token, user_api_key_dict.api_key))
 
     # Create data with video_id
     data: Final[dict[str, object]] = {"video_id": video_id}

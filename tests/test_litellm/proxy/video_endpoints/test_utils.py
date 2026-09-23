@@ -13,21 +13,23 @@ is encode_character_id_with_provider, which runs for real; encoding assertions
 are checked by the genuine decode round-trip.
 """
 
-
 import pytest
 
-
+from litellm.proxy._types import ProxyException
 from litellm.proxy.video_endpoints.utils import (
+    assert_video_owner,
     encode_character_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
     infer_video_provider_from_model,
     resolve_video_request_model,
+    stamp_video_owner,
     video_reference_to_id,
 )
 from litellm.types.videos.utils import (
     decode_character_id_with_provider,
     encode_character_id_with_provider,
+    encode_video_id_with_provider,
 )
 
 # =========================================================================== #
@@ -166,12 +168,7 @@ def test_provider__falsy_top_level_falls_through_to_extra_body(falsy):
 
 
 def test_provider__from_extra_body_dict():
-    assert (
-        get_custom_provider_from_data(
-            {"extra_body": {"custom_llm_provider": "bedrock"}}
-        )
-        == "bedrock"
-    )
+    assert get_custom_provider_from_data({"extra_body": {"custom_llm_provider": "bedrock"}}) == "bedrock"
 
 
 def test_provider__from_extra_body_json_string():
@@ -189,10 +186,7 @@ def test_provider__json_string_parsing_to_non_dict_is_none():
 
 
 def test_provider__extra_body_provider_not_a_string_is_none():
-    assert (
-        get_custom_provider_from_data({"extra_body": {"custom_llm_provider": 123}})
-        is None
-    )
+    assert get_custom_provider_from_data({"extra_body": {"custom_llm_provider": 123}}) is None
 
 
 @pytest.mark.parametrize(
@@ -224,9 +218,7 @@ def test_encode__dict_with_id_mutates_in_place_and_preserves_other_keys():
 
     assert out is response  # same dict, mutated in place
     assert out["object"] == "character" and out["name"] == "hero"
-    assert out["id"] == encode_character_id_with_provider(
-        "char_raw", "azure", "model-1"
-    )
+    assert out["id"] == encode_character_id_with_provider("char_raw", "azure", "model-1")
     decoded = decode_character_id_with_provider(out["id"])
     assert decoded["custom_llm_provider"] == "azure"
     assert decoded["model_id"] == "model-1"
@@ -262,6 +254,16 @@ def test_encode__object_non_str_or_empty_id_unchanged(bad_id):
 
     assert out is resp
     assert resp.id == bad_id  # untouched
+
+
+def test_stamp_and_assert_video_owner_round_trip():
+    encoded = encode_video_id_with_provider("req_1", "xai", "grok-imagine-video")
+    stamped = stamp_video_owner(encoded, "key-hash")
+    assert stamped != encoded
+    assert_video_owner(stamped, "key-hash")
+    with pytest.raises(ProxyException):
+        assert_video_owner(stamped, "other-key")
+    assert_video_owner(encoded, "other-key")
 
 
 def test_encode__object_without_id_attr_returned_unchanged():

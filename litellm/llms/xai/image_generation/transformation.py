@@ -35,7 +35,9 @@ _XAI_NATIVE_PARAMS: Final = frozenset({"aspect_ratio", "n"})
 
 
 class XAIImageGenerationConfig(BaseImageGenerationConfig):
-    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:  # mutable-ok: provider JSON body and base-class dict signature
+    def get_supported_openai_params(
+        self, model: str
+    ) -> list[OpenAIImageGenerationOptionalParams]:  # mutable-ok: provider JSON body and base-class dict signature
         return ["n", "response_format", "size", "user"]  # mutable-ok: provider JSON body and base-class dict signature
 
     def map_openai_params(
@@ -55,14 +57,19 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
                 "Set drop_params=True to drop unsupported parameters."
             )
 
-        merged: Final = {**optional_params, **{k: v for k, v in non_default_params.items() if k in allowed}}  # mutable-ok: provider JSON body and base-class dict signature
+        merged: Final = {
+            **optional_params,
+            **{k: v for k, v in non_default_params.items() if k in allowed},
+        }  # mutable-ok: provider JSON body and base-class dict signature
         size: Final = merged.get("size")
         aspect_ratio: Final = merged.get("aspect_ratio") or (
             _SIZE_TO_ASPECT_RATIO.get(str(size), "1:1") if size else None
         )
         n: Final = merged.get("n")
         return {  # mutable-ok: provider JSON body and base-class dict signature
-            **({"aspect_ratio": aspect_ratio} if aspect_ratio is not None else {}),  # mutable-ok: provider JSON body and base-class dict signature
+            **(
+                {"aspect_ratio": aspect_ratio} if aspect_ratio is not None else {}
+            ),  # mutable-ok: provider JSON body and base-class dict signature
             **({"n": int(n)} if n is not None else {}),  # mutable-ok: provider JSON body and base-class dict signature
         }
 
@@ -142,7 +149,9 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
             "model": XAIModelInfo.get_base_model(model) or model,
             "prompt": prompt,
             **(
-                {"aspect_ratio": optional_params["aspect_ratio"]}  # mutable-ok: provider JSON body and base-class dict signature
+                {
+                    "aspect_ratio": optional_params["aspect_ratio"]
+                }  # mutable-ok: provider JSON body and base-class dict signature
                 if optional_params.get("aspect_ratio") is not None
                 else {}  # mutable-ok: provider JSON body and base-class dict signature
             ),
@@ -174,7 +183,9 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
         logging_obj.post_call(
             input=request_data.get("prompt", ""),
             api_key=api_key,
-            additional_args={"complete_input_dict": request_data},  # mutable-ok: provider JSON body and base-class dict signature
+            additional_args={
+                "complete_input_dict": request_data
+            },  # mutable-ok: provider JSON body and base-class dict signature
             original_response=response_data,
         )
 

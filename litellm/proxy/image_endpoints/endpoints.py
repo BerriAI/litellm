@@ -60,7 +60,9 @@ async def batch_to_bytesio(
     """
     if not uploads:
         return None
-    return [await uploadfile_to_bytesio(u) for u in uploads]  # mutable-ok: provider JSON body and base-class dict signature
+    return [
+        await uploadfile_to_bytesio(u) for u in uploads
+    ]  # mutable-ok: provider JSON body and base-class dict signature
 
 
 def _is_image_reference_string(value: str) -> bool:
@@ -98,7 +100,9 @@ async def _normalize_image_values(values: tuple[object, ...], field: str) -> obj
     return list(coerced)  # mutable-ok: provider JSON body and base-class dict signature
 
 
-def _json_image_values(data: dict[str, object], field: str) -> tuple[object, ...]:  # mutable-ok: provider JSON body and base-class dict signature
+def _json_image_values(
+    data: dict[str, object], field: str
+) -> tuple[object, ...]:  # mutable-ok: provider JSON body and base-class dict signature
     if field not in data:
         return ()
     raw: Final = data[field]
@@ -113,7 +117,9 @@ async def _normalized_image_edit_fields(
     image: Final = await _normalize_image_values(values_by_field["image"], "image")
     mask: Final = await _normalize_image_values(values_by_field["mask"], "mask")
     return {  # mutable-ok: provider JSON body and base-class dict signature
-        **({"image": image} if image is not None else {}),  # mutable-ok: provider JSON body and base-class dict signature
+        **(
+            {"image": image} if image is not None else {}
+        ),  # mutable-ok: provider JSON body and base-class dict signature
         **({"mask": mask} if mask is not None else {}),  # mutable-ok: provider JSON body and base-class dict signature
     }
 
@@ -125,9 +131,13 @@ async def _image_edit_assets_from_request(
     form: Final = await request.form() if _is_form_content_type(request.headers.get("content-type", "")) else None
     if form is None:
         return {  # mutable-ok: provider JSON body and base-class dict signature
-            **{key: value for key, value in data.items() if key not in {"image[]", "mask[]"}},  # mutable-ok: provider JSON body and base-class dict signature
+            **{
+                key: value for key, value in data.items() if key not in {"image[]", "mask[]"}
+            },  # mutable-ok: provider JSON body and base-class dict signature
             **await _normalized_image_edit_fields(
-                {field: _json_image_values(data, field) for field, _alias in _IMAGE_EDIT_FILE_FIELDS}  # mutable-ok: provider JSON body and base-class dict signature
+                {
+                    field: _json_image_values(data, field) for field, _alias in _IMAGE_EDIT_FILE_FIELDS
+                }  # mutable-ok: provider JSON body and base-class dict signature
             ),
         }
 
@@ -143,9 +153,13 @@ async def _image_edit_assets_from_request(
             detail=f"Cannot specify both '{conflicts[0]}' and '{conflicts[0]}[]'",
         )
     return {  # mutable-ok: provider JSON body and base-class dict signature
-        **{key: value for key, value in data.items() if key not in {"image[]", "mask[]"}},  # mutable-ok: provider JSON body and base-class dict signature
+        **{
+            key: value for key, value in data.items() if key not in {"image[]", "mask[]"}
+        },  # mutable-ok: provider JSON body and base-class dict signature
         **await _normalized_image_edit_fields(
-            {field: form_values[field] or form_values[alias] for field, alias in _IMAGE_EDIT_FILE_FIELDS}  # mutable-ok: provider JSON body and base-class dict signature
+            {
+                field: form_values[field] or form_values[alias] for field, alias in _IMAGE_EDIT_FILE_FIELDS
+            }  # mutable-ok: provider JSON body and base-class dict signature
         ),
     }
 
@@ -257,7 +271,9 @@ async def image_generation(
         )
 
         ### RESPONSE HEADERS ###
-        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}  # mutable-ok: provider JSON body and base-class dict signature
+        hidden_params: Final = (
+            getattr(response, "_hidden_params", {}) or {}
+        )  # mutable-ok: provider JSON body and base-class dict signature
         model_id: Final = hidden_params.get("model_id", None) or ""
         cache_key: Final = hidden_params.get("cache_key", None) or ""
         api_base: Final = hidden_params.get("api_base", None) or ""
@@ -373,7 +389,9 @@ async def image_edit_api(
     with_assets: Final = await _image_edit_assets_from_request(request, parsed_body)
     data: Final = {  # mutable-ok: provider JSON body and base-class dict signature
         **with_assets,
-        **({} if "prompt" in with_assets else {"prompt": None}),  # mutable-ok: provider JSON body and base-class dict signature
+        **(
+            {} if "prompt" in with_assets else {"prompt": None}
+        ),  # mutable-ok: provider JSON body and base-class dict signature
         "model": (
             model or general_settings.get("image_generation_model", None) or user_model or with_assets.get("model")
         ),

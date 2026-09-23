@@ -3,11 +3,42 @@ from typing import Final, Protocol
 
 import orjson
 
-from litellm.types.videos.utils import encode_character_id_with_provider
+from litellm.proxy._types import ProxyException
+from litellm.types.videos.utils import (
+    decode_video_id_with_provider,
+    encode_character_id_with_provider,
+    encode_video_id_with_provider,
+)
 
 
 class VideoModelIdResolver(Protocol):
     def resolve_model_name_from_model_id(self, model_id: str | None) -> str | None: ...
+
+
+def video_owner_from_key(token: str | None, api_key: str | None) -> str | None:
+    return token or api_key
+
+
+def assert_video_owner(video_id: str, owner: str | None) -> None:
+    recorded: Final = decode_video_id_with_provider(video_id).get("owner")
+    if recorded and recorded != owner:
+        raise ProxyException(
+            message="Video does not belong to this API key",
+            type="permission_error",
+            param="video_id",
+            code=403,
+        )
+
+
+def stamp_video_owner(video_id: str, owner: str | None) -> str:
+    if not owner:
+        return video_id
+    decoded: Final = decode_video_id_with_provider(video_id)
+    provider: Final = decoded.get("custom_llm_provider")
+    raw_id: Final = decoded.get("video_id")
+    if not provider or not raw_id or decoded.get("owner"):
+        return video_id
+    return encode_video_id_with_provider(raw_id, provider, decoded.get("model_id"), owner)
 
 
 def infer_video_provider_from_model(model: str | None) -> str | None:
