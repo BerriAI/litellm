@@ -2019,6 +2019,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/spend/test_end_user_spend_without_proxy_user.py::test_end_user_spend_lands_for_key_without_user_id_when_auth_cache_is_redis": [
+      "spend.end_user.charged_when_key_has_no_user_id_and_auth_cache_is_redis"
     ]
   },
   "browser": {
