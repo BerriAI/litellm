@@ -31,6 +31,10 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
     inline_remote_image_urls,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    place_mid_conversation_system,
+    split_leading_system_run,
+)
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
@@ -100,7 +104,6 @@ from ..common_utils import (
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
 )
-from ..mid_conversation_system import place_mid_conversation_system, split_leading_system_run
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

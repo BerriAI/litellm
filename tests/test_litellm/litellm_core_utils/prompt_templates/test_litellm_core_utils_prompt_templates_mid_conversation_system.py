@@ -8,7 +8,7 @@ the pure placement rules on the OpenAI-format message list.
 import pytest
 
 import litellm
-from litellm.llms.anthropic.mid_conversation_system import (
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
     place_mid_conversation_system,
     split_leading_system_run,
@@ -198,3 +198,49 @@ def test_flagged_placement_of_an_earlier_run_does_not_move_when_later_turns_are_
 
     assert placed_n_plus_one[: len(placed_n)] == placed_n
     assert _roles(placed_n_plus_one) == ["user", "assistant", "user", "assistant", "user"]
+
+
+@pytest.mark.parametrize("empty_content", [[], None])
+def test_flagged_placement_converts_a_run_whose_preceding_user_turn_sends_nothing(empty_content):
+    placed = place_mid_conversation_system(
+        [
+            {"role": "user", "content": empty_content},
+            {"role": "system", "content": "reminder"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "q2"},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "user", "assistant", "user"]
+    assert _texts(placed[1]) == [CONVERTED_SYSTEM_NOTE, "reminder"]
+
+
+@pytest.mark.parametrize("empty_content", [[], None])
+def test_flagged_placement_converts_a_run_whose_following_user_turn_sends_nothing(empty_content):
+    placed = place_mid_conversation_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "system", "content": "reminder"},
+            {"role": "user", "content": empty_content},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "assistant", "user", "user"]
+    assert _texts(placed[2]) == [CONVERTED_SYSTEM_NOTE, "reminder"]
+
+
+def test_flagged_placement_keeps_a_system_behind_a_user_turn_merged_with_an_empty_one():
+    placed = place_mid_conversation_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "user", "content": []},
+            {"role": "system", "content": "reminder"},
+            {"role": "assistant", "content": "a1"},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "user", "system", "assistant"]

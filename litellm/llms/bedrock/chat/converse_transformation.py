@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
     make_valid_bedrock_tool_name,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING,
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
@@ -41,7 +42,6 @@ from litellm.llms.anthropic.chat.transformation import (
     AnthropicConfig,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-from litellm.llms.anthropic.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,

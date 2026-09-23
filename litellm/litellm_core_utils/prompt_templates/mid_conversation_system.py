@@ -238,6 +238,28 @@ def _block_containing(message_index: int, blocks: Sequence[tuple[bool, tuple[int
     return next(index for index, (_, indices) in enumerate(blocks) if message_index in indices)
 
 
+def _renders(message: object) -> bool:
+    """Whether ``anthropic_messages_pt`` puts a block on the wire for this user-type message.
+
+    A tool message always becomes a ``tool_result`` and string content always becomes
+    a text block (empty text gets a placeholder); ``None`` or an empty list vanishes.
+    """
+    if _field(message, "role") in _TOOL_ROLES:
+        return True
+    content: Final = _field(message, "content")
+    return isinstance(content, str) or bool(_as_items(content))
+
+
+def _rendered_block(
+    message_index: int,
+    messages: Sequence[AllMessageValues],
+    blocks: Sequence[tuple[bool, tuple[int, ...]]],
+) -> int | None:
+    block_index: Final = _block_containing(message_index, blocks)
+    _, indices = blocks[block_index]
+    return block_index if any(_renders(messages[index]) for index in indices) else None
+
+
 def _anchor_block(
     run: Sequence[int],
     messages: Sequence[AllMessageValues],
@@ -248,14 +270,16 @@ def _anchor_block(
     The run never starts at 0: the leading system run was split off before this
     policy runs, so the message before a run is always a non-system message. Only
     the run's neighbours decide, so a request that replays these messages with more
-    turns appended places the run identically.
+    turns appended places the run identically. A block that puts nothing on the wire
+    cannot anchor a run: the system message would land first or behind an assistant
+    turn, so the run converts in place instead.
     """
     previous: Final = run[0] - 1
     if _is_user_type(messages[previous]):
-        return _block_containing(previous, blocks)
+        return _rendered_block(previous, messages, blocks)
     follower: Final = run[-1] + 1
     if follower < len(messages) and _is_user_type(messages[follower]):
-        return _block_containing(follower, blocks)
+        return _rendered_block(follower, messages, blocks)
     return None
 
 

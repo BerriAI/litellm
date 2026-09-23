@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from itertools import groupby
 from typing import Final
 
-from litellm.llms.anthropic.mid_conversation_system import CONVERTED_SYSTEM_NOTE
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 
 
 def as_system_content_blocks(value: object) -> list[object]:

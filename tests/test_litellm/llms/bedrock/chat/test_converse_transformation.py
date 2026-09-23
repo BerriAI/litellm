@@ -1,16 +1,15 @@
 import copy
 import json
 import os
+from typing import Final
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-from typing import Final
-from unittest.mock import MagicMock, patch
-
 import litellm
 from litellm import ModelResponse
-from litellm.llms.anthropic.mid_conversation_system import CONVERTED_SYSTEM_NOTE
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.types.llms.bedrock import ConverseTokenUsageBlock
 
