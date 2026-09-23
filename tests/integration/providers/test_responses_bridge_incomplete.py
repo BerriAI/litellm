@@ -138,8 +138,6 @@ def test_messages_over_responses_deployment_with_max_tokens_1_is_clamped_to_16_i
         assert body["stop_reason"] == "end_turn", response.text
 
 
-
-
 @pytest.mark.covers("providers.responses_bridge.sub_minimum_max_tokens_is_raised_to_the_openai_floor")
 def test_messages_over_responses_deployment_with_max_tokens_one_reaches_openai_as_sixteen(gateway: Gateway) -> None:
     identity: Final = "responses-min-tokens-" + uuid.uuid4().hex

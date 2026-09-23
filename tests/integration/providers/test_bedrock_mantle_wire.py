@@ -115,8 +115,6 @@ def test_chat_completions_bridge_signs_mantle_responses_request_with_deployment_
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", _RESPONSES_PATH)]
 
 
-
-
 _CLAUDE_BACKEND: Final = "anthropic.claude-sonnet-5-v1:0"
 _MESSAGES_PATH: Final = "/anthropic/v1/messages"
 _STREAM_EVENTS: Final = (

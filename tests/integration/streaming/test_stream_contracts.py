@@ -526,9 +526,7 @@ def test_primary_stream_with_empty_first_chunk_then_disconnect_falls_back_and_bi
                 abort_after=2,
             )
         ) as primary,
-        wire_server(
-            lambda request: Reply(content_type="text/event-stream", chunks=text_stream(identity))
-        ) as fallback,
+        wire_server(lambda request: Reply(content_type="text/event-stream", chunks=text_stream(identity))) as fallback,
     ):
         config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
         config["model_list"] = [
