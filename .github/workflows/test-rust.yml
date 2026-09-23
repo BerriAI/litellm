@@ -177,13 +177,13 @@ jobs:
       - run: python tests/test_litellm/rust_bridge/native_route_wheel_test.py dist/*.whl
 
       - name: Run pytest tests/test_litellm_rust with the compiled extension
-        run: make test-rust-extension RUST_EXTENSION_PYTEST_ARGS="--cov=litellm --cov-report=xml:coverage-rust-extension.xml"
+        run: make test-rust-extension
 
       - name: Upload native Python coverage
         uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
         with:
           use_oidc: true
-          files: coverage-rust-extension.xml
+          files: coverage-rust.xml
           flags: rust-native
 
       - run: >-
