@@ -201,7 +201,7 @@ impl NativeSecretManager {
             read_secret_from_python_manager(&backend, &name, &settings, &ProcessEnvironment)
                 .await
                 .map_err(|error| PyValueError::new_err(error.to_string()))
-                .and_then(|value| python_secret_value(value, &name))
+                .and_then(python_secret_value)
         })
     }
     #[pyo3(signature = (secret_name, optional_params=None, timeout=None, primary_secret_name=None))]
@@ -272,7 +272,7 @@ impl NativeSecretManager {
             read_secret_from_python_manager(&backend, &name, &settings, &ProcessEnvironment)
                 .await
                 .map_err(|error| PyValueError::new_err(error.to_string()))
-                .and_then(|value| python_secret_value(value, &name))
+                .and_then(python_secret_value)
         })
     }
 }
@@ -318,18 +318,8 @@ fn parse_settings(value: Option<&Bound<'_, PyAny>>) -> PyResult<KeyManagementSet
         .map(Option::unwrap_or_default)
 }
 
-fn python_secret_value(payload: PythonSecretRead, name: &str) -> PyResult<Py<PyAny>> {
-    let value = match payload {
-        PythonSecretRead::Value(value) => value,
-        PythonSecretRead::PrimaryJson(document) => {
-            return Python::attach(|py| {
-                py.import("json")?
-                    .call_method1("loads", (document.expose(),))?
-                    .call_method1("get", (name,))
-                    .map(Bound::unbind)
-            });
-        }
-    };
+fn python_secret_value(payload: PythonSecretRead) -> PyResult<Py<PyAny>> {
+    let PythonSecretRead::Value(value) = payload;
     let value = match value {
         None => serde_json::Value::Null,
         Some(Secret::String(value)) => serde_json::Value::String(value.expose().to_owned()),

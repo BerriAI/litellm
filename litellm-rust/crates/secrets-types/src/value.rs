@@ -10,7 +10,6 @@ pub enum Secret {
 #[derive(Debug)]
 pub enum PythonSecretRead {
     Value(Option<Secret>),
-    PrimaryJson(SecretValue),
 }
 
 impl From<SecretValue> for Secret {
