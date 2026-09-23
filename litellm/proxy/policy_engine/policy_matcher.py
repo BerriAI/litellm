@@ -137,14 +137,46 @@ class PolicyMatcher:
         context: PolicyMatchContext,
         policies: dict[str, Policy] | None = None,
     ) -> Callable[[str], bool]:
-        """Predicate telling whether a policy exists and any policy in its inheritance chain applies to the context."""
+        """
+        Predicate telling whether a policy exists and any policy in its
+        inheritance chain applies to the context. Admissions where the
+        policy's own condition missed but an ancestor applies are logged at
+        INFO, once per attachment scan.
+        """
         resolved: Final = policies if policies is not None else PolicyMatcher._registry_policies()
-        return lambda policy_name: bool(
-            PolicyMatcher.get_policies_with_matching_conditions(
-                policy_names=(policy_name,),
-                context=context,
-                policies=resolved,
+
+        def applies(policy_name: str) -> bool:
+            applying: Final = PolicyMatcher._applying_chain_members(
+                policy_name=policy_name, context=context, policies=resolved
             )
+            if applying and policy_name not in applying:
+                verbose_proxy_logger.info(
+                    "Policy '%s' applied through ancestor '%s' although its own condition did not match "
+                    "(team_alias=%s, key_alias=%s, model=%s)",
+                    policy_name,
+                    applying[0],
+                    context.team_alias,
+                    context.key_alias,
+                    context.model,
+                )
+            return bool(applying)
+
+        return applies
+
+    @staticmethod
+    def _applying_chain_members(
+        policy_name: str,
+        context: PolicyMatchContext,
+        policies: dict[str, Policy],
+    ) -> tuple[str, ...]:
+        from litellm.proxy.policy_engine.condition_evaluator import ConditionEvaluator
+
+        chain: Final = PolicyResolver.resolve_inheritance_chain(policy_name=policy_name, policies=policies)
+        return tuple(
+            name
+            for name in chain
+            if (policy := policies.get(name)) is not None
+            and (policy.condition is None or ConditionEvaluator.evaluate(policy.condition, context))
         )
 
     @staticmethod
@@ -168,8 +200,7 @@ class PolicyMatcher:
         resolver then drops only the chain members whose own condition fails,
         so a child whose condition misses still contributes the guardrails of
         its unconditional ancestors. A missing policy resolves to an empty
-        chain and does not apply. Admissions where the policy's own condition
-        missed but an ancestor applies are logged at INFO.
+        chain and does not apply.
 
         Args:
             policy_names: List of policy names to filter
@@ -179,28 +210,9 @@ class PolicyMatcher:
         Returns:
             List of policy names that apply to the context
         """
-        from litellm.proxy.policy_engine.condition_evaluator import ConditionEvaluator
-
         resolved: Final = policies if policies is not None else PolicyMatcher._registry_policies()
-
-        def chain_applies(policy_name: str) -> bool:
-            chain: Final = PolicyResolver.resolve_inheritance_chain(policy_name=policy_name, policies=resolved)
-            applying: Final = tuple(
-                name
-                for name in chain
-                if (policy := resolved.get(name)) is not None
-                and (policy.condition is None or ConditionEvaluator.evaluate(policy.condition, context))
-            )
-            if applying and policy_name not in applying:
-                verbose_proxy_logger.info(
-                    "Policy '%s' applied through ancestor '%s' although its own condition did not match "
-                    "(team_alias=%s, key_alias=%s, model=%s)",
-                    policy_name,
-                    applying[0],
-                    context.team_alias,
-                    context.key_alias,
-                    context.model,
-                )
-            return bool(applying)
-
-        return [policy_name for policy_name in policy_names if chain_applies(policy_name)]
+        return [
+            policy_name
+            for policy_name in policy_names
+            if PolicyMatcher._applying_chain_members(policy_name, context, resolved)
+        ]

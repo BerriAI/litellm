@@ -392,11 +392,9 @@ class TestAncestorAdmissionLogging:
     def test_logs_when_admitted_through_ancestor_only(self, caplog):
         context: Final = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-4o")
         with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
-            result: Final = PolicyMatcher.get_policies_with_matching_conditions(
-                policy_names=["child"], context=context, policies=self._chain()
-            )
+            result: Final = PolicyMatcher.policy_applies(context, self._chain())("child")
         records: Final = [r for r in caplog.records if "applied through ancestor" in r.getMessage()]
-        assert result == ["child"]
+        assert result is True
         assert len(records) == 1
         assert "applied through ancestor 'parent'" in records[0].getMessage()
         assert "'child'" in records[0].getMessage()
@@ -404,10 +402,8 @@ class TestAncestorAdmissionLogging:
     def test_no_log_when_own_condition_matches(self, caplog):
         context: Final = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.5")
         with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
-            result: Final = PolicyMatcher.get_policies_with_matching_conditions(
-                policy_names=["child"], context=context, policies=self._chain()
-            )
-        assert result == ["child"]
+            result: Final = PolicyMatcher.policy_applies(context, self._chain())("child")
+        assert result is True
         assert not [r for r in caplog.records if "applied through ancestor" in r.getMessage()]
 
     def test_no_log_when_no_chain_member_applies(self, caplog):
@@ -424,8 +420,15 @@ class TestAncestorAdmissionLogging:
         }
         context: Final = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-4o")
         with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+            result: Final = PolicyMatcher.policy_applies(context, policies)("child")
+        assert result is False
+        assert not [r for r in caplog.records if "applied through ancestor" in r.getMessage()]
+
+    def test_condition_filter_logs_nothing(self, caplog):
+        context: Final = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-4o")
+        with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
             result: Final = PolicyMatcher.get_policies_with_matching_conditions(
-                policy_names=["child"], context=context, policies=policies
+                policy_names=["child"], context=context, policies=self._chain()
             )
-        assert result == []
+        assert result == ["child"]
         assert not [r for r in caplog.records if "applied through ancestor" in r.getMessage()]
