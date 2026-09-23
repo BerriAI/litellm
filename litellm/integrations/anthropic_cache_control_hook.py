@@ -679,7 +679,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             messages, answered_tool_ids=client_answers
         )
 
-        taken: set[int] = set()
+        taken: set[int] = set()  # mutable-ok: the messages this request has already marked
         limit_reached = False
         for point in points:
             if used_blocks >= max_blocks:
@@ -721,7 +721,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def _resolve_target_indices(
-        point: CacheControlMessageInjectionPoint, messages: list[AllMessageValues], taken: set[int] | None = None
+        point: CacheControlMessageInjectionPoint, messages: list[AllMessageValues], taken: Container[int] = frozenset()
     ) -> list[int]:
         """Resolve which message indices an injection point targets.
 
@@ -730,7 +730,6 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         point turns two configured breakpoints into one, and the four exist so that a
         prefix which stops matching at one can still match at an earlier one.
         """
-        already_marked: Final = taken or set()
         _targetted_index: Final[int | str | None] = point.get("index", None)
         targetted_index: int | None = None
         if isinstance(_targetted_index, str):
@@ -745,11 +744,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # that role's turns, so {role: assistant, index: -1} is the last assistant
         # turn rather than the last message.
         targetted_role: Final = point.get("role", None)
-        candidates: Final = [
+        candidates: Final = tuple(
             index
             for index, message in enumerate(messages)
             if targetted_role is None or message.get("role") == targetted_role
-        ]
+        )
 
         # Case 1: Target by role alone
         if targetted_index is None:
@@ -778,7 +777,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         position = targetted_index
         while position >= 0:
             index = candidates[position]
-            if index not in already_marked and _message_accepts_cache_control(messages[index]):
+            if index not in taken and _message_accepts_cache_control(messages[index]):
                 return [index]
             position -= 1
         return []
