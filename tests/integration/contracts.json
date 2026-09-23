@@ -2019,6 +2019,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/routing/test_priority_rate_limit_headers.py::test_streaming_chat_completion_success_logs_v3_rate_limit_remaining_values_for_callbacks": [
+      "other.routing.priority_rate_limits.streaming_success_logs_v3_remaining_values_for_callbacks"
     ]
   },
   "browser": {
