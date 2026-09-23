@@ -83,9 +83,10 @@ than as a GitHub Action or on a dedicated VM. Trade-offs:
    human reviews before it lands on the public table. The check fails
    *closed*: if it errors, auto-merge is withheld.
 9. **Sweeps stale compat-matrix PRs**: once today's PR exists, every
-   other open `compat-matrix/*` PR on the docs repo is closed (and its
-   bot-owned branch deleted), so at most one compat-matrix PR is ever
-   open — the newest.
+   other open `compat-matrix/*` PR that the publishing account opened
+   from a branch on the docs repo itself is closed (and its bot-owned
+   branch deleted), so at most one compat-matrix PR is ever open — the
+   newest. A contributor's PR under that prefix is never touched.
 
 ## The Render service
 
