@@ -140,8 +140,8 @@ def test_streamed_web_search_turn_capped_by_max_agentic_loops_ends_turn_with_sni
             search_ids: Final = tuple(block["id"] for block in started if block["type"] == "server_tool_use")
             assert search_ids and all(search_id.startswith("srvtoolu_") for search_id in search_ids), response.text
             assert started[-1] == {"type": "text", "text": ""}, response.text
-            assert set(json.dumps(block, sort_keys=True) for block in started[:-1]) == {
-                json.dumps(block, sort_keys=True)
+            assert started[:-1] == tuple(
+                block
                 for search_id in search_ids
                 for block in (
                     {"type": "server_tool_use", "id": search_id, "name": "web_search", "input": {"query": "query-0"}},
@@ -160,7 +160,7 @@ def test_streamed_web_search_turn_capped_by_max_agentic_loops_ends_turn_with_sni
                         ],
                     },
                 )
-            }, response.text
+            ), response.text
             assert (
                 "".join(event["delta"]["text"] for name, event in events if name == "content_block_delta") == "turn-1"
             ), response.text

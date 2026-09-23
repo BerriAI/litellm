@@ -1,5 +1,5 @@
-import itertools
 import json
+import threading
 import uuid
 from pathlib import Path
 from typing import Final
@@ -42,11 +42,11 @@ def test_config_deployment_dropped_by_stale_boot_cost_map_is_restored_after_relo
     remote_map: Final = json.dumps(
         {model: {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0, "output_cost_per_token": 0}}
     ).encode()
-    fetches: Final = itertools.count(1)
+    fresh_map_published: Final = threading.Event()
 
     def respond(request: Request) -> Reply:
         assert request.target == "/model_prices.json", request
-        return Reply(status=503, body=b"{}") if next(fetches) == 1 else Reply(body=remote_map)
+        return Reply(body=remote_map) if fresh_map_published.is_set() else Reply(status=503, body=b"{}")
 
     overrides: Final = {"MODEL_COST_MAP_MIN_MODEL_COUNT": "1", "MODEL_COST_MAP_MAX_SHRINK_RATIO": "0"}
     with (
@@ -61,6 +61,8 @@ def test_config_deployment_dropped_by_stale_boot_cost_map_is_restored_after_relo
             config=config,
             remove_environment=("LITELLM_LOCAL_MODEL_COST_MAP",),
         ) as candidate:
+            assert model not in tuple(entry["id"] for entry in candidate.get("/v1/models")["data"])
+            fresh_map_published.set()
             reload: Final = candidate.request("POST", "/reload/model_cost_map")
             assert reload.status_code == 200, reload.text
             eventually(
