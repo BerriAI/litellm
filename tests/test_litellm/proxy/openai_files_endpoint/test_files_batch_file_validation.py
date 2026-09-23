@@ -4,8 +4,8 @@ import pytest
 
 from litellm.proxy._types import ProxyException
 from litellm.proxy.openai_files_endpoints.batch_file_validation import (
-    BATCH_LINE_REQUIRED_KEYS,
-    PASSTHROUGH_BATCH_LINE_REQUIRED_KEYS,
+    BATCH_LINE_SHAPE,
+    PASSTHROUGH_BATCH_LINE_SHAPE,
     BatchFileEmpty,
     BatchFileInvalidJsonLine,
     BatchFileLineNotObject,
@@ -97,7 +97,7 @@ def test_non_object_line_rejected():
     assert check_batch_file_upload("batch.jsonl", content, None) == BatchFileLineNotObject(line_number=2)
 
 
-@pytest.mark.parametrize("missing_key", BATCH_LINE_REQUIRED_KEYS)
+@pytest.mark.parametrize("missing_key", BATCH_LINE_SHAPE.required_keys)
 def test_missing_required_key_rejected(missing_key):
     import json
 
@@ -182,14 +182,14 @@ NATIVE_VERTEX_LINE = b'{"request": {"contents": [{"role": "user", "parts": [{"te
 
 def test_passthrough_keys_accept_native_vertex_rows():
     content = NATIVE_VERTEX_LINE + b"\n" + NATIVE_VERTEX_LINE + b"\n"
-    assert check_batch_file_upload("batch.jsonl", content, None, PASSTHROUGH_BATCH_LINE_REQUIRED_KEYS) is None
+    assert check_batch_file_upload("batch.jsonl", content, None, PASSTHROUGH_BATCH_LINE_SHAPE) is None
 
 
 def test_passthrough_keys_reject_openai_rows():
     content = NATIVE_VERTEX_LINE + b"\n" + VALID_LINE + b"\n"
     assert check_batch_file_upload(
-        "batch.jsonl", content, None, PASSTHROUGH_BATCH_LINE_REQUIRED_KEYS
-    ) == BatchFileMissingLineKey(line_number=2, key="request", required_keys=PASSTHROUGH_BATCH_LINE_REQUIRED_KEYS)
+        "batch.jsonl", content, None, PASSTHROUGH_BATCH_LINE_SHAPE
+    ) == BatchFileMissingLineKey(line_number=2, key="request", line_shape=PASSTHROUGH_BATCH_LINE_SHAPE)
 
 
 def test_default_keys_still_reject_native_vertex_rows():
@@ -198,12 +198,13 @@ def test_default_keys_still_reject_native_vertex_rows():
     )
 
 
-def test_passthrough_missing_key_message_names_the_passthrough_keys():
+def test_passthrough_missing_key_message_says_what_a_passthrough_upload_takes():
     with pytest.raises(ProxyException) as exc_info:
         raise_batch_file_validation_failure(
-            BatchFileMissingLineKey(line_number=3, key="request", required_keys=PASSTHROUGH_BATCH_LINE_REQUIRED_KEYS)
+            BatchFileMissingLineKey(line_number=3, key="request", line_shape=PASSTHROUGH_BATCH_LINE_SHAPE)
         )
     assert exc_info.value.param == "request"
     assert "line 3" in exc_info.value.message
-    assert "keys request." in exc_info.value.message
+    assert "passthrough upload takes native Vertex batch rows" in exc_info.value.message
+    assert "with a request key." in exc_info.value.message
     assert "custom_id" not in exc_info.value.message

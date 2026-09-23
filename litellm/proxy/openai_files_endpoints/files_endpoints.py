@@ -57,8 +57,8 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
 )
 from litellm.proxy.openai_files_endpoints.batch_file_validation import (
-    BATCH_LINE_REQUIRED_KEYS,
-    PASSTHROUGH_BATCH_LINE_REQUIRED_KEYS,
+    BATCH_LINE_SHAPE,
+    PASSTHROUGH_BATCH_LINE_SHAPE,
     check_batch_file_upload,
     raise_batch_file_validation_failure,
 )
@@ -671,7 +671,7 @@ async def create_file(
                 file.filename,
                 file_source,
                 _MAX_BATCH_FILE_SIZE_MB_ADAPTER.validate_python(general_settings.get("max_batch_file_size_mb")),
-                PASSTHROUGH_BATCH_LINE_REQUIRED_KEYS if passthrough else BATCH_LINE_REQUIRED_KEYS,
+                PASSTHROUGH_BATCH_LINE_SHAPE if passthrough else BATCH_LINE_SHAPE,
             )
             if batch_file_failure is not None:
                 raise_batch_file_validation_failure(batch_file_failure)
