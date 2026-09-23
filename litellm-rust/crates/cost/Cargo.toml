@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
 [dev-dependencies]
 criterion.workspace = true
 proptest.workspace = true

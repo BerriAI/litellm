@@ -2963,6 +2963,8 @@ dependencies = [
  "criterion",
  "proptest",
  "rstest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

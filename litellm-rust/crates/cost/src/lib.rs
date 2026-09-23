@@ -2,6 +2,7 @@ pub mod batch;
 pub mod catalog;
 pub mod custom_pricing;
 pub mod non_token;
+pub mod responses_usage;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Rate {

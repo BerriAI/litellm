@@ -12,9 +12,12 @@ use litellm_cost::non_token::{
     ImageRates, ImageUsage, OcrBatchRates, OcrRates, OcrUsage, VideoRates, calculate_image,
     calculate_ocr, calculate_ocr_batch, calculate_video,
 };
+use litellm_cost::responses_usage::transform_response_api_usage_to_chat_usage;
 use litellm_cost::{
-    Pricing, PromptConvention, Rate, Rates, Request, ServiceTier, ThresholdPolicy, Usage, compile,
+    Pricing, PromptConvention, Rate, Rates, Request, ServiceTier, ThresholdPolicy, Usage,
+    calculate, compile,
 };
+use serde_json::json;
 
 fn main() {
     let pricing = Pricing {
@@ -192,5 +195,33 @@ fn main() {
         "catalog_input={:.4} catalog_output={:.4}",
         catalog_cost.input(),
         catalog_cost.output()
+    );
+    let response_usage = transform_response_api_usage_to_chat_usage(&json!({
+        "input_tokens": 1000,
+        "output_tokens": 100,
+        "input_tokens_details": {"cached_tokens": 200, "cache_write_tokens": 100}
+    }))
+    .unwrap();
+    let response_pricing = Pricing {
+        standard: Rates {
+            input: Rate::Value(1e-6),
+            output: Rate::Value(2e-6),
+            cache_read: Rate::Value(0.2e-6),
+            cache_write: Rate::Value(1.25e-6),
+            cache_write_1h: Rate::Missing,
+        },
+        tiers: &[],
+        thresholds: &[],
+        off_peak: None,
+    };
+    let response_request = Request {
+        usage: response_usage.token_usage(),
+        ..request
+    };
+    let response_cost = calculate(&response_pricing, &response_request).unwrap();
+    println!(
+        "responses_input={:.6} responses_output={:.6}",
+        response_cost.input(),
+        response_cost.output()
     );
 }
