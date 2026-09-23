@@ -3604,6 +3604,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # from `image`/`source` blocks. Five other guardrails already consume this
         # field; Bedrock was the one that dropped it on the floor.
         image_urls: Final = tuple(inputs.get("images") or ()) if input_type == "request" else ()
+        for image_ref in image_urls:
+            if not isinstance(image_ref, str):
+                self._handle_unscannable_attachment(reason="a non-string image reference cannot be scanned")
         # Refused before the shortcuts: ApplyGuardrail has no content type for a document/file attachment.
         files: Final = tuple(inputs.get("files") or ()) if input_type == "request" else ()
         if files:

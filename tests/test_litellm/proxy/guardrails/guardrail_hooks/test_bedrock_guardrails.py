@@ -7254,6 +7254,8 @@ async def test_during_call_hook_refuses_serialized_tool_output_attachment_unknow
             call_type=CallTypes.acompletion.value,
         )
 
+    mock_post.assert_called_once()
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -7333,3 +7335,25 @@ async def test_during_call_hook_drops_bare_attachment_shells():
             user_api_key_dict=UserAPIKeyAuth(),
             call_type=CallTypes.acompletion.value,
         )
+
+    mock_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_refuses_non_string_image_reference():
+    """A non-string entry in inputs["images"] must refuse cleanly, not crash on startswith."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-int-image-ref",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["look"], "images": [5]}, request_data={}, input_type="request"
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "cannot be scanned" in str(exc_info.value.detail)
