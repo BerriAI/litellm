@@ -12,7 +12,8 @@ import os
 import random
 import time
 import traceback
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, overload
@@ -267,6 +268,56 @@ def _timed_request_duration_ms(
 def _spend_update_tx(prisma_client: PrismaClient) -> _SpendTransactionManager:
     tx: Final[_SpendTransactionManager] = prisma_client.db.tx(timeout=timedelta(seconds=60))
     return tx
+
+
+_daily_spend_commit_started: Final[ContextVar[asyncio.Event | None]] = ContextVar(
+    "_daily_spend_commit_started", default=None
+)
+
+
+def _mark_daily_spend_commit_started() -> None:
+    started: Final = _daily_spend_commit_started.get()
+    if started is not None:
+        started.set()
+
+
+def _mark_daily_spend_commit_finished() -> None:
+    started: Final = _daily_spend_commit_started.get()
+    if started is not None:
+        started.clear()
+
+
+def _start_daily_spend_commit(
+    commit_started: asyncio.Event, commit: Callable[[], Coroutine[object, object, None]]
+) -> "asyncio.Task[None]":
+    token: Final = _daily_spend_commit_started.set(commit_started)
+    try:
+        return asyncio.ensure_future(commit())
+    finally:
+        _daily_spend_commit_started.reset(token)
+
+
+async def _requeue_daily_spend_the_commit_left_behind(
+    commit_task: "asyncio.Task[None]",
+    queue: DailySpendUpdateQueue,
+    entity_type: str,
+    transactions: dict[str, BaseDailySpendTransaction],
+) -> None:
+    await asyncio.wait({commit_task})
+    if commit_task.cancelled() or not transactions:
+        return
+    failure: Final = commit_task.exception()
+    if failure is None:
+        return
+    spend_log_error(
+        "Spend tracking - daily %s spend commit interrupted by shutdown failed. Re-queued %d rows for the "
+        "shutdown flush. Error: %s",
+        entity_type,
+        len(transactions),
+        str(failure),
+        exc=failure,
+    )
+    await queue.add_update(transactions)
 
 
 # The per-team advisory lock the team endpoints hold while changing a roster (TEAM_ADVISORY_LOCK_SQL),
@@ -1606,17 +1657,22 @@ class DBSpendUpdateWriter:
         proxy_logging_obj: ProxyLogging,
     ) -> None:
         transactions: Final = await queue.flush_and_get_aggregated_daily_spend_update_transactions()
-        commit_task: Final = asyncio.ensure_future(
-            commit(
+        commit_started: Final = asyncio.Event()
+        commit_task: Final = _start_daily_spend_commit(
+            commit_started,
+            lambda: commit(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
                 daily_spend_transactions=cast(dict[str, _DailySpendTransactionT], transactions),
-            )
+            ),
         )
         try:
             await asyncio.shield(commit_task)
         except asyncio.CancelledError:
+            if commit_started.is_set():
+                await _requeue_daily_spend_the_commit_left_behind(commit_task, queue, entity_type, transactions)
+                raise
             commit_task.cancel()
             if transactions:
                 await queue.add_update(transactions)
@@ -1847,17 +1903,26 @@ class DBSpendUpdateWriter:
         if not daily_tag_spend_update_transactions:
             return
 
-        commit_task: Final = asyncio.ensure_future(
-            DBSpendUpdateWriter.update_daily_tag_spend(
+        commit_started: Final = asyncio.Event()
+        commit_task: Final = _start_daily_spend_commit(
+            commit_started,
+            lambda: DBSpendUpdateWriter.update_daily_tag_spend(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
                 daily_spend_transactions=daily_tag_spend_update_transactions,
-            )
+            ),
         )
         try:
             await asyncio.shield(commit_task)
         except BaseException:  # noqa: BLE001  # a cancel must restore the drained rows before its rollback returns
+            if commit_started.is_set():
+                await asyncio.wait({commit_task})
+                if not commit_task.cancelled() and commit_task.exception() is not None:
+                    await self.redis_update_buffer.restore_transactions_to_redis(
+                        daily_tag_spend_update_transactions=daily_tag_spend_update_transactions,
+                    )
+                raise
             commit_task.cancel()
             await self.redis_update_buffer.restore_transactions_to_redis(
                 daily_tag_spend_update_transactions=daily_tag_spend_update_transactions,
@@ -2382,6 +2447,8 @@ class DBSpendUpdateWriter:
                             sql, params = build_bulk_upsert(table=table, batch=merged_batch)
                             async with _spend_update_tx(prisma_client) as transaction:
                                 await transaction.execute_raw(sql, *params)
+                                _mark_daily_spend_commit_started()
+                            _mark_daily_spend_commit_finished()
                         except Exception as batch_error:
                             if _spend_commit_failure_is_requeue_safe(batch_error):
                                 spend_log_error(
