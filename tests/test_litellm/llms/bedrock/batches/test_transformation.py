@@ -19,9 +19,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-
 from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
-from litellm.types.utils import LiteLLMBatch, LlmProviders
+from litellm.types.utils import LlmProviders
 
 # AWS JobStatus -> OpenAI BatchJobStatus, exactly as encoded in transformation.py
 # (both transform_create_batch_response and transform_retrieve_batch_response).
@@ -265,6 +264,44 @@ def test_create_request_keeps_kms_key_alongside_s3_bucket_owner(config, monkeypa
         "s3OutputDataConfig": {
             "s3Uri": "s3://in-bucket/litellm-batch-outputs/litellm-batch-1/",
             "s3BucketOwner": "111111111111",
+            "s3EncryptionKeyId": "kms-key-123",
+        }
+    }
+
+
+def test_create_request_omits_kms_key_when_env_var_is_blank(config, monkeypatch):
+    monkeypatch.setenv("AWS_S3_ENCRYPTION_KEY_ID", "")
+    monkeypatch.delenv("AWS_S3_BUCKET_OWNER", raising=False)
+
+    bedrock_request = _signed_batch_request(config, {}, {})
+
+    assert bedrock_request["outputDataConfig"] == {
+        "s3OutputDataConfig": {"s3Uri": "s3://in-bucket/litellm-batch-outputs/litellm-batch-1/"}
+    }
+
+
+def test_create_request_omits_s3_bucket_owner_when_env_var_is_blank(config, monkeypatch):
+    monkeypatch.setenv("AWS_S3_BUCKET_OWNER", "")
+    monkeypatch.delenv("AWS_S3_ENCRYPTION_KEY_ID", raising=False)
+
+    bedrock_request = _signed_batch_request(config, {}, {})
+
+    assert bedrock_request["inputDataConfig"] == {"s3InputDataConfig": {"s3Uri": "s3://in-bucket/in.jsonl"}}
+    assert bedrock_request["outputDataConfig"] == {
+        "s3OutputDataConfig": {"s3Uri": "s3://in-bucket/litellm-batch-outputs/litellm-batch-1/"}
+    }
+
+
+def test_create_request_emits_real_values_alongside_blank_sibling_env_var(config, monkeypatch):
+    monkeypatch.setenv("AWS_S3_ENCRYPTION_KEY_ID", "kms-key-123")
+    monkeypatch.setenv("AWS_S3_BUCKET_OWNER", "")
+
+    bedrock_request = _signed_batch_request(config, {}, {})
+
+    assert bedrock_request["inputDataConfig"] == {"s3InputDataConfig": {"s3Uri": "s3://in-bucket/in.jsonl"}}
+    assert bedrock_request["outputDataConfig"] == {
+        "s3OutputDataConfig": {
+            "s3Uri": "s3://in-bucket/litellm-batch-outputs/litellm-batch-1/",
             "s3EncryptionKeyId": "kms-key-123",
         }
     }
