@@ -122,6 +122,7 @@ import os
 import re
 import sys
 import tokenize
+from dataclasses import dataclass
 from multiprocessing import Pool
 from pathlib import Path
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -206,25 +207,23 @@ KWARGS_OK_RE = re.compile(r"#\s*kwargs-ok(?::\s*(?P<reason>.*))?")
 REBIND_OK_RE = re.compile(r"#\s*rebind-ok(?::\s*(?P<reason>.*))?")
 WRITABLE_OK_RE = re.compile(r"#\s*writable-ok(?::\s*(?P<reason>.*))?")
 
-# Suppression tokens that must each carry a reason (LIT005).
-OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("mutable-ok", MUTABLE_OK_RE),
-    ("cast-ok", CAST_OK_RE),
-    ("guard-ok", GUARD_OK_RE),
-    ("kwargs-ok", KWARGS_OK_RE),
-    ("rebind-ok", REBIND_OK_RE),
-    ("writable-ok", WRITABLE_OK_RE),
-)
+@dataclass(frozen=True, slots=True)
+class _OkToken:
+    """One `*-ok` suppression token: its comment pattern and the rule codes it suppresses."""
 
-SUPPRESSED_CODES: Mapping[str, frozenset[str]] = MappingProxyType(
-    {
-        "mutable-ok": frozenset(("LIT001", "LIT002")),
-        "cast-ok": frozenset(("LIT006",)),
-        "guard-ok": frozenset(("LIT007",)),
-        "kwargs-ok": frozenset(("LIT008",)),
-        "rebind-ok": frozenset(("LIT010", "LIT011")),
-        "writable-ok": frozenset(("LIT012",)),
-    }
+    token: str
+    pattern: re.Pattern[str]
+    codes: frozenset[str]
+
+
+# Suppression tokens that must each carry a reason (LIT005).
+OK_SUPPRESSIONS: Final[tuple[_OkToken, ...]] = (
+    _OkToken("mutable-ok", MUTABLE_OK_RE, frozenset(("LIT001", "LIT002"))),
+    _OkToken("cast-ok", CAST_OK_RE, frozenset(("LIT006",))),
+    _OkToken("guard-ok", GUARD_OK_RE, frozenset(("LIT007",))),
+    _OkToken("kwargs-ok", KWARGS_OK_RE, frozenset(("LIT008",))),
+    _OkToken("rebind-ok", REBIND_OK_RE, frozenset(("LIT010", "LIT011"))),
+    _OkToken("writable-ok", WRITABLE_OK_RE, frozenset(("LIT012",))),
 )
 
 
@@ -255,10 +254,10 @@ def _valid_ok(regex: re.Pattern[str], text: str) -> bool:
 
 def _comment_violations(path: Path, line_no: int, text: str) -> Iterator[Violation]:
     """Pure: all LIT003/004/005 findings for one comment."""
-    for token, regex in OK_SUPPRESSIONS:
-        m = regex.search(text)
+    for ok in OK_SUPPRESSIONS:
+        m = ok.pattern.search(text)
         if m and len((m.group("reason") or "").strip()) < MIN_REASON_LEN:
-            yield Violation(path, line_no, "LIT005", f"{token} requires a reason: `# {token}: <reason>`")
+            yield Violation(path, line_no, "LIT005", f"{ok.token} requires a reason: `# {ok.token}: <reason>`")
 
     m = NOQA_RE.search(text)
     if m:
@@ -296,13 +295,13 @@ def scan_comments(path: Path, source: str) -> tuple[Mapping[str, frozenset[int]]
         # tokenize raises TokenError (EOF mid-construct) or a SyntaxError subclass
         # (IndentationError / TabError) on malformed source; defer to ast.parse below,
         # which re-raises and is reported as LIT000 rather than crashing the run.
-        return {token: frozenset() for token, _ in OK_SUPPRESSIONS}, ()
+        return {ok.token: frozenset() for ok in OK_SUPPRESSIONS}, ()
 
     return (
         MappingProxyType(
             {
-                token: frozenset(line for line, text in comment_toks if _valid_ok(regex, text))
-                for token, regex in OK_SUPPRESSIONS
+                ok.token: frozenset(line for line, text in comment_toks if _valid_ok(ok.pattern, text))
+                for ok in OK_SUPPRESSIONS
             }
         ),
         tuple(v for line, text in comment_toks for v in _comment_violations(path, line, text)),
@@ -1050,19 +1049,22 @@ def apply_suppressions(
     kept = tuple(
         v
         for v in raw
-        if not any(v.line in lines and v.code in SUPPRESSED_CODES[token] for token, lines in suppressions.items())
+        if not any(
+            v.line in suppressions.get(ok.token, frozenset()) and v.code in ok.codes
+            for ok in OK_SUPPRESSIONS
+        )
     )
     unused = (
         Violation(
             path,
             line,
             "LIT013",
-            f"`# {token}` suppresses nothing: no "
-            f"{'/'.join(sorted(SUPPRESSED_CODES[token]))} violation on this line, so delete it",
+            f"`# {ok.token}` suppresses nothing: no "
+            f"{'/'.join(sorted(ok.codes))} violation on this line, so delete it",
         )
-        for token, lines in suppressions.items()
-        for line in sorted(lines)
-        if not any(v.line == line and v.code in SUPPRESSED_CODES[token] for v in raw)
+        for ok in OK_SUPPRESSIONS
+        for line in sorted(suppressions.get(ok.token, frozenset()))
+        if not any(v.line == line and v.code in ok.codes for v in raw)
     )
     return (*kept, *unused)
 

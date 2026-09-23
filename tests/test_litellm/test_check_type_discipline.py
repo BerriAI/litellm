@@ -107,11 +107,6 @@ def test_ok_suppression_without_reason_is_flagged(tmp_path):
     assert "LIT002" in codes  # and it does not suppress, so the construction still trips
 
 
-# --------------------------------------------------------------------------- #
-# Unused suppressions (LIT013)
-# --------------------------------------------------------------------------- #
-
-
 def test_mutable_ok_on_a_real_violation_suppresses_and_is_not_lit013(tmp_path):
     codes = _codes(tmp_path, "x: Final = []  # mutable-ok: seed\n")
     assert "LIT002" not in codes
