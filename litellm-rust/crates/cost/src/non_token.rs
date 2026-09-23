@@ -246,22 +246,15 @@ pub fn calculate_video(
     duration_seconds: f64,
     resolution: Option<&str>,
 ) -> Result<Cost, Error> {
-    let resolution_rate = resolution.and_then(|value| {
-        let suffix: String = value
-            .trim()
-            .to_lowercase()
-            .chars()
-            .filter(|character| character.is_alphanumeric() || *character == '_')
-            .collect();
-        if suffix.is_empty() || suffix.len() > 24 {
-            return None;
-        }
-        rates
-            .resolution_rates
-            .iter()
-            .find(|(name, _)| *name == suffix)
-            .and_then(|(_, rate)| priced(*rate))
-    });
+    let resolution_rate = resolution
+        .and_then(video_resolution_to_cost_field_suffix)
+        .and_then(|suffix| {
+            rates
+                .resolution_rates
+                .iter()
+                .find(|(name, _)| *name == suffix)
+                .and_then(|(_, rate)| priced(*rate))
+        });
     let rate = priced(rates.per_video_second)
         .or(resolution_rate)
         .or_else(|| priced(rates.per_second));
@@ -279,5 +272,15 @@ pub fn calculate_video(
             calculate(&[])
         }
     }
+}
+
+pub fn video_resolution_to_cost_field_suffix(resolution: &str) -> Option<String> {
+    let suffix: String = resolution
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|character| character.is_alphanumeric() || *character == '_')
+        .collect();
+    (!suffix.is_empty() && suffix.chars().count() <= 24).then_some(suffix)
 }
 use crate::Rate;

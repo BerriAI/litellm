@@ -5,6 +5,7 @@ use crate::anthropic_cost::{
     get_web_search_requests_from_usage,
 };
 use crate::gemini_cost::{cost_per_google_maps_grounding_request, cost_per_web_search_request};
+use crate::groq_cost::cost_per_web_search_request as groq_web_search_cost;
 use crate::responses_usage::ChatUsage;
 use crate::tool_call_cost_tracking::{
     DefaultToolRates, ResponseKind, count_web_search_calls, extract_file_search_params,
@@ -91,10 +92,11 @@ fn provider_web_search_cost(
             )
         }),
         "groq" => usage.map(|usage| {
-            server_tool_count(usage, "web_search_requests").unwrap_or(0) as f64
-                * context_rate(model_info)
-                + server_tool_count(usage, "browser_open_requests").unwrap_or(0) as f64
-                    * request.defaults.groq_browser_open_per_call
+            groq_web_search_cost(
+                usage,
+                model_info,
+                request.defaults.groq_browser_open_per_call,
+            )
         }),
         provider if provider.starts_with("vertex_ai") => {
             let is_claude = model_info

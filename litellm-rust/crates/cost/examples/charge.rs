@@ -21,6 +21,7 @@ use litellm_cost::generic_cost::{
 };
 use litellm_cost::generic_input::{InputBaseRates, calculate_input_cost};
 use litellm_cost::generic_usage::parse_prompt_tokens_details;
+use litellm_cost::groq_cost::cost_per_web_search_request as groq_web_search_cost;
 use litellm_cost::guardrail_cost::bedrock_guardrail_cost;
 use litellm_cost::image_cost_router::{
     ImageCostRouteRequest, route_image_generation_cost_calculator,
@@ -29,6 +30,7 @@ use litellm_cost::non_token::{
     ImageRates, ImageUsage, OcrBatchRates, OcrRates, OcrUsage, VideoRates, calculate_image,
     calculate_ocr, calculate_ocr_batch, calculate_video,
 };
+use litellm_cost::openai_cost::video_generation_cost;
 use litellm_cost::responses_usage::transform_response_api_usage_to_chat_usage;
 use litellm_cost::tiered_pricing::{select_tier_for_input, tier_rate};
 use litellm_cost::tool_call_cost_tracking::{
@@ -127,6 +129,13 @@ fn main() {
     )
     .unwrap();
     println!("video={} ocr_batch={}", video.total, ocr_batch.total);
+    let openai_video = video_generation_cost(
+        &json!({"output_cost_per_second": 0.05, "output_cost_per_second_1080p": 0.08}),
+        10.0,
+        Some("1080p"),
+    )
+    .unwrap();
+    println!("openai_video={openai_video:.2}");
     let batch = batch_cost_calculator(
         &BatchPricing {
             batch: BatchCostRates {
@@ -337,6 +346,21 @@ fn main() {
         }),
     );
     println!("gemini_search={search_cost:.2}");
+    let groq_usage = get_usage_object(&json!({
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 2,
+            "server_tool_use": {"web_search_requests": 2, "browser_open_requests": 3}
+        }
+    }))
+    .unwrap()
+    .unwrap();
+    let groq_search = groq_web_search_cost(
+        &groq_usage,
+        &json!({"search_context_cost_per_query": {"search_context_size_medium": 0.01}}),
+        0.001,
+    );
+    println!("groq_search={groq_search:.3}");
     let parsed = parse_prompt_tokens_details(
         &get_usage_object(&json!({
             "usage": {
