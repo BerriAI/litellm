@@ -3566,3 +3566,49 @@ class TestOpenAIResponsesHandlerAttachmentsDefaultScope:
         assert guardrail.inputs is not None
         assert guardrail.inputs["texts"] == ["summarize this document"]
         assert "files" not in guardrail.inputs
+
+    @pytest.mark.asyncio
+    async def test_function_call_output_attachments_reach_guardrail_when_scanning(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = ScanningGuardrail()
+        data = {
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "c1",
+                    "output": [
+                        {"type": "input_image", "image_url": self._GIF_DATA_URI},
+                        {"type": "input_file", "file_id": "file_abc"},
+                    ],
+                }
+            ],
+            "model": "gpt-4o",
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["images"] == [self._GIF_DATA_URI]
+        assert guardrail.inputs["files"] == ["file_abc"]
+
+    @pytest.mark.asyncio
+    async def test_function_call_output_attachments_ignored_when_not_scanning(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = InputRecordingGuardrail()
+        input_data = [
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": [
+                    {"type": "input_image", "image_url": self._GIF_DATA_URI},
+                    {"type": "input_file", "file_id": "file_abc"},
+                ],
+            }
+        ]
+        data = {"input": input_data, "model": "gpt-4o"}
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.calls == 0, "non-scanning guardrail fired on function_call_output attachments"
+        assert result["input"] == input_data

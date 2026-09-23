@@ -478,6 +478,24 @@ def _image_url_part_ref(content_item: Mapping[str, object], scan_attachments: bo
     return file_id if isinstance(file_id, str) and file_id else None
 
 
+def _extract_tool_output_attachments(
+    item: Mapping[str, object], images_to_check: list[str], files_to_check: list[str]
+) -> None:
+    """Attachments nested inside a ``function_call_output`` item's ``output`` parts."""
+    if item.get("type") != "function_call_output":
+        return
+    output: Final = item.get("output")
+    if not isinstance(output, list):
+        return
+    for part in output:
+        if not isinstance(part, dict):
+            continue
+        if (part_map := cast(Mapping[str, object], part)).get("type") == "input_image":  # fmt: skip  # cast-ok: narrowed to dict above
+            images_to_check.append(_input_image_ref(part_map))
+        elif part_map.get("type") == "input_file":
+            files_to_check.append(_input_file_ref(part_map))
+
+
 def _input_file_ref(content_item: Mapping[str, object]) -> str:
     """Identify an ``input_file`` part by whichever reference field it carries."""
     return next(
@@ -567,7 +585,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         flattened_tool_groups: Final = tuple(
             form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(original_tools)
         )
-        scan_attachments: Final = getattr(guardrail_to_apply, "scans_attachments", False)
+        scan_attachments: Final = getattr(guardrail_to_apply, "scans_attachments", False) is True
         extracted: Final = self._extract_guardrail_inputs(data, input_data, flattened_tool_groups, scan_attachments)
         if not (
             extracted.inputs.get("texts")
@@ -642,6 +660,10 @@ class OpenAIResponsesHandler(BaseTranslation):
                     task_mappings=task_mappings,
                     scan_attachments=scan_attachments,
                 )
+                if scan_attachments:
+                    _extract_tool_output_attachments(
+                        item=message, images_to_check=images_to_check, files_to_check=files_to_check
+                    )
         inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
         if images_to_check:
             inputs["images"] = images_to_check

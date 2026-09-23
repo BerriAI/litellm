@@ -202,3 +202,54 @@ class TestOpenAIChatHandlerAttachmentsDefaultScope:
     @pytest.mark.asyncio
     async def test_custom_guardrail_default_scans_attachments_is_false(self):
         assert CustomGuardrail.scans_attachments is False
+
+    @pytest.mark.asyncio
+    async def test_spec_mock_guardrail_never_calls_apply_guardrail_on_attachment_only_turn(self):
+        from unittest.mock import MagicMock
+
+        guardrail = MagicMock(spec=CustomGuardrail)
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}},
+                    {"type": "file", "file": {"file_id": "file_abc"}},
+                ],
+            }
+        ]
+        data = {"model": "gpt-4o", "messages": messages}
+
+        result = await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        guardrail.apply_guardrail.assert_not_called()
+        assert result["messages"] == messages
+
+    @pytest.mark.asyncio
+    async def test_empty_tools_and_empty_model_are_absent_from_inputs(self):
+        guardrail = RecordingGuardrail()
+        data = {
+            "model": "",
+            "messages": [{"role": "user", "content": "hi there"}],
+            "tools": [],
+        }
+
+        await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert "tools" not in guardrail.inputs
+        assert "model" not in guardrail.inputs
+
+    @pytest.mark.asyncio
+    async def test_empty_image_url_string_is_forwarded_as_images(self):
+        guardrail = ScanningGuardrail()
+        data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": ""}]}],
+        }
+
+        await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["images"] == [""]

@@ -74,11 +74,11 @@ if TYPE_CHECKING:
 def _image_part_ref(content_item: Mapping[str, object], scan_attachments: bool) -> str | None:
     image_url: Final = content_item.get("image_url")
     if isinstance(image_url, str):
-        return image_url or None
+        return image_url
     if isinstance(image_url, dict):
         url: Final = image_url.get("url")
-        if isinstance(url, str) and url:
-            return url
+        if url:
+            return cast("str", url)  # cast-ok: base forwarded the raw url value
         if scan_attachments:
             file_id: Final = image_url.get("file_id")
             if isinstance(file_id, str) and file_id:
@@ -99,6 +99,14 @@ def _file_part_ref(content_item: Mapping[str, object]) -> str:
         ),
         "file",
     )
+
+
+def _media_part_ref(content_item: Mapping[str, object]) -> str:
+    """Identify a ``video_url`` or ``input_audio`` part by its nested url when present."""
+    part_type: Final = cast("str", content_item.get("type"))  # cast-ok: caller gates on the two media types
+    media: Final = content_item.get(part_type)
+    media_url: Final = media.get("url") if isinstance(media, dict) else None
+    return media_url if isinstance(media_url, str) and media_url else part_type
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -142,7 +150,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
         scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
-        scan_attachments: Final = getattr(guardrail_to_apply, "scans_attachments", False)
+        scan_attachments: Final = getattr(guardrail_to_apply, "scans_attachments", False) is True
 
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
@@ -284,10 +292,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if structured_messages:
             inputs["structured_messages"] = [structured_messages[index] for index in scoped_message_indices]
         tools: Final = data.get("tools")
-        if isinstance(tools, list) and not scan_only_tool_results:
+        if tools and isinstance(tools, list) and not scan_only_tool_results:
             inputs["tools"] = cast("list[ChatCompletionToolParam]", tools)  # cast-ok: raw request json
         model: Final = data.get("model")
-        if isinstance(model, str):
+        if model and isinstance(model, str):
             inputs["model"] = model
         return inputs, structured_messages, scoped_message_indices
 
@@ -383,6 +391,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     # Extract non-image file attachments
                     if scan_attachments and content_item.get("type") == "file":
                         files_to_check.append(_file_part_ref(content_item))
+
+                    if scan_attachments and content_item.get("type") in ("video_url", "input_audio"):
+                        files_to_check.append(_media_part_ref(content_item))
 
         # Extract tool calls (typically in assistant messages)
         tool_calls: Final = message.get("tool_calls", None)

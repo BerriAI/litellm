@@ -490,8 +490,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if image_url is None:
                 self._handle_unscannable_attachment(reason="image part carries no inline url")
             return await self._build_image_content_item(image_url=image_url)
-        if part.get("type") in ("file", "document"):
-            self._handle_unscannable_attachment(reason="a document/file attachment cannot be scanned")
+        if part.get("type") in ("file", "document", "video_url", "input_audio"):
+            self._handle_unscannable_attachment(reason="a document, file, video or audio attachment cannot be scanned")
         if part.get("type") == "image":
             return await self._build_anthropic_image_content_item(part=part)
         text: Final = part.get("text")
@@ -3310,11 +3310,51 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         return updated_messages
 
+    @staticmethod
+    def _mask_leaf(item: object, masked_texts: list[str], masking_index: int) -> tuple[object, int]:
+        if isinstance(item, str):
+            if masking_index < len(masked_texts):
+                return masked_texts[masking_index], masking_index + 1
+            return item, masking_index
+        if isinstance(item, dict):
+            part: Final = cast(Mapping[str, object], item)  # cast-ok: narrowed to dict on the line above
+            text: Final = part.get("text")
+            if isinstance(text, str) and part.get("type") not in ("image_url", "image", "file", "document"):
+                if masking_index < len(masked_texts):
+                    new_item: Final = dict(item)
+                    new_item["text"] = masked_texts[masking_index]
+                    return new_item, masking_index + 1
+        return item, masking_index
+
+    @staticmethod
+    def _mask_tool_result(item: dict, masked_texts: list[str], masking_index: int) -> tuple[dict, int]:
+        inner: Final = item.get("content")
+        if isinstance(inner, str):
+            masked, masking_index = BedrockGuardrail._mask_leaf(
+                item=inner, masked_texts=masked_texts, masking_index=masking_index
+            )
+            new_item: Final = dict(item)
+            new_item["content"] = masked
+            return new_item, masking_index
+        if isinstance(inner, list):
+            rewritten: Final[list[object]] = []
+            for part in inner:
+                masked_part, masking_index = BedrockGuardrail._mask_leaf(
+                    item=part, masked_texts=masked_texts, masking_index=masking_index
+                )
+                rewritten.append(masked_part)
+            new_item_list: Final = dict(item)
+            new_item_list["content"] = rewritten
+            return new_item_list, masking_index
+        return item, masking_index
+
     def _mask_content_list(
         self, content_list: Sequence[object], masked_texts: list[str], masking_index: int
     ) -> tuple[list[Any], int]:
         """
-        Apply masking to a list of content items.
+        Apply masking to a list of content items, walking the same leaves
+        ``_content_leaf_parts`` emits so a ``tool_result`` block keeps its place in
+        the message and its inner text is masked as a leaf.
 
         Args:
             content_list: List of content items
@@ -3324,20 +3364,19 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Returns:
             Updated content list with masked items
         """
-        new_content: Final[list[dict[str, object] | str]] = []
+        new_content: Final[list[object]] = []
         for item in content_list:
-            if isinstance(item, dict) and "text" in item:
-                new_item = item.copy()
-                if masking_index < len(masked_texts):
-                    new_item["text"] = masked_texts[masking_index]
-                    masking_index += 1
+            if isinstance(item, dict) and item.get("type") == "tool_result":
+                new_item, masking_index = self._mask_tool_result(
+                    item=item, masked_texts=masked_texts, masking_index=masking_index
+                )
                 new_content.append(new_item)
-            elif isinstance(item, str):
-                if masking_index < len(masked_texts):
-                    item = masked_texts[masking_index]
-                    masking_index += 1
-                if item is not None:
-                    new_content.append(item)
+            else:
+                new_item, masking_index = self._mask_leaf(
+                    item=item, masked_texts=masked_texts, masking_index=masking_index
+                )
+                if new_item is not None:
+                    new_content.append(new_item)
 
         return new_content, masking_index
 

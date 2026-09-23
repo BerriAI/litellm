@@ -7107,3 +7107,63 @@ async def test_apply_guardrail_signs_off_the_event_loop(monkeypatch):
 def test_bedrock_guardrail_opts_into_attachment_scanning() -> None:
     """Translation handlers scope attachment extraction by this flag; Bedrock must keep it set."""
     assert BedrockGuardrail.scans_attachments is True
+
+
+def test_apply_masking_to_messages_keeps_tool_result_and_image_blocks() -> None:
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="x", guardrailVersion="1", aws_region_name="us-east-1"
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_01A", "content": "record SSN 123-45-6789"},
+                {"type": "text", "text": "please summarise"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo"}},
+            ],
+        }
+    ]
+
+    result = guardrail._apply_masking_to_messages(
+        messages=messages, masked_texts=["record SSN {SSN}", "please summarise", "leftover"]
+    )
+
+    assert result[0]["content"] == [
+        {"type": "tool_result", "tool_use_id": "toolu_01A", "content": "record SSN {SSN}"},
+        {"type": "text", "text": "please summarise"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo"}},
+    ]
+
+
+def test_apply_masking_to_messages_masks_tool_result_inner_list_items() -> None:
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="x", guardrailVersion="1", aws_region_name="us-east-1"
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01A",
+                    "content": [
+                        {"type": "text", "text": "inner ssn 123-45-6789"},
+                        {"type": "image", "source": {"data": "abc"}},
+                    ],
+                }
+            ],
+        }
+    ]
+
+    result = guardrail._apply_masking_to_messages(messages=messages, masked_texts=["inner ssn {SSN}"])
+
+    assert result[0]["content"] == [
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01A",
+            "content": [
+                {"type": "text", "text": "inner ssn {SSN}"},
+                {"type": "image", "source": {"data": "abc"}},
+            ],
+        }
+    ]

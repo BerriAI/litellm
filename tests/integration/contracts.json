@@ -290,6 +290,27 @@
     "tests/integration/observability/test_guardrail_effects.py::test_non_bedrock_guardrail_is_not_invoked_on_image_only_request": [
       "other.observability.guardrails.non_bedrock_policy_skips_image_only_request"
     ],
+    "tests/integration/observability/test_guardrail_effects.py::test_bedrock_during_call_mask_keeps_tool_result": [
+      "other.observability.guardrails.bedrock_during_call_mask_keeps_tool_result"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_bedrock_during_call_mask_survives_pii_in_text": [
+      "other.observability.guardrails.bedrock_during_call_mask_survives_pii_in_text"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_non_bedrock_policy_inputs_match_base_on_empty_tools": [
+      "other.observability.guardrails.non_bedrock_policy_inputs_match_base_on_empty_tools"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_bedrock_refuses_responses_function_call_output_file": [
+      "other.observability.guardrails.bedrock_refuses_responses_function_call_output_file"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_bedrock_scans_responses_function_call_output_image": [
+      "other.observability.guardrails.bedrock_scans_responses_function_call_output_image"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_bedrock_refuses_chat_video_part": [
+      "other.observability.guardrails.bedrock_refuses_chat_video_part"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_bedrock_during_call_refuses_chat_video_part": [
+      "other.observability.guardrails.bedrock_during_call_refuses_chat_video_part"
+    ],
     "tests/integration/mcp/test_mcp_protocol_errors.py::test_jsonrpc_error_and_malformed_tool_result_remain_errors": [
       "other.mcp.errors.protocol_and_malformed_results_cannot_be_empty_success"
     ],
