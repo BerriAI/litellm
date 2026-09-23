@@ -5,8 +5,8 @@ use litellm_cost::batch::{
     BatchCostRates, BatchPricing, BatchUsage, ModalityRates, batch_cost_calculator,
 };
 use litellm_cost::catalog::{
-    BuiltInToolCharge, CompletionCostRequest, CostCatalog, ModelCostRequest, ModelInfoCatalog,
-    ResponseCostRequest,
+    AzureAiImageCatalogRequest, BuiltInToolCharge, CompletionCostRequest, CostCatalog,
+    ModelCostRequest, ModelInfoCatalog, ResponseCostRequest,
 };
 use litellm_cost::custom_pricing::{
     CustomPricing, CustomTokenRates, RawUsage, cost_per_token_custom_pricing_helper,
@@ -541,6 +541,10 @@ fn main() {
             json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003}),
         ),
         (
+            "azure_ai/pixel-sample".to_owned(),
+            json!({"input_cost_per_pixel": 0.0002}),
+        ),
+        (
             "anthropic/fast".to_owned(),
             json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003, "provider_specific_entry": {"fast": 2.0, "us": 1.1}, "search_context_cost_per_query": {"search_context_size_medium": 0.005}}),
         ),
@@ -990,4 +994,16 @@ fn main() {
         )
         .unwrap();
     println!("vertex_image_edit={vertex_edit:.3}");
+    let azure_image = model_info_catalog
+        .azure_ai_image_generation_cost(AzureAiImageCatalogRequest {
+            model: "pixel-sample",
+            image_response: &json!({"data": [{}, {}], "size": "10x10"}),
+            size: None,
+            n: None,
+            optional_params: &json!({"width": 20, "height": 10}),
+            supplied_model_info: None,
+            at,
+        })
+        .unwrap();
+    println!("azure_image_generation={azure_image:.3}");
 }

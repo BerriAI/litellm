@@ -8,6 +8,9 @@ use crate::azure_ai_cost::{
     calculate_azure_model_router_flat_cost, is_azure_model_router, router_fee_entry_name,
     router_fee_name,
 };
+use crate::azure_ai_image_cost::{
+    AzureAiImageRequest, cost_calculator as azure_ai_image_cost_calculator,
+};
 use crate::azure_cost::output_per_second_cost;
 use crate::billed_token_rates::{
     BilledRatesRequest, BilledTokenRates, TokenTypeCostBreakdown,
@@ -28,6 +31,7 @@ use crate::image_response_cost::{
     calculate_image_response_cost_from_usage, gemini_image_edit_cost, gemini_image_generation_cost,
     resolve_image_model_info, vertex_image_edit_cost, vertex_image_generation_cost,
 };
+use crate::non_token::Error as NonTokenError;
 use crate::per_second::per_second_pricing_cost;
 use crate::perplexity_cost::cost_per_token as perplexity_cost_per_token;
 use crate::prompt_caching_savings::{
@@ -101,6 +105,17 @@ pub struct ResponseCostRequest<'a> {
     pub hidden_params: &'a Value,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct AzureAiImageCatalogRequest<'a> {
+    pub model: &'a str,
+    pub image_response: &'a Value,
+    pub size: Option<&'a str>,
+    pub n: Option<u64>,
+    pub optional_params: &'a Value,
+    pub supplied_model_info: Option<&'a Value>,
+    pub at: Timestamp,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CatalogError {
     ModelNotFound,
@@ -123,6 +138,24 @@ pub enum RealtimeCostError {
 pub enum CatalogSpeechError {
     Catalog(CatalogError),
     Speech(SpeechCostError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CatalogImageError {
+    Catalog(CatalogError),
+    Pricing(NonTokenError),
+}
+
+impl From<CatalogError> for CatalogImageError {
+    fn from(value: CatalogError) -> Self {
+        Self::Catalog(value)
+    }
+}
+
+impl From<NonTokenError> for CatalogImageError {
+    fn from(value: NonTokenError) -> Self {
+        Self::Pricing(value)
+    }
 }
 
 impl From<CatalogError> for CatalogSpeechError {
@@ -742,6 +775,32 @@ impl ModelInfoCatalog {
                 .ok_or(CatalogError::ModelNotFound),
             _ => Err(CatalogError::ModelNotFound),
         }
+    }
+
+    pub fn azure_ai_image_generation_cost(
+        &self,
+        request: AzureAiImageCatalogRequest<'_>,
+    ) -> Result<f64, CatalogImageError> {
+        let shared = self
+            .select_model_key(request.model, Some("azure_ai"), None)
+            .and_then(|key| self.entries.get(key));
+        let model_info = resolve_image_model_info(shared, request.supplied_model_info)
+            .ok_or(CatalogError::ModelNotFound)?;
+        let shared_pricing = model_info
+            .get("key")
+            .and_then(Value::as_str)
+            .and_then(|key| self.entries.get(key))
+            .or(shared);
+        Ok(azure_ai_image_cost_calculator(AzureAiImageRequest {
+            image_response: request.image_response,
+            model_info: &model_info,
+            supplied_model_info: request.supplied_model_info,
+            shared_pricing,
+            size: request.size,
+            n: request.n,
+            optional_params: request.optional_params,
+            at: request.at,
+        })?)
     }
 
     pub fn rerank_cost(
