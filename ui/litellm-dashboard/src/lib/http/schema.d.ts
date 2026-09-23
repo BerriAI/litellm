@@ -1234,6 +1234,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Get Auto Router Availability */
+        post: operations["get_auto_router_availability_auto_router_availability_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/benchmarks": {
         parameters: {
             query?: never;
@@ -17325,7 +17342,7 @@ export interface paths {
         };
         /**
          * Ui View Users
-         * @description Filter users based on partial match of user_id or email with pagination.
+         * @description Filter users based on partial match of user_id or email, or combined ``search``, with pagination.
          *
          *     Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
          *     (stored in the ``litellm_uisettings`` table):
@@ -24123,6 +24140,43 @@ export interface components {
             updated_values?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** AutoRouterAllowance */
+        AutoRouterAllowance: {
+            /**
+             * Available
+             * @default true
+             */
+            available: boolean;
+            /** Key */
+            key: string;
+            /** Limit */
+            limit: number | null;
+            /** Remaining */
+            remaining: number | null;
+            /**
+             * Used By This Router
+             * @default false
+             */
+            used_by_this_router: boolean;
+        };
+        /** AutoRouterAvailabilityRequest */
+        AutoRouterAvailabilityRequest: {
+            /** Complexity Router Config */
+            complexity_router_config?: {
+                [key: string]: unknown;
+            } | null;
+            /** Saved Model Id */
+            saved_model_id?: string | null;
+            /** Team Id */
+            team_id?: string | null;
+        };
+        /** AutoRouterAvailabilityResponse */
+        AutoRouterAvailabilityResponse: {
+            /** Allowances */
+            allowances: components["schemas"]["AutoRouterAllowance"][];
+            /** Error */
+            error?: string | null;
         };
         /**
          * AutoRouterBenchmarkGroup
@@ -44134,6 +44188,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_auto_router_availability_auto_router_availability_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoRouterAvailabilityRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterAvailabilityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -64338,6 +64425,8 @@ export interface operations {
                 user_id?: string | null;
                 /** @description User email in the request parameters */
                 user_email?: string | null;
+                /** @description Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive). */
+                search?: string | null;
                 /** @description Team ID — used when a team admin searches for users to add to their team */
                 team_id?: string | null;
                 /** @description Page number for pagination */

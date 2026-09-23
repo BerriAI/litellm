@@ -32,27 +32,35 @@ from litellm._logging import (
 from litellm.caching.caching import Cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
     CallTypes,
     Choices,
     Delta,
+    EmbeddingResponse,
+    ImageResponse,
     LlmProviders,
+    LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
+    RerankResponse,
     StreamingChoices,
+    TranscriptionResponse,
     Usage,
     all_litellm_params,
     bedrock_batch_litellm_params,
 )
+from litellm.types.videos.main import VideoObject
 from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
@@ -228,6 +236,13 @@ def test_get_model_info_prefers_exact_dated_key_over_stripped(
     assert expected_key in litellm.model_cost
     info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     assert info["key"] == expected_key
+
+
+def test_get_model_info_internal_failure_is_not_reported_as_unmapped() -> None:
+    with patch("litellm.utils._get_potential_model_names", side_effect=RuntimeError("malformed metadata")):
+        with pytest.raises(Exception, match="This model isn't mapped yet") as exc_info:
+            litellm.utils._get_model_info_helper(model="gpt-4o", custom_llm_provider="openai")
+    assert not isinstance(exc_info.value, litellm.ModelNotMappedError)
 
 
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
@@ -624,6 +639,9 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_character",
         "input_cost_per_image",
         "output_cost_per_image",
+        "output_cost_per_image_512",
+        "output_cost_per_image_1024",
+        "output_cost_per_image_1536",
         "input_cost_per_pixel",
         "output_cost_per_pixel",
         "input_cost_per_second",
@@ -851,6 +869,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_character": {"type": "number"},
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
+                "output_cost_per_image_512": {"type": "number"},
+                "output_cost_per_image_1024": {"type": "number"},
+                "output_cost_per_image_1536": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
                 "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
@@ -4397,6 +4418,111 @@ async def test_converted_chat_stream_hook_skips_unhandled_wrappers(
 
     assert hook.seen_responses == ()
     assert wrapper.completion_stream is completion_stream
+
+
+class _ChatShapedSuccessDeploymentHook(CustomLogger):
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: object, call_type: CallTypes | None
+    ) -> None:
+        raise AttributeError(f"{type(response).__name__!r} object has no attribute 'choices'")
+
+
+class _RecordingSuccessDeploymentHook(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_responses: tuple[object, ...] = ()
+
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: object, call_type: CallTypes | None
+    ) -> None:
+        self.seen_responses = (*self.seen_responses, response)
+
+
+_SUCCESS_RESPONSES_BY_CALL_TYPE: Final = (
+    pytest.param(
+        VideoObject(id="video_abc", object="video", status="queued", model="sora-2", seconds="4", size="720x1280"),
+        CallTypes.avideo_generation,
+        id="video",
+    ),
+    pytest.param(EmbeddingResponse(model="text-embedding-3-small"), CallTypes.aembedding, id="embedding"),
+    pytest.param(
+        ResponsesAPIResponse(
+            id="resp_abc", created_at=1, output=[], parallel_tool_calls=False, tool_choice="auto", tools=[], model="gpt-5.6"
+        ),
+        CallTypes.aresponses,
+        id="responses",
+    ),
+    pytest.param(ImageResponse(), CallTypes.aimage_generation, id="image"),
+    pytest.param(RerankResponse(id="rerank_abc"), CallTypes.arerank, id="rerank"),
+    pytest.param(TranscriptionResponse(text="hi"), CallTypes.atranscription, id="transcription"),
+    pytest.param(ModelResponse(model="gpt-5.6"), CallTypes.acompletion, id="chat"),
+    pytest.param(ModelResponse(model="claude-sonnet-4-5"), CallTypes.aanthropic_messages, id="anthropic_messages"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("response", "call_type"), _SUCCESS_RESPONSES_BY_CALL_TYPE)
+async def test_success_deployment_hook_raising_keeps_response_and_runs_later_hooks(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, response: object, call_type: CallTypes
+) -> None:
+    second_hook: Final = _RecordingSuccessDeploymentHook()
+    monkeypatch.setattr(litellm, "callbacks", [_ChatShapedSuccessDeploymentHook(), second_hook])
+
+    with caplog.at_level(logging.ERROR, logger=verbose_logger.name):
+        result: Final = await async_post_call_success_deployment_hook(
+            request_data={"model": "m"}, response=response, call_type=call_type
+        )
+
+    assert result is response
+    assert second_hook.seen_responses == (response,)
+    failure_logs: Final = tuple(r for r in caplog.records if "async_post_call_success_deployment_hook error" in r.message)
+    assert len(failure_logs) == 1
+    assert "_ChatShapedSuccessDeploymentHook" in failure_logs[0].message
+    assert str(call_type) in failure_logs[0].message
+    assert failure_logs[0].exc_info is not None
+
+
+@pytest.mark.asyncio
+async def test_success_deployment_hook_raising_keeps_earlier_hook_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    rewriter: Final = _RewritingSuccessDeploymentHook()
+    trailing_hook: Final = _RecordingSuccessDeploymentHook()
+    monkeypatch.setattr(litellm, "callbacks", [rewriter, _ChatShapedSuccessDeploymentHook(), trailing_hook])
+    original: Final = ModelResponse(model="gpt-5.6")
+
+    result: Final = await async_post_call_success_deployment_hook(
+        request_data={"model": "gpt-5.6"}, response=original, call_type=CallTypes.acompletion
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result is not original
+    assert result.choices[0].message.content == "rewritten by deployment hook"
+    assert trailing_hook.seen_responses == (result,)
+
+
+class _GuardrailBlocked(Exception):
+    pass
+
+
+class _BlockingSuccessDeploymentGuardrail(CustomGuardrail):
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict, response: LLMResponseTypes, call_type: CallTypes | None
+    ) -> LLMResponseTypes | None:
+        raise _GuardrailBlocked("Violated moderation policy")
+
+
+@pytest.mark.asyncio
+async def test_success_deployment_hook_still_propagates_guardrail_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    later_hook: Final = _RewritingSuccessDeploymentHook()
+    monkeypatch.setattr(
+        litellm, "callbacks", [_BlockingSuccessDeploymentGuardrail(guardrail_name="blocking"), later_hook]
+    )
+
+    with pytest.raises(_GuardrailBlocked):
+        await async_post_call_success_deployment_hook(
+            request_data={"model": "gpt-5.6"}, response=ModelResponse(model="gpt-5.6"), call_type=CallTypes.acompletion
+        )
+
+    assert later_hook.seen_responses == ()
 
 
 @pytest.mark.asyncio
