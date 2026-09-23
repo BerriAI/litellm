@@ -17,6 +17,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -28,6 +29,11 @@ from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transfor
 )
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
+)
+from litellm.types.integrations.anthropic_cache_control_hook import (
+    GATEWAY_INJECTED_CACHE_METADATA_KEY,
+    GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT,
+    CacheControlInjectionPoint,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.utils import ServerToolUse, Usage
@@ -6798,3 +6804,260 @@ def test_chat_dummy_tool_result_for_an_orphaned_tool_call_replays_a_byte_identic
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[0]["messages"]] == ["user", "assistant", "user"]
     assert requests[0]["messages"][2]["content"][0]["type"] == "tool_result"
+
+
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the weather in a city",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+    },
+}
+_TIME_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_time",
+        "description": "Get the time in a city",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+    },
+}
+
+
+async def _anthropic_body_for(
+    tools: list[dict],
+    points: list[CacheControlInjectionPoint],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    metadata: dict | None = None,
+) -> dict:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setattr(litellm, "callbacks", [AnthropicCacheControlHook()])
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [{"type": "text", "text": "It is sunny."}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 3},
+            },
+        )
+    )
+    await litellm.acompletion(
+        model="anthropic/claude-sonnet-4-5",
+        api_key="test",
+        messages=[{"role": "user", "content": "What is the weather in Hanoi?"}],
+        tools=tools,
+        cache_control_injection_points=points,
+        metadata=metadata,
+    )
+    return json.loads(route.calls[0].request.content)
+
+
+async def test_tool_config_point_marks_the_last_tool(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Anthropic caches the tools block up to and including the marked tool."""
+    body: Final = await _anthropic_body_for(
+        [_WEATHER_TOOL, _TIME_TOOL], [{"location": "tool_config"}], respx_mock, monkeypatch
+    )
+
+    assert body["tools"] == [
+        {
+            "name": "get_weather",
+            "description": "Get the weather in a city",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            "type": "custom",
+        },
+        {
+            "name": "get_time",
+            "description": "Get the time in a city",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            "type": "custom",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+    assert "cache_control_injection_points" not in body
+
+
+async def test_tool_config_point_stands_down_when_the_caller_marked_a_tool(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The caller's own marker already spent the breakpoint the point asked for."""
+    body: Final = await _anthropic_body_for(
+        [{**_WEATHER_TOOL, "cache_control": {"type": "ephemeral"}}, _TIME_TOOL],
+        [{"location": "tool_config"}],
+        respx_mock,
+        monkeypatch,
+    )
+
+    assert body["tools"] == [
+        {
+            "name": "get_weather",
+            "description": "Get the weather in a city",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            "type": "custom",
+            "cache_control": {"type": "ephemeral"},
+        },
+        {
+            "name": "get_time",
+            "description": "Get the time in a city",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            "type": "custom",
+        },
+    ]
+
+
+async def test_tool_config_point_walks_back_off_a_tool_search_tool(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """This transform drops a cache_control written on a tool-search tool."""
+    body: Final = await _anthropic_body_for(
+        [_WEATHER_TOOL, {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}],
+        [{"location": "tool_config"}],
+        respx_mock,
+        monkeypatch,
+    )
+
+    assert body["tools"] == [
+        {
+            "name": "get_weather",
+            "description": "Get the weather in a city",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            "type": "custom",
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+    ]
+
+
+async def test_tool_config_point_writes_the_control_the_point_carries(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A point naming a one-hour cache must not be written as the five-minute default."""
+    body: Final = await _anthropic_body_for(
+        [_WEATHER_TOOL],
+        [{"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}}],
+        respx_mock,
+        monkeypatch,
+    )
+
+    assert body["tools"] == [
+        {
+            "name": "get_weather",
+            "description": "Get the weather in a city",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            "type": "custom",
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        }
+    ]
+
+
+async def test_tool_config_point_with_no_tool_to_mark_sends_no_injection_points(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The key is litellm's own routing input; Anthropic rejects fields it does not define."""
+    body: Final = await _anthropic_body_for([], [{"location": "tool_config"}], respx_mock, monkeypatch)
+
+    assert "cache_control_injection_points" not in body
+    assert body["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "What is the weather in Hanoi?"}]}
+    ]
+
+
+async def test_tool_config_point_records_the_gateway_injection(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spend attribution credits litellm only for breakpoints it placed itself."""
+    metadata: Final = {}
+
+    await _anthropic_body_for([_WEATHER_TOOL], [{"location": "tool_config"}], respx_mock, monkeypatch, metadata)
+
+    assert metadata[GATEWAY_INJECTED_CACHE_METADATA_KEY] == GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT
+
+
+async def test_a_point_that_is_not_a_tool_config_point_leaves_the_tools_unmarked(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every point this pass does not place reaches here, not only the tool_config one."""
+    body: Final = await _anthropic_body_for([_WEATHER_TOOL], [{"location": "system"}], respx_mock, monkeypatch)
+
+    assert body["tools"] == [
+        {
+            "name": "get_weather",
+            "description": "Get the weather in a city",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            "type": "custom",
+        }
+    ]
+
+
+async def test_tool_config_point_moves_past_a_control_that_is_not_an_object(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Giving up the tools breakpoint over one unusable line answers the same config two ways."""
+    body: Final = await _anthropic_body_for(
+        [_WEATHER_TOOL],
+        [{"location": "tool_config", "control": "ephemeral"}, {"location": "tool_config"}],
+        respx_mock,
+        monkeypatch,
+    )
+
+    assert body["tools"] == [
+        {
+            "name": "get_weather",
+            "description": "Get the weather in a city",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            "type": "custom",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+def test_tool_config_point_leaves_the_caller_tools_alone() -> None:
+    """A tool already in Anthropic shape reaches the tools list as the caller's own object."""
+    caller_tools: Final = [{"name": "get_weather", "description": "d", "input_schema": {"type": "object"}}]
+
+    data: Final = AnthropicConfig().transform_request(
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "What is the weather in Hanoi?"}],
+        optional_params={
+            "tools": caller_tools,
+            "cache_control_injection_points": [{"location": "tool_config"}],
+            "max_tokens": 16,
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert data["tools"] == [
+        {
+            "name": "get_weather",
+            "description": "d",
+            "input_schema": {"type": "object"},
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    assert caller_tools == [{"name": "get_weather", "description": "d", "input_schema": {"type": "object"}}]
+
+
+async def test_tool_config_point_refuses_a_control_that_is_not_an_object(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`control: ephemeral` in a config file reads back as a string, which Anthropic rejects."""
+    body: Final = await _anthropic_body_for(
+        [_WEATHER_TOOL], [{"location": "tool_config", "control": "ephemeral"}], respx_mock, monkeypatch
+    )
+
+    assert body["tools"] == [
+        {
+            "name": "get_weather",
+            "description": "Get the weather in a city",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            "type": "custom",
+        }
+    ]
