@@ -164,8 +164,8 @@ def _assert_derived_trace_fields(span: SpanRecord, call_type: str) -> None:
 
 
 def _langfuse_config(directory: Path, callbacks: tuple[str, ...]) -> Path:
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["litellm_settings"]["callbacks"] = list(callbacks)
+    base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config: Final = {**base, "litellm_settings": {**base["litellm_settings"], "callbacks": list(callbacks)}}
     path: Final = directory / "langfuse.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
