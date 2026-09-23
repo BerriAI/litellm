@@ -2030,6 +2030,44 @@
     ],
     "tests/integration/routing/test_semantic_auto_router_benchmarks.py::test_semantic_auto_router_traffic_is_counted_by_the_benchmarks_endpoint": [
       "other.routing.auto_router.semantic_traffic_lands_in_session_rollup_and_benchmarks"
+    ],
+    "tests/integration/routing/test_semantic_auto_router_audit.py::test_a_matched_semantic_route_records_a_tier_decision_and_a_session_turn": [
+      "other.routing.auto_router.semantic_match_turn_records_tier_decision_and_session_row"
+    ],
+    "tests/integration/routing/test_semantic_auto_router_audit.py::test_a_streamed_semantic_fallback_records_a_default_fallback_decision": [
+      "other.routing.auto_router.semantic_stream_fallback_turn_records_default_fallback"
+    ],
+    "tests/integration/routing/test_semantic_auto_router_audit.py::test_an_anthropic_messages_turn_records_a_semantic_decision": [
+      "other.routing.auto_router.semantic_anthropic_messages_turn_records_match_decision"
+    ],
+    "tests/integration/routing/test_semantic_auto_router_audit.py::test_a_responses_turn_records_a_semantic_fallback_decision": [
+      "other.routing.auto_router.semantic_responses_turn_records_fallback_decision"
+    ],
+    "tests/integration/routing/test_semantic_auto_router_audit.py::test_streamed_semantic_turns_feed_the_benchmarks_and_session_views": [
+      "other.routing.auto_router.semantic_stream_turns_feed_benchmarks_and_session_views",
+      "other.routing.auto_router.semantic_benchmarks_lists_the_router_idle_then_with_traffic",
+      "other.routing.auto_router.semantic_session_endpoint_reports_the_recorded_turns"
+    ],
+    "tests/integration/routing/test_semantic_auto_router_audit.py::test_a_broken_embedding_call_falls_back_and_is_counted": [
+      "other.routing.auto_router.semantic_broken_embedding_call_falls_back_and_is_counted"
+    ],
+    "tests/integration/routing/test_semantic_auto_router_audit.py::test_session_id_edge_values_never_break_a_semantic_turn": [
+      "other.routing.auto_router.semantic_session_id_edge_values_never_break_the_turn"
+    ],
+    "tests/integration/routing/test_semantic_auto_router_audit.py::test_an_unauthenticated_semantic_turn_records_nothing": [
+      "other.routing.auto_router.semantic_unauthenticated_turn_records_nothing"
+    ],
+    "tests/integration/routing/test_semantic_auto_router_audit.py::test_a_failed_semantic_turn_is_not_counted_but_the_next_success_is": [
+      "other.routing.auto_router.semantic_failed_turn_is_not_counted_and_the_next_success_is"
+    ],
+    "tests/integration/routing/test_semantic_auto_router_audit.py::test_a_shared_session_counts_only_the_auto_routed_turn": [
+      "other.routing.auto_router.semantic_rollup_counts_only_the_auto_routed_turn_in_a_shared_session"
+    ],
+    "tests/integration/routing/test_semantic_auto_router_audit.py::test_complexity_router_decisions_are_unchanged_by_the_semantic_fix": [
+      "other.routing.auto_router.complexity_router_decisions_are_unchanged_by_the_semantic_fix"
+    ],
+    "tests/integration/routing/test_semantic_auto_router_audit.py::test_a_mixed_endpoint_burst_records_every_turn_once": [
+      "other.routing.auto_router.semantic_mixed_endpoint_burst_records_every_turn_exactly_once"
     ]
   },
   "browser": {
