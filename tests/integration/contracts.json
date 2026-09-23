@@ -2087,6 +2087,75 @@
       "mgmt.key.reset_spend.returns_promptly_with_wedged_coordination_redis",
       "mgmt.auth_cache_invalidation.publish_parked_by_short_redis_wedge_lands_after_recovery",
       "mgmt.auth_cache_invalidation.burst_with_worker_kill_keeps_serving_while_redis_wedged"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_chat_completion_sdk_body_litellm_session_id_lands_as_conversation_id": [
+      "other.observability.otel.conversation_id_from_body_session_id_chat_sdk"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_chat_stream_async_sdk_x_litellm_session_id_header_lands_as_conversation_id": [
+      "other.observability.otel.conversation_id_from_header_chat_stream_async_sdk"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_messages_sdk_x_litellm_session_id_header_lands_as_conversation_id": [
+      "other.observability.otel.conversation_id_from_header_messages_sdk"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_messages_stream_async_sdk_langfuse_session_id_header_lands_as_conversation_id": [
+      "other.observability.otel.conversation_id_from_langfuse_header_messages_stream_async_sdk"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_responses_sdk_x_litellm_session_id_header_lands_as_conversation_id": [
+      "other.observability.otel.conversation_id_from_header_responses_sdk"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_responses_stream_raw_metadata_session_id_lands_as_conversation_id": [
+      "other.observability.otel.conversation_id_from_metadata_responses_stream_raw"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_chat_raw_metadata_session_id_lands_as_conversation_id": [
+      "other.observability.otel.conversation_id_from_metadata_chat_raw"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_integer_and_list_litellm_session_id_match_the_spend_row_or_are_dropped_together": [
+      "other.observability.otel.conversation_id_non_string_session_ids_match_spend_row"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_empty_string_litellm_session_id_leaves_the_span_without_a_conversation_id": [
+      "other.observability.otel.conversation_id_empty_string_session_id_is_omitted"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_five_kilobyte_session_header_round_trips_to_the_span_and_the_spend_row": [
+      "other.observability.otel.conversation_id_five_kilobyte_header_round_trips"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_duplicate_session_header_lands_once_and_unchanged": [
+      "other.observability.otel.conversation_id_duplicate_header_lands_once"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_unauthenticated_request_with_session_header_is_rejected_and_leaves_no_span": [
+      "other.observability.otel.conversation_id_unauthenticated_request_leaves_no_span"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_sink_rejecting_with_403_drops_those_spans_and_later_spans_still_land": [
+      "other.observability.otel.conversation_id_survives_sink_rejection"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_request_without_any_session_input_has_no_conversation_id": [
+      "other.observability.otel.conversation_id_absent_without_caller_session"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_generate_policy_minted_session_id_reaches_the_spend_row_but_not_the_span": [
+      "other.observability.otel.conversation_id_ignores_generated_session_id"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_generate_policy_keeps_the_langfuse_session_header_as_conversation_id": [
+      "other.observability.otel.conversation_id_langfuse_header_wins_over_generated"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_header_body_and_metadata_session_ids_resolve_to_the_same_id_as_the_spend_row": [
+      "other.observability.otel.conversation_id_header_precedence_matches_spend_row"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_three_identical_requests_produce_one_span_each_with_the_same_conversation_id": [
+      "other.observability.otel.conversation_id_repeated_requests_log_once_each"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_metadata_trace_id_alone_fills_the_spend_row_but_not_the_span": [
+      "other.observability.otel.conversation_id_ignores_trace_id_backfill"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_sink_outage_during_a_mixed_burst_lands_every_response_exactly_once_after_recovery": [
+      "other.observability.otel.conversation_id_sink_outage_recovers_exactly_once"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_slow_sink_during_a_burst_lands_every_response_exactly_once": [
+      "other.observability.otel.conversation_id_slow_sink_no_duplicates"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_killing_one_of_two_workers_mid_burst_keeps_serving_and_never_duplicates_a_span": [
+      "other.observability.otel.conversation_id_survives_worker_kill"
+    ],
+    "tests/integration/observability/test_otel_conversation_id.py::test_terminating_the_proxy_right_after_a_burst_flushes_every_span_before_exit": [
+      "other.observability.otel.conversation_id_flushes_on_shutdown"
     ]
   },
   "browser": {
