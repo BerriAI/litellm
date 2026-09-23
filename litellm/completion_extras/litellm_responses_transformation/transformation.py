@@ -516,15 +516,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return content
         if isinstance(content, list):
             if any(
-                not isinstance(block, dict)
-                or block.get("type") != "text"
-                or "cache_control" in block
+                not isinstance(block, dict) or block.get("type") != "text" or "cache_control" in block
                 for block in content
             ):
                 return None
-            text_parts: Final = tuple(
-                block["text"] for block in content if isinstance(block.get("text"), str)
-            )
+            text_parts: Final = tuple(block["text"] for block in content if isinstance(block.get("text"), str))
             return "".join(text_parts) if text_parts else None
         return None
 
