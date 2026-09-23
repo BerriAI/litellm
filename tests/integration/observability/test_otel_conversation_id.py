@@ -185,7 +185,7 @@ class Collector:
         return str(spans[0]["gen_ai.response.id"]["stringValue"])
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def collector() -> Iterator[Collector]:
     outage: Final = threading.Event()
     rejection: Final = threading.Event()
@@ -204,7 +204,7 @@ def collector() -> Iterator[Collector]:
         yield Collector(wire, outage, rejection, slow, [])
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def provider() -> Iterator[Wire]:
     with wire_server(_upstream) as wire:
         yield wire
@@ -298,12 +298,12 @@ class RigFactory:
             yield Rig(owned.gateway, owned, model, self.provider, self.sink)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def rig(provider: Wire, collector: Collector, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     yield from RigFactory(provider, collector, tmp_path_factory.mktemp("otel"), {}, 2).start()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def generating_rig(provider: Wire, collector: Collector, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     factory: Final = RigFactory(
         provider, collector, tmp_path_factory.mktemp("otel-generate"), {"missing_session_id": "generate"}, 2
@@ -311,7 +311,7 @@ def generating_rig(provider: Wire, collector: Collector, tmp_path_factory: pytes
     yield from factory.start()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def two_worker_rig(provider: Wire, collector: Collector, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     yield from RigFactory(provider, collector, tmp_path_factory.mktemp("otel-workers"), {}, 2).start()
 
