@@ -6,10 +6,12 @@ from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
+from litellm.integrations.arize._utils import safe_set_attribute
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.integrations.otel.model.utils import as_str, as_str_mapping
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
@@ -258,9 +260,6 @@ class LangfuseOtelLogger(OpenTelemetry):
 
     @staticmethod
     def _set_trace_user_attribute(span: Span, kwargs: dict[str, object]) -> None:
-        from litellm.integrations.arize._utils import safe_set_attribute
-        from litellm.integrations.otel.model.utils import as_str, as_str_mapping
-
         slp: Final = as_str_mapping(kwargs.get("standard_logging_object"))
         slp_metadata: Final = as_str_mapping(slp.get("metadata")) if slp is not None else None
         if slp is None or slp_metadata is None:

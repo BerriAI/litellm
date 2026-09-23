@@ -9,6 +9,7 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
     BaseLLMObsOTELAttributes,
     safe_set_attribute,
 )
+from litellm.integrations.otel.model.utils import as_str_mapping
 from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
@@ -477,9 +478,7 @@ def set_attributes(
     # Additive emitters. Each is independently guarded so a failure can never
     # blank the attributes set by the main try-block above. New attributes are
     # written under new keys; existing attributes are not overwritten.
-    from litellm.integrations.otel.model.utils import as_str_mapping
-
-    slp: Final = as_str_mapping(kwargs.get("standard_logging_object"))
+    slp: Final = kwargs.get("standard_logging_object")
     if emit_session_and_user:
         _safe_emit("session/user attrs", _set_session_and_user_attrs, span, kwargs, slp)
     _safe_emit("request context attrs", _set_request_context_attrs, span, slp)
@@ -880,8 +879,6 @@ def _set_session_and_user_attrs(span: "Span", kwargs: dict, standard_logging_pay
 
 def _set_request_context_attrs(span: "Span", standard_logging_payload: object) -> None:
     """Emit `litellm.trace_id` / team / key context when source data exists."""
-    from litellm.integrations.otel.model.utils import as_str_mapping
-
     payload: Final = as_str_mapping(standard_logging_payload)
     if payload is None:
         return

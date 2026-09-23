@@ -486,9 +486,7 @@ def test_a_request_without_trace_controls_stamps_none_of_them():
     logger, exporter = _logger()
 
     root_attrs, generation_attrs = _run_named_request(
-        logger,
-        exporter,
-        {"metadata": {"user_api_key_team_id": "t1", "tags": []}, "proxy_server_request": {"headers": {}}},
+        logger, exporter, {"metadata": {"user_api_key_team_id": "t1", "tags": []}, "proxy_server_request": {"headers": {}}}
     )
 
     assert set(TRACE_CONTROL_ATTRS).isdisjoint(root_attrs)
