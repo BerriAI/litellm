@@ -1,64 +1,25 @@
 import asyncio
 import json
 import uuid
-from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
 import httpx
 import pytest
-import yaml
 from anthropic import Anthropic
 from openai import AsyncOpenAI, OpenAI
-from pydantic import JsonValue
 
-from integration._support.client import Gateway, eventually, object_value, string_value
+from integration._support.client import Gateway, eventually, string_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
-
-
-def _denying_guardrail(request: Request) -> Reply:
-    assert request.target == "/beta/litellm_basic_guardrail_api"
-    return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": "synthetic policy denial"}).encode())
-
-
-def _guardrail_config(policy_url: str, path: Path) -> Path:
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["guardrails"] = [
-        {
-            "guardrail_name": "guardrail" + uuid.uuid4().hex,
-            "litellm_params": {
-                "guardrail": "generic_guardrail_api",
-                "mode": "pre_call",
-                "default_on": True,
-                "api_base": policy_url,
-                "api_key": "synthetic-guardrail-key",
-            },
-        }
-    ]
-    path.write_text(yaml.safe_dump(config))
-    return path
-
-
-def _stored_metadata(token: str) -> dict[str, object]:
-    rows: Final = read_rows(
-        'SELECT metadata FROM "LiteLLM_VerificationToken" WHERE token = %s', (sha256(token.encode()).hexdigest(),)
-    )
-    assert len(rows) == 1, rows
-    return rows[0]["metadata"]
-
-
-def _upstream_observations(gateway: Gateway) -> tuple[dict[str, JsonValue], ...]:
-    with httpx.Client(timeout=5, trust_env=False) as client:
-        drained: Final = object_value(client.get(f"{gateway.upstream_url}/__observations").json())
-    requests: Final = drained["requests"]
-    assert isinstance(requests, list)
-    return tuple(object_value(entry) for entry in requests)
-
-
-def _upstream_hits(gateway: Gateway, marker: str) -> int:
-    return sum(1 for entry in _upstream_observations(gateway) if marker in json.dumps(entry.get("body")))
+from integration.authorization._guardrail_opt_out import (
+    chat,
+    denying_guardrail,
+    guardrail_config,
+    stored_metadata,
+    upstream_hits,
+)
 
 
 def _wire_hits(wire: Wire, marker: str) -> int:
@@ -112,15 +73,6 @@ def _anthropic_provider(request: Request) -> Reply:
     )
 
 
-def _chat(candidate: Gateway, model: str, key: str, marker: str, *, stream: bool) -> httpx.Response:
-    return candidate.request(
-        "POST",
-        "/v1/chat/completions",
-        {"model": model, "messages": [{"role": "user", "content": marker}], "stream": stream},
-        key=key,
-    )
-
-
 def _messages(candidate: Gateway, model: str, key: str, marker: str, *, stream: bool) -> httpx.Response:
     return candidate.request(
         "POST",
@@ -148,8 +100,8 @@ def _responses(candidate: Gateway, model: str, key: str, marker: str, *, stream:
     "mgmt.key.disable_global_guardrails.runtime.denied_on_all_surfaces",
 )
 def test_guardrail_denies_non_exempt_key_on_all_surfaces(gateway: Gateway, tmp_path: Path) -> None:
-    with wire_server(_denying_guardrail) as policy, wire_server(_anthropic_provider) as anthropic_wire:
-        config: Final = _guardrail_config(policy.url, tmp_path / "denied.yaml")
+    with wire_server(denying_guardrail) as policy, wire_server(_anthropic_provider) as anthropic_wire:
+        config: Final = guardrail_config(policy.url, tmp_path / "denied.yaml")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
             openai_model: Final = scenario.model()
             claude_model: Final = scenario.model(
@@ -160,7 +112,7 @@ def test_guardrail_denies_non_exempt_key_on_all_surfaces(gateway: Gateway, tmp_p
             deepseek_model: Final = scenario.model(model="deepseek/gpt-4o-mini", api_base=gateway.upstream_url + "/v1")
             key: Final = scenario.key(models=[openai_model, claude_model, deepseek_model])
             surfaces: Final = (
-                ("chat", openai_model, _chat),
+                ("chat", openai_model, chat),
                 ("messages", claude_model, _messages),
                 ("responses", deepseek_model, _responses),
             )
@@ -172,7 +124,7 @@ def test_guardrail_denies_non_exempt_key_on_all_surfaces(gateway: Gateway, tmp_p
                     assert response.status_code == 400, f"{surface} stream={stream}: {response.text}"
                     assert "synthetic policy denial" in response.text, response.text
                     assert _sink_hits(policy, marker) == 1
-                    assert _upstream_hits(gateway, marker) == 0
+                    assert upstream_hits(gateway, marker) == 0
                     assert _wire_hits(anthropic_wire, marker) == 0
 
 
@@ -180,8 +132,8 @@ def test_guardrail_denies_non_exempt_key_on_all_surfaces(gateway: Gateway, tmp_p
     "mgmt.key.disable_global_guardrails.runtime.exempt_on_all_surfaces_and_clients",
 )
 def test_guardrail_skipped_for_admin_exempt_key_on_all_surfaces_and_clients(gateway: Gateway, tmp_path: Path) -> None:
-    with wire_server(_denying_guardrail) as policy, wire_server(_anthropic_provider) as anthropic_wire:
-        config: Final = _guardrail_config(policy.url, tmp_path / "exempt.yaml")
+    with wire_server(denying_guardrail) as policy, wire_server(_anthropic_provider) as anthropic_wire:
+        config: Final = guardrail_config(policy.url, tmp_path / "exempt.yaml")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
             openai_model: Final = scenario.model()
             claude_model: Final = scenario.model(
@@ -193,9 +145,9 @@ def test_guardrail_skipped_for_admin_exempt_key_on_all_surfaces_and_clients(gate
             exempt: Final = scenario.key(
                 models=[openai_model, claude_model, deepseek_model], disable_global_guardrails=True
             )
-            assert _stored_metadata(exempt)["disable_global_guardrails"] is True
+            assert stored_metadata(exempt)["disable_global_guardrails"] is True
             surfaces: Final = (
-                ("chat", openai_model, _chat),
+                ("chat", openai_model, chat),
                 ("messages", claude_model, _messages),
                 ("responses", deepseek_model, _responses),
             )
@@ -207,7 +159,7 @@ def test_guardrail_skipped_for_admin_exempt_key_on_all_surfaces_and_clients(gate
                     assert response.status_code == 200, f"{surface} stream={stream}: {response.text}"
                     assert "synthetic policy denial" not in response.text
                     provider_hits: Final = (
-                        _wire_hits(anthropic_wire, marker) if surface == "messages" else _upstream_hits(gateway, marker)
+                        _wire_hits(anthropic_wire, marker) if surface == "messages" else upstream_hits(gateway, marker)
                     )
                     assert provider_hits == 1, f"{surface} stream={stream} marker={marker}"
                     assert _sink_hits(policy, marker) == 0
@@ -217,18 +169,18 @@ def test_guardrail_skipped_for_admin_exempt_key_on_all_surfaces_and_clients(gate
             OpenAI(api_key=exempt, base_url=base_url, max_retries=0).chat.completions.create(
                 model=openai_model, messages=[{"role": "user", "content": sync_marker}]
             )
-            assert _upstream_hits(gateway, sync_marker) == 1
+            assert upstream_hits(gateway, sync_marker) == 1
 
             async_marker: Final = "exempt-sdk-async-" + uuid.uuid4().hex
 
-            async def _async_chat() -> None:
+            async def _asyncchat() -> None:
                 async with AsyncOpenAI(api_key=exempt, base_url=base_url, max_retries=0) as client:
                     await client.chat.completions.create(
                         model=openai_model, messages=[{"role": "user", "content": async_marker}]
                     )
 
-            asyncio.run(_async_chat())
-            assert _upstream_hits(gateway, async_marker) == 1
+            asyncio.run(_asyncchat())
+            assert upstream_hits(gateway, async_marker) == 1
 
             anthropic_marker: Final = "exempt-anthropic-" + uuid.uuid4().hex
             Anthropic(
@@ -245,8 +197,8 @@ def test_guardrail_skipped_for_admin_exempt_key_on_all_surfaces_and_clients(gate
     "mgmt.key.disable_global_guardrails.runtime.spend_log_exactly_once",
 )
 def test_team_flag_resaved_key_and_spend_log(gateway: Gateway, tmp_path: Path) -> None:
-    with wire_server(_denying_guardrail) as policy:
-        config: Final = _guardrail_config(policy.url, tmp_path / "team-exempt.yaml")
+    with wire_server(denying_guardrail) as policy:
+        config: Final = guardrail_config(policy.url, tmp_path / "team-exempt.yaml")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model()
             member: Final = scenario.user(user_role="internal_user")
@@ -254,9 +206,9 @@ def test_team_flag_resaved_key_and_spend_log(gateway: Gateway, tmp_path: Path) -
             exempt_team: Final = scenario.team(models=[model], disable_global_guardrails=True)
             team_key: Final = scenario.key(team_id=exempt_team, models=[model])
             team_marker: Final = "team-exempt-" + uuid.uuid4().hex
-            team_response: Final = _chat(candidate, model, team_key, team_marker, stream=False)
+            team_response: Final = chat(candidate, model, team_key, team_marker, stream=False)
             assert team_response.status_code == 200, team_response.text
-            assert _upstream_hits(gateway, team_marker) == 1
+            assert upstream_hits(gateway, team_marker) == 1
             assert _sink_hits(policy, team_marker) == 0
 
             caller_team: Final = scenario.team(
@@ -278,10 +230,10 @@ def test_team_flag_resaved_key_and_spend_log(gateway: Gateway, tmp_path: Path) -
             )
             assert resaved.status_code == 200, resaved.text
             resave_marker: Final = "resaved-exempt-" + uuid.uuid4().hex
-            resave_response: Final = _chat(candidate, model, admin_exempt, resave_marker, stream=False)
+            resave_response: Final = chat(candidate, model, admin_exempt, resave_marker, stream=False)
             assert resave_response.status_code == 200, resave_response.text
             response_id: Final = string_value(resave_response.json()["id"])
-            assert _upstream_hits(gateway, resave_marker) == 1
+            assert upstream_hits(gateway, resave_marker) == 1
             assert _sink_hits(policy, resave_marker) == 0
             eventually(
                 lambda: read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (response_id,)),

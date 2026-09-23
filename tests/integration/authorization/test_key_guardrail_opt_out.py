@@ -1,56 +1,29 @@
-import json
 import uuid
-from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
 import yaml
-import httpx
 
 from integration._support.client import Gateway, Scenario, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import wire_server
+from integration.authorization._guardrail_opt_out import (
+    denying_guardrail,
+    guardrail_config,
+    non_admin_caller,
+    stored_metadata,
+)
 
 _KEY_ROUTES: Final = ["/key/generate", "/key/update", "/key/regenerate", "/v1/chat/completions"]
 
 
-def _denying_guardrail(request: Request) -> Reply:
-    assert request.target == "/beta/litellm_basic_guardrail_api"
-    return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": "synthetic policy denial"}).encode())
-
-
-def _default_on_guardrail_config(policy_url: str, path: Path) -> Path:
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["guardrails"] = [
-        {
-            "guardrail_name": "guardrail" + uuid.uuid4().hex,
-            "litellm_params": {
-                "guardrail": "generic_guardrail_api",
-                "mode": "pre_call",
-                "default_on": True,
-                "api_base": policy_url,
-                "api_key": "synthetic-guardrail-key",
-            },
-        }
-    ]
-    path.write_text(yaml.safe_dump(config))
-    return path
-
-
-def _stored_metadata(token: str) -> dict[str, object]:
-    rows: Final = read_rows(
-        'SELECT metadata FROM "LiteLLM_VerificationToken" WHERE token = %s', (sha256(token.encode()).hexdigest(),)
-    )
-    assert len(rows) == 1, rows
-    return rows[0]["metadata"]
-
-
 @pytest.mark.covers("mgmt.key.disable_global_guardrails.non_admin_denied_and_default_on_guardrail_still_runs")
 def test_non_admin_cannot_opt_key_out_of_default_on_guardrail(gateway: Gateway, tmp_path: Path) -> None:
-    with wire_server(_denying_guardrail) as policy:
-        config: Final = _default_on_guardrail_config(policy.url, tmp_path / "default_on.yaml")
+    with wire_server(denying_guardrail) as policy:
+        config: Final = guardrail_config(policy.url, tmp_path / "default_on.yaml")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model()
             member: Final = scenario.user(user_role="internal_user")
@@ -91,7 +64,7 @@ def test_non_admin_cannot_opt_key_out_of_default_on_guardrail(gateway: Gateway, 
                 "POST", "/key/regenerate", {"key": own, "disable_global_guardrails": True}, key=caller
             )
             assert regenerated.status_code == 403, regenerated.text
-            assert "disable_global_guardrails" not in _stored_metadata(own)
+            assert "disable_global_guardrails" not in stored_metadata(own)
 
             blocked: Final = candidate.request(
                 "POST",
@@ -102,7 +75,7 @@ def test_non_admin_cannot_opt_key_out_of_default_on_guardrail(gateway: Gateway, 
             assert blocked.status_code == 400 and "synthetic policy denial" in blocked.text, blocked.text
 
             exempt: Final = scenario.key(team_id=team, models=[model], disable_global_guardrails=True)
-            assert _stored_metadata(exempt)["disable_global_guardrails"] is True
+            assert stored_metadata(exempt)["disable_global_guardrails"] is True
             resaved: Final = candidate.request(
                 "POST",
                 "/key/update",
@@ -114,23 +87,16 @@ def test_non_admin_cannot_opt_key_out_of_default_on_guardrail(gateway: Gateway, 
                 key=caller,
             )
             assert resaved.status_code == 200, resaved.text
-            assert _stored_metadata(exempt)["disable_global_guardrails"] is True
+            assert stored_metadata(exempt)["disable_global_guardrails"] is True
             served: Final = candidate.chat(model, key=exempt, text="synthetic denied marker")
             assert object_value(served["usage"])["total_tokens"] == 40
             assert len(policy.drain()) == 1
-
-
-_MANAGEMENT_ROUTES: Final = ["/key/*", "/team/new", "/team/update", "/v1/chat/completions"]
 
 
 def _team_metadata(team_id: str) -> dict[str, object]:
     rows: Final = read_rows('SELECT metadata FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team_id,))
     assert len(rows) == 1, rows
     return rows[0]["metadata"]
-
-
-def _non_admin_caller(scenario: Scenario, member: str, team: str, model: str) -> str:
-    return scenario.key(user_id=member, team_id=team, models=[model], allowed_routes=_MANAGEMENT_ROUTES)
 
 
 def _drop_created_key(scenario: Scenario, response: httpx.Response) -> None:
@@ -146,13 +112,13 @@ def _drop_created_key(scenario: Scenario, response: httpx.Response) -> None:
     "mgmt.key.disable_global_guardrails.non_admin_denied_service_account",
 )
 def test_non_admin_flag_denied_on_every_key_write_route(gateway: Gateway, tmp_path: Path) -> None:
-    with wire_server(_denying_guardrail) as policy:
-        config: Final = _default_on_guardrail_config(policy.url, tmp_path / "denied-routes.yaml")
+    with wire_server(denying_guardrail) as policy:
+        config: Final = guardrail_config(policy.url, tmp_path / "denied-routes.yaml")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model()
             member: Final = scenario.user(user_role="internal_user")
             team: Final = scenario.team(models=[model], members_with_roles=[{"role": "admin", "user_id": member}])
-            caller: Final = _non_admin_caller(scenario, member, team, model)
+            caller: Final = non_admin_caller(scenario, member, team, model)
             own: Final = scenario.key(team_id=team, models=[model])
 
             attempts: Final = (
@@ -187,7 +153,7 @@ def test_non_admin_flag_denied_on_every_key_write_route(gateway: Gateway, tmp_pa
                 _drop_created_key(scenario, response)
                 assert response.status_code == 403, f"{method} {path}: {response.text}"
                 assert "disable_global_guardrails" in response.text, response.text
-            assert "disable_global_guardrails" not in _stored_metadata(own)
+            assert "disable_global_guardrails" not in stored_metadata(own)
 
             service_alias: Final = "audit-sa-" + uuid.uuid4().hex
             service_denied: Final = candidate.request(
@@ -204,13 +170,13 @@ def test_non_admin_flag_denied_on_every_key_write_route(gateway: Gateway, tmp_pa
 
 @pytest.mark.covers("mgmt.team.disable_global_guardrails.non_admin_denied_on_team_new")
 def test_non_admin_flag_denied_on_team_new(gateway: Gateway, tmp_path: Path) -> None:
-    with wire_server(_denying_guardrail) as policy:
-        config: Final = _default_on_guardrail_config(policy.url, tmp_path / "denied-team.yaml")
+    with wire_server(denying_guardrail) as policy:
+        config: Final = guardrail_config(policy.url, tmp_path / "denied-team.yaml")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model()
             member: Final = scenario.user(user_role="internal_user")
             team: Final = scenario.team(models=[model], members_with_roles=[{"role": "admin", "user_id": member}])
-            caller: Final = _non_admin_caller(scenario, member, team, model)
+            caller: Final = non_admin_caller(scenario, member, team, model)
 
             alias: Final = "audit-team-" + uuid.uuid4().hex
             denied: Final = candidate.request(
@@ -231,8 +197,8 @@ def test_non_admin_flag_denied_on_team_new(gateway: Gateway, tmp_path: Path) -> 
     "mgmt.team.disable_global_guardrails.admin_writes_succeed_on_all_routes",
 )
 def test_admin_flag_writes_succeed_on_all_routes(gateway: Gateway, tmp_path: Path) -> None:
-    with wire_server(_denying_guardrail) as policy:
-        config: Final = _default_on_guardrail_config(policy.url, tmp_path / "admin-routes.yaml")
+    with wire_server(denying_guardrail) as policy:
+        config: Final = guardrail_config(policy.url, tmp_path / "admin-routes.yaml")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model()
             team: Final = scenario.team(models=[model])
@@ -242,11 +208,11 @@ def test_admin_flag_writes_succeed_on_all_routes(gateway: Gateway, tmp_path: Pat
             )
             generated_key: Final = string_value(generated["key"])
             scenario.cleanups.callback(scenario.delete_key, generated_key)
-            assert _stored_metadata(generated_key)["disable_global_guardrails"] is True
+            assert stored_metadata(generated_key)["disable_global_guardrails"] is True
 
             plain: Final = scenario.key(team_id=team, models=[model])
             candidate.post("/key/update", {"key": plain, "disable_global_guardrails": True})
-            assert _stored_metadata(plain)["disable_global_guardrails"] is True
+            assert stored_metadata(plain)["disable_global_guardrails"] is True
 
             regen_source: Final = string_value(
                 candidate.post("/key/generate", {"team_id": team, "models": [model]})["key"]
@@ -256,7 +222,7 @@ def test_admin_flag_writes_succeed_on_all_routes(gateway: Gateway, tmp_path: Pat
             )
             regenerated_key: Final = string_value(regenerated["key"])
             scenario.cleanups.callback(scenario.delete_key, regenerated_key)
-            assert _stored_metadata(regenerated_key)["disable_global_guardrails"] is True
+            assert stored_metadata(regenerated_key)["disable_global_guardrails"] is True
 
             new_team: Final = candidate.post(
                 "/team/new", {"team_alias": "audit-admin-" + uuid.uuid4().hex, "disable_global_guardrails": True}
@@ -275,15 +241,15 @@ def test_admin_flag_writes_succeed_on_all_routes(gateway: Gateway, tmp_path: Pat
     "mgmt.key.disable_global_guardrails.stored_false_does_not_exempt",
 )
 def test_non_admin_resave_omit_and_revoke_sequences(gateway: Gateway, tmp_path: Path) -> None:
-    with wire_server(_denying_guardrail) as policy:
-        config: Final = _default_on_guardrail_config(policy.url, tmp_path / "resave.yaml")
+    with wire_server(denying_guardrail) as policy:
+        config: Final = guardrail_config(policy.url, tmp_path / "resave.yaml")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model()
             member: Final = scenario.user(user_role="internal_user")
             team: Final = scenario.team(models=[model], members_with_roles=[{"role": "admin", "user_id": member}])
-            caller: Final = _non_admin_caller(scenario, member, team, model)
+            caller: Final = non_admin_caller(scenario, member, team, model)
             exempt: Final = scenario.key(team_id=team, models=[model], disable_global_guardrails=True)
-            assert _stored_metadata(exempt)["disable_global_guardrails"] is True
+            assert stored_metadata(exempt)["disable_global_guardrails"] is True
 
             resaved: Final = candidate.request(
                 "POST",
@@ -296,7 +262,7 @@ def test_non_admin_resave_omit_and_revoke_sequences(gateway: Gateway, tmp_path: 
                 key=caller,
             )
             assert resaved.status_code == 200, resaved.text
-            assert _stored_metadata(exempt)["disable_global_guardrails"] is True
+            assert stored_metadata(exempt)["disable_global_guardrails"] is True
 
             omitted: Final = candidate.request(
                 "POST",
@@ -307,14 +273,14 @@ def test_non_admin_resave_omit_and_revoke_sequences(gateway: Gateway, tmp_path: 
             assert omitted.status_code == 200, omitted.text
 
             candidate.post("/key/update", {"key": exempt, "disable_global_guardrails": False})
-            assert _stored_metadata(exempt)["disable_global_guardrails"] is False
+            assert stored_metadata(exempt)["disable_global_guardrails"] is False
 
             rejected: Final = candidate.request(
                 "POST", "/key/update", {"key": exempt, "disable_global_guardrails": True}, key=caller
             )
             assert rejected.status_code == 403, rejected.text
             assert "disable_global_guardrails" in rejected.text, rejected.text
-            assert _stored_metadata(exempt)["disable_global_guardrails"] is False
+            assert stored_metadata(exempt)["disable_global_guardrails"] is False
 
 
 @pytest.mark.covers("mgmt.key.disable_global_guardrails.server_default_metadata_does_not_trip_gate")
@@ -329,12 +295,12 @@ def test_generate_ignores_server_default_metadata_flag(gateway: Gateway, tmp_pat
         model: Final = scenario.model()
         member: Final = scenario.user(user_role="internal_user")
         team: Final = scenario.team(models=[model], members_with_roles=[{"role": "admin", "user_id": member}])
-        caller: Final = _non_admin_caller(scenario, member, team, model)
+        caller: Final = non_admin_caller(scenario, member, team, model)
 
         generated: Final = candidate.post("/key/generate", {"team_id": team, "models": [model]}, key=caller)
         generated_key: Final = string_value(generated["key"])
         scenario.cleanups.callback(scenario.delete_key, generated_key)
-        assert _stored_metadata(generated_key)["disable_global_guardrails"] is True
+        assert stored_metadata(generated_key)["disable_global_guardrails"] is True
 
         explicit: Final = candidate.request(
             "POST",
@@ -357,7 +323,7 @@ def test_sad_flag_inputs_on_key_generate(gateway: Gateway, tmp_path: Path) -> No
         model: Final = scenario.model()
         member: Final = scenario.user(user_role="internal_user")
         team: Final = scenario.team(models=[model], members_with_roles=[{"role": "admin", "user_id": member}])
-        caller: Final = _non_admin_caller(scenario, member, team, model)
+        caller: Final = non_admin_caller(scenario, member, team, model)
 
         denied_bodies: Final = (
             {"team_id": team, "models": [model], "disable_global_guardrails": "true"},
@@ -405,13 +371,13 @@ def test_sad_flag_inputs_on_key_generate(gateway: Gateway, tmp_path: Path) -> No
     "mgmt.key.disable_global_guardrails.falsy_metadata_flag_stays_stored_and_guarded",
 )
 def test_falsy_metadata_flag_shapes_stay_stored_and_guarded(gateway: Gateway, tmp_path: Path) -> None:
-    with wire_server(_denying_guardrail) as policy:
-        config: Final = _default_on_guardrail_config(policy.url, tmp_path / "falsy.yaml")
+    with wire_server(denying_guardrail) as policy:
+        config: Final = guardrail_config(policy.url, tmp_path / "falsy.yaml")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model()
             member: Final = scenario.user(user_role="internal_user")
             team: Final = scenario.team(models=[model], members_with_roles=[{"role": "admin", "user_id": member}])
-            caller: Final = _non_admin_caller(scenario, member, team, model)
+            caller: Final = non_admin_caller(scenario, member, team, model)
 
             for shape in ([], {}):
                 created: Final = candidate.request(
@@ -423,7 +389,7 @@ def test_falsy_metadata_flag_shapes_stay_stored_and_guarded(gateway: Gateway, tm
                 _drop_created_key(scenario, created)
                 assert created.status_code == 200, created.text
                 token: Final = string_value(created.json()["key"])
-                assert _stored_metadata(token)["disable_global_guardrails"] == shape
+                assert stored_metadata(token)["disable_global_guardrails"] == shape
                 blocked: Final = candidate.request(
                     "POST",
                     "/v1/chat/completions",
