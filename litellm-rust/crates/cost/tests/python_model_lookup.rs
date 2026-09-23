@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
-use litellm_cost::catalog::{CatalogError, CostCatalog};
+use jiff::Timestamp;
+use litellm_cost::catalog::{CatalogError, CostCatalog, ModelCostRequest, ModelInfoCatalog};
+use litellm_cost::usage_dispatch::get_usage_object;
 use litellm_cost::{PromptConvention, Rate, Rates, Request, ServiceTier, ThresholdPolicy, Usage};
 use rstest::rstest;
+use serde_json::json;
 
 fn rates(input: f64, output: f64) -> Rates {
     Rates {
@@ -98,4 +101,86 @@ fn cost_per_token_reports_an_unmapped_model() {
         catalog().cost_per_token("missing", Some("openai"), None, &request()),
         Err(CatalogError::ModelNotFound)
     );
+}
+
+#[rstest]
+fn model_info_catalog_prices_selected_model_with_off_peak_and_region() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        (
+            "openai/model".to_owned(),
+            json!({
+                "input_cost_per_token": 2e-6,
+                "output_cost_per_token": 4e-6,
+                "regional_processing_uplift_multiplier_eu": 1.2,
+                "off_peak_pricing": {
+                    "hours_utc": "16:30-00:30",
+                    "input_cost_per_token": 1e-6,
+                    "output_cost_per_token": 2e-6,
+                    "cache_read_input_token_cost": 0.25e-6
+                }
+            }),
+        ),
+        (
+            "openai/openai/model".to_owned(),
+            json!({"input_cost_per_token": 9e-6, "output_cost_per_token": 9e-6}),
+        ),
+    ]));
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "total_tokens": 150,
+        "prompt_tokens_details": {"cached_tokens": 20}
+    }}))
+    .unwrap()
+    .unwrap();
+    let at: Timestamp = "2026-01-01T18:00Z".parse().unwrap();
+    let actual = catalog
+        .cost_per_token(ModelCostRequest {
+            model: "openai/openai/model",
+            provider: Some("openai"),
+            region: None,
+            usage: &usage,
+            service_tier: None,
+            data_residency: Some("eu"),
+            vertex_location: None,
+            at,
+        })
+        .unwrap();
+    assert!((actual.0 - (80.0 * 1e-6 + 20.0 * 0.25e-6) * 1.2).abs() < 1e-12);
+    assert!((actual.1 - 50.0 * 2e-6 * 1.2).abs() < 1e-12);
+}
+
+#[rstest]
+fn model_info_catalog_applies_xai_inclusive_threshold_policy() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "xai/model".to_owned(),
+        json!({
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": 4e-6,
+            "input_cost_per_token_above_128k_tokens": 5e-6,
+            "output_cost_per_token_above_128k_tokens": 7e-6
+        }),
+    )]));
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 128_000,
+        "completion_tokens": 10,
+        "total_tokens": 128_010
+    }}))
+    .unwrap()
+    .unwrap();
+    let at: Timestamp = "2026-01-01T18:00Z".parse().unwrap();
+    let actual = catalog
+        .cost_per_token(ModelCostRequest {
+            model: "model",
+            provider: Some("xai"),
+            region: None,
+            usage: &usage,
+            service_tier: None,
+            data_residency: None,
+            vertex_location: None,
+            at,
+        })
+        .unwrap();
+    assert!((actual.0 - 128_000.0 * 5e-6).abs() < 1e-12);
+    assert!((actual.1 - 10.0 * 7e-6).abs() < 1e-12);
 }

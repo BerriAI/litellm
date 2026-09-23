@@ -4,7 +4,7 @@ use jiff::Timestamp;
 use litellm_cost::batch::{
     BatchCostRates, BatchPricing, BatchUsage, ModalityRates, batch_cost_calculator,
 };
-use litellm_cost::catalog::CostCatalog;
+use litellm_cost::catalog::{CostCatalog, ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::custom_pricing::{
     CustomPricing, CustomTokenRates, RawUsage, cost_per_token_custom_pricing_helper,
     normalize_cache_usage,
@@ -487,4 +487,31 @@ fn main() {
         at,
     );
     println!("regional_prompt={regional_prompt:.5} regional_output={regional_output:.5}");
+    let model_info_catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/model".to_owned(),
+        json!({
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": 4e-6,
+            "regional_processing_uplift_multiplier_eu": 1.2,
+            "off_peak_pricing": {
+                "hours_utc": "16:30-00:30",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "output_cost_per_reasoning_token": 3e-6
+            }
+        }),
+    )]));
+    let (catalog_prompt, catalog_output) = model_info_catalog
+        .cost_per_token(ModelCostRequest {
+            model: "openai/model",
+            provider: Some("openai"),
+            region: None,
+            usage: &off_peak_usage,
+            service_tier: None,
+            data_residency: Some("eu"),
+            vertex_location: None,
+            at,
+        })
+        .unwrap();
+    println!("catalog_prompt={catalog_prompt:.6} catalog_output={catalog_output:.6}");
 }
