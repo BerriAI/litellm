@@ -40,7 +40,7 @@ LIT003  noqa suppression without rule codes or without a reason.
 LIT004  pyright/mypy ignore without bracketed codes or without a reason.
         Required shape: `# pyright: ignore[reportArgumentType]  # <reason>`
 LIT005  A `# mutable-ok` / `# cast-ok` / `# guard-ok` / `# kwargs-ok` /
-        `# rebind-ok` / `# writable-ok` suppression without a reason.
+        `# rebind-ok` / `# writable-ok` / `# frozen-ok` suppression without a reason.
 LIT006  `cast(...)` call. typing.cast is an unchecked assertion (the moral equivalent
         of TypeScript's `as`); it lies to the type checker with zero runtime guarantee.
         Validate into a concrete frozen type at the boundary instead.
@@ -99,6 +99,17 @@ LIT012  TypedDict field without a `ReadOnly[...]` qualifier. A writable key lets
         the functional form (`X = TypedDict("X", {...})`) is checked too. A base
         imported from another module is out of reach without import resolution.
         Suppress with `# writable-ok: <reason>`.
+LIT013  Pydantic model class that is not frozen. A writable model lets any holder
+        rewrite its fields after validation; set `model_config = ConfigDict(frozen=True)`
+        (or `frozen = True` in an inner `class Config`), which subclasses inherit, or
+        a dict-literal `model_config = {"frozen": True, ...}`. Detection is name-based,
+        like the TypedDict check: a class is a pydantic model when `BaseModel`,
+        `pydantic.BaseModel`, `LiteLLMPydanticObjectBase`, or `RootModel` is among its
+        bases, or when it inherits, transitively within the same module, from a class
+        already determined to be one; a base defined in another module is out of reach.
+        Classes whose bases include `TypedDict` are not pydantic models and are exempt.
+        A body that sets `frozen=False` explicitly is a violation. Suppress with
+        `# frozen-ok: <reason>` on the `class` line.
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
@@ -122,7 +133,7 @@ from dataclasses import dataclass
 from multiprocessing import Pool
 from pathlib import Path
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import NamedTuple
+from typing import Final, NamedTuple
  
 # Mutable collection types, banned in *every* annotation. Name-based, so `dict`,
 # `typing.Dict`, `collections.deque`, and `collections.abc.MutableMapping` all match
@@ -164,6 +175,11 @@ READONLY_QUALIFIER = "ReadOnly"
 # first argument is type syntax, the rest is metadata and never qualifies the field.
 FIELD_QUALIFIER_WRAPPERS = frozenset(("Required", "NotRequired", "Annotated"))
 TYPEDDICT_BASE = "TypedDict"
+# Base names that mark a class as a pydantic model (LIT013). Dotted access resolves
+# to the same head, so `pydantic.BaseModel` is covered by `BaseModel`; subclasses
+# join transitively within the same module, and an in-file frozen ancestor makes
+# the subclass frozen too (pydantic v2 inherits model_config).
+PYDANTIC_BASES = frozenset(("BaseModel", "LiteLLMPydanticObjectBase", "RootModel"))
 MIN_REASON_LEN = 3
  
 NOQA_RE = re.compile(
@@ -182,6 +198,7 @@ GUARD_OK_RE = re.compile(r"#\s*guard-ok(?::\s*(?P<reason>.*))?")
 KWARGS_OK_RE = re.compile(r"#\s*kwargs-ok(?::\s*(?P<reason>.*))?")
 REBIND_OK_RE = re.compile(r"#\s*rebind-ok(?::\s*(?P<reason>.*))?")
 WRITABLE_OK_RE = re.compile(r"#\s*writable-ok(?::\s*(?P<reason>.*))?")
+FROZEN_OK_RE = re.compile(r"#\s*frozen-ok(?::\s*(?P<reason>.*))?")
 
 # Suppression tokens that must each carry a reason (LIT005).
 OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -191,6 +208,7 @@ OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("kwargs-ok", KWARGS_OK_RE),
     ("rebind-ok", REBIND_OK_RE),
     ("writable-ok", WRITABLE_OK_RE),
+    ("frozen-ok", FROZEN_OK_RE),
 )
  
  
@@ -214,6 +232,7 @@ class Comments:
     kwargs_ok_lines: frozenset[int]
     rebind_ok_lines: frozenset[int]
     writable_ok_lines: frozenset[int]
+    frozen_ok_lines: frozenset[int]
  
  
 # --------------------------------------------------------------------------- #
@@ -269,7 +288,7 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
         # tokenize raises TokenError (EOF mid-construct) or a SyntaxError subclass
         # (IndentationError / TabError) on malformed source; defer to ast.parse below,
         # which re-raises and is reported as LIT000 rather than crashing the run.
-        return Comments(frozenset(), frozenset(), frozenset(), frozenset(), frozenset(), frozenset()), ()
+        return Comments(*(frozenset() for _ in Comments.__dataclass_fields__)), ()
 
     def _lines_with(regex: re.Pattern[str]) -> frozenset[int]:
         return frozenset(line for line, text in comment_toks if _valid_ok(regex, text))
@@ -282,6 +301,7 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
             kwargs_ok_lines=_lines_with(KWARGS_OK_RE),
             rebind_ok_lines=_lines_with(REBIND_OK_RE),
             writable_ok_lines=_lines_with(WRITABLE_OK_RE),
+            frozen_ok_lines=_lines_with(FROZEN_OK_RE),
         ),
         tuple(v for line, text in comment_toks for v in _comment_violations(path, line, text)),
     )
@@ -1034,6 +1054,107 @@ def iter_typeddict_violations(path: Path, tree: ast.AST, comments: Comments) -> 
 
 
 # --------------------------------------------------------------------------- #
+# Unfrozen pydantic models (LIT013)
+# --------------------------------------------------------------------------- #
+
+
+def _pydantic_classes(tree: ast.AST) -> tuple[ast.ClassDef, ...]:
+    """ClassDefs that are pydantic models: a PYDANTIC_BASES name among the bases, or
+    -- transitively, within this module -- a base that is itself one of these classes.
+    TypedDict classes are excluded: their bases name a form that is not pydantic."""
+    classes: Final = tuple(node for node in ast.walk(tree) if isinstance(node, ast.ClassDef))
+    bases_of: Final = {cls.name: _base_names(cls) for cls in classes}
+
+    def expand(known: frozenset[str]) -> frozenset[str]:
+        grown = known | frozenset(name for name, bases in bases_of.items() if bases & known)
+        return grown if grown == known else expand(grown)
+
+    names: Final = expand(PYDANTIC_BASES) - expand(frozenset((TYPEDDICT_BASE,)))
+    return tuple(cls for cls in classes if cls.name in names)
+
+
+def _bool_constant(value: ast.expr) -> bool | None:
+    return value.value if isinstance(value, ast.Constant) and isinstance(value.value, bool) else None
+
+
+def _model_config_frozen(value: ast.expr) -> bool | None:
+    """The `frozen` flag a `ConfigDict(...)` call or dict literal sets, None when it sets none."""
+    if isinstance(value, ast.Call) and _head_name(value.func) == "ConfigDict":
+        flags: Final = tuple(_bool_constant(kw.value) for kw in value.keywords if kw.arg == "frozen")
+        return flags[-1] if flags else None
+    if isinstance(value, ast.Dict):
+        flags: Final = tuple(
+            _bool_constant(item)
+            for key, item in zip(value.keys, value.values)
+            if isinstance(key, ast.Constant) and key.value == "frozen"
+        )
+        return flags[-1] if flags else None
+    return None
+
+
+def _assigns_name(stmt: ast.stmt, name: str) -> ast.expr | None:
+    """The value a simple `name = ...` / `name: T = ...` body statement binds."""
+    value: Final = stmt.value if isinstance(stmt, (ast.Assign, ast.AnnAssign)) else None
+    targets: Final = stmt.targets if isinstance(stmt, ast.Assign) else (stmt.target,) if isinstance(stmt, ast.AnnAssign) else ()
+    if value is not None and any(isinstance(t, ast.Name) and t.id == name for t in targets):
+        return value
+    return None
+
+
+def _config_class_frozen(node: ast.ClassDef) -> bool | None:
+    """The `frozen = ...` flag an inner `class Config:` binds, None when it binds none."""
+    flags: Final = tuple(
+        _bool_constant(value)
+        for stmt in node.body
+        for value in (_assigns_name(stmt, "frozen"),)
+        if value is not None
+    )
+    return flags[-1] if flags else None
+
+
+def _stmt_frozen_flag(stmt: ast.stmt) -> bool | None:
+    config_value: Final = _assigns_name(stmt, "model_config")
+    if config_value is not None:
+        return _model_config_frozen(config_value)
+    if isinstance(stmt, ast.ClassDef) and stmt.name == "Config":
+        return _config_class_frozen(stmt)
+    return None
+
+
+def _class_frozen_override(cls: ast.ClassDef) -> bool | None:
+    """The `frozen` flag the class body itself sets; the last statement that sets one wins,
+    like pydantic. None means the class inherits its parent's setting."""
+    flags: Final = tuple(flag for flag in map(_stmt_frozen_flag, cls.body) if flag is not None)
+    return flags[-1] if flags else None
+
+
+def iter_pydantic_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+    models: Final = _pydantic_classes(tree)
+    bases_of: Final = {cls.name: _base_names(cls) for cls in models}
+
+    override_of: Final = {cls.name: _class_frozen_override(cls) for cls in models}
+
+    def frozen(known: frozenset[str]) -> frozenset[str]:
+        grown = known | frozenset(
+            cls.name
+            for cls in models
+            if override_of[cls.name] is True or (override_of[cls.name] is None and bases_of[cls.name] & known)
+        )
+        return grown if grown == known else frozen(grown)
+
+    frozen_names: Final = frozen(frozenset())
+    for cls in models:
+        if cls.name in frozen_names or cls.lineno in comments.frozen_ok_lines:
+            continue
+        yield Violation(
+            path, cls.lineno, "LIT013",
+            f"pydantic model `{cls.name}` is not frozen: any holder can rewrite its "
+            f"fields after validation. Set `model_config = ConfigDict(frozen=True)` "
+            f"(inherited by subclasses) (suppress: `# frozen-ok: <reason>`)",
+        )
+
+
+# --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
  
@@ -1060,6 +1181,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
         *iter_final_violations(path, tree, comments),
         *iter_param_violations(path, tree, comments),
         *iter_typeddict_violations(path, tree, comments),
+        *iter_pydantic_violations(path, tree, comments),
     )
  
  
