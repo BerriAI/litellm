@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from litellm.types.mcp import MCPAuth
 
@@ -91,7 +91,7 @@ def mock_mcp_client_ip():
 
 
 @pytest.fixture(autouse=True)
-def isolate_global_mcp_registry():
+def isolate_global_mcp_registry(monkeypatch):
     """Restore the module-global MCP server registry after each test.
 
     Tests here register servers on ``global_mcp_server_manager`` directly; without a
@@ -100,6 +100,8 @@ def isolate_global_mcp_registry():
     """
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
+    from litellm.proxy._experimental.mcp_server.catalog import TargetCatalog
+    monkeypatch.setattr(global_mcp_server_manager, "catalog", TargetCatalog(global_mcp_server_manager))
     snapshot = dict(global_mcp_server_manager.registry)
     yield
     global_mcp_server_manager.registry.clear()
@@ -114,7 +116,8 @@ def _mock_callback_request(base_url: str = "http://localhost:3000/"):
     and trusted ``X-Forwarded-*`` headers). A simple MagicMock with the
     right attributes is sufficient.
     """
-    req = MagicMock()
+    req = MagicMock(spec=Request)
+    req.client = None
     req.base_url = base_url
     req.headers = {}
     req.cookies = {}
@@ -4700,7 +4703,7 @@ async def test_token_endpoint_authorization_code_missing_code():
     )
     global_mcp_server_manager.registry[server.server_id] = server
 
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://proxy.example/"
     mock_request.headers = {}
 
@@ -7796,7 +7799,7 @@ async def test_authorize_endpoint_rejects_non_oauth2_server():
     server = _access_group_none_server()
     global_mcp_server_manager.registry[server.server_id] = server
 
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -7835,7 +7838,7 @@ async def test_token_endpoint_rejects_non_oauth2_server():
     server = _access_group_none_server()
     global_mcp_server_manager.registry[server.server_id] = server
 
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -7877,7 +7880,7 @@ async def test_register_client_rejects_non_oauth2_server():
     server = _access_group_none_server()
     global_mcp_server_manager.registry[server.server_id] = server
 
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -7950,7 +7953,7 @@ async def test_oauth_authorization_server_404_for_non_oauth2_server():
     server = _access_group_none_server()
     global_mcp_server_manager.registry[server.server_id] = server
 
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -7998,7 +8001,7 @@ async def test_oauth_protected_resource_passthrough_none_auth_not_404():
     )
     global_mcp_server_manager.registry[passthrough_server.server_id] = passthrough_server
 
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -8032,7 +8035,7 @@ async def test_oauth_protected_resource_404_for_unknown_server_name():
         pytest.skip("MCP discoverable endpoints not available")
 
     global_mcp_server_manager.registry.clear()
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -8060,7 +8063,7 @@ async def test_oauth_authorization_server_404_for_unknown_server_name():
         pytest.skip("MCP discoverable endpoints not available")
 
     global_mcp_server_manager.registry.clear()
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9064,7 +9067,7 @@ async def test_load_servers_from_config_hydrates_dcr_clients():
     )
 
     hydrate_spy = AsyncMock()
-    with patch.object(global_mcp_server_manager, "_hydrate_config_servers_dcr_clients", new=hydrate_spy):
+    with patch.object(global_mcp_server_manager, "hydrate_config_servers_dcr_clients", new=hydrate_spy):
         await global_mcp_server_manager.load_servers_from_config({})
 
     hydrate_spy.assert_awaited_once()
@@ -9089,7 +9092,7 @@ async def test_reload_servers_from_database_hydrates_dcr_clients():
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=prisma,
         ),
-        patch.object(global_mcp_server_manager, "_hydrate_config_servers_dcr_clients", new=hydrate_spy),
+        patch.object(global_mcp_server_manager, "hydrate_config_servers_dcr_clients", new=hydrate_spy),
     ):
         await global_mcp_server_manager.reload_servers_from_database()
 
@@ -9360,7 +9363,7 @@ async def test_authorize_wall_names_the_fix_for_urlless_servers():
         auth_type=MCPAuth.oauth2,
         spec_path="https://example.com/openapi.yaml",
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9398,7 +9401,7 @@ async def test_token_wall_names_the_fix_for_urlless_servers():
         spec_path="https://example.com/openapi.yaml",
         authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9438,7 +9441,7 @@ async def test_register_wall_names_the_fix_for_urlless_servers():
         auth_type=MCPAuth.oauth2,
         spec_path="https://example.com/openapi.yaml",
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9477,7 +9480,7 @@ async def test_authorize_wall_points_at_discovery_failure_for_url_servers():
         transport=MCPTransport.http,
         auth_type=MCPAuth.oauth2,
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9513,7 +9516,7 @@ async def test_token_wall_points_at_discovery_failure_for_url_servers():
         auth_type=MCPAuth.oauth2,
         authorization_url="https://idp.example.com/authorize",
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9553,7 +9556,7 @@ async def test_authorize_wall_names_the_issuer_for_anchored_servers():
         issuer="https://idp.example.com",
         issuer_is_anchored=True,
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9600,7 +9603,7 @@ async def test_authorize_uses_admin_entered_github_oauth_urls_after_issuer_yield
         configured_authorization_url="https://github.com/login/oauth/authorize",
         configured_token_url="https://github.com/login/oauth/access_token",
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9622,7 +9625,7 @@ def test_oauth_endpoints_count_admin_entered_urls_as_resolved():
     """A leftover issuer empties the resolved authorize/token fields but must not keep the
     server on the deferred-discovery retry path when the admin already stored those URLs."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        _oauth_endpoints_unresolved,
+        oauth_endpoints_unresolved,
     )
     from litellm.types.mcp import MCPAuth, MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -9639,7 +9642,7 @@ def test_oauth_endpoints_count_admin_entered_urls_as_resolved():
         configured_authorization_url="https://github.com/login/oauth/authorize",
         configured_token_url="https://github.com/login/oauth/access_token",
     )
-    assert _oauth_endpoints_unresolved(server) is False
+    assert oauth_endpoints_unresolved(server) is False
 
 
 @pytest.mark.asyncio
@@ -9692,7 +9695,7 @@ async def test_token_exchange_with_configured_token_url_never_joins_discovery(mo
         "get_async_httpx_client",
         lambda llm_provider: fake_http_client,
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9817,7 +9820,7 @@ async def test_bridge_authorize_relays_with_registration_url_resolved_by_deferre
         "ensure_oauth_metadata_discovered",
         resolve_discovery,
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -11139,7 +11142,7 @@ def test_discovery_advertises_the_exchange_grant_only_where_the_gateway_can_serv
         litellm_jwtauth=LiteLLM_JWTAuth(virtual_key_claim_field=virtual_key_claim_field),
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.jwt_handler", handler)
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": jwt_auth_enabled})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": jwt_auth_enabled, "supported_db_objects": []})
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     exchange_grant = ["urn:ietf:params:oauth:grant-type:token-exchange"] if exchange_servable else []

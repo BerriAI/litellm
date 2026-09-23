@@ -7491,7 +7491,8 @@ class TestGatewaySessionAdmission:
         prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
         with (
             patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
-            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.should_load_db_object", return_value=False),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         ):
             yield get_user_object
@@ -9583,7 +9584,8 @@ class TestScopedSessionAdmission:
         with (
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
             patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
-            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.should_load_db_object", return_value=False),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         ):
             auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope_dict)

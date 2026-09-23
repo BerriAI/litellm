@@ -1,6 +1,5 @@
 """Shared MCP operation policy and dispatch."""
 
-import asyncio
 import traceback
 import types
 import uuid
@@ -50,7 +49,7 @@ from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
     cache_byok_credential,
     get_cached_byok_credential,
 )
-from litellm.proxy._experimental.mcp_server.catalog import with_mcp_catalog
+from litellm.proxy._experimental.mcp_server.catalog import TargetCatalog, catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.contracts import (
     AuthorizedToolCall,
     OperationContext,
@@ -615,7 +614,7 @@ def apply_tool_overrides(
     return tools
 
 
-@with_mcp_catalog
+@catalog_operation(lambda: global_mcp_server_manager)
 async def _get_allowed_mcp_servers(
     user_api_key_auth: UserAPIKeyAuth | None,
     mcp_servers: Sequence[str] | None,
@@ -932,6 +931,7 @@ def _aggregate_server_key(server: MCPServer) -> str:
     return get_server_prefix(server) or "unknown"
 
 
+@catalog_operation(lambda: global_mcp_server_manager)
 async def _get_tools_from_mcp_servers(
     user_api_key_auth: UserAPIKeyAuth | None,
     mcp_auth_header: str | None,
@@ -1153,24 +1153,17 @@ async def _get_tools_from_mcp_servers(
                 verbose_logger.exception("Error getting tools from server %s: %s", server.name, e)
                 return [], classify_list_exception(e)
 
-        # Fetch tools from all servers in parallel
-        tasks: Final = [_fetch_and_filter_server_tools(server) for server in allowed_mcp_servers]
-        results: Final = await asyncio.gather(*tasks)
-
-        # Flatten results into single list
-        all_tools: Final[list[MCPTool]] = [tool for tools, _ in results for tool in tools]
-        server_outcomes: Final[dict[str, ServerOutcome]] = {
-            _aggregate_server_key(server): outcome
-            for server, (_, outcome) in zip(allowed_mcp_servers, results)
-            if server is not None
-        }
+        listing: Final = await TargetCatalog.aggregate_list(
+            allowed_mcp_servers, _fetch_and_filter_server_tools, _aggregate_server_key
+        )
+        all_tools: Final = listing.tools
+        server_outcomes: Final = listing.outcomes
 
         # If logging is enabled, enrich spend_logs_metadata with counts
         if litellm_logging_obj:
             per_server_tool_counts: Final[dict[str, int]] = {
-                _aggregate_server_key(server): len(server_tools)
-                for server, (server_tools, _) in zip(allowed_mcp_servers, results)
-                if server is not None
+                key: outcome.tool_count if isinstance(outcome, ServerListOk) else 0
+                for key, outcome in server_outcomes.items()
             }
 
             metadata_dict: Final = litellm_logging_obj.model_call_details.get("metadata")
@@ -1437,7 +1430,7 @@ async def filter_tools_by_key_team_permissions(
     ]
 
 
-@with_mcp_catalog
+@catalog_operation(lambda: global_mcp_server_manager)
 async def _list_mcp_tools(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -1488,7 +1481,7 @@ async def _list_mcp_tools(
         return AggregateToolListing(tools=[], outcomes={})
 
 
-@with_mcp_catalog
+@catalog_operation(global_manager)
 async def _list_mcp_prompts(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -1530,7 +1523,7 @@ async def _list_mcp_prompts(
     return managed_prompts
 
 
-@with_mcp_catalog
+@catalog_operation(global_manager)
 async def _list_mcp_resources(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -1560,7 +1553,7 @@ async def _list_mcp_resources(
     return managed_resources
 
 
-@with_mcp_catalog
+@catalog_operation(global_manager)
 async def _list_mcp_resource_templates(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -2277,6 +2270,7 @@ async def fire_mcp_tool_call_failure_logging(
 
 
 @client
+@catalog_operation(lambda: global_mcp_server_manager)
 async def call_mcp_tool(
     name: str,
     arguments: dict[str, object] | None = None,
@@ -3064,7 +3058,7 @@ class GatewayOperations:
     @overload
     async def execute(self, operation: ReadResourceRequest, context: OperationContext) -> ReadResourceResult: ...
 
-    @with_mcp_catalog
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
         match operation:
             case AuthorizedToolCall():

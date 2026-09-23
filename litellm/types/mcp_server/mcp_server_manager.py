@@ -204,7 +204,7 @@ class MCPServer(BaseModel):
     # None or a value <= 0 means unlimited.
     max_concurrent_requests: int | None = None
     # Resolved short-ID tool prefix when LITELLM_USE_SHORT_MCP_TOOL_PREFIX is
-    # enabled.  Set by ``MCPServerManager._assign_unique_short_prefix`` at
+    # enabled.  Set by ``MCPServerManager.assign_unique_short_prefix`` at
     # registration time so that natural-hash collisions between two
     # different ``server_id`` values are bumped deterministically.  Left
     # ``None`` in default-prefix mode.

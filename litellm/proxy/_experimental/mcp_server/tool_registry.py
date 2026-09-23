@@ -1,5 +1,8 @@
+import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
@@ -22,7 +25,30 @@ class MCPToolRegistry:
 
     def __init__(self):
         # Registry to store all registered tools
-        self.tools: dict[str, MCPTool] = {}
+        self.published_tools: dict[str, MCPTool] = {}
+        self._catalog_tools: ContextVar[tuple[dict[str, MCPTool], asyncio.Event] | None] = ContextVar(
+            "mcp_catalog_tools", default=None
+        )
+
+    @property
+    def tools(self) -> dict[str, MCPTool]:
+        scoped: Final = self._catalog_tools.get()
+        return scoped[0] if scoped is not None and not scoped[1].is_set() else self.published_tools
+
+    @tools.setter
+    def tools(self, tools: dict[str, MCPTool]) -> None:
+        self.published_tools = tools
+
+    @contextmanager
+    def catalog_scope(self, tools: Mapping[str, MCPTool]) -> Iterator[dict[str, MCPTool]]:
+        detached: Final = dict(tools)
+        closed: Final = asyncio.Event()
+        token: Final = self._catalog_tools.set((detached, closed))
+        try:
+            yield detached
+        finally:
+            closed.set()
+            self._catalog_tools.reset(token)
 
     def register_tool(
         self,

@@ -645,6 +645,15 @@ async def get_all_mcp_servers(
     return list(_readable_mcp_servers(mcp_servers))
 
 
+async def get_runtime_mcp_server_rows(
+    prisma_client: PrismaClient,
+) -> Sequence["prisma_db_models.LiteLLM_MCPServerTable"]:
+    where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {
+        "OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]
+    }
+    return await _db_find_mcp_server_rows(prisma_client, where)
+
+
 async def get_mcp_server(prisma_client: PrismaClient, server_id: str) -> LiteLLM_MCPServerTable | None:
     """
     Returns the matching mcp server from the db iff exists

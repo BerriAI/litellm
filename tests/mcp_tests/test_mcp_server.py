@@ -2,7 +2,7 @@
 import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -918,6 +918,7 @@ async def test_get_tools_from_mcp_servers():
 
         # Create a mock manager
         mock_manager = AsyncMock()
+        mock_manager.catalog.operation = nullcontext
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["server1_id", "server2_id"]
         )
@@ -946,6 +947,7 @@ async def test_get_tools_from_mcp_servers():
             # Test Case 2: Without specific MCP servers
             # Create a different mock manager for the second test case
             mock_manager_2 = AsyncMock()
+            mock_manager_2.catalog.operation = nullcontext
             mock_manager_2.get_allowed_mcp_servers = AsyncMock(
                 return_value=["server1_id", "server2_id"]
             )
@@ -993,6 +995,7 @@ async def test_get_tools_from_mcp_servers():
         # Test Case 3: With specific MCP servers and access groups
         # Create a mock manager
         mock_manager = AsyncMock()
+        mock_manager.catalog.operation = nullcontext
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["server1_id", "server2_id", "server3_id"]
         )

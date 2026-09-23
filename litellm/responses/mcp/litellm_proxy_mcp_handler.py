@@ -10,7 +10,7 @@ from openai.types.responses.function_tool_param import FunctionToolParam
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._experimental.mcp_server.catalog import with_mcp_catalog
+from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.utils import (
     iter_known_server_prefixes,
     logging_safe_mcp_headers,
@@ -112,6 +112,7 @@ async def _toolset_exists(name: str) -> bool:
         return False
 
 
+@catalog_operation(global_manager)
 async def _gateway_served_names(
     names: Collection[str],
     servers: Callable[[], Collection[MCPServer]] = _registered_mcp_servers,
@@ -179,7 +180,7 @@ class LiteLLM_Proxy_MCP_Handler:
         )
 
     @staticmethod
-    @with_mcp_catalog
+    @catalog_operation(global_manager)
     async def routes_through_gateway(
         tools: Iterable[Mapping[str, object]] | None,
         served_names: Callable[[Collection[str]], Awaitable[frozenset[str]]] = _gateway_served_names,
@@ -231,7 +232,7 @@ class LiteLLM_Proxy_MCP_Handler:
             return user_api_key_auth
 
     @staticmethod
-    @with_mcp_catalog
+    @catalog_operation(global_manager)
     async def _get_mcp_tools_from_manager(
         user_api_key_auth: "UserAPIKeyAuth | None",
         mcp_tools_with_litellm_proxy: Iterable[Mapping[str, object]] | None,
@@ -687,7 +688,7 @@ class LiteLLM_Proxy_MCP_Handler:
         return result_text or "Tool executed successfully"
 
     @staticmethod
-    @with_mcp_catalog
+    @catalog_operation(global_manager)
     async def _execute_tool_calls(
         tool_server_map: dict[str, str],
         tool_calls: Sequence[object],

@@ -55,6 +55,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     canonical_resource_uri,
@@ -770,6 +771,7 @@ def _open_flow_for(
     return flow
 
 
+@catalog_operation(global_manager)
 async def _flow_target(
     flow: _ConnectFlow, lookup_server_reachability: LookupServerReachability
 ) -> tuple[Literal["unscoped", "interactive", "m2m", "stale"], MCPServer | None]:
