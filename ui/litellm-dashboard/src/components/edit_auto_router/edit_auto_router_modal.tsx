@@ -39,7 +39,11 @@ import {
   hydrateTierBoundaries,
   hydrateTokenThresholds,
 } from "../add_model/heuristic_scoring_knobs";
-import { defaultJevClassifierConfig, jevClassifierConfigSchema, normalizeJevClassifierConfig } from "../add_model/jev_classifier_config";
+import {
+  defaultJevClassifierConfig,
+  jevClassifierConfigSchema,
+  normalizeJevClassifierConfig,
+} from "../add_model/jev_classifier_config";
 import ComplexityRouterConfig, {
   AdaptiveEligible,
   AdaptiveRouterWeights,

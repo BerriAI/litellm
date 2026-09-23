@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { transitionClassifierType } from "../add_model/classifier_type_transition";
 import { effectiveClassifierType } from "../add_model/ComplexityRouterConfig";
 
-import { buildUpdatedComplexityRouterConfig, hydrateComplexityRouterConfig, type KeywordMatchingState } from "./edit_auto_router_modal";
+import {
+  buildUpdatedComplexityRouterConfig,
+  hydrateComplexityRouterConfig,
+  type KeywordMatchingState,
+} from "./edit_auto_router_modal";
 
 const STORED = {
   tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },

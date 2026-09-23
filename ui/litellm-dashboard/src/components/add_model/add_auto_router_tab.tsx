@@ -494,7 +494,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       ? {
           prompt: JEV_CONNECTION_TEST_PROMPT,
           config: buildComplexityRouterConfig(complexityRouterConfigParams),
-          defaultModel: resolveComplexityDefaultModel(complexityRouterConfig.tiers, complexityRouterConfig.default_model),
+          defaultModel: resolveComplexityDefaultModel(
+            complexityRouterConfig.tiers,
+            complexityRouterConfig.default_model,
+          ),
           routerName: watchedName,
           teamId: requiresTeamScope ? watchedTeamId ?? undefined : undefined,
         }

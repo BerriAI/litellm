@@ -129,9 +129,8 @@ export const heuristicScoringRoleFor = (
 export const heuristicScoringRole = (value: ComplexityRouterConfigValue): HeuristicScoringRole =>
   heuristicScoringRoleFor(value.classifier_type, value.classifier_fallback);
 
-export const effectiveClassifierType = (
-  value: Pick<ComplexityRouterConfigValue, "classifier_type">,
-): ClassifierType => value.classifier_type;
+export const effectiveClassifierType = (value: Pick<ComplexityRouterConfigValue, "classifier_type">): ClassifierType =>
+  value.classifier_type;
 
 export type AdaptiveEligible = "all" | "classified_tier";
 
@@ -232,8 +231,6 @@ export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof Complexit
 
 export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
   tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
-
-
 
 /** Tiers the plan-mode floor may name: the backend rejects a floor whose tier has no models. */
 export const planModeEligibleTiers = (tiers: ComplexityTiers): Array<keyof ComplexityTiers> =>

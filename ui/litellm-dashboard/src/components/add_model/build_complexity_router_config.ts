@@ -1,11 +1,7 @@
 import { KeywordTierRule } from "./KeywordTierRules";
 import { type JevClassifierConfig, normalizeJevClassifierConfig } from "./jev_classifier_config";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
-import {
-  TierModelParams,
-  TierModelParamsByTier,
-  serializeTierModelConfigs,
-} from "./complexity_router_tiers";
+import { TierModelParams, TierModelParamsByTier, serializeTierModelConfigs } from "./complexity_router_tiers";
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
@@ -235,7 +231,6 @@ export const getSemanticConfigError = ({
   if (keywordTierRules.length === 0) return "Add at least one keyword tier rule to use semantic keyword matching";
   return null;
 };
-
 
 export const buildComplexityRouterConfig = ({
   tiers,
