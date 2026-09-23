@@ -39,19 +39,20 @@ class LangfuseOtelLogger(OpenTelemetry):
         super().__init__(config=config, *args, **kwargs)
 
     @staticmethod
-    def set_langfuse_otel_attributes(span: Span, kwargs, response_obj):
+    def set_langfuse_otel_attributes(span: Span, kwargs: dict[str, object], response_obj) -> None:
         """
         Sets OpenTelemetry span attributes for Langfuse observability.
         Uses the same attribute setting logic as Arize Phoenix for consistency.
         """
 
-        _utils.set_attributes(span, kwargs, response_obj, LangfuseLLMObsOTELAttributes)
+        _utils.set_attributes(span, kwargs, response_obj, LangfuseLLMObsOTELAttributes, emit_session_and_user=False)
         span.set_attribute("langfuse.observation.type", "generation")
 
         #########################################################
         # Set Langfuse specific attributes
         #########################################################
         LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
+        LangfuseOtelLogger._set_trace_user_attribute(span=span, kwargs=kwargs)
 
     @staticmethod
     def _extract_langfuse_metadata(kwargs: dict) -> dict:
@@ -254,6 +255,28 @@ class LangfuseOtelLogger(OpenTelemetry):
             )
 
         LangfuseOtelLogger._set_observation_output(span=span, response_obj=response_obj)
+
+    @staticmethod
+    def _set_trace_user_attribute(span: Span, kwargs: dict[str, object]) -> None:
+        from litellm.integrations.arize._utils import safe_set_attribute
+        from litellm.integrations.otel.model.utils import as_str, as_str_mapping
+
+        slp: Final = as_str_mapping(kwargs.get("standard_logging_object"))
+        slp_metadata: Final = as_str_mapping(slp.get("metadata")) if slp is not None else None
+        if slp is None or slp_metadata is None:
+            return
+        metadata: Final = as_str_mapping(
+            LangfuseOtelLogger._extract_langfuse_metadata(kwargs)  # pyright: ignore[reportUnknownArgumentType,reportUnknownMemberType]  # helper returns a loosely typed dict
+        )
+        if metadata is None or as_str(metadata.get("trace_user_id")):
+            return
+        end_user: Final = (
+            slp_metadata.get("user_api_key_end_user_id")
+            or slp.get("end_user")
+            or as_str(metadata.get("user_api_key_end_user_id"))
+        )
+        if end_user:
+            safe_set_attribute(span, LangfuseSpanAttributes.TRACE_USER_ID.value, str(end_user))
 
     @staticmethod
     def _get_langfuse_otel_host() -> str | None:

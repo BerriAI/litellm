@@ -9,7 +9,7 @@ from litellm.integrations.otel.mappers.langfuse import (
     LangfuseMapper,
 )
 from litellm.integrations.otel.model.request_io import request_input, response_output, stream_output
-from litellm.integrations.otel.model.trace_controls import caller_trace_controls
+from litellm.integrations.otel.model.trace_controls import langfuse_trace_controls
 from litellm.integrations.otel.plumbing.context import request_root_span
 
 if TYPE_CHECKING:
@@ -18,13 +18,14 @@ if TYPE_CHECKING:
 
 
 class LangfuseOpenTelemetryV2(OpenTelemetryV2):
-    """Stamps the caller's trace controls (name, user, session, tags) on the request. Langfuse reads them off
-    the root observation, and the proxy's root span is still recording when the LLM call starts."""
+    """Stamps the caller's trace controls (name, user, session, tags) on the request, falling back to the
+    proxy's end user when the caller names no trace user. Langfuse reads them off the root observation,
+    and the proxy's root span is still recording when the LLM call starts."""
 
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         root: Final = request_root_span()
         if root is not None and root.is_recording():
-            root.set_attributes(LangfuseMapper.trace_attributes(caller_trace_controls(kwargs)))
+            root.set_attributes(LangfuseMapper.trace_attributes(langfuse_trace_controls(kwargs)))
         super().log_pre_api_call(model, messages, kwargs)
 
 
