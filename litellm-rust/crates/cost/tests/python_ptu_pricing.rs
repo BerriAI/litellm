@@ -526,7 +526,8 @@ fn a_config_error_names_the_model_when_supplied() {
 
 #[test]
 fn the_zeroed_pricing_map_carries_exactly_the_python_fields() {
-    let override_pricing = zeroed_with_flag(&valid_model_info(), &json!({}), true).expect("pricing");
+    let override_pricing =
+        zeroed_with_flag(&valid_model_info(), &json!({}), true).expect("pricing");
 
     let mut names: Vec<&str> = override_pricing.keys().map(String::as_str).collect();
     names.sort_unstable();
