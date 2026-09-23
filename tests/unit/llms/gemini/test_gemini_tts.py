@@ -2,8 +2,10 @@
 Test Gemini TTS (Text-to-Speech) functionality
 """
 
-import pytest
+from typing import Final
 from unittest.mock import patch, MagicMock
+
+import pytest
 
 import litellm
 from litellm.endpoints.speech.speech_to_completion_bridge.transformation import (
@@ -167,6 +169,37 @@ class TestGeminiTTSTransformation:
 
         assert "languageCode" not in result
         assert result["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+    def test_map_audio_params_preserves_nested_list_and_values_without_voice(self):
+        config: Final = GoogleAIStudioGeminiConfig()
+
+        result: Final = config._map_audio_params(
+            {
+                "speech_config": {
+                    "language_code": "fr-FR",
+                    "multi_speaker_voice_config": {
+                        "speaker_voice_configs": [
+                            {"speaker": "Ryan", "voice_config": {"prebuilt_voice_config": {"voice_name": "Umbriel"}}}
+                        ]
+                    },
+                    "metadata": {1: "discard", "source": ["studio", 2]},
+                },
+                "format": "pcm16",
+            }
+        )
+
+        assert result == {
+            "languageCode": "fr-FR",
+            "multiSpeakerVoiceConfig": {
+                "speakerVoiceConfigs": [
+                    {"speaker": "Ryan", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Umbriel"}}}
+                ]
+            },
+            "metadata": {"source": ["studio", 2]},
+        }
+        assert config._map_audio_params({"speech_config": {"language_code": "fr-FR"}, "format": "pcm16"}) == {
+            "languageCode": "fr-FR"
+        }
 
     def test_gemini_tts_multi_speaker_audio_parameter_mapping(self):
         """Test multi-speaker audio parameter mapping for Gemini 3.1 TTS models"""
