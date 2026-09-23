@@ -347,6 +347,8 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_cost_per_query: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_cost_per_reference_pixel: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_cost_per_request: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_cost_per_second: Option<f64>,
