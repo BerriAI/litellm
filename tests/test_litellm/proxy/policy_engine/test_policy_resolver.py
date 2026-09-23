@@ -11,6 +11,8 @@ import pytest
 
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.types.proxy.policy_engine import (
+    GuardrailPipeline,
+    PipelineStep,
     Policy,
     PolicyCondition,
     PolicyGuardrails,
@@ -199,3 +201,55 @@ class TestPolicyResolverWithConditions:
         )
         assert "pii_blocker" in resolved_gpt35.guardrails
         assert "child_guardrail" not in resolved_gpt35.guardrails
+
+    def test_resolve_guardrails_for_context_with_condition_missing_child_keeps_inherited_parent(self):
+        """Test a matched child whose condition misses still contributes unconditional parent guardrails."""
+        policies = {
+            "parent": Policy(
+                guardrails=PolicyGuardrails(add=["y"]),
+            ),
+            "child": Policy(
+                inherit="parent",
+                guardrails=PolicyGuardrails(add=["x"]),
+                condition=PolicyCondition(model="claude.*"),
+            ),
+        }
+
+        context_miss = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.5")
+        assert PolicyResolver.resolve_guardrails_for_context(
+            context=context_miss, policies=policies, policy_names=["child"]
+        ) == ["y"]
+
+        context_hit = PolicyMatchContext(team_alias="t", key_alias="k", model="claude-haiku")
+        assert set(
+            PolicyResolver.resolve_guardrails_for_context(
+                context=context_hit, policies=policies, policy_names=["child"]
+            )
+        ) == {"x", "y"}
+
+    def test_resolve_pipelines_for_context_skips_pipeline_when_own_condition_misses(self):
+        """Test a matched child whose own condition misses does not run its pipeline."""
+        pipeline = GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="child-guard")])
+        policies = {
+            "parent": Policy(
+                guardrails=PolicyGuardrails(add=["y"]),
+            ),
+            "child": Policy(
+                inherit="parent",
+                pipeline=pipeline,
+                condition=PolicyCondition(model="gpt-5.5"),
+            ),
+        }
+
+        context_miss = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-4o")
+        assert (
+            PolicyResolver.resolve_pipelines_for_context(
+                context=context_miss, policies=policies, policy_names=["child"]
+            )
+            == []
+        )
+
+        context_hit = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.5")
+        assert PolicyResolver.resolve_pipelines_for_context(
+            context=context_hit, policies=policies, policy_names=["child"]
+        ) == [("child", pipeline)]
