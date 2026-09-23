@@ -169,6 +169,17 @@ def test_azure_ai_keeps_max_completion_tokens_for_gpt_5():
     assert "max_tokens" not in mapped_params
 
 
+def test_azure_ai_keeps_max_completion_tokens_for_reasoning_models(_local_model_cost_map: None) -> None:
+    mapped_params: Final = litellm.get_optional_params(
+        model="o3",
+        custom_llm_provider="azure_ai",
+        max_completion_tokens=256,
+    )
+
+    assert mapped_params["max_completion_tokens"] == 256
+    assert "max_tokens" not in mapped_params
+
+
 def test_azure_ai_keeps_params_without_max_completion_tokens():
     mapped_params: Final = litellm.get_optional_params(
         model="mistral-large-3",

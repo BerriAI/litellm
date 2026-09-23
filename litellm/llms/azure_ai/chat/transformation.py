@@ -28,7 +28,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ProviderField
-from litellm.utils import _add_path_to_api_base, supports_tool_choice
+from litellm.utils import _add_path_to_api_base, supports_reasoning, supports_tool_choice
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -111,7 +111,9 @@ class AzureAIStudioConfig(OpenAIConfig):
             drop_params=drop_params,
         )
 
-        if "max_completion_tokens" not in optional_params:
+        if "max_completion_tokens" not in optional_params or supports_reasoning(
+            model=model, custom_llm_provider="azure_ai"
+        ):
             return optional_params
 
         max_tokens: Final = optional_params["max_completion_tokens"]
