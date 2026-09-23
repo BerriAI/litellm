@@ -11,13 +11,17 @@ BACKUP_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.js
 
 # AWS has not published Bedrock prices for these yet. Bedrock US Geo and
 # In-Region rates for OpenAI models are the OpenAI API rate plus a 10% fee,
-# so these entries are the OpenAI rate for the same model times 1.1.
+# and Global cross-Region rates are the OpenAI API rate with no fee, so these
+# entries are the OpenAI rate for the same model times the matching multiplier.
 US_UPLIFT = 1.1
+GLOBAL_UPLIFT = 1.0
 BEDROCK_TO_OPENAI = {
-    "us.openai.gpt-6-sol": "gpt-6-sol",
-    "bedrock_mantle/openai.gpt-6-sol": "gpt-6-sol",
-    "us.openai.gpt-6-luna": "gpt-6-luna",
-    "bedrock_mantle/openai.gpt-6-luna": "gpt-6-luna",
+    "us.openai.gpt-6-sol": ("gpt-6-sol", US_UPLIFT),
+    "bedrock_mantle/openai.gpt-6-sol": ("gpt-6-sol", US_UPLIFT),
+    "global.openai.gpt-6-sol": ("gpt-6-sol", GLOBAL_UPLIFT),
+    "us.openai.gpt-6-luna": ("gpt-6-luna", US_UPLIFT),
+    "bedrock_mantle/openai.gpt-6-luna": ("gpt-6-luna", US_UPLIFT),
+    "global.openai.gpt-6-luna": ("gpt-6-luna", GLOBAL_UPLIFT),
 }
 PRICE_KEYS = (
     "input_cost_per_token",
@@ -44,14 +48,14 @@ def test_backup_matches_main(model):
     assert backup_cost[model] == main_cost[model], f"{model} differs between main and backup model cost maps"
 
 
-@pytest.mark.parametrize("model,openai_model", BEDROCK_TO_OPENAI.items())
-def test_prices_are_openai_rate_plus_us_uplift(model, openai_model):
+@pytest.mark.parametrize("model,openai_model,uplift", [(m, o, u) for m, (o, u) in BEDROCK_TO_OPENAI.items()])
+def test_prices_are_openai_rate_times_uplift(model, openai_model, uplift):
     cost_map = _load(MAIN_PATH)
     entry = cost_map[model]
     openai_entry = cost_map[openai_model]
 
     for key in PRICE_KEYS:
-        assert entry[key] == pytest.approx(openai_entry[key] * US_UPLIFT), key
+        assert entry[key] == pytest.approx(openai_entry[key] * uplift), key
 
 
 @pytest.mark.parametrize("model", BEDROCK_TO_OPENAI)
