@@ -14,8 +14,15 @@ type ResizableSheetContentProps = Omit<React.ComponentProps<typeof SheetContent>
   minWidthPercent?: number;
 };
 
+const MIN_WIDTH_PX = 720;
+
 function clampWidth(value: number, min: number) {
   return Math.min(100, Math.max(min, value));
+}
+
+function effectiveMinPercent(minWidthPercent: number) {
+  if (typeof window === "undefined") return minWidthPercent;
+  return Math.min(100, Math.max(minWidthPercent, (MIN_WIDTH_PX / window.innerWidth) * 100));
 }
 
 function readStoredWidth(storageKey: string, defaultWidthPercent: number, minWidthPercent: number) {
@@ -42,7 +49,7 @@ function ResizableSheetContent({
   React.useEffect(() => () => cleanupRef.current?.(), []);
 
   const applyWidth = (next: number, persist: boolean) => {
-    const clamped = clampWidth(next, minWidthPercent);
+    const clamped = clampWidth(next, effectiveMinPercent(minWidthPercent));
     widthRef.current = clamped;
     setWidth(clamped);
     if (persist) setLocalStorageItem(storageKey, String(clamped));
@@ -57,14 +64,16 @@ function ResizableSheetContent({
     const onUp = () => {
       cleanupRef.current?.();
       cleanupRef.current = null;
-      setLocalStorageItem(storageKey, String(widthRef.current));
+      if (widthRef.current < 100) setLocalStorageItem(storageKey, String(widthRef.current));
     };
     cleanupRef.current = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   };
 
   const toggle = () => {
@@ -73,7 +82,7 @@ function ResizableSheetContent({
       return;
     }
     lastNonFullWidthRef.current = width;
-    applyWidth(100, true);
+    applyWidth(100, false);
   };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -89,12 +98,12 @@ function ResizableSheetContent({
     }
     if (event.key === "Home") {
       event.preventDefault();
-      applyWidth(100, true);
+      applyWidth(100, false);
       return;
     }
     if (event.key === "End") {
       event.preventDefault();
-      applyWidth(minWidthPercent, true);
+      applyWidth(effectiveMinPercent(minWidthPercent), true);
     }
   };
 
@@ -108,7 +117,7 @@ function ResizableSheetContent({
       style={{ "--sheet-width": `${width}%` } as React.CSSProperties}
       {...props}
     >
-      {children}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
       <div
         role="separator"
         aria-orientation="vertical"
@@ -117,7 +126,7 @@ function ResizableSheetContent({
         className="absolute inset-y-0 left-0 hidden w-1.5 cursor-col-resize touch-none select-none hover:bg-border focus-visible:bg-border focus-visible:outline-none sm:block"
         tabIndex={0}
         aria-valuenow={Math.round(width)}
-        aria-valuemin={minWidthPercent}
+        aria-valuemin={Math.round(effectiveMinPercent(minWidthPercent))}
         aria-valuemax={100}
         onPointerDown={onPointerDown}
         onKeyDown={onKeyDown}

@@ -176,7 +176,7 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
 
   return (
     <Sheet open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
-      <ResizableSheetContent storageKey="litellm:auditLogDrawerWidth" className="gap-0 overflow-y-auto p-0">
+      <ResizableSheetContent storageKey="litellm:auditLogDrawerWidth" className="gap-0 p-0">
         <SheetTitle className="sr-only">Audit log details</SheetTitle>
 
         <div className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-6 py-4">

@@ -10,6 +10,7 @@ function sheetContent(): HTMLElement {
 describe("ResizableSheetContent", () => {
   beforeEach(() => {
     localStorage.clear();
+    Object.defineProperty(window, "innerWidth", { value: 2000, configurable: true, writable: true });
   });
 
   it("resizes by dragging the handle, clamps to the minimum, and persists on release", () => {
@@ -55,5 +56,22 @@ describe("ResizableSheetContent", () => {
     fireEvent.keyDown(sep, { key: "End" });
     expect(sheetContent().style.getPropertyValue("--sheet-width")).toBe("40%");
     expect(sep).toHaveAttribute("aria-valuenow", "40");
+  });
+
+  it("clamps the End key to the 720px floor when it exceeds the percentage minimum", () => {
+    Object.defineProperty(window, "innerWidth", { value: 1000, configurable: true, writable: true });
+    render(
+      <Sheet open>
+        <ResizableSheetContent storageKey="k">
+          <SheetTitle>t</SheetTitle>
+        </ResizableSheetContent>
+      </Sheet>,
+    );
+
+    const sep = screen.getByRole("separator");
+    fireEvent.keyDown(sep, { key: "End" });
+
+    expect(sheetContent().style.getPropertyValue("--sheet-width")).toBe("72%");
+    expect(sep).toHaveAttribute("aria-valuenow", "72");
   });
 });

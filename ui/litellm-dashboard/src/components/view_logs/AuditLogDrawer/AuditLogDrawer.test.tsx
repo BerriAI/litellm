@@ -135,6 +135,7 @@ describe("AuditLogDrawer", () => {
   describe("width", () => {
     beforeEach(() => {
       localStorage.clear();
+      Object.defineProperty(window, "innerWidth", { value: 2000, configurable: true, writable: true });
     });
 
     function sheetContent(): HTMLElement {
@@ -162,6 +163,20 @@ describe("AuditLogDrawer", () => {
       localStorage.setItem("litellm:auditLogDrawerWidth", "58");
       render(<AuditLogDrawer {...defaultProps} />);
       expect(sheetContent().style.getPropertyValue("--sheet-width")).toBe("58%");
+    });
+
+    it("keeps the saved width while expanded and restores it on collapse", async () => {
+      const user = userEvent.setup();
+      localStorage.setItem("litellm:auditLogDrawerWidth", "58");
+      render(<AuditLogDrawer {...defaultProps} />);
+
+      await user.click(screen.getByRole("button", { name: /expand drawer/i }));
+      expect(sheetContent().style.getPropertyValue("--sheet-width")).toBe("100%");
+      expect(localStorage.getItem("litellm:auditLogDrawerWidth")).toBe("58");
+
+      await user.click(screen.getByRole("button", { name: /collapse drawer/i }));
+      expect(sheetContent().style.getPropertyValue("--sheet-width")).toBe("58%");
+      expect(localStorage.getItem("litellm:auditLogDrawerWidth")).toBe("58");
     });
 
     it("falls back to the default width for a non-numeric stored value", () => {
