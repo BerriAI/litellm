@@ -8,10 +8,6 @@ mod logger;
 mod marshal;
 mod python_settings;
 mod routes;
-#[allow(
-    dead_code,
-    reason = "secret-manager foundations await rollout activation"
-)]
 mod secrets;
 mod tokenizer;
 
@@ -56,7 +52,11 @@ mod _native {
         let dict = module.dict();
         dict.set_item("_CacheTestHandle", py.get_type::<CacheTestHandle>())?;
         dict.set_item("_CacheTestResolver", py.get_type::<CacheTestResolver>())?;
-        dict.set_item("_ResponseCacheRuntime", py.get_type::<ResolvedCache>())
+        dict.set_item("_ResponseCacheRuntime", py.get_type::<ResolvedCache>())?;
+        dict.set_item(
+            "_SecretManagerRuntime",
+            py.get_type::<crate::secrets::runtime::NativeSecretManager>(),
+        )
     }
 }
 
