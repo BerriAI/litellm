@@ -575,7 +575,25 @@ class TestVaultIsolation:
 
         used = mock.call_args_list[0].kwargs["headers"]["X-Session-ID"]
         assert used != "victim-session"
-        assert data["metadata"]["llm_shield_session_id"] == used
+        assert data["litellm_metadata"]["llm_shield_session_id"] == used
+
+    @pytest.mark.asyncio
+    async def test_session_id_is_not_forwarded_to_the_provider(self):
+        """The vault id is a capability, so it must stay out of provider-visible metadata.
+
+        `metadata` is forwarded upstream on /v1/responses; `litellm_metadata` is not. A
+        provider holding both the placeholders and the session id could call the shield's
+        rehydrate endpoint and read back exactly what this guardrail withholds.
+        """
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["[EMAIL_1]"]})
+
+        data = {"messages": [{"role": "user", "content": "a@b.com"}], "metadata": {}}
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
+
+        used = mock.call_args_list[0].kwargs["headers"]["X-Session-ID"]
+        assert "llm_shield_session_id" not in data["metadata"]
+        assert data["litellm_metadata"]["llm_shield_session_id"] == used
 
     @pytest.mark.asyncio
     async def test_restore_ignores_a_foreign_session_id(self):
@@ -899,3 +917,28 @@ class TestStreamingRehydration:
 
         assert len(chunks) == 3
         assert [c.choices[0].delta.content for c in chunks] == ["one ", "two ", "three"]
+
+
+class TestApplyGuardrailToolCalls:
+    """The unified entry point the UI's Test button and the translation handlers use."""
+
+    @pytest.mark.asyncio
+    async def test_response_tool_call_arguments_are_rehydrated(self):
+        """Regression: this path deep-copied tool calls with `copy` never imported.
+
+        47 tests passed with a guaranteed NameError here, because every tool-call test
+        covered the request side and this is the only path that reaches the copy.
+        """
+        guardrail = _guardrail(event_hook="post_call")
+        _mock_post(guardrail, {"texts": ["hi", '{"email": "a@b.com"}']})
+
+        data = {"litellm_metadata": {"llm_shield_session_id": "shield-abc"}}
+        inputs = {
+            "texts": ["hi"],
+            "tool_calls": [{"function": {"name": "send", "arguments": '{"email": "[EMAIL_1]"}'}}],
+        }
+
+        merged = await guardrail.apply_guardrail(inputs=inputs, request_data=data, input_type="response")
+
+        assert merged["tool_calls"][0]["function"]["arguments"] == '{"email": "a@b.com"}'
+        assert inputs["tool_calls"][0]["function"]["arguments"] == '{"email": "[EMAIL_1]"}'

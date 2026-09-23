@@ -5,6 +5,7 @@
 #
 # +-------------------------------------------------------------+
 
+import copy
 import os
 import uuid
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
@@ -254,24 +255,28 @@ def _collect_json_leaves(node: object, slots: _SlotSink, depth: int = 0) -> None
     string, so a value worth restoring can sit at any depth. Bounded by
     `_MAX_CONTENT_DEPTH` for the same reason the request walk is: the shape is model
     controlled, and the bound is what stops a crafted one from becoming an unbounded
-    descent.
+    descent. Walked with an explicit stack rather than recursively, so a deeply nested
+    tool input cannot spend stack frames proportional to attacker-chosen depth.
     """
-    if depth > _MAX_CONTENT_DEPTH:
-        return
-    if isinstance(node, dict):
-        for key in tuple(node):
-            value = node[key]
-            if isinstance(value, str) and value:
-                slots.append((value, lambda new, d=node, k=key: d.__setitem__(k, new)))
-            else:
-                _collect_json_leaves(value, slots, depth + 1)
-        return
-    if isinstance(node, list):
-        for index, value in enumerate(node):
-            if isinstance(value, str) and value:
-                slots.append((value, lambda new, entries=node, i=index: entries.__setitem__(i, new)))
-            else:
-                _collect_json_leaves(value, slots, depth + 1)
+    pending: Final[list] = [(node, depth)]  # mutable-ok: local walk stack.
+    while pending:
+        current, current_depth = pending.pop()
+        if current_depth > _MAX_CONTENT_DEPTH:
+            continue
+        if isinstance(current, dict):
+            for key in tuple(current):
+                value = current[key]
+                if isinstance(value, str) and value:
+                    slots.append((value, lambda new, d=current, k=key: d.__setitem__(k, new)))
+                else:
+                    pending.append((value, current_depth + 1))
+            continue
+        if isinstance(current, list):
+            for index, value in enumerate(current):
+                if isinstance(value, str) and value:
+                    slots.append((value, lambda new, entries=current, i=index: entries.__setitem__(i, new)))
+                else:
+                    pending.append((value, current_depth + 1))
 
 
 def _carry_sort_key(key: tuple) -> tuple:
@@ -391,7 +396,11 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         caller from reaching another caller's vault.
         """
         session_id: Final = f"{_VAULT_PREFIX}-{uuid.uuid4().hex}"
-        metadata: Final = data.setdefault("metadata", {})  # mutable-ok: per-request store.
+        # `litellm_metadata` is proxy-private; `metadata` is forwarded to the provider on
+        # /v1/responses. The session id is a capability against the vault's rehydrate
+        # endpoint, so handing it to the provider alongside the placeholders would let the
+        # provider read back exactly what this guardrail exists to withhold.
+        metadata: Final = data.setdefault("litellm_metadata", {})  # mutable-ok: per-request store.
         if isinstance(metadata, dict):
             metadata[_SESSION_METADATA_KEY] = session_id
         return session_id
@@ -404,7 +413,9 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         reply that cannot be restored is a visible placeholder, while trusting a
         caller-supplied id would hand them someone else's plaintext.
         """
-        metadata: Final = data.get("metadata")
+        # Read only from `litellm_metadata`, the same proxy-private store `_mint_session_id`
+        # writes to. A caller can populate `metadata`; they cannot populate this.
+        metadata: Final = data.get("litellm_metadata")
         existing: Final = metadata.get(_SESSION_METADATA_KEY) if isinstance(metadata, dict) else None
         if isinstance(existing, str) and existing.startswith(_VAULT_PREFIX):
             return existing
@@ -602,9 +613,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
                     slots.append((value, lambda new, i=item, f=field: _write_field(i, f, new)))
         return tuple(slots)
 
-    async def _restore_responses_api_response(
-        self, response: Any, slots: Sequence[_Slot], data: MutableRequest
-    ) -> Any:
+    async def _restore_responses_api_response(self, response: Any, slots: Sequence[_Slot], data: MutableRequest) -> Any:
         """Puts the original values back into a Responses API reply."""
         restored: Final = await self._rehydrate(tuple(text for text, _ in slots), self._session_id(data))
         for (_, write), replacement in zip(slots, restored):
