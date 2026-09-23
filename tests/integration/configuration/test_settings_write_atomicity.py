@@ -73,7 +73,6 @@ def _write_owned_config(
     return path
 
 
-@pytest.mark.covers("configuration.settings_write.refused_patch_leaves_serving_value")
 def test_refused_patch_leaves_serving_value(gateway: Gateway, tmp_path: Path) -> None:
     config: Final = _write_owned_config(tmp_path, {}, {"default_internal_user_params": {"max_budget": 999.0}})
     with _owned_database(tmp_path) as database_url, owned_redis(tmp_path) as cache:
@@ -100,7 +99,6 @@ def test_refused_patch_leaves_serving_value(gateway: Gateway, tmp_path: Path) ->
             assert object_value(settings["values"])["max_budget"] == 999.0, json.dumps(settings)
 
 
-@pytest.mark.covers("configuration.settings_write.db_general_settings_row_cannot_rebind_role_permissions")
 def test_db_general_settings_row_cannot_rebind_role_permissions(gateway: Gateway, tmp_path: Path) -> None:
     private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     numbers: Final = private_key.public_key().public_numbers()
