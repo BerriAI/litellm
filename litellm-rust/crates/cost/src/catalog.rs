@@ -94,6 +94,32 @@ pub struct ModelCostRequest<'a> {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub enum CostCall<'a> {
+    Token {
+        call_type: &'a str,
+        prompt_characters: Option<f64>,
+        completion_characters: Option<f64>,
+        request_model: Option<&'a str>,
+    },
+    Speech {
+        prompt_characters: Option<f64>,
+    },
+    Transcription {
+        duration_seconds: f64,
+    },
+    Rerank {
+        billed_units: Option<&'a Value>,
+    },
+    VectorStoreSearch {
+        api_type: Option<&'a str>,
+    },
+    Search {
+        number_of_queries: Option<u64>,
+        optional_params: &'a Value,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct CompletionCostRequest<'a> {
     pub token: ModelCostRequest<'a>,
     pub built_in_tools: BuiltInToolCharge<'a>,
@@ -161,6 +187,13 @@ pub enum CatalogSpeechError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CatalogCallError {
+    Catalog(CatalogError),
+    Speech(CatalogSpeechError),
+    MissingProvider,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CatalogImageError {
     Catalog(CatalogError),
     Pricing(NonTokenError),
@@ -188,6 +221,18 @@ impl From<UsageError> for CatalogImageError {
 impl From<CatalogError> for CatalogSpeechError {
     fn from(value: CatalogError) -> Self {
         Self::Catalog(value)
+    }
+}
+
+impl From<CatalogError> for CatalogCallError {
+    fn from(value: CatalogError) -> Self {
+        Self::Catalog(value)
+    }
+}
+
+impl From<CatalogSpeechError> for CatalogCallError {
+    fn from(value: CatalogSpeechError) -> Self {
+        Self::Speech(value)
     }
 }
 
@@ -322,6 +367,62 @@ impl ModelInfoCatalog {
         select_model_key(&self.entries, model, provider, region)
     }
 
+    pub fn cost_per_token_for_call(
+        &self,
+        request: ModelCostRequest<'_>,
+        call: CostCall<'_>,
+    ) -> Result<(f64, f64), CatalogCallError> {
+        match call {
+            CostCall::Token {
+                call_type,
+                prompt_characters,
+                completion_characters,
+                request_model,
+            } => {
+                if request.provider == Some("vertex_ai") {
+                    return Ok(self.vertex_cost(
+                        request,
+                        call_type,
+                        prompt_characters,
+                        completion_characters,
+                    )?);
+                }
+                if request.provider == Some("together_ai")
+                    && matches!(call_type, "embedding" | "aembedding")
+                {
+                    return Ok(self.together_ai_cost_per_token(request, call_type)?);
+                }
+                if request.provider == Some("azure_ai") {
+                    return Ok(self.azure_ai_cost_per_token(request, request_model)?);
+                }
+                Ok(self.cost_per_token(request)?)
+            }
+            CostCall::Speech { prompt_characters } => {
+                Ok(self.speech_cost(request, prompt_characters)?)
+            }
+            CostCall::Transcription { duration_seconds } => {
+                Ok(self.transcription_cost(request, duration_seconds)?)
+            }
+            CostCall::Rerank { billed_units } => {
+                let provider = request.provider.ok_or(CatalogCallError::MissingProvider)?;
+                Ok(self.rerank_cost(request.model, provider, request.region, billed_units))
+            }
+            CostCall::VectorStoreSearch { api_type } => {
+                let provider = request.provider.ok_or(CatalogCallError::MissingProvider)?;
+                Ok(self.vector_store_search_cost(provider, api_type))
+            }
+            CostCall::Search {
+                number_of_queries,
+                optional_params,
+            } => Ok(self.search_provider_cost_per_query(
+                request.model,
+                request.provider,
+                number_of_queries.filter(|count| *count > 0).unwrap_or(1),
+                optional_params,
+            )?),
+        }
+    }
+
     pub fn vertex_cost(
         &self,
         request: ModelCostRequest<'_>,
@@ -329,6 +430,13 @@ impl ModelInfoCatalog {
         prompt_characters: Option<f64>,
         completion_characters: Option<f64>,
     ) -> Result<(f64, f64), CatalogError> {
+        if let Some(cost) = self
+            .select_model_key(request.model, request.provider, request.region)
+            .and_then(|key| self.entries.get(key))
+            .and_then(|info| per_second_pricing_cost(info, request.response_time_ms))
+        {
+            return Ok(cost);
+        }
         if vertex_cost_router(request.model, request.provider.unwrap_or(""), call_type)
             == CostRoute::PerToken
         {

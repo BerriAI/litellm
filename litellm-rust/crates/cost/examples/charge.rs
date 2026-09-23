@@ -5,7 +5,7 @@ use litellm_cost::batch::{
     BatchCostRates, BatchPricing, BatchUsage, ModalityRates, batch_cost_calculator,
 };
 use litellm_cost::catalog::{
-    AzureAiImageCatalogRequest, BuiltInToolCharge, CompletionCostRequest, CostCatalog,
+    AzureAiImageCatalogRequest, BuiltInToolCharge, CompletionCostRequest, CostCall, CostCatalog,
     ModelCostRequest, ModelInfoCatalog, ResponseCostRequest,
 };
 use litellm_cost::custom_pricing::{
@@ -875,6 +875,26 @@ fn main() {
     let search_cost = model_info_catalog
         .search_provider_cost_per_query("search", Some("exa_ai"), 3, &json!({"max_results": 12}))
         .unwrap();
+    let routed_search_cost = model_info_catalog
+        .cost_per_token_for_call(
+            ModelCostRequest {
+                model: "search",
+                provider: Some("exa_ai"),
+                region: None,
+                usage: &off_peak_usage,
+                service_tier: None,
+                data_residency: None,
+                vertex_location: None,
+                at,
+                response_time_ms: None,
+            },
+            CostCall::Search {
+                number_of_queries: Some(3),
+                optional_params: &json!({"max_results": 12}),
+            },
+        )
+        .unwrap();
+    println!("routed_search_cost={:.3}", routed_search_cost.0);
     let parallel_search_cost = model_info_catalog
         .search_provider_cost_per_query(
             "ignored",
