@@ -4,7 +4,7 @@ import uuid
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway
+from integration._support.client import JSON_OBJECT, Gateway
 from integration._support.wire import Reply, Request, wire_server
 
 _UPSTREAM_STALL_SECONDS: Final = 4.0
@@ -18,7 +18,7 @@ def test_messages_endpoint_honors_configured_timeout_against_stalled_upstream(ga
     def respond(request: Request) -> Reply:
         assert request.method == "POST" and request.target == "/v1/messages"
         assert request.headers["x-api-key"] == "synthetic-anthropic-key"
-        body: Final = json.loads(request.body)
+        body: Final = JSON_OBJECT.validate_json(request.body)
         assert body["model"] == "claude-sonnet-4-5-20250929"
         assert body["messages"] == [{"role": "user", "content": prompt}]
         assert body["max_tokens"] == 16
