@@ -8,9 +8,11 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Final
 
+import litellm
 import pytest
 from integration._support.upstream import INTERNAL_FIELDS
 from integration._support.wire import Reply, Request, wire_server
+from litellm.integrations.custom_logger import CustomLogger
 
 TEXT: Final = "wire control"
 OPENAI_RESPONSE: Final = {
@@ -241,6 +243,21 @@ def _keys_at_every_depth(value: object) -> frozenset[str]:
     return frozenset()
 
 
+class _LitellmParamsRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: list[dict] = []
+
+    def log_pre_api_call(self, model, messages, kwargs) -> None:
+        self.seen.append(kwargs["litellm_params"])
+
+
+def _record_litellm_params(monkeypatch: pytest.MonkeyPatch) -> _LitellmParamsRecorder:
+    recorder: Final = _LitellmParamsRecorder()
+    monkeypatch.setattr(litellm, "input_callback", [recorder])
+    return recorder
+
+
 def _peer(provider: str) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         body: Final = json.loads(request.body) if request.body else {}
@@ -263,8 +280,6 @@ def _peer(provider: str) -> Callable[[Request], Reply]:
 async def test_stream_chunk_size_never_reaches_provider_body(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, provider: str, asynchronous: bool, stream: bool
 ) -> None:
-    import litellm
-
     empty: Final = tmp_path / "empty-aws-config"
     empty.write_text("")
     for name in tuple(name for name in os.environ if name.startswith("AWS_")):
@@ -277,6 +292,7 @@ async def test_stream_chunk_size_never_reaches_provider_body(
     }.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _record_litellm_params(monkeypatch)
     with wire_server(_peer(provider)) as wire:
         parameters: Final = {
             **_request_parameters(provider, wire.url),
@@ -300,6 +316,8 @@ async def test_stream_chunk_size_never_reaches_provider_body(
             assert result.choices[0].message.content == TEXT
         requests: Final = wire.drain()
         assert len(requests) == 1
+        assert len(recorder.seen) == 1
+        assert recorder.seen[0]["stream_chunk_size"] == 64
         body: Final = json.loads(requests[0].body)
         keys: Final = _keys_at_every_depth(body)
         assert "stream_chunk_size" not in keys

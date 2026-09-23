@@ -1,10 +1,13 @@
 import json
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.bedrock.chat import BedrockConverseLLM
 from litellm.llms.bedrock.chat.converse_handler import make_sync_call
 from litellm.llms.bedrock.common_utils import _get_all_bedrock_regions
@@ -313,7 +316,33 @@ def test_completion_plumbs_stream_chunk_size_through_converse():
     iter_bytes_spy.assert_called_once_with(chunk_size=2048)
 
 
-def _stream_converse_completion_with_spied_client(**kwargs) -> tuple[MagicMock, MagicMock]:
+class _LitellmParamsRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: list[dict] = []
+
+    def log_pre_api_call(self, model, messages, kwargs) -> None:
+        self.seen.append(kwargs["litellm_params"])
+
+
+def _record_litellm_params(monkeypatch: pytest.MonkeyPatch) -> _LitellmParamsRecorder:
+    recorder: Final = _LitellmParamsRecorder()
+    monkeypatch.setattr(litellm, "input_callback", [recorder])
+    return recorder
+
+
+def _keys_at_every_depth(value: object) -> frozenset[str]:
+    if isinstance(value, Mapping):
+        return frozenset(value) | frozenset().union(*(_keys_at_every_depth(item) for item in value.values()))
+    if isinstance(value, (list, tuple)):
+        return frozenset().union(*(_keys_at_every_depth(item) for item in value))
+    return frozenset()
+
+
+def _stream_converse_completion_with_spied_client(
+    monkeypatch: pytest.MonkeyPatch, **kwargs
+) -> tuple[MagicMock, MagicMock, _LitellmParamsRecorder]:
+    recorder: Final = _record_litellm_params(monkeypatch)
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.iter_bytes = MagicMock(return_value=iter([]))
@@ -330,29 +359,41 @@ def _stream_converse_completion_with_spied_client(**kwargs) -> tuple[MagicMock, 
         aws_region_name="us-east-1",
         **kwargs,
     )
-    return mock_response.iter_bytes, client.post
+    return mock_response.iter_bytes, client.post, recorder
 
 
-def test_completion_stream_chunk_size_reaches_iter_bytes_but_not_converse_body():
-    iter_bytes_spy, post_spy = _stream_converse_completion_with_spied_client(stream_chunk_size=64)
+def test_completion_stream_chunk_size_reaches_iter_bytes_but_not_converse_body(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    iter_bytes_spy, post_spy, recorder = _stream_converse_completion_with_spied_client(
+        monkeypatch, stream_chunk_size=64
+    )
 
     iter_bytes_spy.assert_called_once_with(chunk_size=64)
-    assert "stream_chunk_size" not in post_spy.call_args.kwargs["data"], post_spy.call_args.kwargs["data"]
+    data: Final = post_spy.call_args.kwargs["data"]
+    assert "stream_chunk_size" not in _keys_at_every_depth(json.loads(data)), data
+    assert len(recorder.seen) == 1
+    assert recorder.seen[0]["stream_chunk_size"] == 64
 
 
-def test_completion_without_stream_chunk_size_uses_default_chunking():
-    iter_bytes_spy, _ = _stream_converse_completion_with_spied_client()
+def test_completion_without_stream_chunk_size_uses_default_chunking(monkeypatch: pytest.MonkeyPatch):
+    iter_bytes_spy, _, recorder = _stream_converse_completion_with_spied_client(monkeypatch)
 
     iter_bytes_spy.assert_called_once_with(chunk_size=None)
+    assert len(recorder.seen) == 1
+    assert recorder.seen[0]["stream_chunk_size"] is None
 
 
-async def _astream_converse_completion_with_spied_client(**kwargs) -> tuple[MagicMock, AsyncMock]:
+async def _astream_converse_completion_with_spied_client(
+    monkeypatch: pytest.MonkeyPatch, **kwargs
+) -> tuple[MagicMock, AsyncMock, _LitellmParamsRecorder]:
     async def _no_bytes():
         return
         yield b""
 
     mock_response = MagicMock()
     mock_response.status_code = 200
+    recorder: Final = _record_litellm_params(monkeypatch)
     mock_response.aiter_bytes = MagicMock(return_value=_no_bytes())
     aiter_bytes_spy = mock_response.aiter_bytes
     client = AsyncHTTPHandler()
@@ -368,26 +409,38 @@ async def _astream_converse_completion_with_spied_client(**kwargs) -> tuple[Magi
         aws_region_name="us-east-1",
         **kwargs,
     )
-    return aiter_bytes_spy, client.post
+    return aiter_bytes_spy, client.post, recorder
 
 
 @pytest.mark.asyncio
-async def test_acompletion_stream_chunk_size_reaches_aiter_bytes_but_not_converse_body():
-    aiter_bytes_spy, post_spy = await _astream_converse_completion_with_spied_client(stream_chunk_size=64)
+async def test_acompletion_stream_chunk_size_reaches_aiter_bytes_but_not_converse_body(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    aiter_bytes_spy, post_spy, recorder = await _astream_converse_completion_with_spied_client(
+        monkeypatch, stream_chunk_size=64
+    )
 
     aiter_bytes_spy.assert_called_once_with(chunk_size=64)
-    assert "stream_chunk_size" not in post_spy.call_args.kwargs["data"], post_spy.call_args.kwargs["data"]
+    data: Final = post_spy.call_args.kwargs["data"]
+    assert "stream_chunk_size" not in _keys_at_every_depth(json.loads(data)), data
+    assert len(recorder.seen) == 1
+    assert recorder.seen[0]["stream_chunk_size"] == 64
 
 
 @pytest.mark.asyncio
-async def test_acompletion_without_stream_chunk_size_uses_default_chunking():
-    aiter_bytes_spy, _ = await _astream_converse_completion_with_spied_client()
+async def test_acompletion_without_stream_chunk_size_uses_default_chunking(monkeypatch: pytest.MonkeyPatch):
+    aiter_bytes_spy, _, recorder = await _astream_converse_completion_with_spied_client(monkeypatch)
 
     aiter_bytes_spy.assert_called_once_with(chunk_size=None)
+    assert len(recorder.seen) == 1
+    assert recorder.seen[0]["stream_chunk_size"] is None
 
 
 @pytest.mark.parametrize("stream_chunk_size,expected_chunk_size", [(64, 64), (None, None)])
-def test_router_deployment_stream_chunk_size_reaches_iter_bytes(stream_chunk_size, expected_chunk_size):
+def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
+    monkeypatch: pytest.MonkeyPatch, stream_chunk_size, expected_chunk_size
+):
+    recorder: Final = _record_litellm_params(monkeypatch)
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.iter_bytes = MagicMock(return_value=iter([]))
@@ -417,7 +470,10 @@ def test_router_deployment_stream_chunk_size_reaches_iter_bytes(stream_chunk_siz
     )
 
     mock_response.iter_bytes.assert_called_once_with(chunk_size=expected_chunk_size)
-    assert "stream_chunk_size" not in client.post.call_args.kwargs["data"], client.post.call_args.kwargs["data"]
+    data: Final = client.post.call_args.kwargs["data"]
+    assert "stream_chunk_size" not in _keys_at_every_depth(json.loads(data)), data
+    assert len(recorder.seen) == 1
+    assert recorder.seen[0]["stream_chunk_size"] == stream_chunk_size
 
 
 def _bedrock_error_response(status_code: int, request_id: str) -> httpx.Response:
