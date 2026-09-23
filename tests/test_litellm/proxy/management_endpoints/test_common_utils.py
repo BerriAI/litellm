@@ -816,6 +816,21 @@ class TestCheckDisableGlobalGuardrailsCallerPermission:
         assert exc_info.value.status_code == 403
         assert exc_info.value.detail == {"error": "Only proxy admins can set `disable_global_guardrails` on a key."}
 
+    def test_explicit_false_with_metadata_true_is_rejected(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_disable_global_guardrails_caller_permission(
+                False, {"disable_global_guardrails": True}, self._non_admin()
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == {"error": "Only proxy admins can set `disable_global_guardrails` on a key."}
+
     def test_rejection_names_the_team_entity(self):
         from fastapi import HTTPException
 

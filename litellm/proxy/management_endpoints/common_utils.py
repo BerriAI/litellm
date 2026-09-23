@@ -188,10 +188,8 @@ def _check_disable_global_guardrails_caller_permission(
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
-    requested: Final = (
-        disable_global_guardrails
-        if disable_global_guardrails is not None
-        else metadata is not None and bool(metadata.get("disable_global_guardrails"))
+    requested: Final = bool(disable_global_guardrails) or (
+        metadata is not None and bool(metadata.get("disable_global_guardrails"))
     )
     if not requested:
         return
