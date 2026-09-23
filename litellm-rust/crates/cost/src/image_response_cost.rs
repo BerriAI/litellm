@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use jiff::Timestamp;
 use serde_json::Value;
 
+use crate::gemini_cost::cost_per_web_search_request;
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
+use crate::generic_input::get_cost_per_unit;
 use crate::provider_cache::apply_provider_cache_read_default;
 use crate::responses_usage::{ChatUsage, CompletionTokenDetails, PromptTokenDetails};
 
@@ -99,4 +101,83 @@ pub fn calculate_image_response_cost_from_usage(
         at,
     );
     Some(input + output)
+}
+
+pub fn flat_image_cost(image_response: &Value, model_info: &Value) -> f64 {
+    let count = image_response
+        .get("data")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    count as f64 * get_cost_per_unit(model_info, "output_cost_per_image", Some(0.0)).unwrap_or(0.0)
+}
+
+pub fn resolve_image_model_info(shared: Option<&Value>, supplied: Option<&Value>) -> Option<Value> {
+    match (shared, supplied) {
+        (None, None) => None,
+        (Some(info), None) | (None, Some(info)) => Some(info.clone()),
+        (Some(shared), Some(supplied)) => match (shared.as_object(), supplied.as_object()) {
+            (Some(shared), Some(supplied)) => Some(Value::Object(
+                shared
+                    .iter()
+                    .chain(supplied.iter())
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+            )),
+            _ => Some(supplied.clone()),
+        },
+    }
+}
+
+pub fn calculate_image_response_web_search_cost(
+    image_response: &Value,
+    model_info: &Value,
+    provider: &str,
+) -> f64 {
+    if !matches!(provider, "gemini" | "vertex_ai") {
+        return 0.0;
+    }
+    let requests = image_response
+        .pointer("/usage/web_search_requests")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if requests == 0 {
+        return 0.0;
+    }
+    let usage = ChatUsage {
+        prompt_tokens_details: Some(PromptTokenDetails {
+            web_search_requests: Some(requests),
+            ..PromptTokenDetails::default()
+        }),
+        ..ChatUsage::default()
+    };
+    cost_per_web_search_request(&usage, model_info)
+}
+
+fn google_image_generation_cost(
+    image_response: &Value,
+    model_info: &Value,
+    provider: &str,
+    at: Timestamp,
+) -> f64 {
+    let search = calculate_image_response_web_search_cost(image_response, model_info, provider);
+    let image =
+        calculate_image_response_cost_from_usage(image_response, model_info, Some(provider), at)
+            .unwrap_or_else(|| flat_image_cost(image_response, model_info));
+    image + search
+}
+
+pub fn vertex_image_generation_cost(
+    image_response: &Value,
+    model_info: &Value,
+    at: Timestamp,
+) -> f64 {
+    google_image_generation_cost(image_response, model_info, "vertex_ai", at)
+}
+
+pub fn gemini_image_generation_cost(
+    image_response: &Value,
+    model_info: &Value,
+    at: Timestamp,
+) -> f64 {
+    google_image_generation_cost(image_response, model_info, "gemini", at)
 }

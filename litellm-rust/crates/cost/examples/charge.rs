@@ -549,6 +549,10 @@ fn main() {
             json!({"input_cost_per_character": 0.0001, "output_cost_per_character": 0.0002, "regional_endpoint_uplift_multiplier": 1.1}),
         ),
         (
+            "vertex_ai/image-sample".to_owned(),
+            json!({"input_cost_per_token": 0.001, "output_cost_per_image_token": 0.003, "output_cost_per_image": 0.5, "web_search_billing_unit": "per_query", "search_context_cost_per_query": {"search_context_size_medium": 0.02}}),
+        ),
+        (
             "azure/speech".to_owned(),
             json!({"mode": "audio_speech", "input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "output_cost_per_second": 0.02}),
         ),
@@ -966,4 +970,14 @@ fn main() {
         "vertex_character_input={:.3} vertex_character_output={:.3}",
         vertex.0, vertex.1
     );
+    let vertex_image = model_info_catalog
+        .google_image_generation_cost(
+            "image-sample",
+            "vertex_ai",
+            &json!({"data": [{}], "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5, "web_search_requests": 2}}),
+            None,
+            at,
+        )
+        .unwrap();
+    println!("vertex_image_generation={vertex_image:.3}");
 }

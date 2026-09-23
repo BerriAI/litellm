@@ -24,7 +24,10 @@ use crate::fireworks_cost::{
     FireworksThresholds, cost_per_token as fireworks_cost_per_token, get_base_model_for_pricing,
 };
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
-use crate::image_response_cost::calculate_image_response_cost_from_usage;
+use crate::image_response_cost::{
+    calculate_image_response_cost_from_usage, gemini_image_generation_cost,
+    resolve_image_model_info, vertex_image_generation_cost,
+};
 use crate::per_second::per_second_pricing_cost;
 use crate::perplexity_cost::cost_per_token as perplexity_cost_per_token;
 use crate::prompt_caching_savings::{
@@ -687,6 +690,34 @@ impl ModelInfoCatalog {
             .select_model_key(model, provider, region)
             .and_then(|key| self.entries.get(key))?;
         calculate_image_response_cost_from_usage(image_response, model_info, provider, at)
+    }
+
+    pub fn google_image_generation_cost(
+        &self,
+        model: &str,
+        provider: &str,
+        image_response: &Value,
+        supplied_model_info: Option<&Value>,
+        at: Timestamp,
+    ) -> Result<f64, CatalogError> {
+        let shared = self
+            .select_model_key(model, Some(provider), None)
+            .and_then(|key| self.entries.get(key));
+        let model_info = resolve_image_model_info(shared, supplied_model_info)
+            .ok_or(CatalogError::ModelNotFound)?;
+        match provider {
+            "gemini" => Ok(gemini_image_generation_cost(
+                image_response,
+                &model_info,
+                at,
+            )),
+            "vertex_ai" => Ok(vertex_image_generation_cost(
+                image_response,
+                &model_info,
+                at,
+            )),
+            _ => Err(CatalogError::ModelNotFound),
+        }
     }
 
     pub fn rerank_cost(
