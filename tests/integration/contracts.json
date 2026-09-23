@@ -1939,6 +1939,9 @@
     "tests/integration/providers/test_bedrock_rerank_wire.py::test_forwarded_client_header_on_rerank_is_excluded_from_the_sigv4_signature": [
       "providers.bedrock_rerank.forwarded_client_headers_are_sent_unsigned"
     ],
+    "tests/integration/providers/test_rerank_latency_headers_wire.py::test_rerank_response_carries_call_id_latency_and_cost_headers_like_chat_completions": [
+      "providers.rerank.response_carries_latency_and_cost_headers"
+    ],
     "tests/integration/providers/test_bedrock_thinking_tokens_wire.py::test_bedrock_redacted_thinking_is_not_reported_as_zero_reasoning_tokens": [
       "other.provider_wire.bedrock.hidden_thinking_tokens_are_not_reported_as_text"
     ],
