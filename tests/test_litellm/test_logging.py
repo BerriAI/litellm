@@ -1676,3 +1676,75 @@ def test_access_log_path_filter_keeps_a_record_without_a_string_path_arg(monkeyp
         exc_info=None,
     )
     assert AccessLogPathFilter().filter(record) is True
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_diagnostic_filter_scrubs_exc_stack_and_nested_extras(monkeypatch, native):
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    secret = "sk-" + "q" * 48
+    try:
+        raise ValueError(f"upstream rejected {secret}")
+    except ValueError:
+        record = _make_record(logging.ERROR, "call failed", exc_info=sys.exc_info())
+    record.stack_info = f"Stack (most recent call last): {secret}"
+    record.payload = {
+        "api_key": secret,
+        "items": [secret, "ok"],
+        "tags": {secret},
+        "pair": (secret, "ok"),
+        "count": 2,
+    }
+
+    assert DiagnosticProcessingFilter().filter(record) is True
+
+    assert secret not in (record.exc_text or "")
+    assert secret not in (record.stack_info or "")
+    assert secret not in repr(record.payload)
+    assert record.payload["count"] == 2
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_diagnostic_filter_stamps_records_so_a_second_pass_is_free(monkeypatch, native):
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.WARNING, "api_key=secret123")
+    diagnostic_filter = DiagnosticProcessingFilter()
+
+    assert diagnostic_filter.filter(record) is True
+    assert diagnostic_filter.filter(record) is True
+    assert record.getMessage() == "REDACTED"
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_json_formatter_scrubs_unfiltered_extras(monkeypatch, native):
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    secret = "sk-" + "q" * 48
+    record = _make_record(logging.INFO, "response complete")
+    record.payload = {"api_key": secret, "nested": {"list": [secret]}}
+
+    rendered = JsonFormatter().format(record)
+
+    assert secret not in rendered
+    assert "REDACTED" in rendered
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_diagnostic_filter_redacts_a_non_string_message_object(monkeypatch, native):
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    secret = "sk-" + "q" * 48
+    record = _make_record(logging.ERROR, {"api_key": secret})
+
+    assert DiagnosticProcessingFilter().filter(record) is True
+
+    assert secret not in record.getMessage()
