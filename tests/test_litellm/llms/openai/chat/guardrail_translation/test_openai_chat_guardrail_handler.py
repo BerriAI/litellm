@@ -253,3 +253,30 @@ class TestOpenAIChatHandlerAttachmentsDefaultScope:
         assert guardrail.calls == 1
         assert guardrail.inputs is not None
         assert guardrail.inputs["images"] == [""]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "shell",
+        [
+            {"type": "video_url"},
+            {"type": "input_audio"},
+            {"type": "file"},
+            {"type": "video_url", "video_url": {}},
+            {"type": "input_audio", "input_audio": ""},
+        ],
+    )
+    async def test_bare_attachment_shells_yield_no_files_entry(self, shell):
+        """A payload-less attachment part carries nothing the guardrail can refuse or scan."""
+        guardrail = ScanningGuardrail()
+        data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "look"}, shell]}],
+        }
+
+        await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["look"]
+        assert "files" not in guardrail.inputs
+        assert "images" not in guardrail.inputs

@@ -130,6 +130,9 @@ _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS: Final[Mapping[str, str]] = MappingProxyTyp
         "input_audio": "input_audio",
     }
 )
+_TOOL_OUTPUT_ATTACHMENT_TYPES: Final[frozenset[str]] = frozenset(
+    ("input_file", "file", "document", "input_image", "image_url", "image")
+)
 _NO_TRACING_DETAIL: Final[GuardrailTracingDetail] = {}
 # Resource-less, detect-only InvokeGuardrailChecks API (no guardrail resource required).
 _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH: Final = "/guardrail-checks/invoke"
@@ -170,13 +173,13 @@ _GROUNDING_SOURCE_TRUSTED_ROLES: Final = frozenset({"system", "developer"})
 _MAX_IMAGE_BYTES: Final = 4 * 1024 * 1024
 _MAX_IMAGES_PER_APPLY_GUARDRAIL_CALL: Final = 20
 
-_APPLY_GUARDRAIL_IMAGE_FORMATS: Final[
-    dict[str, BedrockGuardrailImageFormat]
-] = {  # mutable-ok: module-level lookup table, never mutated
-    "png": "png",
-    "jpeg": "jpeg",
-    "jpg": "jpeg",
-}
+_APPLY_GUARDRAIL_IMAGE_FORMATS: Final[Mapping[str, BedrockGuardrailImageFormat]] = MappingProxyType(
+    {
+        "png": "png",
+        "jpeg": "jpeg",
+        "jpg": "jpeg",
+    }
+)
 
 
 class QualifiedTextBlock(NamedTuple):
@@ -257,6 +260,23 @@ _RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.are
 def _decoded_base64_length(encoded: str) -> int:
     """Decoded byte length of a base64 payload without materializing it."""
     return len(encoded) * 3 // 4 - encoded[-2:].count("=")
+
+
+def _serialized_tool_output_parts(content: str) -> tuple[Mapping[str, object], ...]:
+    """Attachment-shaped members of a ``tool`` message's JSON-serialized output."""
+    if not content.lstrip().startswith("["):
+        return ()
+    try:
+        decoded: Final = json.loads(content)
+    except ValueError:
+        return ()
+    if not isinstance(decoded, list):
+        return ()
+    return tuple(
+        cast(Mapping[str, object], item)  # cast-ok: narrowed to dict in the generator's condition
+        for item in decoded
+        if isinstance(item, dict)
+    )
 
 
 def _content_leaf_parts(content: object) -> tuple[object, ...]:
@@ -439,7 +459,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
         return cleaned or None
 
-    async def _create_bedrock_input_content_request(self, messages: list[AllMessageValues] | None) -> BedrockRequest:
+    async def _create_bedrock_input_content_request(
+        self, messages: "Sequence[AllMessageValues] | None"
+    ) -> BedrockRequest:
         """Create a bedrock request for the input content - the LLM request."""
         bedrock_request: Final[BedrockRequest] = BedrockRequest(source="INPUT")
         if messages is None:
@@ -667,8 +689,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return
         part_map: Final = cast(Mapping[str, object], part)  # cast-ok: narrowed to dict on the line above
         part_type: Final = part_map.get("type")
-        if part_type in ("file", "document"):
-            self._handle_unscannable_attachment(reason="a document/file attachment cannot be scanned")
+        payload_key: Final = _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS.get(str(part_type))
+        if payload_key is not None and part_map.get(payload_key):
+            self._handle_unscannable_attachment(reason="a document, file, video or audio attachment cannot be scanned")
         if part_type == "image_url":
             image_url: Final = self._get_image_url(item=part_map)
             if image_url is None:
@@ -692,6 +715,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         for message in messages:
             for leaf in _content_leaf_parts(message.get("content")):
                 self._refuse_unscannable_part(part=leaf)
+            self._refuse_serialized_tool_output(message=message)
+
+    def _refuse_serialized_tool_output(self, message: Mapping[str, object]) -> None:
+        """Refuse an attachment hiding in a ``tool`` message's serialized output."""
+        if message.get("role") != "tool":
+            return
+        content: Final = message.get("content")
+        if not isinstance(content, str):
+            return
+        for part in _serialized_tool_output_parts(content):
+            if part.get("type") in _TOOL_OUTPUT_ATTACHMENT_TYPES:
+                self._handle_unscannable_attachment(reason="a tool output attachment cannot be scanned")
 
     async def _build_image_content_item(self, image_url: str) -> BedrockContentItem:
         """Refuse remote urls with the same substring test

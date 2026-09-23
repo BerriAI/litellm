@@ -86,9 +86,11 @@ def _image_part_ref(content_item: Mapping[str, object], scan_attachments: bool) 
     return None
 
 
-def _file_part_ref(content_item: Mapping[str, object]) -> str:
+def _file_part_ref(content_item: Mapping[str, object]) -> str | None:
     """Identify a ``type == "file"`` part by whichever reference field it carries."""
     file_part: Final = content_item.get("file")
+    if not file_part:
+        return None
     if not isinstance(file_part, dict):
         return "file"
     return next(
@@ -101,12 +103,29 @@ def _file_part_ref(content_item: Mapping[str, object]) -> str:
     )
 
 
-def _media_part_ref(content_item: Mapping[str, object]) -> str:
+def _media_part_ref(content_item: Mapping[str, object]) -> str | None:
     """Identify a ``video_url`` or ``input_audio`` part by its nested url when present."""
     part_type: Final = cast("str", content_item.get("type"))  # cast-ok: caller gates on the two media types
     media: Final = content_item.get(part_type)
+    if not media:
+        return None
     media_url: Final = media.get("url") if isinstance(media, dict) else None
     return media_url if isinstance(media_url, str) and media_url else part_type
+
+
+def _attachment_part_refs(content_item: Mapping[str, object], scan_attachments: bool) -> tuple[str | None, str | None]:
+    """The (image, file) reference a content part contributes to the guardrail inputs."""
+    image_ref: Final = (
+        _image_part_ref(content_item, scan_attachments) if content_item.get("type") == "image_url" else None
+    )
+    if not scan_attachments:
+        return image_ref, None
+    part_type: Final = content_item.get("type")
+    if part_type == "file":
+        return image_ref, _file_part_ref(content_item)
+    if part_type in ("video_url", "input_audio"):
+        return image_ref, _media_part_ref(content_item)
+    return image_ref, None
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -383,17 +402,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         text_task_mappings.append((msg_idx, int(content_idx)))
 
                     # Extract images (image_url)
-                    if content_item.get("type") == "image_url":
-                        image_ref = _image_part_ref(content_item, scan_attachments)
-                        if image_ref is not None:
-                            images_to_check.append(image_ref)
-
-                    # Extract non-image file attachments
-                    if scan_attachments and content_item.get("type") == "file":
-                        files_to_check.append(_file_part_ref(content_item))
-
-                    if scan_attachments and content_item.get("type") in ("video_url", "input_audio"):
-                        files_to_check.append(_media_part_ref(content_item))
+                    image_ref, file_ref = _attachment_part_refs(content_item, scan_attachments)
+                    if image_ref is not None:
+                        images_to_check.append(image_ref)
+                    if file_ref is not None:
+                        files_to_check.append(file_ref)
 
         # Extract tool calls (typically in assistant messages)
         tool_calls: Final = message.get("tool_calls", None)
@@ -509,59 +522,86 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
         if texts_to_check or tool_calls_to_check:
-            # Use the real request_data if provided (proxy path), otherwise
-            # create a standalone dict (SDK / direct-call path).
-            if request_data is None:
-                request_data = {"response": response}
-            else:
-                if "response" not in request_data:
-                    request_data["response"] = response
-
-            self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
-
-            inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
-            if images_to_check:
-                inputs["images"] = images_to_check
-            if tool_calls_to_check:
-                inputs["tool_calls"] = tool_calls_to_check
-            # Include model information from the response if available
-            if hasattr(response, "model") and response.model:
-                inputs["model"] = response.model
-
-            guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-                inputs=inputs,
+            await self._apply_guardrail_to_output_choices(
+                response=response,
+                texts_to_check=texts_to_check,
+                images_to_check=images_to_check,
+                tool_calls_to_check=tool_calls_to_check,
+                text_task_mappings=text_task_mappings,
+                tool_call_task_mappings=tool_call_task_mappings,
                 request_data=request_data,
-                input_type="response",
-                logging_obj=litellm_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=litellm_logging_obj,
             )
-
-            guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
-            returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
-            guardrailed_tool_calls: Final[list[dict[str, object]]] = (
-                cast(list[dict[str, object]], returned_tool_calls)
-                if isinstance(returned_tool_calls, list) and len(returned_tool_calls) == len(tool_calls_to_check)
-                else tool_calls_to_check
-            )
-
-            # Step 3: Map guardrail responses back to original response structure
-            if guardrailed_texts and texts_to_check:
-                await self._apply_guardrail_responses_to_output_texts(
-                    response=response,
-                    responses=guardrailed_texts,
-                    task_mappings=text_task_mappings,
-                )
-
-            # Step 4: Apply guardrailed tool calls back to response
-            if guardrailed_tool_calls:
-                await self._apply_guardrail_responses_to_output_tool_calls(
-                    response=response,
-                    tool_calls=guardrailed_tool_calls,
-                    task_mappings=tool_call_task_mappings,
-                )
 
         verbose_proxy_logger.debug("OpenAI Chat Completions: Processed output response: %s", response)
 
         return response
+
+    async def _apply_guardrail_to_output_choices(
+        self,
+        response: "ModelResponse",
+        texts_to_check: Sequence[str],
+        images_to_check: Sequence[str],
+        tool_calls_to_check: Sequence[dict[str, object]],
+        text_task_mappings: Sequence[tuple[int, int | None]],
+        tool_call_task_mappings: Sequence[tuple[int, int]],
+        request_data: dict | None,
+        user_api_key_dict: "UserAPIKeyAuth | None",
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
+    ) -> None:
+        """Apply the guardrail to the extracted output texts and tool calls in batch."""
+        # Use the real request_data if provided (proxy path), otherwise
+        # create a standalone dict (SDK / direct-call path).
+        if request_data is None:
+            request_data = {"response": response}
+        else:
+            if "response" not in request_data:
+                request_data["response"] = response
+
+        self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
+
+        inputs: Final = GenericGuardrailAPIInputs(texts=list(texts_to_check))
+        if images_to_check:
+            inputs["images"] = list(images_to_check)
+        if tool_calls_to_check:
+            inputs["tool_calls"] = list(tool_calls_to_check)
+        # Include model information from the response if available
+        if hasattr(response, "model") and response.model:
+            inputs["model"] = response.model
+
+        guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="response",
+            logging_obj=litellm_logging_obj,
+        )
+
+        guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
+        returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
+        guardrailed_tool_calls: Final[Sequence[dict[str, object]]] = (
+            cast(list[dict[str, object]], returned_tool_calls)
+            if isinstance(returned_tool_calls, list) and len(returned_tool_calls) == len(tool_calls_to_check)
+            else tool_calls_to_check
+        )
+
+        # Step 3: Map guardrail responses back to original response structure
+        if guardrailed_texts and texts_to_check:
+            await self._apply_guardrail_responses_to_output_texts(
+                response=response,
+                responses=guardrailed_texts,
+                task_mappings=text_task_mappings,
+            )
+
+        # Step 4: Apply guardrailed tool calls back to response
+        if guardrailed_tool_calls:
+            await self._apply_guardrail_responses_to_output_tool_calls(
+                response=response,
+                tool_calls=guardrailed_tool_calls,
+                task_mappings=tool_call_task_mappings,
+            )
 
     async def process_output_streaming_response(
         self,
@@ -1099,8 +1139,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     async def _apply_guardrail_responses_to_output_texts(
         self,
         response: "ModelResponse",
-        responses: list[str],
-        task_mappings: list[tuple[int, int | None]],
+        responses: Sequence[str],
+        task_mappings: Sequence[tuple[int, int | None]],
     ) -> None:
         """
         Apply guardrail text responses back to output response.
@@ -1130,8 +1170,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     async def _apply_guardrail_responses_to_output_tool_calls(
         self,
         response: "ModelResponse",
-        tool_calls: list[dict[str, Any]],
-        task_mappings: list[tuple[int, int]],
+        tool_calls: Sequence[dict[str, Any]],
+        task_mappings: Sequence[tuple[int, int]],
     ) -> None:
         """
         Apply guardrailed tool calls back to the output response.

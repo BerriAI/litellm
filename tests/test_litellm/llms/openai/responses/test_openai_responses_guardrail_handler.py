@@ -3612,3 +3612,29 @@ class TestOpenAIResponsesHandlerAttachmentsDefaultScope:
 
         assert guardrail.calls == 0, "non-scanning guardrail fired on function_call_output attachments"
         assert result["input"] == input_data
+
+
+@pytest.mark.asyncio
+async def test_non_string_image_url_value_is_forwarded_to_guardrail():
+    """Base forwarded image_url.url untouched; a non-string value must reach images, not be dropped."""
+    handler = OpenAIResponsesHandler()
+    guardrail = ScanningGuardrail()
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "look"},
+                    {"type": "image_url", "image_url": {"url": 5}},
+                ],
+            }
+        ],
+        "model": "gpt-4o",
+    }
+
+    await handler.process_input_messages(data, guardrail)
+
+    assert guardrail.calls == 1
+    assert guardrail.inputs is not None
+    assert guardrail.inputs["images"] == [5]

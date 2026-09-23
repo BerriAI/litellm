@@ -7167,3 +7167,169 @@ def test_apply_masking_to_messages_masks_tool_result_inner_list_items() -> None:
             ],
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_refuses_serialized_tool_output_attachment():
+    """A tool message's JSON-serialized output list can hide an attachment part that
+    never becomes a leaf; the unscoped pass has to refuse it before any scan."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-output-file",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "content": json.dumps(
+                    [
+                        {
+                            "type": "input_file",
+                            "filename": "a.pdf",
+                            "file_data": "data:application/pdf;base64,JVBERi0=",
+                        }
+                    ]
+                ),
+            },
+            {"role": "user", "content": "hi"},
+        ],
+    }
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_refuses_serialized_tool_output_attachment_unknown_shape_falls_through():
+    """Non-attachment members of the serialized tool output are left to the normal scan."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-output-text",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "content": json.dumps([{"type": "output_text", "text": "memo"}]),
+            },
+            {"role": "user", "content": "hi"},
+        ],
+    }
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "media_part",
+    [
+        {"type": "video_url", "video_url": {"url": "https://synthetic.example/clip.mp4"}},
+        {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
+    ],
+)
+async def test_during_call_hook_refuses_scoped_out_media_attachment(media_part):
+    """Media payloads in a message latest-role scoping drops are refused, not evaded."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-scoped-media",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+        experimental_use_latest_role_message_only=True,
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "watch this"}, media_part]},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "next"},
+        ],
+    }
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_drops_bare_attachment_shells():
+    """A payload-less shell carries nothing the guardrail can refuse; scoping keeps it out."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-shells",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hello"}, {"type": "file"}, {"type": "input_audio"}],
+            }
+        ],
+    }
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )

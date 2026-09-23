@@ -470,8 +470,8 @@ def _image_url_part_ref(content_item: Mapping[str, object], scan_attachments: bo
     if not isinstance(image_url, dict):
         return None
     url: Final = image_url.get("url")
-    if isinstance(url, str) and url:
-        return url
+    if url:
+        return cast("str", url)  # cast-ok: base forwarded the raw url value
     if not scan_attachments:
         return None
     file_id: Final = image_url.get("file_id")

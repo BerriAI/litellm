@@ -1088,3 +1088,161 @@ def test_bedrock_during_call_refuses_chat_video_part(gateway: Gateway, tmp_path:
                 assert "cannot be scanned" in response.text, response.text
                 assert observed.get("/__observations").json()["requests"] == []
             assert policy.drain() == ()
+
+
+@pytest.mark.covers("other.observability.guardrails.bedrock_during_call_refuses_function_call_output_file")
+def test_bedrock_during_call_refuses_responses_function_call_output_file(gateway: Gateway, tmp_path: Path) -> None:
+    with wire_server(_allow) as policy:
+        params: Final = _bedrock_policy(policy.url)
+        params["mode"] = "during_call"
+        path: Final = _guardrail_config(tmp_path, "bedrock-dfco-" + uuid.uuid4().hex, params, "bedrock-dfco.yaml")
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model()
+            with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
+                observed.get("/__observations")
+                response: Final = candidate.request(
+                    "POST",
+                    "/v1/responses",
+                    {
+                        "model": model,
+                        "input": [
+                            {"type": "function_call", "call_id": "c1", "name": "lookup", "arguments": "{}"},
+                            {
+                                "type": "function_call_output",
+                                "call_id": "c1",
+                                "output": [
+                                    {
+                                        "type": "input_file",
+                                        "filename": "a.pdf",
+                                        "file_data": f"data:application/pdf;base64,{PDF_BASE64}",
+                                    }
+                                ],
+                            },
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": "hi"}],
+                            },
+                        ],
+                    },
+                )
+                assert response.status_code == 400, response.text
+                assert "cannot be scanned" in response.text, response.text
+                assert observed.get("/__observations").json()["requests"] == []
+            assert policy.drain() == ()
+
+
+@pytest.mark.parametrize(
+    "media_part",
+    [
+        {"type": "video_url", "video_url": {"url": "https://synthetic.example/clip.mp4"}},
+        {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
+    ],
+)
+@pytest.mark.covers("other.observability.guardrails.bedrock_latest_role_during_call_refuses_scoped_media")
+def test_bedrock_latest_role_during_call_refuses_scoped_media(
+    gateway: Gateway, tmp_path: Path, media_part: dict[str, JsonValue]
+) -> None:
+    with wire_server(_allow) as policy:
+        params: Final = _bedrock_policy(policy.url)
+        params["mode"] = "during_call"
+        params["experimental_use_latest_role_message_only"] = True
+        path: Final = _guardrail_config(tmp_path, "bedrock-latdur-" + uuid.uuid4().hex, params, "bedrock-latdur.yaml")
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model()
+            with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
+                observed.get("/__observations")
+                response: Final = candidate.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {
+                        "model": model,
+                        "messages": [
+                            {"role": "user", "content": [{"type": "text", "text": "watch this"}, media_part]},
+                            {"role": "assistant", "content": "ok"},
+                            {"role": "user", "content": "next"},
+                        ],
+                    },
+                )
+                assert response.status_code == 400, response.text
+                assert "cannot be scanned" in response.text, response.text
+                assert observed.get("/__observations").json()["requests"] == []
+            assert policy.drain() == ()
+
+
+@pytest.mark.parametrize(
+    ("shell_part", "expected_status"),
+    [
+        ({"type": "input_audio"}, 200),
+        ({"type": "video_url"}, 200),
+        ({"type": "file"}, 500),  # the provider side rejects a payload-less file part downstream
+    ],
+)
+@pytest.mark.covers("other.observability.guardrails.bedrock_pre_call_drops_unscannable_shell_part")
+def test_bedrock_pre_call_drops_unscannable_shell_part(
+    gateway: Gateway, tmp_path: Path, shell_part: dict[str, JsonValue], expected_status: int
+) -> None:
+    def guardrail(request: Request) -> Reply:
+        assert request.target == "/guardrail/synthetic-guardrail/version/1/apply"
+        body: Final = json.loads(request.body)
+        assert body["content"] == [{"text": {"text": "hello"}}]
+        return Reply(body=b'{"action":"NONE","outputs":[],"assessments":[]}')
+
+    with wire_server(guardrail) as policy:
+        path: Final = _guardrail_config(
+            tmp_path, "bedrock-shell-" + uuid.uuid4().hex, _bedrock_policy(policy.url), "bedrock-shell.yaml"
+        )
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model()
+            with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
+                observed.get("/__observations")
+                response: Final = candidate.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {
+                        "model": model,
+                        "messages": [{"role": "user", "content": [{"type": "text", "text": "hello"}, shell_part]}],
+                    },
+                )
+                assert response.status_code == expected_status, response.text
+                assert "cannot be scanned" not in response.text, response.text
+                if expected_status == 200:
+                    assert len(observed.get("/__observations").json()["requests"]) == 1
+            assert len(policy.drain()) == 1
+
+
+@pytest.mark.covers("other.observability.guardrails.non_bedrock_policy_forwards_non_string_image_url")
+def test_non_bedrock_policy_forwards_non_string_image_url(gateway: Gateway, tmp_path: Path) -> None:
+    def sink(_request: Request) -> Reply:
+        return Reply(body=b'{"action":"NONE"}')
+
+    with wire_server(sink) as policy:
+        params: Final = {
+            "guardrail": "generic_guardrail_api",
+            "mode": "pre_call",
+            "default_on": True,
+            "api_base": policy.url,
+            "api_key": "synthetic-guardrail-key",
+        }
+        path: Final = _guardrail_config(tmp_path, "generic-img-" + uuid.uuid4().hex, params, "generic-img.yaml")
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model()
+            response: Final = candidate.request(
+                "POST",
+                "/v1/responses",
+                {
+                    "model": model,
+                    "input": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [
+                                {"type": "input_text", "text": "look"},
+                                {"type": "image_url", "image_url": {"url": 5}},
+                            ],
+                        }
+                    ],
+                },
+            )
+            assert response.status_code == 500, response.text
+            assert "input_value=5" in response.text, response.text
