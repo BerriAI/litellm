@@ -548,6 +548,14 @@ fn main() {
             json!({"input_cost_per_token": 2e-6, "output_cost_per_token": 4e-6, "off_peak_pricing": {"hours_utc": "16:30-00:30", "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}}),
         ),
         (
+            "exa_ai/search".to_owned(),
+            json!({"tiered_pricing": [{"max_results_range": [1, 10], "input_cost_per_query": 0.002}, {"max_results_range": [11, 20], "input_cost_per_query": 0.004}]}),
+        ),
+        (
+            "parallel_ai/search-fast".to_owned(),
+            json!({"input_cost_per_query": 0.02}),
+        ),
+        (
             "vertex_ai/rerank".to_owned(),
             json!({"input_cost_per_query": 0.25}),
         ),
@@ -743,4 +751,22 @@ fn main() {
         })
         .unwrap();
     println!("fireworks_prompt={fireworks_prompt:.6} fireworks_output={fireworks_output:.6}");
+    let search_cost = model_info_catalog
+        .search_provider_cost_per_query("search", Some("exa_ai"), 3, &json!({"max_results": 12}))
+        .unwrap();
+    let parallel_search_cost = model_info_catalog
+        .search_provider_cost_per_query(
+            "ignored",
+            Some("parallel_ai"),
+            1,
+            &json!({"mode": "fast", "_parallel_ai_usage": [
+                {"name": "sku_search", "count": 2},
+                {"name": "sku_search_additional_results", "count": 3}
+            ]}),
+        )
+        .unwrap();
+    println!(
+        "search_cost={:.3} parallel_search_cost={:.3}",
+        search_cost.0, parallel_search_cost.0
+    );
 }

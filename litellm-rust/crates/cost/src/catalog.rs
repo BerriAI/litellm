@@ -26,6 +26,10 @@ use crate::prompt_caching_savings::{
 use crate::provider_cache::apply_provider_cache_read_default;
 use crate::responses_usage::ChatUsage;
 use crate::retrieval_cost::{rerank_cost, vector_store_search_cost};
+use crate::search_cost::{
+    ParallelAiPricing, effective_mode, parallel_ai_search_cost, provider_usage,
+    search_provider_cost_per_query,
+};
 use crate::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
 use crate::xai_cost::{cost_per_token as xai_cost_per_token, reported_cost as xai_reported_cost};
 use crate::{Cost, Pricing, PricingError, Rates, Request, calculate};
@@ -354,6 +358,55 @@ impl ModelInfoCatalog {
 
     pub fn vector_store_search_cost(&self, provider: &str, api_type: Option<&str>) -> (f64, f64) {
         vector_store_search_cost(provider, api_type, self.entries.get("vertex_ai/search_api"))
+    }
+
+    pub fn search_provider_cost_per_query(
+        &self,
+        model: &str,
+        provider: Option<&str>,
+        number_of_queries: u64,
+        optional_params: &Value,
+    ) -> Result<(f64, f64), CatalogError> {
+        if provider == Some("parallel_ai") {
+            let pricing_model = match effective_mode(optional_params) {
+                "fast" => "parallel_ai/search-fast",
+                "turbo" => "parallel_ai/search-turbo",
+                _ => "parallel_ai/search",
+            };
+            let model_info = self
+                .entries
+                .get(pricing_model)
+                .ok_or(CatalogError::ModelNotFound)?;
+            let request_cost = model_info
+                .get("input_cost_per_query")
+                .and_then(|value| match value {
+                    Value::Number(value) => value.as_f64(),
+                    Value::String(value) => value.parse().ok(),
+                    _ => None,
+                })
+                .unwrap_or(0.0);
+            return Ok((
+                parallel_ai_search_cost(
+                    optional_params,
+                    provider_usage(optional_params),
+                    ParallelAiPricing {
+                        request_cost,
+                        default_results: 10,
+                        additional_result_cost: 0.001,
+                    },
+                ),
+                0.0,
+            ));
+        }
+        let model_info = self
+            .select_model_key(model, provider, None)
+            .and_then(|key| self.entries.get(key))
+            .ok_or(CatalogError::ModelNotFound)?;
+        Ok(search_provider_cost_per_query(
+            model_info,
+            number_of_queries,
+            optional_params,
+        ))
     }
 
     pub fn built_in_tool_cost(
