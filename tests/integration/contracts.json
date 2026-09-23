@@ -1794,6 +1794,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/spend/test_passthrough_failure.py::test_config_pass_through_endpoint_failure_writes_a_spend_row": [
+      "quota_management.spend_tracking.pass_through_failure.failure_row_written"
     ]
   },
   "browser": {
