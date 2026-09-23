@@ -9292,6 +9292,10 @@ class ProviderConfigManager:
             from litellm.llms.mistral.files.transformation import MistralFilesConfig
 
             return MistralFilesConfig()
+        elif LlmProviders.XAI == provider:
+            from litellm.llms.xai.files.transformation import XAIFilesConfig
+
+            return XAIFilesConfig()
         return None
 
     @staticmethod
