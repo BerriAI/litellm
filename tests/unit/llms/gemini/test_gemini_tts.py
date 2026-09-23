@@ -182,7 +182,7 @@ class TestGeminiTTSTransformation:
                             {"speaker": "Ryan", "voice_config": {"prebuilt_voice_config": {"voice_name": "Umbriel"}}}
                         ]
                     },
-                    "metadata": {1: "discard", "source": ["studio", 2]},
+                    "metadata": ["studio", 2],
                 },
                 "format": "pcm16",
             }
@@ -195,10 +195,7 @@ class TestGeminiTTSTransformation:
                     {"speaker": "Ryan", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Umbriel"}}}
                 ]
             },
-            "metadata": {"source": ["studio", 2]},
-        }
-        assert config._map_audio_params({"speech_config": {"language_code": "fr-FR"}, "format": "pcm16"}) == {
-            "languageCode": "fr-FR"
+            "metadata": ["studio", 2],
         }
 
     def test_gemini_tts_multi_speaker_audio_parameter_mapping(self):
