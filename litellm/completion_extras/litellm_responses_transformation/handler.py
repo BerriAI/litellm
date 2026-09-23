@@ -94,7 +94,7 @@ class ResponsesToCompletionBridgeHandler:
         if len(response.output) == 0 and callable(get_streamed_items):
             streamed_items: Final = get_streamed_items()
             if streamed_items:
-                response.output = streamed_items  # pyright: ignore[reportAssignmentType]  # streamed items are the typed SSE output items
+                response.output = streamed_items  # pyright: ignore[reportAttributeAccessIssue]  # assigning typed SSE items back to ResponsesAPIResponse.output
         return response
 
     async def _collect_response_from_stream_async(self, stream_iter: AsyncIterable[object]) -> "ResponsesAPIResponse":
@@ -114,7 +114,7 @@ class ResponsesToCompletionBridgeHandler:
         if len(response.output) == 0 and callable(get_streamed_items):
             streamed_items: Final = get_streamed_items()
             if streamed_items:
-                response.output = streamed_items  # pyright: ignore[reportAssignmentType]  # streamed items are the typed SSE output items
+                response.output = streamed_items  # pyright: ignore[reportAttributeAccessIssue]  # assigning typed SSE items back to ResponsesAPIResponse.output
         return response
 
     def validate_input_kwargs(self, kwargs: dict) -> ResponsesToCompletionBridgeHandlerInputKwargs:
