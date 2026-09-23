@@ -2019,6 +2019,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/providers/test_responses_client_header_forwarding_wire.py::test_client_x_header_is_forwarded_to_the_provider_on_responses": [
+      "providers.responses_api.forwarded_client_headers_reach_the_provider"
     ]
   },
   "browser": {
