@@ -72,6 +72,7 @@ BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
 )
 BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS: Final = frozenset({"background"})
 REMOTE_IMAGE_URL_SCHEMES: Final = ("http://", "https://")
+IMAGE_BLOCK_LIST_KEYS: Final = ("content", "output")
 
 
 def resolve_bedrock_bearer_token(api_key: str | None) -> str | None:
@@ -87,20 +88,23 @@ def _remote_image_url(block: object) -> str | None:
     return image_url
 
 
-def _content_blocks(item: object) -> "tuple[object, ...]":
+def _block_lists(item: object) -> "tuple[tuple[str, tuple[object, ...]], ...]":
     if not isinstance(item, dict):
         return ()
-    content: Final = item.get("content")
-    return tuple(content) if isinstance(content, list) else ()
+    return tuple((key, tuple(item[key])) for key in IMAGE_BLOCK_LIST_KEYS if isinstance(item.get(key), list))
 
 
 def collect_remote_image_urls(input: "str | ResponseInputParam") -> "tuple[str, ...]":
-    """The distinct http(s) ``input_image`` URLs in ``input``, in first-seen order."""
+    """The distinct http(s) ``input_image`` URLs in message content and tool output lists, in first-seen order."""
     if not isinstance(input, list):
         return ()
     return tuple(
         dict.fromkeys(
-            url for item in input for block in _content_blocks(item) if (url := _remote_image_url(block)) is not None
+            url
+            for item in input
+            for _, blocks in _block_lists(item)
+            for block in blocks
+            if (url := _remote_image_url(block)) is not None
         )
     )
 
@@ -113,12 +117,14 @@ def _inline_block(block: object, inlined: "Mapping[str, str]") -> object:
 
 
 def _inline_item(item: object, inlined: "Mapping[str, str]") -> object:
-    if not isinstance(item, dict) or not isinstance(item.get("content"), list):
+    block_lists: Final = _block_lists(item)
+    if not isinstance(item, dict) or not block_lists:
         return item
-    return {  # mutable-ok: outgoing JSON request item
-        **item,
-        "content": [_inline_block(block, inlined) for block in item["content"]],  # mutable-ok: same
+    inlined_lists: Final = {  # mutable-ok: outgoing JSON request item
+        key: [_inline_block(block, inlined) for block in blocks]  # mutable-ok: same
+        for key, blocks in block_lists
     }
+    return {**item, **inlined_lists}  # mutable-ok: same
 
 
 def inline_remote_image_urls(

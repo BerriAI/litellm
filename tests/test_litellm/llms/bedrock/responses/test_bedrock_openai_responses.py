@@ -355,6 +355,37 @@ class TestRemoteImageInlining:
         assert body["input"] == self._input(self._INLINED)
         assert fetched == [self._REMOTE]
 
+    def test_tool_output_lists_are_inlined_and_string_outputs_are_untouched(self):
+        fetched: list[str] = []
+
+        def fetch(url: str) -> str:
+            fetched.append(url)
+            return self._INLINED
+
+        def tool_turn(remote: str) -> list[dict]:
+            return [
+                {"type": "function_call", "call_id": "call_1", "name": "fetch_chart", "arguments": "{}"},
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [{"type": "input_text", "text": "the chart"}, {"type": "input_image", "image_url": remote}],
+                },
+                {"type": "function_call_output", "call_id": "call_2", "output": "https://example.com/plain-text.png"},
+                {"role": "user", "content": [{"type": "input_image", "image_url": remote}]},
+            ]
+
+        body = BedrockOpenAIResponsesConfig(
+            fetch_image=fetch, async_fetch_image=_never_fetch_async
+        ).transform_responses_api_request(
+            model=MODEL,
+            input=tool_turn(self._REMOTE),
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["input"] == tool_turn(self._INLINED)
+        assert fetched == [self._REMOTE]
+
     @pytest.mark.asyncio
     async def test_async_transform_fetches_with_the_async_fetcher(self):
         fetched: list[str] = []
