@@ -543,3 +543,33 @@ pub(super) fn resolve(
     }
     handle.service().map(Some)
 }
+
+#[cfg(test)]
+mod tests {
+    use pyo3::{ffi::c_str, prelude::*, types::PyDict};
+
+    use super::ObjectGuard;
+
+    #[test]
+    fn late_interpreter_attributes_do_not_hide_behavior_changes() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            py.run(
+                c_str!("class TestFacade:\n    pass\nfacade = TestFacade()"),
+                None,
+                Some(&locals),
+            )
+            .unwrap();
+            let class = locals.get_item("TestFacade").unwrap().unwrap();
+            let facade = locals.get_item("facade").unwrap().unwrap();
+            let guard = ObjectGuard::capture(py, &facade, &[]).unwrap();
+
+            class.setattr("_abc_impl", py.None()).unwrap();
+            assert!(guard.matches(py, &facade).unwrap());
+
+            class.setattr("get_cache", py.None()).unwrap();
+            assert!(!guard.matches(py, &facade).unwrap());
+        });
+    }
+}
