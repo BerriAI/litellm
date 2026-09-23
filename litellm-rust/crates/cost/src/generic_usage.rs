@@ -73,6 +73,10 @@ pub fn parse_prompt_tokens_details(usage: &ChatUsage) -> ParsedPromptDetails {
     }
 }
 
+pub fn get_billable_input_tokens(prompt_tokens: u64, cache_hit_tokens: u64) -> i128 {
+    prompt_tokens as i128 - cache_hit_tokens as i128
+}
+
 pub fn parse_completion_tokens_details(usage: &ChatUsage) -> ParsedCompletionDetails {
     let Some(details) = usage.completion_tokens_details.as_ref() else {
         return ParsedCompletionDetails::default();

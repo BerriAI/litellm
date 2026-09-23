@@ -13,7 +13,7 @@ fn token_detail(details: Option<&Value>, key: &str) -> Option<u64> {
     details?.get(key)?.as_u64()
 }
 
-fn prices_tokens(model_info: &Value) -> bool {
+pub fn prices_tokens(model_info: &Value) -> bool {
     [
         "input_cost_per_token",
         "output_cost_per_token",

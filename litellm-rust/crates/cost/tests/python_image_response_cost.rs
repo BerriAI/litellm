@@ -4,7 +4,7 @@ use jiff::Timestamp;
 use litellm_cost::catalog::ModelInfoCatalog;
 use litellm_cost::image_response_cost::{
     calculate_image_response_cost_from_usage, calculate_image_response_web_search_cost,
-    flat_image_cost, gemini_image_edit_cost, gemini_image_generation_cost,
+    flat_image_cost, gemini_image_edit_cost, gemini_image_generation_cost, prices_tokens,
     resolve_image_model_info, vertex_image_edit_cost, vertex_image_generation_cost,
 };
 use rstest::rstest;
@@ -21,6 +21,24 @@ fn model_info() -> Value {
         "output_cost_per_token": 7e-6,
         "output_cost_per_image_token": 3e-5
     })
+}
+
+#[rstest]
+#[case(json!({}), false)]
+#[case(json!({"input_cost_per_token": null}), false)]
+#[case(json!({"input_cost_per_image_token": 0}), true)]
+#[case(json!({"output_cost_per_token": 0.003}), true)]
+fn image_token_price_presence_controls_token_cost_route(
+    #[case] model_info: Value,
+    #[case] priced: bool,
+) {
+    let response = json!({"usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}});
+    assert_eq!(prices_tokens(&model_info), priced);
+    assert_eq!(
+        calculate_image_response_cost_from_usage(&response, &model_info, Some("openai"), at())
+            .is_some(),
+        priced,
+    );
 }
 
 #[rstest]

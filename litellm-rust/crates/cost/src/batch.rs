@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::generic_usage::parse_prompt_tokens_details;
+use crate::generic_usage::{get_billable_input_tokens, parse_prompt_tokens_details};
 use crate::regional_uplift::get_regional_uplift_multiplier;
 use crate::responses_usage::ChatUsage;
 use crate::{Rate, ThresholdPolicy};
@@ -183,8 +183,7 @@ pub fn batch_cost_calculator(
             + cached as f64 * value(batch.cache_read).unwrap_or(0.0)
             + written as f64 * value(batch.cache_creation).unwrap_or(0.0)
     } else if let Some(input) = value(pricing.regular.input).filter(|rate| *rate != 0.0) {
-        let base = usage.prompt_tokens as i128
-            - usage.cache_read_tokens as i128
+        let base = get_billable_input_tokens(usage.prompt_tokens, usage.cache_read_tokens)
             - usage.cache_creation_tokens as i128;
         let creation_rate = value(pricing.regular.cache_creation)
             .filter(|rate| *rate != 0.0)

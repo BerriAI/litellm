@@ -1,7 +1,24 @@
-use litellm_cost::generic_usage::{parse_completion_tokens_details, parse_prompt_tokens_details};
+use litellm_cost::generic_usage::{
+    get_billable_input_tokens, parse_completion_tokens_details, parse_prompt_tokens_details,
+};
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
 use serde_json::json;
+
+#[rstest]
+#[case(100, 20, 80)]
+#[case(100, 0, 100)]
+#[case(10, 20, -10)]
+fn get_billable_input_tokens_subtracts_cached_tokens(
+    #[case] prompt_tokens: u64,
+    #[case] cache_hit_tokens: u64,
+    #[case] expected: i128,
+) {
+    assert_eq!(
+        get_billable_input_tokens(prompt_tokens, cache_hit_tokens),
+        expected
+    );
+}
 
 #[rstest]
 fn parse_prompt_tokens_details_subtracts_each_cached_modality_once() {
