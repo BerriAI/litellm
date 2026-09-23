@@ -12095,6 +12095,9 @@
         "supports_reasoning": true,
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-southeast-3/minimax.minimax-m2.1": {
@@ -12108,6 +12111,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-southeast-3/minimax.minimax-m2.5": {
@@ -12122,6 +12128,9 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/ap-southeast-3/moonshotai.kimi-k2.5": {
@@ -12136,6 +12145,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-southeast-3/qwen.qwen3-coder-next": {
@@ -12149,6 +12160,9 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ca-central-1/meta.llama3-70b-instruct-v1:0": {
