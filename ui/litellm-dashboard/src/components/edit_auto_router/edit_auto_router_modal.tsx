@@ -39,12 +39,14 @@ import {
   hydrateTierBoundaries,
   hydrateTokenThresholds,
 } from "../add_model/heuristic_scoring_knobs";
-import { usesClassifierContext } from "../add_model/classifier_types";
 import { defaultJevClassifierConfig, jevClassifierConfigSchema, normalizeJevClassifierConfig } from "../add_model/jev_classifier_config";
 import ComplexityRouterConfig, {
+  AdaptiveEligible,
+  AdaptiveRouterWeights,
+  ClassifierLLMConfig,
+  ClassifierType,
   ComplexityRouterConfigValue,
   ComplexityTiers,
-  effectiveClassifierType,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
@@ -556,12 +558,13 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       setRouterConfig(parsedConfig);
 
       // Set form values
-      form.reset({
+      const resetValues = {
         auto_router_name: modelData.model_name,
         auto_router_default_model: modelData.litellm_params?.auto_router_default_model || "",
         auto_router_embedding_model: modelData.litellm_params?.auto_router_embedding_model || "",
         model_access_group: modelData.model_info?.access_groups || [],
-      });
+      };
+      form.reset(resetValues);
     } catch (error) {
       console.error("Error parsing auto router config:", error);
       toast.fromError("Error loading auto router configuration");
@@ -616,19 +619,20 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       // Dual write: complexity_router_config.default_model (the pin marker hydratePinnedDefaultModel
       // reads back) and complexity_router_default_model (what the backend routes on) must always be
       // written together from the same value. Same pairing in add_auto_router_tab.tsx.
+      const overrides = {
+        keywordTierRules,
+        escalationKeywords,
+        semanticMatchingEnabled,
+        embeddingModel,
+        matchThreshold,
+      };
       const updatedLitellmParams = {
         ...modelData.litellm_params,
         complexity_router_config: buildUpdatedComplexityRouterConfig(
           modelData.litellm_params?.complexity_router_config,
           complexityRouterConfig,
           customTechnicalKeywords,
-          {
-            keywordTierRules,
-            escalationKeywords,
-            semanticMatchingEnabled,
-            embeddingModel,
-            matchThreshold,
-          },
+          overrides,
         ),
         complexity_router_default_model: defaultModel,
       };
@@ -637,19 +641,21 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         access_groups: values.model_access_group || [],
       };
 
-      await modelPatchUpdateCall(
-        accessToken,
-        { model_name: values.auto_router_name, litellm_params: updatedLitellmParams, model_info: updatedModelInfo },
-        modelData.model_info.id,
-      );
+      const patchPayload = {
+        model_name: values.auto_router_name,
+        litellm_params: updatedLitellmParams,
+        model_info: updatedModelInfo,
+      };
+      await modelPatchUpdateCall(accessToken, patchPayload, modelData.model_info.id);
 
       toast.success("Auto router configuration updated successfully");
-      onSuccess({
+      const updatedModel = {
         ...modelData,
         model_name: values.auto_router_name,
         litellm_params: updatedLitellmParams,
         model_info: updatedModelInfo,
-      });
+      };
+      onSuccess(updatedModel);
       onCancel();
       return;
     }

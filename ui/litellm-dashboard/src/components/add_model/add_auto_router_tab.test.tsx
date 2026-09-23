@@ -1,6 +1,6 @@
 import { renderWithProviders, screen, waitFor, within, fireEvent, testQueryClient } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import AddAutoRouterTab from "./add_auto_router_tab";
 import { toast } from "@/lib/toast";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";

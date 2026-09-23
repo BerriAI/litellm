@@ -4,7 +4,6 @@ import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./comple
 import {
   TierModelParams,
   TierModelParamsByTier,
-  normalizeTierModels,
   serializeTierModelConfigs,
 } from "./complexity_router_tiers";
 import {

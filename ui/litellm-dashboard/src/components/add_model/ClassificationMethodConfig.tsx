@@ -24,12 +24,10 @@ import {
   DEFAULT_CLASSIFIER_FALLBACK,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
   DEFAULT_CLASSIFICATION_RUBRIC,
-  NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
   CLASSIFICATION_RUBRIC_DESCRIPTIONS,
   CLASSIFICATION_RUBRIC_KEYS,
   ClassificationRubric,
   effectiveTierLabel,
-  usesLlmClassifier,
   usesClassifierContext,
 } from "./ComplexityRouterConfig";
 

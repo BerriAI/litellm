@@ -20,7 +20,7 @@ describe("transitionClassifierType", () => {
       adaptive: true,
     };
     const jev = transitionClassifierType(initial, "jev");
-    expect(jev).toMatchObject({
+    const expectedJev = {
       classifier_type: "jev",
       classifier_context_window_size: 8,
       classifier_context_budget_chars: 16000,
@@ -28,7 +28,8 @@ describe("transitionClassifierType", () => {
       classifier_fallback: "default_model",
       adaptive: true,
       tiers: initial.tiers,
-    });
+    };
+    expect(jev).toMatchObject(expectedJev);
     expect(jev.jev_classifier_config).toBeDefined();
     expect(jev.classifier_llm_config).toBeUndefined();
     expect(jev.classification_prompt).toBeUndefined();

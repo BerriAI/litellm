@@ -1,5 +1,5 @@
 import type { JevClassifierConfig } from "./jev_classifier_config";
-import { type ClassifierType, usesLlmClassifier } from "./classifier_types";
+import { type ClassifierType } from "./classifier_types";
 export { type ClassifierType, usesLlmClassifier, usesClassifierContext } from "./classifier_types";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
