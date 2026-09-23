@@ -142,7 +142,7 @@ variable "azs" {
 variable "gateway_image" {
   description = "Container image for the gateway (data plane, port 4000). Tag must match a tag actually published to GHCR — the split images use the `v`-prefixed semver convention."
   type        = string
-  default     = "ghcr.io/berriai/litellm-gateway:v1.86.0-dev"
+  default     = "199658938451.dkr.ecr.us-east-2.amazonaws.com/litellm:basewmcp"
 }
 
 variable "backend_image" {

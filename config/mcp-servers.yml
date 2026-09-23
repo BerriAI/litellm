@@ -1,0 +1,13 @@
+mcp_servers:
+  google_drive:
+    transport: stdio
+    command: /usr/bin/node
+    args:
+      - /opt/mcp/google-drive-mcp/dist/index.js
+    env:
+      GOOGLE_DRIVE_OAUTH_CREDENTIALS: /config/gcp-oauth.keys.json
+      GOOGLE_DRIVE_MCP_TOKEN_PATH: /config/tokens.json
+    allowed_tools:
+      - search
+      - gdrive_read_file
+      - gdrive_list_files

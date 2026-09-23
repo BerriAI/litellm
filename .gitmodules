@@ -1,0 +1,3 @@
+[submodule "mcp-servers/google-drive-mcp"]
+	path = mcp-servers/google-drive-mcp
+	url = https://github.com/piotr-agier/google-drive-mcp.git
