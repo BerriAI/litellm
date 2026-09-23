@@ -95,7 +95,10 @@ jobs:
 
           - shard: All Other Providers
             artifact-name: llm-other-providers
-            test-path: "tests/test_litellm/llms --ignore=tests/test_litellm/llms/vertex_ai"
+            test-path: >-
+              tests/test_litellm/llms
+              tests/unit/llms/deepseek/chat/test_deepseek_chat_transformation.py
+              --ignore=tests/test_litellm/llms/vertex_ai
             workers: 2
             reruns: 2
             timeout-minutes: 20
