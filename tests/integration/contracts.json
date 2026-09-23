@@ -263,6 +263,9 @@
     "tests/integration/compatibility/test_a2a_wire_versions.py::test_a2a_versions_and_legacy_casing_preserve_real_wire_and_response": [
       "other.compatibility.a2a.supported_versions_preserve_literal_envelopes"
     ],
+    "tests/integration/compatibility/test_a2a_wire_versions.py::test_agent_serving_its_card_only_at_versioned_path_is_reached_with_bearer_and_answers": [
+      "compatibility.a2a.versioned_card_path_agent_is_reached_with_bearer_and_blocking_send"
+    ],
     "tests/integration/compatibility/test_persisted_toolsets.py::test_existing_toolset_format_loads_before_start_and_keeps_sibling_denied": [
       "other.compatibility.mcp.persisted_tool_names_survive_candidate_startup"
     ],
