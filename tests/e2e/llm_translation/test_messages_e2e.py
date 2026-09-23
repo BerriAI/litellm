@@ -461,7 +461,7 @@ class TestMessagesUpstreamStreamFailure:
             f"the stream produced a first event that is not message_start, so this run proves a "
             f"startup failure, not an interrupted stream: {first!r}"
         )
-        with pytest.raises(anthropic.APIError, match=".+") as raised:
+        with pytest.raises(anthropic.APIError) as raised:
             for _ in stream:
                 pass
         assert str(raised.value), (
