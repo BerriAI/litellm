@@ -2049,6 +2049,9 @@
         ],
         "tests/integration/routing/test_priority_rate_limit_headers.py::test_streaming_chat_completion_success_logs_v3_rate_limit_remaining_values_for_callbacks": [
             "other.routing.priority_rate_limits.streaming_success_logs_v3_remaining_values_for_callbacks"
+        ],
+        "tests/integration/routing/test_key_tpm_reservation.py::test_concurrent_requests_over_key_tpm_are_rejected_before_reaching_provider": [
+            "quota_management.key_tpm_limit.concurrent_requests_reserve_tokens_before_provider_call"
         ]
     },
     "browser": {
