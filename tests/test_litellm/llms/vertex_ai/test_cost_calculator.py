@@ -61,3 +61,34 @@ def test_above_128k_pricing_splits_cache_tokens_out_of_the_prompt(
 
     assert prompt_cost == pytest.approx(expected_prompt_cost)
     assert completion_cost == pytest.approx(10 * 0.003)
+
+
+def test_above_128k_pricing_falls_back_to_the_resolved_tier_rate_for_creation_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing cache-creation rate resolves to the tiered input rate, like generic_cost_per_token."""
+    model: Final = "vertex_ai/fake-above-128k-model-no-creation-rate"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "vertex_ai",
+            "input_cost_per_token": 0.001,
+            "input_cost_per_token_above_128k_tokens": 0.002,
+            "output_cost_per_token": 0.003,
+        },
+    )
+
+    usage: Final = Usage(
+        prompt_tokens=260_000,
+        completion_tokens=10,
+        total_tokens=260_010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cache_creation_tokens=120_000),
+    )
+    prompt_cost, _ = cost_per_token(
+        model=model,
+        custom_llm_provider="vertex_ai",
+        usage=usage,
+    )
+
+    assert prompt_cost == pytest.approx(140_000 * 0.002 + 120_000 * 0.002)
