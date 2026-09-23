@@ -4256,7 +4256,7 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         else:
             result = anthropic_message_to_model_response(
-                cast(Mapping[str, object], result),
+                cast(Mapping[str, object], result),  # cast-ok: this handler receives heterogeneous provider results typed as Any upstream
                 speed=self.optional_params.get("speed") if self.optional_params else None,
             )
         return result
