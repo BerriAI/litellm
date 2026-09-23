@@ -2027,6 +2027,10 @@
       "mgmt.key.reset_spend.returns_promptly_with_wedged_coordination_redis",
       "mgmt.auth_cache_invalidation.publish_parked_by_short_redis_wedge_lands_after_recovery",
       "mgmt.auth_cache_invalidation.burst_with_worker_kill_keeps_serving_while_redis_wedged"
+    ],
+    "tests/integration/spend/test_batch_line_item_callbacks.py::test_completed_batch_emits_paired_request_response_callback_events_per_jsonl_line": [
+      "spend.batches.completed_batch_emits_one_callback_event_per_jsonl_line_beside_the_aggregate",
+      "spend.batches.line_item_callback_events_do_not_bill_spend_twice"
     ]
   },
   "browser": {
