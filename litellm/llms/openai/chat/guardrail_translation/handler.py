@@ -377,7 +377,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
                     # Extract images (image_url)
                     if content_item.get("type") == "image_url":
-                        image_ref: Final = _image_part_ref(content_item, scan_attachments)
+                        image_ref = _image_part_ref(content_item, scan_attachments)
                         if image_ref is not None:
                             images_to_check.append(image_ref)
 
