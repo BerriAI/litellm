@@ -82,6 +82,18 @@ def _with_text(block: bytes, new_text: str) -> bytes:
     return f"event: content_block_delta\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n".encode()
 
 
+def _first_text(processed: Mapping[str, object]) -> str | None:
+    """The text of the first content block in a guardrail-processed Messages response."""
+    content: Final = processed.get("content")
+    if not isinstance(content, list) or not content:
+        return None
+    first: Final[object] = content[0]
+    if not isinstance(first, Mapping):
+        return None
+    text: Final = first.get("text")
+    return text if isinstance(text, str) else None
+
+
 class AnthropicPassthroughGuardrailHandler(BaseTranslation):
     @staticmethod
     def is_event_stream_content_type(content_type: str) -> bool:
@@ -139,11 +151,8 @@ class AnthropicPassthroughGuardrailHandler(BaseTranslation):
             )
             return body_bytes
 
-        try:
-            de_anonymized: Final = processed["content"][0]["text"]
-        except (KeyError, IndexError, TypeError):
-            return body_bytes
-        if not isinstance(de_anonymized, str):
+        de_anonymized: Final = _first_text(processed)
+        if de_anonymized is None:
             return body_bytes
 
         # Put the full rewrite on the first text_delta; blank the rest so
