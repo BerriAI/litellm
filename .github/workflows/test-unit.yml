@@ -4,13 +4,10 @@ on:
   pull_request:
     branches:
       - main
-      - litellm_internal_staging
-      - litellm_oss_staging
       - "litellm_**"
   push:
     branches:
       - main
-      - litellm_internal_staging
   workflow_dispatch:
 
 permissions:
@@ -114,6 +111,7 @@ jobs:
               tests/test_litellm/images
               tests/test_litellm/interactions
               tests/test_litellm/messages
+              tests/test_litellm/embeddings
               tests/test_litellm/ocr
               tests/test_litellm/passthrough
               tests/test_litellm/rag
