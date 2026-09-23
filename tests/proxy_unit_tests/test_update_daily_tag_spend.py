@@ -100,6 +100,7 @@ async def test_daily_tag_spend_retries_then_succeeds():
             1,
         ]
     )
+    prisma_client.db.tx.return_value.__aenter__.return_value.execute_raw = prisma_client.db.execute_raw
 
     daily_spend_transactions: Dict[str, DailyTagSpendTransaction] = {
         "k": {

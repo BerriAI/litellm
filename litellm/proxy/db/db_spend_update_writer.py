@@ -1606,13 +1606,21 @@ class DBSpendUpdateWriter:
         proxy_logging_obj: ProxyLogging,
     ) -> None:
         transactions: Final = await queue.flush_and_get_aggregated_daily_spend_update_transactions()
-        try:
-            await commit(
+        commit_task: Final = asyncio.ensure_future(
+            commit(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
                 daily_spend_transactions=cast(dict[str, _DailySpendTransactionT], transactions),
             )
+        )
+        try:
+            await asyncio.shield(commit_task)
+        except asyncio.CancelledError:
+            commit_task.cancel()
+            if transactions:
+                await queue.add_update(transactions)
+            raise
         except Exception as e:  # noqa: BLE001  # whatever failed here, the other tables must still flush
             if not transactions:
                 return
@@ -1839,14 +1847,18 @@ class DBSpendUpdateWriter:
         if not daily_tag_spend_update_transactions:
             return
 
-        try:
-            await DBSpendUpdateWriter.update_daily_tag_spend(
+        commit_task: Final = asyncio.ensure_future(
+            DBSpendUpdateWriter.update_daily_tag_spend(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
                 daily_spend_transactions=daily_tag_spend_update_transactions,
             )
-        except Exception:
+        )
+        try:
+            await asyncio.shield(commit_task)
+        except BaseException:  # noqa: BLE001  # a cancel must restore the drained rows before its rollback returns
+            commit_task.cancel()
             await self.redis_update_buffer.restore_transactions_to_redis(
                 daily_tag_spend_update_transactions=daily_tag_spend_update_transactions,
             )
@@ -2368,7 +2380,8 @@ class DBSpendUpdateWriter:
                                 table=table, transactions=tuple(transactions_to_process.values())
                             )
                             sql, params = build_bulk_upsert(table=table, batch=merged_batch)
-                            await prisma_client.db.execute_raw(sql, *params)
+                            async with _spend_update_tx(prisma_client) as transaction:
+                                await transaction.execute_raw(sql, *params)
                         except Exception as batch_error:
                             if _spend_commit_failure_is_requeue_safe(batch_error):
                                 spend_log_error(
