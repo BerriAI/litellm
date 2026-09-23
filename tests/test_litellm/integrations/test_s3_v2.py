@@ -2485,6 +2485,69 @@ def _ok_response() -> MagicMock:
     return response
 
 
+class _CountingPut:
+    def __init__(self) -> None:
+        self.in_flight = 0
+        self.peak = 0
+        self.calls = 0
+
+    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+        self.in_flight += 1
+        self.peak = max(self.peak, self.in_flight)
+        self.calls += 1
+        await asyncio.sleep(0.01)
+        self.in_flight -= 1
+        return _ok_response()
+
+
+class _RecordingPut:
+    def __init__(self) -> None:
+        self.calls: tuple[tuple[str, str | None, dict[str, str] | None], ...] = ()
+
+    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+        self.calls = (*self.calls, (url, data, headers))
+        return _ok_response()
+
+
+class _LateAppendingPut:
+    def __init__(self, logger: S3Logger, element: s3BatchLoggingElement, fail_first: bool = False) -> None:
+        self.logger = logger
+        self.element = element
+        self.fail_first = fail_first
+        self.appended = False
+
+    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+        if not self.appended:
+            self.appended = True
+            self.logger.log_queue.append(self.element)
+            if self.fail_first:
+                return _failure_response()
+        return _ok_response()
+
+
+class _FailOnSuffixPut:
+    def __init__(self, suffixes: tuple[str, ...]) -> None:
+        self.failing = True
+        self.suffixes = suffixes
+
+    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+        if self.failing and url.endswith(self.suffixes):
+            return _failure_response()
+        return _ok_response()
+
+
+class _FailUntilClearedPut:
+    def __init__(self) -> None:
+        self.failing = True
+        self.calls: tuple[tuple[str, str | None], ...] = ()
+
+    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+        self.calls = (*self.calls, (url, data))
+        if self.failing:
+            return _failure_response()
+        return _ok_response()
+
+
 @pytest.mark.asyncio
 async def test_async_send_batch_bounds_concurrent_uploads() -> None:
     logger = S3Logger(
@@ -2495,28 +2558,16 @@ async def test_async_send_batch_bounds_concurrent_uploads() -> None:
         s3_max_concurrent_uploads=4,
     )
 
-    in_flight = 0
-    peak = 0
-    put_calls = 0
-
-    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
-        nonlocal in_flight, peak, put_calls
-        in_flight += 1
-        peak = max(peak, in_flight)
-        put_calls += 1
-        await asyncio.sleep(0.01)
-        in_flight -= 1
-        return _ok_response()
-
+    put = _CountingPut()
     logger.async_httpx_client = AsyncMock()
-    logger.async_httpx_client.put = fake_put
+    logger.async_httpx_client.put = put
 
     logger.log_queue = [_element({"i": i}, f"{i}") for i in range(40)]
 
     await logger.async_send_batch()
 
-    assert peak == 4
-    assert put_calls == 40
+    assert put.peak == 4
+    assert put.calls == 40
 
 
 @pytest.mark.asyncio
@@ -2531,23 +2582,20 @@ async def test_async_send_batch_uploads_single_jsonl_file() -> None:
         s3_batch_file_upload=True,
     )
 
-    calls = []
-
-    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
-        calls.append((url, data, headers))
-        return _ok_response()
-
+    put = _RecordingPut()
     logger.async_httpx_client = AsyncMock()
-    logger.async_httpx_client.put = fake_put
+    logger.async_httpx_client.put = put
 
     payloads = [{"id": "req-1"}, {"id": "req-2"}, {"id": "req-3"}]
     logger.log_queue = [_element(payload, f"{i}") for i, payload in enumerate(payloads)]
 
     await logger.async_send_batch()
 
-    assert len(calls) == 1
-    url, data, headers = calls[0]
+    assert len(put.calls) == 1
+    url, data, headers = put.calls[0]
     assert url.endswith(".jsonl")
+    assert data is not None
+    assert headers is not None
     assert [json.loads(line) for line in data.splitlines()] == payloads
     assert headers["Content-Type"] == "application/x-ndjson"
 
@@ -2562,17 +2610,9 @@ async def test_flush_queue_preserves_events_added_during_upload() -> None:
     )
 
     late_element = _element({"id": "late"}, "late")
-    appended = False
-
-    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
-        nonlocal appended
-        if not appended:
-            appended = True
-            logger.log_queue.append(late_element)
-        return _ok_response()
 
     logger.async_httpx_client = AsyncMock()
-    logger.async_httpx_client.put = fake_put
+    logger.async_httpx_client.put = _LateAppendingPut(logger, late_element)
 
     logger.log_queue = [_element({"id": "first"}, "first")]
 
@@ -2654,23 +2694,17 @@ async def test_failed_uploads_stay_queued_for_next_flush() -> None:
     )
 
     elements = [_element({"i": i}, f"{i}") for i in range(5)]
-    fail_next = True
-
-    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
-        nonlocal fail_next
-        if fail_next and (url.endswith("test-2.json") or url.endswith("test-4.json")):
-            return _failure_response()
-        return _ok_response()
+    put = _FailOnSuffixPut(("test-2.json", "test-4.json"))
 
     logger.async_httpx_client = AsyncMock()
-    logger.async_httpx_client.put = fake_put
+    logger.async_httpx_client.put = put
     logger.log_queue = list(elements)
 
     await logger.flush_queue()
 
     assert logger.log_queue == [elements[2], elements[4]]
 
-    fail_next = False
+    put.failing = False
     await logger.flush_queue()
 
     assert logger.log_queue == []
@@ -2686,22 +2720,17 @@ async def test_batch_file_upload_failure_keeps_whole_batch() -> None:
         s3_batch_file_upload=True,
     )
 
-    put_calls = 0
-
-    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
-        nonlocal put_calls
-        put_calls += 1
-        return _failure_response()
+    put = _FailUntilClearedPut()
 
     logger.async_httpx_client = AsyncMock()
-    logger.async_httpx_client.put = fake_put
+    logger.async_httpx_client.put = put
 
     elements = [_element({"i": i}, f"{i}") for i in range(3)]
     logger.log_queue = list(elements)
 
     await logger.flush_queue()
 
-    assert put_calls == 1
+    assert len(put.calls) == 1
     assert len(logger.log_queue) == 1
     assert logger.log_queue[0].body == "\n".join(json.dumps(element.payload) for element in elements)
 
@@ -2716,18 +2745,9 @@ async def test_events_appended_during_failed_flush_survive() -> None:
     )
 
     late = _element({"id": "late"}, "late")
-    appended = False
-
-    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
-        nonlocal appended
-        if not appended:
-            appended = True
-            logger.log_queue.append(late)
-            return _failure_response()
-        return _ok_response()
 
     logger.async_httpx_client = AsyncMock()
-    logger.async_httpx_client.put = fake_put
+    logger.async_httpx_client.put = _LateAppendingPut(logger, late, fail_first=True)
 
     first = _element({"id": "first"}, "first")
     logger.log_queue = [first]
@@ -2748,19 +2768,16 @@ async def test_batch_file_key_shape() -> None:
         s3_batch_file_upload=True,
     )
 
-    calls = []
-
-    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
-        calls.append((url, headers))
-        return _ok_response()
+    put = _RecordingPut()
 
     logger.async_httpx_client = AsyncMock()
-    logger.async_httpx_client.put = fake_put
+    logger.async_httpx_client.put = put
     logger.log_queue = [_element({"id": "req-1"}, "0")]
 
     await logger.async_send_batch()
 
-    ((url, headers),) = calls
+    ((url, _data, headers),) = put.calls
+    assert headers is not None
     assert re.search(r".*/2025-09-14/batch_\d{2}-\d{2}-\d{2}_[0-9a-f]{32}\.jsonl$", url)
     assert headers["Content-Disposition"].endswith('.jsonl"')
 
@@ -2775,14 +2792,10 @@ async def test_batch_file_groups_raw_elements_by_key_parent() -> None:
         s3_batch_file_upload=True,
     )
 
-    calls = []
-
-    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
-        calls.append((url, data))
-        return _ok_response()
+    put = _RecordingPut()
 
     logger.async_httpx_client = AsyncMock()
-    logger.async_httpx_client.put = fake_put
+    logger.async_httpx_client.put = put
 
     alpha = s3BatchLoggingElement(
         s3_object_key="logs/alpha/2026-01-01/a.json", payload={"id": "a"}, s3_object_download_filename="a.json"
@@ -2800,10 +2813,10 @@ async def test_batch_file_groups_raw_elements_by_key_parent() -> None:
 
     await logger.async_send_batch()
 
-    assert len(calls) == 4
+    assert len(put.calls) == 4
     by_parent = {
         re.sub(r"(^|/)batch_\d{2}-\d{2}-\d{2}_[0-9a-f]{32}\.jsonl$", "", url.split(".com/", 1)[-1]): (url, data)
-        for url, data in calls
+        for url, data, _headers in put.calls
     }
     assert sorted(by_parent) == ["", "logs/2026-01-01", "logs/alpha/2026-01-01", "logs/beta/2026-01-01"]
     assert [line for line in by_parent[""][1].splitlines()] == [json.dumps({"id": "d"})]
@@ -2822,17 +2835,10 @@ async def test_failed_batch_file_is_requeued_and_resent_unchanged() -> None:
         s3_batch_file_upload=True,
     )
 
-    calls = []
-    fail_next = True
-
-    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
-        calls.append((url, data))
-        if fail_next:
-            return _failure_response()
-        return _ok_response()
+    put = _FailUntilClearedPut()
 
     logger.async_httpx_client = AsyncMock()
-    logger.async_httpx_client.put = fake_put
+    logger.async_httpx_client.put = put
     logger.log_queue = [_element({"i": i}, f"{i}") for i in range(3)]
 
     await logger.flush_queue()
@@ -2841,12 +2847,12 @@ async def test_failed_batch_file_is_requeued_and_resent_unchanged() -> None:
     assert logger.log_queue[0].body is not None
     assert logger.log_queue[0].s3_object_key.endswith(".jsonl")
 
-    fail_next = False
+    put.failing = False
     await logger.flush_queue()
 
     assert logger.log_queue == []
-    assert len(calls) == 2
-    assert calls[0] == calls[1]
+    assert len(put.calls) == 2
+    assert put.calls[0] == put.calls[1]
 
 
 @pytest.mark.asyncio
@@ -2859,17 +2865,10 @@ async def test_elements_appended_after_failed_batch_file_get_their_own_file() ->
         s3_batch_file_upload=True,
     )
 
-    calls = []
-    fail_next = True
-
-    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
-        calls.append((url, data))
-        if fail_next:
-            return _failure_response()
-        return _ok_response()
+    put = _FailUntilClearedPut()
 
     logger.async_httpx_client = AsyncMock()
-    logger.async_httpx_client.put = fake_put
+    logger.async_httpx_client.put = put
     logger.log_queue = [_element({"id": "first"}, "first")]
 
     await logger.flush_queue()
@@ -2877,14 +2876,14 @@ async def test_elements_appended_after_failed_batch_file_get_their_own_file() ->
     late = _element({"id": "late"}, "late")
     logger.log_queue.append(late)
 
-    fail_next = False
+    put.failing = False
     await logger.flush_queue()
 
     assert logger.log_queue == []
-    assert len(calls) == 3
-    assert calls[0] == calls[1]
-    assert calls[2][0] != calls[0][0]
-    assert calls[2][1] == json.dumps({"id": "late"})
+    assert len(put.calls) == 3
+    assert put.calls[0] == put.calls[1]
+    assert put.calls[2][0] != put.calls[0][0]
+    assert put.calls[2][1] == json.dumps({"id": "late"})
 
 
 @pytest.mark.asyncio
@@ -2897,14 +2896,10 @@ async def test_batch_file_mode_disabled_when_s3_v2_is_cold_storage_logger(monkey
         s3_batch_file_upload=True,
     )
 
-    calls = []
-
-    async def fake_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
-        calls.append((url, headers))
-        return _ok_response()
+    put = _RecordingPut()
 
     logger.async_httpx_client = AsyncMock()
-    logger.async_httpx_client.put = fake_put
+    logger.async_httpx_client.put = put
 
     import litellm
 
@@ -2913,13 +2908,13 @@ async def test_batch_file_mode_disabled_when_s3_v2_is_cold_storage_logger(monkey
 
     await logger.async_send_batch()
 
-    assert len(calls) == 1
-    assert calls[0][0].endswith("test-0.json")
+    assert len(put.calls) == 1
+    assert put.calls[0][0].endswith("test-0.json")
 
     monkeypatch.setattr(litellm, "cold_storage_custom_logger", None)
     logger.log_queue = [_element({"id": "req-2"}, "1")]
 
     await logger.async_send_batch()
 
-    assert len(calls) == 2
-    assert calls[1][0].endswith(".jsonl")
+    assert len(put.calls) == 2
+    assert put.calls[1][0].endswith(".jsonl")
