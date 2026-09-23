@@ -12,6 +12,22 @@ class RustUpstreamError(Exception): ...
 class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
 
+@final
+class NativeDiagnosticProcessor:
+    def __new__(cls, minimum_custom_key_length: int) -> NativeDiagnosticProcessor: ...
+    def redact_text(self, text: str) -> str: ...
+    def redact_structured_text(self, key: str | None, text: str) -> str: ...
+    def redact_client_message(self, text: str) -> str: ...
+    def process_diagnostic(
+        self,
+        message: str,
+        exception: str | None,
+        stack: str | None,
+        leaves: Sequence[tuple[str | None, str]],
+        policy: tuple[bool, int, int],
+    ) -> tuple[str, str | None, str | None, list[str], bool]: ...
+    def scrub_access_arguments(self, arguments: Sequence[str]) -> list[str]: ...
+
 def ocr(
     request: LiteLLMOcrRequest,
     args: tuple[object, ...],
@@ -105,6 +121,7 @@ class _ResponseCacheRuntime:
         *,
         callback_kwargs: Mapping[str, object] | Sequence[object] | None = None,
     ) -> object: ...
+    def lookup_semantic(self, request: object) -> tuple[object, float | None]: ...
     def store(
         self,
         request: object,
@@ -124,6 +141,7 @@ class _ResponseCacheRuntime:
         *,
         callback_kwargs: Mapping[str, object] | None = None,
     ) -> Future[object]: ...
+    def async_lookup_semantic(self, request: object) -> Future[tuple[object, float | None]]: ...
     def async_store(
         self,
         request: object,
@@ -333,6 +351,7 @@ def reserve_process_for_forking() -> None: ...
 __all__ = [
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
+    "NativeDiagnosticProcessor",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",

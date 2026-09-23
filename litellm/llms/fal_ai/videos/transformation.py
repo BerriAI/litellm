@@ -104,7 +104,10 @@ def _profile_for_model(model: str) -> _ModelProfile:
 
 
 def _resolution_for_short_side(short_side: int, profile: _ModelProfile) -> str:
-    return next(resolution for threshold, resolution in profile.resolution_tiers if short_side <= threshold)
+    return next(
+        (resolution for threshold, resolution in profile.resolution_tiers if short_side <= threshold),
+        profile.resolution_tiers[-1][1],
+    )
 
 
 def _model_path_from_request_url(raw_response: httpx.Response) -> str | None:
@@ -227,6 +230,9 @@ def _response_string(response_data: Mapping[str, object], key: str, default: str
     return value if isinstance(value, str) else default
 
 
+_RESULT_HEADERS_NOT_FORWARDED: Final[frozenset[str]] = frozenset({"host", "content-length", "transfer-encoding"})
+
+
 def _result_request(
     raw_response: httpx.Response,
     response_data: Mapping[str, object],
@@ -234,14 +240,12 @@ def _result_request(
     if _response_string(response_data, "status", "IN_QUEUE") != "COMPLETED":
         return None
     result_url: Final[str] = str(raw_response.request.url).removesuffix("/status")
+    encoding: Final[str] = raw_response.request.headers.encoding
     result_headers: Final[Mapping[str, str]] = MappingProxyType(
         {
-            key: value
-            for key, value in (
-                ("Authorization", raw_response.request.headers.get("Authorization")),
-                ("Content-Type", raw_response.request.headers.get("Content-Type")),
-            )
-            if value is not None
+            key.decode(encoding): value.decode(encoding)
+            for key, value in raw_response.request.headers.raw
+            if key.decode(encoding).lower() not in _RESULT_HEADERS_NOT_FORWARDED
         }
     )
     return result_url, result_headers
@@ -351,6 +355,8 @@ class FalAIVideoConfig(BaseVideoConfig):
         duration: Final[str | None] = _duration_value(seconds)
         if duration is None:
             raise ValueError("fal.ai seconds must be a numeric value")
+        if duration == "auto":
+            return MappingProxyType({}) if profile.integer_duration else MappingProxyType({"duration": duration})
         return MappingProxyType({"duration": int(duration) if profile.integer_duration else duration})
 
     def validate_environment(
@@ -458,9 +464,10 @@ class FalAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: object,
         custom_llm_provider: str | None = None,
+        client: HTTPHandler | None = None,
     ) -> VideoObject:
         response_data: Final[Mapping[str, object]] = _response_data(raw_response)
-        result_error: Final[str | None] = self._fetch_result_error(raw_response, response_data)
+        result_error: Final[str | None] = self._fetch_result_error(raw_response, response_data, client)
         return _status_video_object(
             response_data=response_data,
             raw_response=raw_response,
@@ -472,15 +479,20 @@ class FalAIVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         response_data: Mapping[str, object],
+        client: HTTPHandler | None,
     ) -> str | None:
         result_request: Final[tuple[str, Mapping[str, str]] | None] = _result_request(raw_response, response_data)
         if result_request is None:
             return None
         result_url, result_headers = result_request
-        result_response: Final[httpx.Response] = self._sync_client_factory().get(
-            url=result_url,
-            headers=result_headers,
-        )
+        result_client: Final[HTTPHandler] = client if client is not None else self._sync_client_factory()
+        try:
+            result_response: Final[httpx.Response] = result_client.get(
+                url=result_url,
+                headers=dict(result_headers),  # mutable-ok: HTTPHandler.get only accepts a dict
+            )
+        except httpx.TransportError:
+            return None
         return _terminal_result_error(result_response)
 
     async def async_transform_video_status_retrieve_response(
@@ -488,9 +500,10 @@ class FalAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: object,
         custom_llm_provider: str | None = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> VideoObject:
         response_data: Final[Mapping[str, object]] = _response_data(raw_response)
-        result_error: Final[str | None] = await self._fetch_result_error_async(raw_response, response_data)
+        result_error: Final[str | None] = await self._fetch_result_error_async(raw_response, response_data, client)
         return _status_video_object(
             response_data=response_data,
             raw_response=raw_response,
@@ -502,15 +515,20 @@ class FalAIVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         response_data: Mapping[str, object],
+        client: AsyncHTTPHandler | None,
     ) -> str | None:
         result_request: Final[tuple[str, Mapping[str, str]] | None] = _result_request(raw_response, response_data)
         if result_request is None:
             return None
         result_url, result_headers = result_request
-        result_response: Final[httpx.Response] = await self._async_client_factory().get(
-            url=result_url,
-            headers=result_headers,
-        )
+        result_client: Final[AsyncHTTPHandler] = client if client is not None else self._async_client_factory()
+        try:
+            result_response: Final[httpx.Response] = await result_client.get(
+                url=result_url,
+                headers=dict(result_headers),  # mutable-ok: AsyncHTTPHandler.get only accepts a dict
+            )
+        except httpx.TransportError:
+            return None
         return _terminal_result_error(result_response)
 
     @staticmethod

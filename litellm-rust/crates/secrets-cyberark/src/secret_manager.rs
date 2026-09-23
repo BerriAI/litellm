@@ -2,7 +2,10 @@ use std::{fs, sync::Arc, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_core_utils::settings::Lookup;
-use litellm_secrets_types::{BaseSecretManager, SecretValue, validate_secret_name};
+use litellm_secrets_types::{
+    BaseSecretManager, SecretOperationContext, SecretValue, SecretWriteContext,
+    validate_secret_name,
+};
 use moka::future::Cache;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
@@ -89,7 +92,7 @@ impl CyberArkSecretManager {
             .unwrap_or(true);
         let mut builder = reqwest::Client::builder();
         if !verify {
-            tracing::warn!(
+            litellm_tracing::warn!(
                 "CyberArk SSL verification is disabled. This is insecure and should only be used for testing with self-signed certificates."
             );
             builder = builder.danger_accept_invalid_certs(true);
@@ -140,7 +143,7 @@ impl CyberArkSecretManager {
             .map_err(|_| Error::Endpoint)
     }
 
-    async fn authenticate(&self) -> Result<SecretValue, Error> {
+    async fn authenticate(&self, context: &SecretOperationContext) -> Result<SecretValue, Error> {
         if let Some(token) = self.token.get(&()).await {
             return Ok(token);
         }
@@ -155,12 +158,12 @@ impl CyberArkSecretManager {
                 self.account, self.username
             ))
             .map_err(|_| Error::Endpoint)?;
-        let response = self
-            .client
-            .post(url)
-            .body(self.api_key.expose().to_owned())
-            .send()
-            .await?;
+        let response = with_timeout(
+            self.client.post(url).body(self.api_key.expose().to_owned()),
+            context,
+        )
+        .send()
+        .await?;
         if !response.status().is_success() {
             return Err(Error::AuthStatus(response.status().as_u16()));
         }
@@ -169,23 +172,37 @@ impl CyberArkSecretManager {
         Ok(token)
     }
 
-    async fn authorization_header(&self) -> Result<String, Error> {
+    async fn authorization_header(
+        &self,
+        context: &SecretOperationContext,
+    ) -> Result<String, Error> {
         Ok(format!(
             "Token token=\"{}\"",
-            self.authenticate().await?.expose()
+            self.authenticate(context).await?.expose()
         ))
     }
 
     pub async fn async_read_secret(&self, name: &str) -> Result<Option<SecretValue>, Error> {
+        self.async_read_secret_with_context(name, &SecretOperationContext::default())
+            .await
+    }
+
+    pub async fn async_read_secret_with_context(
+        &self,
+        name: &str,
+        context: &SecretOperationContext,
+    ) -> Result<Option<SecretValue>, Error> {
         if let Some(value) = self.secrets.get(name).await {
             return Ok(Some(value));
         }
-        let response = self
-            .client
-            .get(self.secret_url(name)?)
-            .header("Authorization", self.authorization_header().await?)
-            .send()
-            .await?;
+        let response = with_timeout(
+            self.client
+                .get(self.secret_url(name)?)
+                .header("Authorization", self.authorization_header(context).await?),
+            context,
+        )
+        .send()
+        .await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -201,17 +218,35 @@ impl CyberArkSecretManager {
         &self,
         name: &str,
         value: &SecretValue,
+        description: Option<&str>,
+    ) -> Result<(), Error> {
+        self.async_write_secret_with_context(
+            name,
+            value,
+            description,
+            &SecretOperationContext::default(),
+        )
+        .await
+    }
+
+    pub async fn async_write_secret_with_context(
+        &self,
+        name: &str,
+        value: &SecretValue,
         _description: Option<&str>,
+        context: &SecretOperationContext,
     ) -> Result<(), Error> {
         validate_secret_name(name)?;
-        self.ensure_variable_exists(name).await;
-        let response = self
-            .client
-            .post(self.secret_url(name)?)
-            .header("Authorization", self.authorization_header().await?)
-            .body(value.expose().to_owned())
-            .send()
-            .await?;
+        self.ensure_variable_exists(name, context).await;
+        let response = with_timeout(
+            self.client
+                .post(self.secret_url(name)?)
+                .header("Authorization", self.authorization_header(context).await?)
+                .body(value.expose().to_owned()),
+            context,
+        )
+        .send()
+        .await?;
         if !response.status().is_success() {
             return Err(Error::Status(response.status().as_u16()));
         }
@@ -219,30 +254,34 @@ impl CyberArkSecretManager {
         Ok(())
     }
 
-    async fn ensure_variable_exists(&self, name: &str) {
+    async fn ensure_variable_exists(&self, name: &str, context: &SecretOperationContext) {
         let policy_url = self
             .endpoint
             .join(&format!("policies/{}/policy/root", self.account));
         let Ok(policy_url) = policy_url else {
-            tracing::warn!("Could not build CyberArk policy endpoint");
+            litellm_tracing::warn!("Could not build CyberArk policy endpoint");
             return;
         };
-        let Ok(authorization) = self.authorization_header().await else {
-            tracing::warn!("Could not authenticate while ensuring CyberArk variable exists");
+        let Ok(authorization) = self.authorization_header(context).await else {
+            litellm_tracing::warn!(
+                "Could not authenticate while ensuring CyberArk variable exists"
+            );
             return;
         };
         let body = format!(
             "- !variable {}\n",
             serde_json::to_string(name).expect("serializing a string cannot fail")
         );
-        let response = self
-            .client
-            .post(policy_url)
-            .header("Authorization", authorization)
-            .header("Content-Type", "application/x-yaml")
-            .body(body)
-            .send()
-            .await;
+        let response = with_timeout(
+            self.client
+                .post(policy_url)
+                .header("Authorization", authorization)
+                .header("Content-Type", "application/x-yaml")
+                .body(body),
+            context,
+        )
+        .send()
+        .await;
         match response {
             Ok(response) if response.status().is_success() => {}
             Ok(response)
@@ -251,19 +290,19 @@ impl CyberArkSecretManager {
                     reqwest::StatusCode::CONFLICT | reqwest::StatusCode::UNPROCESSABLE_ENTITY
                 ) =>
             {
-                tracing::debug!(
+                litellm_tracing::debug!(
                     "CyberArk variable policy already exists or conflicts: {}",
                     response.status()
                 );
             }
             Ok(response) => {
-                tracing::warn!(
+                litellm_tracing::warn!(
                     "Could not ensure CyberArk variable exists: {}",
                     response.status()
                 );
             }
             Err(error) => {
-                tracing::warn!("Error ensuring CyberArk variable exists: {error}");
+                litellm_tracing::warn!("Error ensuring CyberArk variable exists: {error}");
             }
         }
     }
@@ -271,9 +310,23 @@ impl CyberArkSecretManager {
     pub async fn async_delete_secret(
         &self,
         name: &str,
-        _recovery_window_in_days: i64,
+        recovery_window_in_days: Option<u32>,
     ) -> Result<DeleteOutcome, Error> {
-        tracing::warn!(
+        self.async_delete_secret_with_context(
+            name,
+            recovery_window_in_days,
+            &SecretOperationContext::default(),
+        )
+        .await
+    }
+
+    pub async fn async_delete_secret_with_context(
+        &self,
+        name: &str,
+        _recovery_window_in_days: Option<u32>,
+        _context: &SecretOperationContext,
+    ) -> Result<DeleteOutcome, Error> {
+        litellm_tracing::warn!(
             "CyberArk Conjur does not support direct secret deletion. Secrets must be removed through policy updates."
         );
         self.secrets.invalidate(name).await;
@@ -286,26 +339,47 @@ impl BaseSecretManager for CyberArkSecretManager {
     type WriteResponse = ();
     type DeleteResponse = DeleteOutcome;
 
-    async fn async_read_secret(&self, name: &str) -> Result<Option<SecretValue>, Error> {
-        self.async_read_secret(name).await
+    async fn async_read_secret(
+        &self,
+        name: &str,
+        context: &SecretOperationContext,
+    ) -> Result<Option<SecretValue>, Error> {
+        self.async_read_secret_with_context(name, context).await
     }
 
     async fn async_write_secret(
         &self,
         name: &str,
         value: &SecretValue,
-        description: Option<&str>,
+        context: &SecretWriteContext,
     ) -> Result<(), Error> {
-        self.async_write_secret(name, value, description).await
+        self.async_write_secret_with_context(
+            name,
+            value,
+            context.description.as_deref(),
+            &context.operation,
+        )
+        .await
     }
 
     async fn async_delete_secret(
         &self,
         name: &str,
-        recovery_window_in_days: i64,
+        recovery_window_in_days: Option<u32>,
+        context: &SecretOperationContext,
     ) -> Result<DeleteOutcome, Error> {
-        self.async_delete_secret(name, recovery_window_in_days)
+        self.async_delete_secret_with_context(name, recovery_window_in_days, context)
             .await
+    }
+}
+
+fn with_timeout(
+    request: reqwest::RequestBuilder,
+    context: &SecretOperationContext,
+) -> reqwest::RequestBuilder {
+    match context.timeout() {
+        Some(timeout) => request.timeout(timeout),
+        None => request,
     }
 }
 

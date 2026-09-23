@@ -1,12 +1,11 @@
-import openai from "openai";
 import { ChatCompletion, ChatCompletionChunk, ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { VectorStoreSearchResponse } from "../chat_ui/types";
-import { getProxyBaseUrl } from "@/components/networking";
 import { MCPServer, MCPToolset, type MCPEvent } from "@/components/mcp_tools/types";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 import { parseUsageCost } from "./usage_cost";
 import { buildPlaygroundHeaders, type CustomHeaders } from "./request_headers";
+import { createGatewayClient } from "./gateway_client";
 
 const completionAsSingleChunk = (completion: ChatCompletion): ChatCompletionChunk =>
   ({
@@ -58,13 +57,11 @@ export async function makeOpenAIChatCompletionRequest(
   if (isLocal !== true) {
     console.log = function () {};
   }
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   const headers = buildPlaygroundHeaders(tags, customHeaders);
 
-  const client = new openai.OpenAI({
-    apiKey: accessToken,
-    baseURL: proxyBaseUrl,
-    dangerouslyAllowBrowser: true,
+  const client = createGatewayClient({
+    accessToken,
+    baseURL: customBaseUrl,
     defaultHeaders: headers,
   });
 

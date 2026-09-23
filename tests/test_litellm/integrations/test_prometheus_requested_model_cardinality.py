@@ -117,6 +117,22 @@ async def test_unknown_models_collapse_to_one_series_on_proxy_request_metrics(ro
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model", [["gpt-4o-mini"], {"name": "gpt-4o-mini"}, 123])
+async def test_non_string_models_collapse_to_other_on_proxy_request_metrics(router, model: object):
+    logger = PrometheusLogger()
+
+    with patch("litellm.proxy.proxy_server.llm_router", router, create=True):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
+        await logger.async_post_call_failure_hook(
+            request_data={"model": model, "metadata": {}, "proxy_server_request": {}},
+            original_exception=_ClientSideError("'model' must be a string."),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key-1"),
+        )
+
+    assert _requested_model_values(logger.litellm_proxy_failed_requests_metric) == {UNRECOGNIZED_REQUESTED_MODEL_LABEL}
+    assert _total_value(logger.litellm_proxy_failed_requests_metric) == 1
+
+
+@pytest.mark.asyncio
 async def test_known_alias_and_wildcard_models_keep_their_own_labels(router):
     logger = PrometheusLogger()
 

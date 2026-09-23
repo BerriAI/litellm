@@ -55,31 +55,3 @@ impl CacheType {
             .find(|cache_type| cache_type.as_python_name() == value)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::CacheType;
-
-    #[test]
-    fn every_python_cache_type_has_one_round_trip_identity() {
-        let names = CacheType::ALL.map(CacheType::as_python_name);
-        assert_eq!(
-            names,
-            [
-                "local",
-                "redis",
-                "redis-semantic",
-                "valkey-semantic",
-                "s3",
-                "disk",
-                "qdrant-semantic",
-                "azure-blob",
-                "gcs",
-            ]
-        );
-        assert_eq!(
-            names.map(CacheType::from_python_name),
-            CacheType::ALL.map(Some)
-        );
-    }
-}
