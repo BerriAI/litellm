@@ -18,6 +18,8 @@ Call `compile(&pricing)` once for an immutable plan, then `plan.calculate(&reque
 
 `generic_input` prices the parsed prompt details with caller-supplied base token rates and model-specific audio, image, video, character, query, count, and duration rates. It preserves Python's service-tier fallback and suppresses token charges when a corresponding image-count or media-duration charge applies. Selecting base rates from full model metadata remains separate
 
+`generic_output` prices text, reasoning, audio, image, and video output tokens and resolves the standard or service-tier reasoning rate. `generic_cost::calculate_generic_cost_with_resolved_rates` joins both sides, adjusts overlapping prompt cache and modality counts, and applies a caller-supplied multiplier. Full base-rate, off-peak, tiered-reasoning, and regional selection remain outside this path
+
 `custom_pricing::normalize_cache_usage` applies Python's cache field precedence and adjusts prompt tokens when cache counts use the Anthropic convention. `custom_pricing::cost_per_token_custom_pricing_helper` prices normalized usage with caller-supplied token or per-second rates. The module validates finite nonnegative quantities and rates before calculation
 
 `catalog::CostCatalog` accepts a caller-supplied map of model keys to token rates. Its `select_model_key` handles duplicate provider prefixes, optional region-specific keys, provider-prefixed keys, and bare-model fallback in the same order as Python's `cost_per_token`. Its `cost_per_token` method calculates generic token cost for the selected key. Catalog loading and provider-specific dispatch remain outside this method
@@ -30,7 +32,7 @@ The Rust module tree does not mirror Python's overall cost module tree. The Pyth
 
 | Python function | Rust function | Python tests | Rust tests |
 | --- | --- | --- | --- |
-| `litellm.litellm_core_utils.llm_cost_calc.utils.generic_cost_per_token` | `litellm_cost::calculate` | `test_llm_cost_calc_utils.py` | `calculation.rs`, `python_reference.tsv` |
+| `litellm.litellm_core_utils.llm_cost_calc.utils.generic_cost_per_token` flat token pricing subset | `litellm_cost::calculate` | `test_llm_cost_calc_utils.py` | `calculation.rs`, `python_reference.tsv` |
 | `litellm.cost_calculator.default_image_cost_calculator` | `litellm_cost::non_token::calculate_image` | `test_cost_calculator.py::test_default_image_cost_calculator` | `python_cost_calculator.rs::default_image_cost_calculator_selects_first_priced_unit` |
 | `litellm.cost_calculator.ocr_cost` | `litellm_cost::non_token::calculate_ocr_with_tables` | `test_cost_calculator.py::test_ocr_cost_*` | `python_cost_calculator.rs::ocr_cost_*` |
 | `litellm.cost_calculator.ocr_batch_cost` | `litellm_cost::non_token::calculate_ocr_batch` | `litellm_core_utils/test_litellm_logging.py::test_ocr_only_deployment_pricing_reaches_batch_ocr_cost` | `python_cost_calculator.rs::ocr_batch_cost_*` |
@@ -68,8 +70,10 @@ The Rust module tree does not mirror Python's overall cost module tree. The Pyth
 | `litellm.litellm_core_utils.llm_cost_calc.utils.calculate_cost_component` | `litellm_cost::generic_input::calculate_cost_component` | `test_llm_cost_calc_utils.py` component cases | `python_generic_input.rs::calculate_cost_component_*` |
 | `litellm.litellm_core_utils.llm_cost_calc.utils.calculate_cache_writing_cost` | `litellm_cost::generic_input::calculate_cache_writing_cost` | `test_llm_cost_calc_utils.py::test_cache_writing_cost_*` | `python_generic_input.rs::calculate_cache_writing_cost_*` |
 | `litellm.litellm_core_utils.llm_cost_calc.utils._calculate_input_cost` | `litellm_cost::generic_input::calculate_input_cost` | `test_llm_cost_calc_utils.py::test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details` and modality cases | `python_generic_input.rs::calculate_input_cost_*` |
+| `litellm.litellm_core_utils.llm_cost_calc.utils._resolve_reasoning_token_cost` | `litellm_cost::generic_output::resolve_reasoning_token_cost` | `test_llm_cost_calc_utils.py::test_*reasoning*` | `python_generic_output.rs::resolve_reasoning_token_cost_*` |
+| `litellm.litellm_core_utils.llm_cost_calc.utils.generic_cost_per_token` output and overlap calculation | `litellm_cost::generic_output::calculate_output_cost`, `litellm_cost::generic_cost::billable_prompt_details`, `litellm_cost::generic_cost::calculate_generic_cost_with_resolved_rates` | `test_llm_cost_calc_utils.py::test_generic_cost_per_token_*` | `python_generic_output.rs::calculate_output_cost_*`, `python_generic_cost.rs` |
 
-`cost_per_token`, `completion_cost`, `response_cost_calculator`, provider calculators, and Python's model lookup and response normalization have no Rust counterpart yet. The ported Rust cases use `rstest` and synthetic prices; they cover the corresponding Python tests' price selection and arithmetic, not their integration with Python model registration
+Full `cost_per_token`, `completion_cost`, `response_cost_calculator`, and many provider calculators have no Rust counterpart yet. The ported Rust cases use `rstest` and synthetic prices; they cover mapped Python calculations, not integration with Python model registration
 
 The caller states whether `prompt_tokens` includes cache tokens. Threshold selection uses total input tokens for either convention and selects one rate for the whole request. Thresholds are sorted when compiled, and duplicate thresholds or tier overrides fail deterministically. `Fast` selects priority rates; unknown tiers use standard rates
 
@@ -77,4 +81,4 @@ The caller states whether `prompt_tokens` includes cache tokens. Threshold selec
 
 The supported off-peak shape is one non-wrapping UTC daily window. The caller supplies the applicable regional multiplier after provider-specific selection. Negative or non-finite rates, ambiguous rules, inconsistent cache counts, incomplete write splits, invalid windows and overflow return errors. Callers must decline unsupported inputs before native execution if their public contract accepts those shapes
 
-This crate does not select models, read catalogs, fetch provider prices, normalize provider responses, or process provider-reported costs. The non-token functions accept already selected prices and do not yet match every Python fallback or warning. This crate does not change proxy behavior. The reference fixture was generated by `tests/generate_python_reference.py` against the Python implementation at the commit recorded in `tests/python_reference.tsv`, using synthetic rates and fixed usage
+This crate accepts a caller-supplied catalog and only supports part of Python's model selection and response normalization. It does not fetch provider prices or process provider-reported costs. The non-token functions accept already selected prices and do not yet match every Python fallback or warning. This crate does not change proxy behavior. The reference fixture was generated by `tests/generate_python_reference.py` against the Python implementation at the commit recorded in `tests/python_reference.tsv`, using synthetic rates and fixed usage

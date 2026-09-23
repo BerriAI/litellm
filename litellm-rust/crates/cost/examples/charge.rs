@@ -9,6 +9,7 @@ use litellm_cost::custom_pricing::{
     normalize_cache_usage,
 };
 use litellm_cost::gemini_cost::cost_per_web_search_request;
+use litellm_cost::generic_cost::{ResolvedTokenRates, calculate_generic_cost_with_resolved_rates};
 use litellm_cost::generic_input::{InputBaseRates, calculate_input_cost};
 use litellm_cost::generic_usage::parse_prompt_tokens_details;
 use litellm_cost::guardrail_cost::bedrock_guardrail_cost;
@@ -353,4 +354,42 @@ fn main() {
         None,
     );
     println!("generic_input={generic_input:.5}");
+    let complete_usage = get_usage_object(&json!({
+        "usage": {
+            "prompt_tokens": 1000,
+            "completion_tokens": 100,
+            "total_tokens": 1100,
+            "prompt_tokens_details": {
+                "cached_tokens": 200,
+                "cache_write_tokens": 100,
+                "text_tokens": 1000,
+                "audio_tokens": 100,
+                "image_tokens": 50,
+                "video_tokens": 50
+            }
+        }
+    }))
+    .unwrap()
+    .unwrap();
+    let (generic_prompt, generic_output) = calculate_generic_cost_with_resolved_rates(
+        &complete_usage,
+        &json!({
+            "input_cost_per_audio_token": 4e-6,
+            "input_cost_per_image_token": 5e-6,
+            "input_cost_per_video_token": 6e-6
+        }),
+        ResolvedTokenRates {
+            input: InputBaseRates {
+                prompt: 2e-6,
+                cache_read: 0.5e-6,
+                cache_creation: 3e-6,
+                cache_creation_above_1hr: 3e-6,
+            },
+            output: 7e-6,
+            reasoning: None,
+            multiplier: 1.0,
+        },
+        None,
+    );
+    println!("generic_prompt={generic_prompt:.5} generic_output={generic_output:.5}");
 }
