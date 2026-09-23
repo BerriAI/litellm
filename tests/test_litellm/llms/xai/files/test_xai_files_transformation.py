@@ -80,6 +80,23 @@ async def test_delete_file_maps_xai_deleted_object() -> None:
 
 
 @respx.mock
+async def test_create_file_falls_back_to_litellm_xai_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "xai_key", "configured-xai-key")
+    monkeypatch.setattr(litellm, "api_key", "generic-key-must-not-be-used")
+    route: Final = respx.post(f"{API_BASE}/v1/files").respond(200, json=_XAI_FILE)
+
+    await litellm.acreate_file(
+        file=("batch.jsonl", b'{"custom_id":"r1"}\n', "application/jsonl"),
+        purpose="batch",
+        custom_llm_provider="xai",
+        api_base=API_BASE,
+    )
+
+    assert route.calls.last.request.headers["authorization"] == "Bearer configured-xai-key"
+
+
+@respx.mock
 async def test_list_files_reads_data_array() -> None:
     respx.get(f"{API_BASE}/v1/files").respond(200, json={"data": [_XAI_FILE], "pagination_token": None})
 

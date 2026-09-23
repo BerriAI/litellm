@@ -88,6 +88,28 @@ async def test_create_batch_keeps_image_and_video_endpoints_on_the_batch(endpoin
 
     assert isinstance(batch, LiteLLMBatch)
     assert batch.endpoint == endpoint
+    assert json.loads(respx.calls.last.request.content) == {"name": "litellm-batch", "input_file_id": "file_1"}
+
+
+@respx.mock
+async def test_retrieve_after_a_non_chat_create_reports_chat() -> None:
+    respx.post(f"{API_BASE}/v1/batches").respond(200, json=_XAI_BATCH)
+    respx.get(f"{API_BASE}/v1/batches/batch_1").respond(200, json=_XAI_BATCH)
+
+    created: Final = await litellm.acreate_batch(
+        completion_window="24h",
+        endpoint="/v1/embeddings",
+        input_file_id="file_1",
+        custom_llm_provider="xai",
+        api_key=KEY,
+        api_base=API_BASE,
+    )
+    retrieved: Final = await litellm.aretrieve_batch(
+        batch_id="batch_1", custom_llm_provider="xai", api_key=KEY, api_base=API_BASE
+    )
+
+    assert isinstance(created, LiteLLMBatch) and isinstance(retrieved, LiteLLMBatch)
+    assert (created.endpoint, retrieved.endpoint) == ("/v1/embeddings", "/v1/chat/completions")
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -101,7 +123,12 @@ async def test_retrieve_batch_reads_native_batch_route(sync_mode: bool) -> None:
     batch: Final = litellm.retrieve_batch(**kwargs) if sync_mode else await litellm.aretrieve_batch(**kwargs)
 
     assert isinstance(batch, LiteLLMBatch)
-    assert (batch.status, batch.output_file_id, batch.input_file_id) == ("in_progress", None, "file_1")
+    assert (batch.status, batch.output_file_id, batch.input_file_id, batch.endpoint) == (
+        "in_progress",
+        None,
+        "file_1",
+        "/v1/chat/completions",
+    )
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -116,7 +143,7 @@ async def test_cancel_batch_uses_colon_cancel_route(sync_mode: bool) -> None:
 
     assert route.called
     assert isinstance(batch, LiteLLMBatch)
-    assert batch.status == "cancelled"
+    assert (batch.status, batch.endpoint) == ("cancelled", "/v1/chat/completions")
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -131,7 +158,7 @@ async def test_list_batches_forwards_cursor_and_returns_openai_list(sync_mode: b
 
     assert dict(route.calls.last.request.url.params) == {"limit": "5", "pagination_token": "cur"}
     assert listed.object == "list"
-    assert [b.id for b in listed.data] == ["batch_1"]
+    assert [(b.id, b.endpoint) for b in listed.data] == [("batch_1", "/v1/chat/completions")]
     assert (listed.has_more, listed.next_page_token) == (True, "next")
 
 
@@ -142,6 +169,7 @@ async def test_list_batches_treats_empty_pagination_token_as_last_page() -> None
     listed: Final = await litellm.alist_batches(custom_llm_provider="xai", api_key=KEY, api_base=API_BASE)
 
     assert (listed.has_more, listed.next_page_token) == (False, None)
+    assert [batch.endpoint for batch in listed.data] == ["/v1/chat/completions"]
 
 
 @respx.mock
@@ -162,15 +190,42 @@ async def test_file_content_stops_paging_on_empty_pagination_token() -> None:
     assert len(content.content.decode().splitlines()) == 1
 
 
+@pytest.mark.parametrize("operation", ["create", "retrieve", "cancel", "list", "file_content"])
 @respx.mock
-async def test_retrieve_batch_falls_back_to_litellm_xai_key(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_batch_calls_fall_back_to_litellm_xai_key(operation: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.setattr(litellm, "xai_key", "configured-xai-key")
-    route: Final = respx.get(f"{API_BASE}/v1/batches/batch_1").respond(200, json=_XAI_BATCH)
+    monkeypatch.setattr(litellm, "api_key", "generic-key-must-not-be-used")
+    routes: Final = {
+        "create": respx.post(f"{API_BASE}/v1/batches").respond(200, json=_XAI_BATCH),
+        "retrieve": respx.get(f"{API_BASE}/v1/batches/batch_1").respond(200, json=_XAI_BATCH),
+        "cancel": respx.post(f"{API_BASE}/v1/batches/batch_1:cancel").respond(200, json=_XAI_BATCH),
+        "list": respx.get(f"{API_BASE}/v1/batches").respond(
+            200, json={"batches": [_XAI_BATCH], "pagination_token": None}
+        ),
+        "file_content": respx.get(f"{API_BASE}/v1/batches/batch_1/results").respond(
+            200, json={"results": [], "pagination_token": None}
+        ),
+    }
 
-    await litellm.aretrieve_batch(batch_id="batch_1", custom_llm_provider="xai", api_base=API_BASE)
+    if operation == "create":
+        await litellm.acreate_batch(
+            completion_window="24h",
+            endpoint="/v1/chat/completions",
+            input_file_id="file_1",
+            custom_llm_provider="xai",
+            api_base=API_BASE,
+        )
+    elif operation == "retrieve":
+        await litellm.aretrieve_batch(batch_id="batch_1", custom_llm_provider="xai", api_base=API_BASE)
+    elif operation == "cancel":
+        await litellm.acancel_batch(batch_id="batch_1", custom_llm_provider="xai", api_base=API_BASE)
+    elif operation == "list":
+        await litellm.alist_batches(custom_llm_provider="xai", api_base=API_BASE)
+    else:
+        await litellm.afile_content(file_id="batch_1", custom_llm_provider="xai", api_base=API_BASE)
 
-    assert route.calls.last.request.headers["authorization"] == "Bearer configured-xai-key"
+    assert routes[operation].calls.last.request.headers["authorization"] == "Bearer configured-xai-key"
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -221,6 +276,59 @@ async def test_file_content_of_a_batch_id_walks_every_results_page(sync_mode: bo
         },
         {"id": "batch_req_r2", "custom_id": "r2", "response": None, "error": {"code": "3", "message": "boom"}},
     ]
+
+
+@respx.mock
+async def test_file_content_unwraps_image_and_video_result_bodies() -> None:
+    respx.get(f"{API_BASE}/v1/batches/batch_1/results").respond(
+        200,
+        json={
+            "results": [
+                {
+                    "batch_request_id": "img",
+                    "batch_result": {
+                        "response": {"image_generation": {"data": [{"url": "https://cdn.example/img.png"}]}}
+                    },
+                },
+                {
+                    "batch_request_id": "vid",
+                    "batch_result": {
+                        "response": {"video_generation": {"id": "vid_1", "url": "https://cdn.example/clip.mp4"}}
+                    },
+                },
+            ],
+            "pagination_token": None,
+        },
+    )
+
+    content: Final = await litellm.afile_content(
+        file_id="batch_1", custom_llm_provider="xai", api_key=KEY, api_base=API_BASE
+    )
+
+    assert [json.loads(line)["response"]["body"] for line in content.content.decode().splitlines()] == [
+        {"data": [{"url": "https://cdn.example/img.png"}]},
+        {"id": "vid_1", "url": "https://cdn.example/clip.mp4"},
+    ]
+
+
+@respx.mock
+async def test_missing_xai_key_is_a_401_before_any_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "xai_key", None)
+    monkeypatch.setattr(litellm, "api_key", "generic-key-must-not-be-used")
+    route: Final = respx.post(f"{API_BASE}/v1/batches").respond(200, json=_XAI_BATCH)
+
+    with pytest.raises(XAIBatchesError) as exc:
+        await litellm.acreate_batch(
+            completion_window="24h",
+            endpoint="/v1/chat/completions",
+            input_file_id="file_1",
+            custom_llm_provider="xai",
+            api_base=API_BASE,
+        )
+
+    assert exc.value.status_code == 401
+    assert route.called is False
 
 
 @respx.mock

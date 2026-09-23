@@ -93,7 +93,13 @@ def test_batch_cancelled_by_caller_is_cancelled() -> None:
 
 @pytest.mark.parametrize(
     "endpoint",
-    ["/v1/images/generations", "/v1/images/edits", "/v1/videos/generations", "/v1/videos/edits", "/v1/videos/extensions"],
+    [
+        "/v1/images/generations",
+        "/v1/images/edits",
+        "/v1/videos/generations",
+        "/v1/videos/edits",
+        "/v1/videos/extensions",
+    ],
 )
 def test_create_body_accepts_image_and_video_endpoints(endpoint: str) -> None:
     body: Final = to_create_batch_body(
@@ -162,13 +168,34 @@ def test_results_render_as_openai_output_jsonl_with_errors_per_line() -> None:
     ]
 
 
-def test_result_keeps_the_body_when_the_endpoint_key_is_not_chat() -> None:
+@pytest.mark.parametrize(
+    ("response_key", "body"),
+    [
+        ("responses", {"id": "resp_1", "output": []}),
+        ("image_generation", {"created": 1, "data": [{"url": "https://cdn.example/img.png"}]}),
+        ("video_generation", {"id": "vid_1", "url": "https://cdn.example/clip.mp4"}),
+    ],
+)
+def test_result_unwraps_the_single_response_key_into_the_openai_body(
+    response_key: str, body: dict[str, object]
+) -> None:
     result: Final = XAIBatchResult.model_validate(
-        {"batch_request_id": "r", "batch_result": {"response": {"responses": {"id": "resp_1", "output": []}}}}
+        {"batch_request_id": "r", "batch_result": {"response": {response_key: body}}}
     )
 
     line: Final = json.loads(results_to_openai_jsonl((result,)).decode())
-    assert line["response"]["body"] == {"id": "resp_1", "output": []}
+    assert line["response"]["body"] == body
+    assert line["response"]["request_id"] == body.get("id")
+    assert response_key not in line["response"]["body"]
+
+
+def test_retrieve_and_list_report_chat_because_xai_has_no_batch_endpoint() -> None:
+    retrieved: Final = to_litellm_batch(_xai_batch())
+    listed: Final = to_openai_batch_list(XAIBatchList.model_validate({"batches": [_xai_batch().model_dump()]}))
+
+    assert retrieved.endpoint == "/v1/chat/completions"
+    assert [batch.endpoint for batch in listed.data] == ["/v1/chat/completions"]
+    assert retrieved.metadata == {"name": "nightly"}
 
 
 def test_list_page_maps_to_openai_list_with_cursor_flags() -> None:
