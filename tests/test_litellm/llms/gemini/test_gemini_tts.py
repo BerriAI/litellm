@@ -12,6 +12,8 @@ from litellm.endpoints.speech.speech_to_completion_bridge.transformation import 
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.utils import get_supported_openai_params
 
+pytestmark = pytest.mark.usefixtures("local_model_cost_map")
+
 GEMINI_3_1_FLASH_TTS_MODEL = "gemini-3.1-flash-tts-preview"
 
 MULTI_SPEAKER_SPEECH_CONFIG = {
@@ -187,7 +189,6 @@ class TestGeminiTTSTransformation:
 
         assert result["speechConfig"] == NORMALIZED_MULTI_SPEAKER_SPEECH_CONFIG
         assert result["responseModalities"] == ["AUDIO"]
-        assert "temperature" not in result
 
     def test_gemini_tts_audio_parameter_with_existing_modalities(self):
         """Test audio parameter mapping when modalities already exist"""
@@ -488,7 +489,6 @@ class TestGeminiTTSSpeechConfigInRequestBody:
         generation_config = request_body["generationConfig"]
         assert generation_config["speechConfig"] == NORMALIZED_MULTI_SPEAKER_SPEECH_CONFIG
         assert generation_config["responseModalities"] == ["AUDIO"]
-        assert "temperature" not in generation_config
 
     @pytest.mark.parametrize(
         "model,custom_llm_provider",

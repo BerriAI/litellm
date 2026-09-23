@@ -13,6 +13,8 @@ from litellm.llms.vertex_ai.text_to_speech.transformation import (
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
+pytestmark = pytest.mark.usefixtures("local_model_cost_map")
+
 
 class TestVertexAITextToSpeechConfig:
     """Tests for VertexAITextToSpeechConfig transformation"""
