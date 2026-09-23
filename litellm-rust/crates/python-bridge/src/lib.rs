@@ -13,7 +13,7 @@ mod tokenizer;
 
 #[pymodule(gil_used = true)]
 mod _native {
-    use crate::cache::{CacheTestHandle, CacheTestResolver, ResolvedCache};
+    use crate::cache::{CacheResolver, CacheTestHandle, ResolvedCache};
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -51,7 +51,8 @@ mod _native {
         let py = module.py();
         let dict = module.dict();
         dict.set_item("_CacheTestHandle", py.get_type::<CacheTestHandle>())?;
-        dict.set_item("_CacheTestResolver", py.get_type::<CacheTestResolver>())?;
+        dict.set_item("_CacheResolver", py.get_type::<CacheResolver>())?;
+        dict.set_item("_CacheTestResolver", py.get_type::<CacheResolver>())?;
         dict.set_item("_ResponseCacheRuntime", py.get_type::<ResolvedCache>())?;
         dict.set_item(
             "_SecretManagerRuntime",

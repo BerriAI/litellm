@@ -1,19 +1,14 @@
 use pyo3::{PyTraverseError, PyVisit, prelude::*};
 
-use super::{
-    binding::{CacheBinding, ResolvedCache},
-    callback::PythonCallback,
-    facade,
-    handle::CacheTestHandle,
-};
+use super::binding::ResolvedCache;
 
-#[pyclass(frozen, name = "_CacheTestResolver")]
-pub(crate) struct CacheTestResolver {
+#[pyclass(frozen, name = "_CacheResolver")]
+pub(crate) struct CacheResolver {
     namespace: Py<PyAny>,
 }
 
 #[pymethods]
-impl CacheTestResolver {
+impl CacheResolver {
     #[new]
     fn new(namespace: Py<PyAny>) -> Self {
         Self { namespace }
@@ -21,16 +16,7 @@ impl CacheTestResolver {
 
     pub(crate) fn resolve(&self, py: Python<'_>) -> PyResult<ResolvedCache> {
         let object = self.namespace.bind(py).getattr("cache")?;
-        let binding = if object.is_none() {
-            CacheBinding::Disabled
-        } else if let Ok(handle) = object.extract::<PyRef<'_, CacheTestHandle>>() {
-            CacheBinding::Native(handle.service()?)
-        } else if let Some(service) = facade::resolve(py, &object)? {
-            CacheBinding::Native(service)
-        } else {
-            CacheBinding::PythonCallback(PythonCallback::new(object.unbind()))
-        };
-        Ok(ResolvedCache::new(binding))
+        ResolvedCache::from_selected(&object)
     }
 
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {

@@ -236,6 +236,57 @@ async def test_catalog_constructs_native_runtime_from_public_cache_configuration
     assert await runtime.async_lookup(async_request) is None
 
 
+async def test_inference_resolver_uses_the_configured_native_cache_directly() -> None:
+    rules: Final = (
+        RouteRule(Route.OCR, Rollout.PYTHON_ONLY),
+        SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({"local"})),
+        CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({"local"})),
+    )
+    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    runtime: Final = resolve_response_cache(facade, rules)
+    assert isinstance(runtime, ResponseCacheRuntime)
+    facade._native_cache = runtime
+
+    selected: Final = _native._CacheResolver(SimpleNamespace(cache=facade)).resolve()
+    assert selected.kind == "native"
+    request: Final = runtime.request(facade, {"cache_key": "inference-native"})
+    assert request is not None
+    await selected.async_store(request, {"answer": 42})
+    assert await selected.async_lookup(request) == {"answer": 42}
+    assert await runtime.async_lookup(request) == {"answer": 42}
+    assert facade.cache.get_cache("inference-native") is None
+
+    facade._native_cache = None
+    fallback: Final = _native._CacheResolver(SimpleNamespace(cache=facade)).resolve()
+    assert fallback.kind == "python_callback"
+    await fallback.async_store(None, {"answer": 7}, callback_kwargs={"cache_key": "inference-python"})
+    assert facade.get_cache(cache_key="inference-python") == {"answer": 7}
+    assert facade.cache.get_cache("inference-python") is not None
+
+
+async def test_inference_resolver_declines_a_native_runtime_whose_facade_changed() -> None:
+    rules: Final = (
+        RouteRule(Route.OCR, Rollout.PYTHON_ONLY),
+        SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({"local"})),
+        CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({"local"})),
+    )
+    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    runtime: Final = resolve_response_cache(facade, rules)
+    assert isinstance(runtime, ResponseCacheRuntime)
+    facade._native_cache = runtime
+    stale_request: Final = runtime.request(facade, {"cache_key": "stale-only"})
+    assert stale_request is not None
+    await runtime.async_store(stale_request, {"answer": "stale"})
+
+    replacement: Final = InMemoryCache()
+    facade.cache = replacement
+    with pytest.raises(_native.RustBridgeDeclined):
+        _native._CacheResolver(SimpleNamespace(cache=facade)).resolve()
+    assert await runtime.async_lookup(stale_request) == {"answer": "stale"}
+    assert replacement.get_cache("stale-only") is None
+    assert replacement.get_cache("swapped-backend") is None
+
+
 def test_existing_global_lifecycle_remains_the_resolver_source_of_truth() -> None:
     resolver: Final = _CacheTestResolver(litellm)
 

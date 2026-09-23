@@ -29,6 +29,7 @@ pub(super) enum CacheBinding {
 #[pyclass(frozen, name = "_ResponseCacheRuntime")]
 pub(crate) struct ResolvedCache {
     binding: CacheBinding,
+    guard: Option<super::facade::FacadeGuard>,
     pid: u32,
 }
 
@@ -36,8 +37,22 @@ impl ResolvedCache {
     pub(super) fn new(binding: CacheBinding) -> Self {
         Self {
             binding,
+            guard: None,
             pid: std::process::id(),
         }
+    }
+
+    pub(super) fn with_guard(mut self, guard: super::facade::FacadeGuard) -> Self {
+        self.guard = Some(guard);
+        self
+    }
+
+    pub(super) fn native_service(&self) -> PyResult<Option<NativeResponseCache>> {
+        self.check_process()?;
+        Ok(match &self.binding {
+            CacheBinding::Native(service) => Some(service.clone()),
+            _ => None,
+        })
     }
 
     fn check_process(&self) -> PyResult<()> {
@@ -71,6 +86,43 @@ impl ResolvedCache {
 #[pymethods]
 impl ResolvedCache {
     #[staticmethod]
+    pub(crate) fn from_selected(cache: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let py = cache.py();
+        let binding = if cache.is_none() {
+            CacheBinding::Disabled
+        } else if let Ok(handle) = cache.extract::<PyRef<'_, super::handle::CacheTestHandle>>() {
+            CacheBinding::Native(handle.service()?)
+        } else if let Some(service) = super::facade::resolve(py, cache)? {
+            CacheBinding::Native(service)
+        } else if let Some(runtime) = cache
+            .getattr_opt("_native_cache")?
+            .filter(|value| !value.is_none())
+        {
+            let resolved = runtime
+                .getattr("native")?
+                .extract::<PyRef<'_, ResolvedCache>>()?;
+            match resolved.native_service()? {
+                Some(service) => {
+                    if !resolved
+                        .guard
+                        .as_ref()
+                        .is_some_and(|guard| guard.matches(py, cache).unwrap_or(false))
+                    {
+                        return Err(RustBridgeDeclined::new_err(
+                            "native cache runtime no longer matches its facade",
+                        ));
+                    }
+                    CacheBinding::Native(service)
+                }
+                None => CacheBinding::PythonCallback(PythonCallback::new(cache.clone().unbind())),
+            }
+        } else {
+            CacheBinding::PythonCallback(PythonCallback::new(cache.clone().unbind()))
+        };
+        Ok(Self::new(binding))
+    }
+
+    #[staticmethod]
     fn from_cache(cache: &Bound<'_, PyAny>) -> PyResult<Self> {
         let config = match NativeCacheConfig::project(cache)? {
             CacheConfigProjection::Native(config) => *config,
@@ -80,7 +132,13 @@ impl ResolvedCache {
         };
         let backend = cache.getattr("cache")?;
         let service = activate(cache.py(), &backend, config)?;
-        Ok(Self::new(CacheBinding::Native(service)))
+        let resolved = Self::new(CacheBinding::Native(service.clone()));
+        Ok(
+            match super::facade::FacadeGuard::capture(cache.py(), cache, &service) {
+                Ok(guard) => resolved.with_guard(guard),
+                Err(_) => resolved,
+            },
+        )
     }
 
     #[getter]
@@ -322,6 +380,9 @@ impl ResolvedCache {
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
         if let CacheBinding::PythonCallback(callback) = &self.binding {
             callback.traverse(&visit)?;
+        }
+        if let Some(guard) = &self.guard {
+            guard.traverse(visit)?;
         }
         Ok(())
     }
