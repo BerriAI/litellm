@@ -163,3 +163,38 @@ def test_placement_is_a_no_op_without_later_system_messages():
 
     assert place_mid_conversation_system(messages, supports_mid_conversation_system=False) == tuple(messages)
     assert place_mid_conversation_system(messages, supports_mid_conversation_system=True) == tuple(messages)
+
+
+def test_flagged_placement_converts_a_run_followed_by_an_assistant_turn_in_place():
+    placed = place_mid_conversation_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "system", "content": "reminder"},
+            {"role": "assistant", "content": "a2"},
+            {"role": "user", "content": "q2"},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "assistant", "user", "assistant", "user"]
+    assert _texts(placed[2]) == [CONVERTED_SYSTEM_NOTE, "reminder"]
+
+
+def test_flagged_placement_of_an_earlier_run_does_not_move_when_later_turns_are_appended():
+    turn_n = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "system", "content": "reminder"},
+    ]
+    turn_n_plus_one = [
+        *turn_n,
+        {"role": "assistant", "content": "a2"},
+        {"role": "user", "content": "q2"},
+    ]
+
+    placed_n = place_mid_conversation_system(turn_n, supports_mid_conversation_system=True)
+    placed_n_plus_one = place_mid_conversation_system(turn_n_plus_one, supports_mid_conversation_system=True)
+
+    assert placed_n_plus_one[: len(placed_n)] == placed_n
+    assert _roles(placed_n_plus_one) == ["user", "assistant", "user", "assistant", "user"]

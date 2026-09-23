@@ -9,8 +9,13 @@ Models flagged ``supports_mid_conversation_system`` in the cost map accept the r
 inside ``messages`` under Anthropic's placement rules: the message must directly
 follow a user turn, must be the last entry or be followed by an assistant turn, and
 must not sit next to another system message. OpenAI-shaped clients put system
-messages anywhere, so this module moves each one to the nearest valid slot and
-merges runs that land together.
+messages anywhere, so this module places each run by its neighbours alone: a run
+after a user turn stays with that turn, a run after an assistant turn slides
+behind the user turn that immediately follows it, and a run that ends the array
+or precedes an assistant turn becomes a user turn in place. Runs that land on the
+same slot merge into one system message. No later message can move an earlier
+run, so a client that replays the conversation with more turns appended sends a
+byte-identical prefix and preserved thinking blocks keep their binding.
 
 Models without the flag reject the role inside ``messages``. Their system messages
 become user turns in place, prefixed with an operator note so the model can tell
@@ -229,31 +234,42 @@ def _system_runs(messages: Sequence[AllMessageValues]) -> tuple[tuple[int, ...],
     )
 
 
+def _block_containing(message_index: int, blocks: Sequence[tuple[bool, tuple[int, ...]]]) -> int:
+    return next(index for index, (_, indices) in enumerate(blocks) if message_index in indices)
+
+
 def _anchor_block(
-    run_start: int,
+    run: Sequence[int],
     messages: Sequence[AllMessageValues],
     blocks: Sequence[tuple[bool, tuple[int, ...]]],
 ) -> int | None:
-    """The user-type block a system run must follow, or ``None`` when no user turn can host it.
+    """The user-type block a system run must follow, or ``None`` when it converts in place.
 
-    ``run_start`` is never 0 here: the leading system run was split off before this
-    policy runs, so the message before a run is always a non-system message.
+    The run never starts at 0: the leading system run was split off before this
+    policy runs, so the message before a run is always a non-system message. Only
+    the run's neighbours decide, so a request that replays these messages with more
+    turns appended places the run identically.
     """
-    if _is_user_type(messages[run_start - 1]):
-        return next(index for index, (is_user, indices) in enumerate(blocks) if is_user and run_start - 1 in indices)
-    return next((index for index, (is_user, indices) in enumerate(blocks) if is_user and indices[0] > run_start), None)
+    previous: Final = run[0] - 1
+    if _is_user_type(messages[previous]):
+        return _block_containing(previous, blocks)
+    follower: Final = run[-1] + 1
+    if follower < len(messages) and _is_user_type(messages[follower]):
+        return _block_containing(follower, blocks)
+    return None
 
 
 def _placed_for_flagged_model(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
     """Keep system messages as ``role: "system"`` at a placement Anthropic accepts.
 
     A run already sitting after a user-type message stays with that user turn. A
-    run after an assistant turn moves to just after the next user turn. Runs that
-    share a user turn merge into one system message. A run with no user turn left
-    to host it becomes user turns in place.
+    run after an assistant turn moves behind the user turn that immediately follows
+    it. A run that ends the array or is followed by an assistant turn becomes user
+    turns in place, so replaying the same messages with more turns appended cannot
+    move it. Runs that share a user turn merge into one system message.
     """
     blocks: Final = _user_type_blocks(messages)
-    anchors: Final = tuple((run, _anchor_block(run[0], messages, blocks)) for run in _system_runs(messages))
+    anchors: Final = tuple((run, _anchor_block(run, messages, blocks)) for run in _system_runs(messages))
 
     def anchored_to(block_index: int) -> tuple[AllMessageValues, ...]:
         return tuple(messages[index] for run, anchor in anchors if anchor == block_index for index in run)
