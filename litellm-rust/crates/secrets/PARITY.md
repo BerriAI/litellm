@@ -12,39 +12,39 @@ Google payload corruption is intentionally rejected: malformed base64 and mismat
 
 | Python test | Rust coverage or boundary |
 | --- | --- |
-| `test_write_secret_replicates_when_configured` | [creation_replicates_only_to_configured_regions](../secrets-aws/tests/secret_manager.rs) |
-| `test_write_secret_no_replication_when_not_configured` | [creation_replicates_only_to_configured_regions](../secrets-aws/tests/secret_manager.rs) |
-| `test_replication_failure_does_not_fail_write` | [creation_passes_tags_and_kms_and_survives_replication_failure](../secrets-aws/tests/secret_manager.rs) |
-| `test_async_replicate_secret_empty_regions_returns_empty` | [creation_passes_tags_and_kms_and_survives_replication_failure](../secrets-aws/tests/secret_manager.rs) |
-| `test_async_replicate_secret_correct_payload` | [direct_replication_returns_response_or_service_error](../secrets-aws/tests/secret_manager.rs) |
-| `test_replication_fires_on_create` | [creation_replicates_only_to_configured_regions](../secrets-aws/tests/secret_manager.rs) |
-| `test_load_aws_secret_manager_passes_replica_regions` | [creation_replicates_only_to_configured_regions](../secrets-aws/tests/secret_manager.rs) |
-| `test_write_secret_http_error_raises` | [create_failure_does_not_overwrite_an_alias_without_a_deletion_date](../secrets-aws/tests/secret_manager.rs) |
-| `test_write_secret_timeout_raises` | [write_and_replication_timeouts_remain_errors](../secrets-aws/tests/secret_manager.rs) |
-| `test_replicate_secret_http_error_raises` | [direct_replication_returns_response_or_service_error](../secrets-aws/tests/secret_manager.rs) |
-| `test_replicate_secret_timeout_raises` | [write_and_replication_timeouts_remain_errors](../secrets-aws/tests/secret_manager.rs) |
+| `test_write_secret_replicates_when_configured` | [creation_replicates_only_to_configured_regions](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_write_secret_no_replication_when_not_configured` | [creation_replicates_only_to_configured_regions](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_replication_failure_does_not_fail_write` | [creation_passes_tags_and_kms_and_survives_replication_failure](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_async_replicate_secret_empty_regions_returns_empty` | [creation_passes_tags_and_kms_and_survives_replication_failure](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_async_replicate_secret_correct_payload` | [direct_replication_returns_response_or_service_error](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_replication_fires_on_create` | [creation_replicates_only_to_configured_regions](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_load_aws_secret_manager_passes_replica_regions` | [creation_replicates_only_to_configured_regions](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_write_secret_http_error_raises` | [create_failure_does_not_overwrite_an_alias_without_a_deletion_date](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_write_secret_timeout_raises` | [write_and_replication_timeouts_remain_errors](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_replicate_secret_http_error_raises` | [direct_replication_returns_response_or_service_error](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_replicate_secret_timeout_raises` | [write_and_replication_timeouts_remain_errors](../secrets-aws/tests/secret_manager/writes.rs) |
 
 ## [tests/test_litellm/secret_managers/test_aws_secret_manager_rotation.py](../../../tests/test_litellm/secret_managers/test_aws_secret_manager_rotation.py)
 
 | Python test | Rust coverage or boundary |
 | --- | --- |
-| `test_rotate_secret_same_name_writes_requested_value_in_place` | [same_name_rotation_uses_put_and_returns_its_response](../secrets-aws/tests/secret_manager.rs) |
-| `test_rotate_secret_different_names_persists_requested_value_and_deletes_old_alias` | [renamed_rotation_reads_creates_verifies_then_deletes](../secrets-aws/tests/secret_manager.rs) |
-| `test_rotate_secret_back_to_name_inside_recovery_window_restores_and_stores_new_value` | [recovery_window_alias_is_restored_updated_and_tagged](../secrets-aws/tests/secret_manager.rs) |
-| `test_write_secret_to_name_inside_recovery_window_reschedules_deletion_when_update_fails` | [failed_update_reschedules_deletion_of_a_restored_alias](../secrets-aws/tests/secret_manager.rs) |
-| `test_write_secret_to_name_inside_recovery_window_restores_and_stores_new_value` | [recovery_window_alias_is_restored_updated_and_tagged](../secrets-aws/tests/secret_manager.rs) |
-| `test_write_secret_to_live_existing_name_still_fails_without_overwriting` | [create_failure_does_not_overwrite_an_alias_without_a_deletion_date](../secrets-aws/tests/secret_manager.rs) |
+| `test_rotate_secret_same_name_writes_requested_value_in_place` | [same_name_rotation_uses_put_and_returns_its_response](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_rotate_secret_different_names_persists_requested_value_and_deletes_old_alias` | [renamed_rotation_reads_creates_verifies_then_deletes](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_rotate_secret_back_to_name_inside_recovery_window_restores_and_stores_new_value` | [recovery_window_alias_is_restored_updated_and_tagged](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_write_secret_to_name_inside_recovery_window_reschedules_deletion_when_update_fails` | [failed_update_reschedules_deletion_of_a_restored_alias](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_write_secret_to_name_inside_recovery_window_restores_and_stores_new_value` | [recovery_window_alias_is_restored_updated_and_tagged](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_write_secret_to_live_existing_name_still_fails_without_overwriting` | [create_failure_does_not_overwrite_an_alias_without_a_deletion_date](../secrets-aws/tests/secret_manager/writes.rs) |
 
 ## [tests/test_litellm/secret_managers/test_aws_secret_manager_v2.py](../../../tests/test_litellm/secret_managers/test_aws_secret_manager_v2.py)
 
 | Python test | Rust coverage or boundary |
 | --- | --- |
-| `test_create_secret_uses_customer_managed_kms_key_from_settings` | [creation_replicates_only_to_configured_regions](../secrets-aws/tests/secret_manager.rs) |
-| `test_create_secret_omits_kms_key_id_when_not_configured` | [write_read_delete_preserves_the_complete_secret_string](../secrets-aws/tests/secret_manager.rs) |
-| `test_write_and_read_json_secret` | [write_read_delete_preserves_the_complete_secret_string](../secrets-aws/tests/secret_manager.rs) |
+| `test_create_secret_uses_customer_managed_kms_key_from_settings` | [creation_replicates_only_to_configured_regions](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_create_secret_omits_kms_key_id_when_not_configured` | [write_read_delete_preserves_the_complete_secret_string](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_write_and_read_json_secret` | [write_read_delete_preserves_the_complete_secret_string](../secrets-aws/tests/secret_manager/writes.rs) |
 | `test_prepare_request_builds_partition_endpoint` | AWS SDK owns partition endpoint construction. LiteLLM region selection is exercised by `trait_read_uses_the_aws_region_from_its_operation_context`; no vendor endpoint table is duplicated |
-| `test_prepare_request_explicit_bedrock_runtime_endpoint_param_still_wins` | [endpoint_overrides_replace_the_service_and_override_the_region](../secrets-aws/tests/secret_manager.rs) |
-| `test_prepare_request_env_bedrock_runtime_endpoint_still_wins` | [endpoint_overrides_replace_the_service_and_override_the_region](../secrets-aws/tests/secret_manager.rs) |
+| `test_prepare_request_explicit_bedrock_runtime_endpoint_param_still_wins` | [endpoint_overrides_replace_the_service_and_override_the_region](../secrets-aws/tests/secret_manager/configuration.rs) |
+| `test_prepare_request_env_bedrock_runtime_endpoint_still_wins` | [endpoint_overrides_replace_the_service_and_override_the_region](../secrets-aws/tests/secret_manager/configuration.rs) |
 
 ## [tests/test_litellm/secret_managers/test_base_secret_manager.py](../../../tests/test_litellm/secret_managers/test_base_secret_manager.py)
 
@@ -69,9 +69,9 @@ Google payload corruption is intentionally rejected: malformed base64 and mismat
 
 | Python test | Rust coverage or boundary |
 | --- | --- |
-| `test_sync_read_matches_parity_fixture` | [secret_names_use_python_quote_encoding](../secrets-cyberark/tests/secret_manager.rs) |
-| `test_async_write_matches_parity_fixture` | [writes_match_python_parity_fixture](../secrets-cyberark/tests/secret_manager.rs) |
-| `test_missing_credentials_raise_value_error` | [new_validates_credentials_before_license_and_configuration](../secrets-cyberark/tests/secret_manager.rs) |
+| `test_sync_read_matches_parity_fixture` | [secret_names_use_python_quote_encoding](../secrets-cyberark/tests/secret_manager/reads.rs) |
+| `test_async_write_matches_parity_fixture` | [writes_match_python_parity_fixture](../secrets-cyberark/tests/secret_manager/writes.rs) |
+| `test_missing_credentials_raise_value_error` | [new_validates_credentials_before_license_and_configuration](../secrets-cyberark/tests/secret_manager/configuration.rs) |
 
 ## [tests/test_litellm/secret_managers/test_get_azure_ad_token_provider.py](../../../tests/test_litellm/secret_managers/test_get_azure_ad_token_provider.py)
 
@@ -95,16 +95,16 @@ Google payload corruption is intentionally rejected: malformed base64 and mismat
 
 | Python test | Rust coverage or boundary |
 | --- | --- |
-| `test_sync_read_uses_login_namespace_for_approle_and_secret_namespace_for_url` | [login_and_secret_namespaces_follow_python_precedence](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_login_header_is_omitted_when_no_namespace_is_configured` | [login_and_secret_namespaces_follow_python_precedence](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_sync_read_per_secret_namespace_overrides_secret_namespace` | [operation_overrides_isolate_cached_targets_and_apply_to_writes_and_deletes](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_sync_read_caches_per_resolved_target` | [operation_overrides_isolate_cached_targets_and_apply_to_writes_and_deletes](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_sync_read_caches_per_data_key_for_the_same_secret_path` | [reads_cache_each_data_key_for_the_same_vault_path](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_async_delete_evicts_every_cached_field_of_the_secret_path` | [write_and_delete_invalidate_the_read_cache](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_async_read_uses_secret_namespace_and_login_namespace` | [login_and_secret_namespaces_follow_python_precedence](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_async_write_and_read_share_the_secret_namespace_target` | [write_and_delete_invalidate_the_read_cache](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_tls_login_uses_login_namespace` | [tls_login_posts_the_role_and_uses_the_client_identity](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_configuration_matches_native_parity_fixture` | [configuration_matches_python_parity_fixture](../secrets-hashicorp/tests/secret_manager.rs) |
+| `test_sync_read_uses_login_namespace_for_approle_and_secret_namespace_for_url` | [login_and_secret_namespaces_follow_python_precedence](../secrets-hashicorp/tests/secret_manager/configuration.rs) |
+| `test_login_header_is_omitted_when_no_namespace_is_configured` | [login_and_secret_namespaces_follow_python_precedence](../secrets-hashicorp/tests/secret_manager/configuration.rs) |
+| `test_sync_read_per_secret_namespace_overrides_secret_namespace` | [operation_overrides_isolate_cached_targets_and_apply_to_writes_and_deletes](../secrets-hashicorp/tests/secret_manager/writes.rs) |
+| `test_sync_read_caches_per_resolved_target` | [operation_overrides_isolate_cached_targets_and_apply_to_writes_and_deletes](../secrets-hashicorp/tests/secret_manager/writes.rs) |
+| `test_sync_read_caches_per_data_key_for_the_same_secret_path` | [reads_cache_each_data_key_for_the_same_vault_path](../secrets-hashicorp/tests/secret_manager/reads.rs) |
+| `test_async_delete_evicts_every_cached_field_of_the_secret_path` | [write_and_delete_invalidate_the_read_cache](../secrets-hashicorp/tests/secret_manager/writes.rs) |
+| `test_async_read_uses_secret_namespace_and_login_namespace` | [login_and_secret_namespaces_follow_python_precedence](../secrets-hashicorp/tests/secret_manager/configuration.rs) |
+| `test_async_write_and_read_share_the_secret_namespace_target` | [write_and_delete_invalidate_the_read_cache](../secrets-hashicorp/tests/secret_manager/writes.rs) |
+| `test_tls_login_uses_login_namespace` | [tls_login_posts_the_role_and_uses_the_client_identity](../secrets-hashicorp/tests/secret_manager/configuration.rs) |
+| `test_configuration_matches_native_parity_fixture` | [configuration_matches_python_parity_fixture](../secrets-hashicorp/tests/secret_manager/configuration.rs) |
 
 ## [tests/test_litellm/secret_managers/test_secret_manager_handler.py](../../../tests/test_litellm/secret_managers/test_secret_manager_handler.py)
 
@@ -143,7 +143,7 @@ Google payload corruption is intentionally rejected: malformed base64 and mismat
 
 | Python test | Rust coverage or boundary |
 | --- | --- |
-| `test_aws_secret_manager` | [write_read_delete_preserves_the_complete_secret_string](../secrets-aws/tests/secret_manager.rs) |
+| `test_aws_secret_manager` | [write_read_delete_preserves_the_complete_secret_string](../secrets-aws/tests/secret_manager/writes.rs) |
 | `test_oidc_google` | [google_expiry_caps_cache_and_preserves_audience](../secrets/tests/oidc.rs) |
 | `test_oidc_github` | [github_requests_are_authenticated_cached_and_revalidate_environment](../secrets/tests/oidc.rs) |
 | `test_oidc_circleci` | [environment_sources_resolve_expected_value](../secrets/tests/oidc.rs) |
@@ -172,45 +172,45 @@ Google payload corruption is intentionally rejected: malformed base64 and mismat
 
 | Python test | Rust coverage or boundary |
 | --- | --- |
-| `test_write_and_read_simple_secret` | [write_read_delete_preserves_the_complete_secret_string](../secrets-aws/tests/secret_manager.rs) |
-| `test_write_and_read_json_secret` | [write_read_delete_preserves_the_complete_secret_string](../secrets-aws/tests/secret_manager.rs) |
-| `test_read_nonexistent_secret` | [failed_read_returns_none_but_invalid_primary_json_is_an_error](../secrets-aws/tests/secret_manager.rs) |
-| `test_primary_secret_functionality` | [primary_lookup_preserves_read_semantics](../secrets-aws/tests/secret_manager.rs) |
-| `test_write_secret_with_description_and_tags` | [creation_passes_tags_and_kms_and_survives_replication_failure](../secrets-aws/tests/secret_manager.rs) |
-| `test_secret_manager_with_iam_role_settings` | [configured_sts_credentials_sign_the_secret_request](../secrets-aws/tests/secret_manager.rs) |
-| `test_secret_manager_with_cross_account_settings` | [configured_sts_credentials_sign_the_secret_request](../secrets-aws/tests/secret_manager.rs) |
-| `test_secret_manager_with_irsa_settings` | [configured_sts_credentials_sign_the_secret_request](../secrets-aws/tests/secret_manager.rs) |
-| `test_secret_manager_with_custom_sts_endpoint` | [configured_sts_credentials_sign_the_secret_request](../secrets-aws/tests/secret_manager.rs) |
-| `test_secret_manager_with_aws_profile` | [configured_profile_credentials_override_static_environment_credentials](../secrets-aws/tests/secret_manager.rs) |
-| `test_load_aws_secret_manager_with_settings` | [creation_replicates_only_to_configured_regions](../secrets-aws/tests/secret_manager.rs) |
+| `test_write_and_read_simple_secret` | [write_read_delete_preserves_the_complete_secret_string](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_write_and_read_json_secret` | [write_read_delete_preserves_the_complete_secret_string](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_read_nonexistent_secret` | [failed_read_returns_none_but_invalid_primary_json_is_an_error](../secrets-aws/tests/secret_manager/reads.rs) |
+| `test_primary_secret_functionality` | [primary_lookup_preserves_read_semantics](../secrets-aws/tests/secret_manager/reads.rs) |
+| `test_write_secret_with_description_and_tags` | [creation_passes_tags_and_kms_and_survives_replication_failure](../secrets-aws/tests/secret_manager/writes.rs) |
+| `test_secret_manager_with_iam_role_settings` | [configured_sts_credentials_sign_the_secret_request](../secrets-aws/tests/secret_manager/configuration.rs) |
+| `test_secret_manager_with_cross_account_settings` | [configured_sts_credentials_sign_the_secret_request](../secrets-aws/tests/secret_manager/configuration.rs) |
+| `test_secret_manager_with_irsa_settings` | [configured_sts_credentials_sign_the_secret_request](../secrets-aws/tests/secret_manager/configuration.rs) |
+| `test_secret_manager_with_custom_sts_endpoint` | [configured_sts_credentials_sign_the_secret_request](../secrets-aws/tests/secret_manager/configuration.rs) |
+| `test_secret_manager_with_aws_profile` | [configured_profile_credentials_override_static_environment_credentials](../secrets-aws/tests/secret_manager/configuration.rs) |
+| `test_load_aws_secret_manager_with_settings` | [creation_replicates_only_to_configured_regions](../secrets-aws/tests/secret_manager/writes.rs) |
 | `test_end_to_end_iam_role_secret_write` | Live AWS account test, not a unit test. Offline STS signing and secret writes are covered without account assumptions |
 
 ## [tests/litellm_utils_tests/test_hashicorp.py](../../../tests/litellm_utils_tests/test_hashicorp.py)
 
 | Python test | Rust coverage or boundary |
 | --- | --- |
-| `test_hashicorp_secret_manager_get_secret` | [token_reads_use_vault_headers_and_cache_values](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_hashicorp_secret_manager_write_secret` | [write_and_delete_invalidate_the_read_cache](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_hashicorp_secret_manager_write_secret_with_team_overrides` | [operation_overrides_isolate_cached_targets_and_apply_to_writes_and_deletes](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_hashicorp_secret_manager_delete_secret` | [write_and_delete_invalidate_the_read_cache](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_hashicorp_secret_manager_delete_secret_with_team_overrides` | [operation_overrides_isolate_cached_targets_and_apply_to_writes_and_deletes](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_hashicorp_secret_manager_tls_cert_auth` | [tls_login_posts_the_role_and_uses_the_client_identity](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_hashicorp_secret_manager_approle_auth` | [approle_login_uses_namespace_and_reuses_the_token](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_hashicorp_custom_mount_and_prefix` | [namespace_mount_and_prefix_are_sanitized_in_the_url](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_hashicorp_get_url_rejects_path_traversal` | [no_auth_and_invalid_names_fail_without_requests](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_hashicorp_secret_manager_rotate_secret_different_names` | [rotation_applies_timeout_to_each_request](../secrets-hashicorp/tests/secret_manager.rs) |
-| `test_hashicorp_secret_manager_rotate_secret_same_name` | [same_name_rotation_keeps_the_replacement](../secrets-hashicorp/tests/secret_manager.rs) |
+| `test_hashicorp_secret_manager_get_secret` | [token_reads_use_vault_headers_and_cache_values](../secrets-hashicorp/tests/secret_manager/reads.rs) |
+| `test_hashicorp_secret_manager_write_secret` | [write_and_delete_invalidate_the_read_cache](../secrets-hashicorp/tests/secret_manager/writes.rs) |
+| `test_hashicorp_secret_manager_write_secret_with_team_overrides` | [operation_overrides_isolate_cached_targets_and_apply_to_writes_and_deletes](../secrets-hashicorp/tests/secret_manager/writes.rs) |
+| `test_hashicorp_secret_manager_delete_secret` | [write_and_delete_invalidate_the_read_cache](../secrets-hashicorp/tests/secret_manager/writes.rs) |
+| `test_hashicorp_secret_manager_delete_secret_with_team_overrides` | [operation_overrides_isolate_cached_targets_and_apply_to_writes_and_deletes](../secrets-hashicorp/tests/secret_manager/writes.rs) |
+| `test_hashicorp_secret_manager_tls_cert_auth` | [tls_login_posts_the_role_and_uses_the_client_identity](../secrets-hashicorp/tests/secret_manager/configuration.rs) |
+| `test_hashicorp_secret_manager_approle_auth` | [approle_login_uses_namespace_and_reuses_the_token](../secrets-hashicorp/tests/secret_manager/configuration.rs) |
+| `test_hashicorp_custom_mount_and_prefix` | [namespace_mount_and_prefix_are_sanitized_in_the_url](../secrets-hashicorp/tests/secret_manager/reads.rs) |
+| `test_hashicorp_get_url_rejects_path_traversal` | [no_auth_and_invalid_names_fail_without_requests](../secrets-hashicorp/tests/secret_manager/configuration.rs) |
+| `test_hashicorp_secret_manager_rotate_secret_different_names` | [rotation_applies_timeout_to_each_request](../secrets-hashicorp/tests/secret_manager/writes.rs) |
+| `test_hashicorp_secret_manager_rotate_secret_same_name` | [same_name_rotation_keeps_the_replacement](../secrets-hashicorp/tests/secret_manager/writes.rs) |
 | `test_hashicorp_secret_manager_rotate_secret_current_not_found` | [missing_old_or_new_value_stops_rotation_before_deletion](../secrets-types/tests/rotation.rs) |
 | `test_hashicorp_secret_manager_rotate_secret_write_fails` | [provider_failures_stop_rotation_before_retirement](../secrets-types/tests/rotation.rs) |
-| `test_hashicorp_secret_manager_rotate_secret_with_team_overrides` | [rotation_applies_timeout_to_each_request](../secrets-hashicorp/tests/secret_manager.rs) |
+| `test_hashicorp_secret_manager_rotate_secret_with_team_overrides` | [rotation_applies_timeout_to_each_request](../secrets-hashicorp/tests/secret_manager/writes.rs) |
 | `test_hashicorp_secret_manager_rotate_secret_value_mismatch` | [a_different_replacement_never_deletes_the_current_secret](../secrets-types/tests/rotation.rs) |
 
 ## [tests/litellm_utils_tests/test_cyberark.py](../../../tests/litellm_utils_tests/test_cyberark.py)
 
 | Python test | Rust coverage or boundary |
 | --- | --- |
-| `test_cyberark_write_secret_rejects_yaml_injection` | [unsafe_names_fail_before_http_calls](../secrets-cyberark/tests/secret_manager.rs) |
-| `test_cyberark_ensure_variable_exists_escapes_yaml_metacharacters` | [policy_writes_preserve_yaml_metacharacters_as_one_variable](../secrets-cyberark/tests/secret_manager.rs) |
-| `test_cyberark_write_and_read_secret` | [writes_tolerate_policy_status_and_cache_value](../secrets-cyberark/tests/secret_manager.rs) |
-| `test_cyberark_rotate_secret` | [rotation_stores_the_replacement_and_retains_other_aliases](../secrets-cyberark/tests/secret_manager.rs) |
-| `test_cyberark_rotate_secret_with_new_alias` | [rotation_stores_the_replacement_and_retains_other_aliases](../secrets-cyberark/tests/secret_manager.rs) |
+| `test_cyberark_write_secret_rejects_yaml_injection` | [unsafe_names_fail_before_http_calls](../secrets-cyberark/tests/secret_manager/reads.rs) |
+| `test_cyberark_ensure_variable_exists_escapes_yaml_metacharacters` | [policy_writes_preserve_yaml_metacharacters_as_one_variable](../secrets-cyberark/tests/secret_manager/writes.rs) |
+| `test_cyberark_write_and_read_secret` | [writes_tolerate_policy_status_and_cache_value](../secrets-cyberark/tests/secret_manager/writes.rs) |
+| `test_cyberark_rotate_secret` | [rotation_stores_the_replacement_and_retains_other_aliases](../secrets-cyberark/tests/secret_manager/writes.rs) |
+| `test_cyberark_rotate_secret_with_new_alias` | [rotation_stores_the_replacement_and_retains_other_aliases](../secrets-cyberark/tests/secret_manager/writes.rs) |
