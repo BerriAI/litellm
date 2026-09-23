@@ -949,8 +949,6 @@ async def test_pre_call_block_keeps_request_declared_guardrail_in_applied_guardr
 
 @pytest.mark.asyncio
 async def test_skip_guardrails_still_runs_non_guardrail_callbacks(proxy_logging, make_user_api_key_auth, monkeypatch):
-    """MCP REST runs guardrails inside execute_mcp_tool, so the generic walk must not
-    run them again; rate limiters and budget hooks still count the request here."""
     accountant = _Accountant()
     monkeypatch.setattr(litellm, "callbacks", [_BlockOnSecretGuardrail(), accountant])
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
@@ -969,7 +967,6 @@ async def test_skip_guardrails_still_runs_non_guardrail_callbacks(proxy_logging,
 
 @pytest.mark.asyncio
 async def test_default_walk_still_blocks_on_the_same_setup(proxy_logging, make_user_api_key_auth, monkeypatch):
-    """Pins the flag, not the fixture: without skip_guardrails the same callbacks raise."""
     accountant = _Accountant()
     monkeypatch.setattr(litellm, "callbacks", [_BlockOnSecretGuardrail(), accountant])
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
