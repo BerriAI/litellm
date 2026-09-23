@@ -174,9 +174,12 @@ def _exclusion_reason(path: str, method: str, operation: Mapping[str, object]) -
         return "no operationId"
     if path in _EXCLUDED_ROUTE_GROUPS:
         return "data plane, public or ui route group"
-    for tag in _json_seq(operation.get("tags")):
-        if isinstance(tag, str) and tag in _EXCLUDED_TAGS:
-            return f"tag:{tag}"
+    matching_tag: Final = next(
+        iter(sorted(tag for tag in _json_seq(operation.get("tags")) if isinstance(tag, str) and tag in _EXCLUDED_TAGS)),
+        None,
+    )
+    if matching_tag is not None:
+        return f"tag:{matching_tag}"
     if path.startswith(_EXCLUDED_PATH_PREFIXES):
         return "excluded path prefix"
     request_body: Final = operation.get("requestBody")
