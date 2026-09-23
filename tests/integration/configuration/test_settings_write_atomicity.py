@@ -3,7 +3,7 @@ import json
 import os
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
@@ -43,7 +43,9 @@ def _b64url_uint(value: int) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
 
-def _write_owned_config(tmp_path: Path, general_settings: dict, litellm_settings: dict) -> Path:
+def _write_owned_config(
+    tmp_path: Path, general_settings: Mapping[str, JsonValue], litellm_settings: Mapping[str, JsonValue]
+) -> Path:
     path: Final = tmp_path / "atomicity-config.yaml"
     path.write_text(
         yaml.safe_dump(
