@@ -16364,6 +16364,7 @@ export interface paths {
          *         - langfuse_host: The host for the Langfuse callback
          *         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
          *         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
+         *         - capture_message_content: For OTEL v2 destinations (arize, langfuse_otel, newrelic, weave_otel), "no_content", "span_only", "event_only" or "span_and_event" decides whether this team's traces carry prompt and response content; unset follows the proxy-wide OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT
          *         - gcs_bucket_name: The name of the GCS bucket
          *         - gcs_path_service_account: The path to the GCS service account
          *         - langsmith_api_key: The API key for the Langsmith callback

@@ -25,6 +25,10 @@ class CaptureMessageContent(str):
     SPAN_AND_EVENT = "span_and_event"
 
 
+def captures_span_content(mode: str) -> bool:
+    return mode in (CaptureMessageContent.SPAN_ONLY, CaptureMessageContent.SPAN_AND_EVENT)
+
+
 class ExporterOwner(str, Enum):
     """The preset that contributed an exporter. Values match the callback names
     in ``presets.PRESET_BY_CALLBACK`` so per-request dynamic-credential routing
@@ -325,10 +329,7 @@ class OpenTelemetryV2Config(BaseSettings):
         bodies leave the process, so a user request can never force its prompt
         or completion into the configured backend while capture is disabled.
         """
-        return self.capture_message_content in (
-            CaptureMessageContent.SPAN_ONLY,
-            CaptureMessageContent.SPAN_AND_EVENT,
-        )
+        return captures_span_content(self.capture_message_content)
 
     @classmethod
     def from_env(cls) -> "OpenTelemetryV2Config":

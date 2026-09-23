@@ -31,6 +31,10 @@ from litellm.integrations.otel.model.payloads import (
 _INPUT_MESSAGES: Final = "llm.input_messages"
 _OUTPUT_MESSAGES: Final = "llm.output_messages"
 _MESSAGE_FAMILIES: Final = (_INPUT_MESSAGES, _OUTPUT_MESSAGES)
+_INPUT_VALUE: Final = "input.value"
+_OUTPUT_VALUE: Final = "output.value"
+OPENINFERENCE_CONTENT_KEYS: Final[frozenset[str]] = frozenset({_INPUT_VALUE, _OUTPUT_VALUE})
+OPENINFERENCE_CONTENT_KEY_PREFIXES: Final = tuple(f"{family}." for family in _MESSAGE_FAMILIES)
 
 
 def _message_key_groups(attrs: Mapping[str, AttrValue]) -> Mapping[tuple[str, int], tuple[str, ...]]:
@@ -137,8 +141,8 @@ class OpenInferenceMapper:
         return {
             **collect(self._LLM_CALL_ATTRS, data),
             **collect(self._BLOB_ATTRS, data),
-            **self._messages(_INPUT_MESSAGES, "input.value", data.messages_in),
-            **self._messages(_OUTPUT_MESSAGES, "output.value", output_messages(data)),
+            **self._messages(_INPUT_MESSAGES, _INPUT_VALUE, data.messages_in),
+            **self._messages(_OUTPUT_MESSAGES, _OUTPUT_VALUE, output_messages(data)),
             **self._tools(data),
         }
 

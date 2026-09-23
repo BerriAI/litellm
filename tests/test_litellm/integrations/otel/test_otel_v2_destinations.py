@@ -1,5 +1,6 @@
 """Key/team OTLP destinations override the operator's exporters for that backend."""
 
+import asyncio
 import contextvars
 import time
 from base64 import b64encode
@@ -40,6 +41,7 @@ from litellm.integrations.otel.plumbing.providers import (
     TenantFanOutSpanProcessor,
     _OverriddenBackendFilter,
     _sink_key,
+    build_logger_provider,
     build_tracer_provider,
     deliverable_destinations,
     operator_sink_scopes,
@@ -51,6 +53,9 @@ from litellm.integrations.otel.presets.destinations import (
     destination_for,
 )
 from litellm.integrations.otel.presets.langfuse import langfuse_preset
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    initialize_standard_callback_dynamic_params,
+)
 from litellm.proxy._types import AddTeamCallback, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
     convert_key_logging_metadata_to_callback,
@@ -3242,3 +3247,360 @@ class TestTenantHostSsrfGuard:
                 destination_for("langfuse_otel", self._langfuse("http://10.0.0.5:3000"))
 
         assert sum("provider_url_destination_allowed_hosts" in record.message for record in caplog.records) == 1
+
+
+PROMPT_MARKER = "MARKER_CAPTURE_PROMPT"
+ANSWER_MARKER = "MARKER_CAPTURE_ANSWER"
+INPUT_MESSAGES = "gen_ai.input.messages"
+OUTPUT_MESSAGES = "gen_ai.output.messages"
+TOOL_ARGUMENTS = "gen_ai.tool.call.arguments"
+CONTENT_MODES = ("no_content", "span_only", "event_only", "span_and_event")
+SPAN_CONTENT_MODES = frozenset({"span_only", "span_and_event"})
+
+
+def _chat_payload() -> Mapping[str, object]:
+    return {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-4o",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15,
+        "stream": False,
+        "model_parameters": {"temperature": 0.7},
+        "messages": [{"role": "user", "content": PROMPT_MARKER}],
+        "response": {
+            "id": "resp_1",
+            "model": "gpt-4o-2024",
+            "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": ANSWER_MARKER}}],
+        },
+        "metadata": {"team_id": "t1", "user_api_key_hash": "hsh"},
+        "api_base": "https://api.openai.com:443/v1",
+        "status": "success",
+        "litellm_call_id": "call_1",
+        "response_cost": 0.002,
+        "hidden_params": {},
+    }
+
+
+def _tool_payload() -> Mapping[str, object]:
+    return {
+        "call_type": "call_mcp_tool",
+        "status": "success",
+        "litellm_call_id": "mcp_1",
+        "response_cost": 0.01,
+        "metadata": {
+            "user_api_key_team_id": "t1",
+            "mcp_tool_call_metadata": {
+                "name": "get_weather",
+                "arguments": {"city": PROMPT_MARKER},
+                "result": {"temp_c": 21},
+                "mcp_server_name": "weather-mcp",
+                "mcp_server_resource": "https://weather.example.com",
+            },
+        },
+        "hidden_params": {},
+    }
+
+
+def _content_dest(mode: str | None, endpoint: str = "http://team.local/api/public/otel") -> OtelDestination:
+    return OtelDestination(
+        endpoint=endpoint,
+        headers={"Authorization": "Basic dGVuYW50"},
+        callback_name="langfuse_otel",
+        capture_message_content=mode,
+    )
+
+
+class TestCaptureMessageContent:
+    """A key or team picks its own ``capture_message_content``; ``None`` follows the operator."""
+
+    @staticmethod
+    def _operator(capture: str):
+        """The operator's logger on its own exporter, fanning out to one exporter per destination."""
+        cfg = OpenTelemetryV2Config(exporter="in_memory", legacy_compat=False, capture_message_content=capture)
+        operator, tenants = InMemorySpanExporter(), {}
+        provider = build_tracer_provider(cfg, exporter=operator)
+
+        def factory(destination):
+            return SimpleSpanProcessor(tenants.setdefault(destination.endpoint, InMemorySpanExporter()))
+
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(processor_factory=factory, operator_captures_content=cfg.capture_span_content)
+        )
+        return OpenTelemetryV2(config=cfg, tracer_provider=provider), operator, tenants
+
+    @staticmethod
+    def _request(logger, destinations, payload=None):
+        kwargs = {"standard_logging_object": payload or _chat_payload(), "litellm_params": {"metadata": {}}}
+
+        def run():
+            set_request_destinations(destinations)
+            logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+            asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+
+        in_fresh_context(run)
+
+    @staticmethod
+    def _only_span(exporter):
+        (span,) = exporter.get_finished_spans()
+        return dict(span.attributes or {})
+
+    @pytest.mark.parametrize("mode", CONTENT_MODES)
+    def test_a_team_picks_its_own_mode_while_the_operator_stays_dark(self, mode):
+        logger, operator, tenants = self._operator("no_content")
+
+        self._request(logger, (_content_dest(mode),))
+
+        operator_attrs, team_attrs = (
+            self._only_span(operator),
+            self._only_span(tenants["http://team.local/api/public/otel"]),
+        )
+        assert INPUT_MESSAGES not in operator_attrs and OUTPUT_MESSAGES not in operator_attrs
+        assert (INPUT_MESSAGES in team_attrs) is (mode in SPAN_CONTENT_MODES), team_attrs
+        if mode in SPAN_CONTENT_MODES:
+            assert PROMPT_MARKER in team_attrs[INPUT_MESSAGES] and ANSWER_MARKER in team_attrs[OUTPUT_MESSAGES]
+
+    @pytest.mark.parametrize("mode", CONTENT_MODES)
+    def test_a_team_picks_its_own_mode_while_the_operator_keeps_content(self, mode):
+        logger, operator, tenants = self._operator("span_only")
+
+        self._request(logger, (_content_dest(mode),))
+
+        operator_attrs, team_attrs = (
+            self._only_span(operator),
+            self._only_span(tenants["http://team.local/api/public/otel"]),
+        )
+        assert PROMPT_MARKER in operator_attrs[INPUT_MESSAGES] and ANSWER_MARKER in operator_attrs[OUTPUT_MESSAGES]
+        assert (OUTPUT_MESSAGES in team_attrs) is (mode in SPAN_CONTENT_MODES), team_attrs
+
+    @pytest.mark.parametrize("operator_mode", ["no_content", "span_only"])
+    def test_a_team_that_named_no_mode_follows_the_operator(self, operator_mode):
+        logger, operator, tenants = self._operator(operator_mode)
+
+        self._request(logger, (_content_dest(None),))
+
+        operator_attrs, team_attrs = (
+            self._only_span(operator),
+            self._only_span(tenants["http://team.local/api/public/otel"]),
+        )
+        assert (INPUT_MESSAGES in team_attrs) is (INPUT_MESSAGES in operator_attrs) is (operator_mode == "span_only")
+
+    @pytest.mark.parametrize(
+        ("mapper", "content_key"),
+        [
+            ("openinference", "input.value"),
+            ("openinference", "llm.input_messages.0.message.content"),
+            ("langtrace", "llm.prompts"),
+            ("weave", "weave.output"),
+            ("langfuse", "langfuse.observation.input"),
+        ],
+    )
+    def test_a_dark_team_loses_every_vocabularys_content_keys(self, mapper, content_key):
+        """Each mapper spells prompt and response under its own keys; the team view must drop them all."""
+        cfg = OpenTelemetryV2Config(
+            exporter="in_memory", legacy_compat=False, capture_message_content="span_only", mapper_names=[mapper]
+        )
+        operator, tenants = InMemorySpanExporter(), {}
+        provider = build_tracer_provider(cfg, exporter=operator)
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda d: SimpleSpanProcessor(tenants.setdefault(d.endpoint, InMemorySpanExporter())),
+                operator_captures_content=True,
+            )
+        )
+
+        self._request(OpenTelemetryV2(config=cfg, tracer_provider=provider), (_content_dest("no_content"),))
+
+        operator_attrs, team_attrs = (
+            self._only_span(operator),
+            self._only_span(tenants["http://team.local/api/public/otel"]),
+        )
+        markers = (PROMPT_MARKER, ANSWER_MARKER)
+        assert any(marker in str(operator_attrs[content_key]) for marker in markers), operator_attrs
+        assert content_key not in team_attrs, team_attrs
+        assert not any(marker in str(value) for marker in markers for value in team_attrs.values()), team_attrs
+        assert team_attrs["gen_ai.request.model"] == operator_attrs["gen_ai.request.model"]
+
+    def test_two_teams_on_one_request_each_get_their_own_view(self):
+        logger, operator, tenants = self._operator("no_content")
+        opted_in = _content_dest("span_only", "http://team.local/api/public/otel")
+        opted_out = _content_dest("no_content", "http://key.local/api/public/otel")
+
+        self._request(logger, (opted_in, opted_out))
+
+        assert PROMPT_MARKER in self._only_span(tenants[opted_in.endpoint])[INPUT_MESSAGES]
+        assert INPUT_MESSAGES not in self._only_span(tenants[opted_out.endpoint])
+        assert INPUT_MESSAGES not in self._only_span(operator)
+
+    def test_a_tool_call_follows_the_same_switch(self):
+        logger, operator, tenants = self._operator("no_content")
+
+        self._request(logger, (_content_dest("span_only"),), payload=_tool_payload())
+
+        assert PROMPT_MARKER in self._only_span(tenants["http://team.local/api/public/otel"])[TOOL_ARGUMENTS]
+        assert TOOL_ARGUMENTS not in self._only_span(operator)
+
+    def test_a_failed_call_follows_the_same_switch_and_its_exception_event_is_untouched(self):
+        """The failure span carries the prompt only in the opted-in team's view; the
+        operator's ``gen_ai.client.operation.exception`` log event still rides its own
+        pipeline with the semconv ``exception.*`` trio and nothing more."""
+        from opentelemetry.sdk._logs.export import InMemoryLogExporter
+
+        from litellm.integrations.otel.model.semconv import ExceptionEvent, GenAIEvent
+
+        cfg = OpenTelemetryV2Config(
+            exporter="in_memory", legacy_compat=False, capture_message_content="no_content", enable_events=True
+        )
+        operator, tenants, log_exporter = InMemorySpanExporter(), {}, InMemoryLogExporter()
+        provider = build_tracer_provider(cfg, exporter=operator)
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda d: SimpleSpanProcessor(tenants.setdefault(d.endpoint, InMemorySpanExporter())),
+                operator_captures_content=False,
+            )
+        )
+        logger = OpenTelemetryV2(
+            config=cfg, tracer_provider=provider, logger_provider=build_logger_provider(cfg, log_exporter=log_exporter)
+        )
+        failed = {
+            **_chat_payload(),
+            "status": "failure",
+            "response": None,
+            "error_str": "rate limited",
+            "error_information": {"error_class": "RateLimitError", "error_code": "429", "llm_provider": "openai"},
+        }
+        kwargs = {"standard_logging_object": failed, "litellm_params": {"metadata": {}}}
+
+        def run():
+            set_request_destinations((_content_dest("span_only"),))
+            logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+            asyncio.run(logger.async_log_failure_event(kwargs, None, None, None))
+
+        in_fresh_context(run)
+
+        team_attrs, operator_attrs = (
+            self._only_span(tenants["http://team.local/api/public/otel"]),
+            self._only_span(operator),
+        )
+        assert PROMPT_MARKER in team_attrs[INPUT_MESSAGES] and team_attrs["error.type"] == "RateLimitError"
+        assert INPUT_MESSAGES not in operator_attrs and operator_attrs["error.type"] == "RateLimitError"
+        (event,) = log_exporter.get_finished_logs()
+        assert event.log_record.attributes[ExceptionEvent.TYPE] == "RateLimitError"
+        assert event.log_record.attributes[ExceptionEvent.MESSAGE] == "rate limited"
+        assert not any(PROMPT_MARKER in str(value) for value in event.log_record.attributes.values())
+        assert event.log_record.attributes["event.name"] == GenAIEvent.OPERATION_EXCEPTION
+
+    def test_the_request_with_no_destination_is_untouched(self):
+        logger, operator, _ = self._operator("no_content")
+
+        self._request(logger, ())
+
+        attrs = self._only_span(operator)
+        assert INPUT_MESSAGES not in attrs and OUTPUT_MESSAGES not in attrs and "gen_ai.request.model" in attrs
+
+    def test_a_mode_is_a_view_of_the_exporter_not_a_second_exporter(self):
+        assert _content_dest("span_only").cache_key() == _content_dest("no_content").cache_key()
+        logger, _, tenants = self._operator("no_content")
+        built = []
+        logger._tracer_provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda d: built.append(d) or SimpleSpanProcessor(InMemorySpanExporter())
+            )
+        )
+
+        self._request(logger, (_content_dest("span_only"),))
+        self._request(logger, (_content_dest("no_content"),))
+
+        assert len(built) == 1, "the same account must not get a second exporter for a second capture mode"
+
+    def test_a_team_callback_var_becomes_the_destinations_mode(self, monkeypatch, allow_test_hosts):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        auth = UserAPIKeyAuth(
+            team_metadata={
+                "logging": [
+                    {
+                        "callback_name": "langfuse_otel",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "langfuse_public_key": "pk-team",
+                            "langfuse_secret_key": "sk-team",
+                            "langfuse_host": "http://team.local",
+                            "capture_message_content": "span_only",
+                        },
+                    }
+                ]
+            }
+        )
+
+        assert [d.capture_message_content for d in resolve_tenant_otel_destinations(auth)] == ["span_only"]
+
+    def test_the_key_wins_over_the_team_for_the_mode(self, monkeypatch, allow_test_hosts):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+
+        def entry(mode: str) -> Mapping[str, object]:
+            return {
+                "callback_name": "langfuse_otel",
+                "callback_type": "success",
+                "callback_vars": {
+                    "langfuse_public_key": "pk",
+                    "langfuse_secret_key": "sk",
+                    "langfuse_host": "http://team.local",
+                    "capture_message_content": mode,
+                },
+            }
+
+        auth = UserAPIKeyAuth(
+            metadata={"logging": [entry("no_content")]}, team_metadata={"logging": [entry("span_only")]}
+        )
+
+        assert [d.capture_message_content for d in resolve_tenant_otel_destinations(auth)] == ["no_content"]
+
+    def test_a_team_that_named_no_mode_resolves_to_none(self, allow_test_hosts):
+        creds = {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_host": "http://x"}
+
+        assert destination_for("langfuse_otel", creds).capture_message_content is None
+
+    @pytest.mark.parametrize("slot", ["body", "metadata", "litellm_metadata"])
+    def test_a_request_body_cannot_pick_the_mode(self, slot):
+        """Only the admin-saved key or team callback names the mode; a caller stays on the configured one."""
+        kwargs = (
+            {"capture_message_content": "span_only"}
+            if slot == "body"
+            else {slot: {"capture_message_content": "span_only"}}
+        )
+
+        assert "capture_message_content" not in initialize_standard_callback_dynamic_params(kwargs)
+
+    @pytest.mark.parametrize("mode", ["SPAN_ONLY", "true", "", "everything"])
+    def test_an_unknown_mode_is_rejected_when_the_callback_is_saved(self, mode):
+        with pytest.raises(ValueError, match=r"Invalid capture_message_content .*must be one of \['event_only'"):
+            AddTeamCallback(
+                callback_name="langfuse_otel",
+                callback_type="success",
+                callback_vars={
+                    "langfuse_public_key": "pk",
+                    "langfuse_secret_key": "sk",
+                    "capture_message_content": mode,
+                },
+            )
+
+    @pytest.mark.parametrize("mode", CONTENT_MODES)
+    def test_a_known_mode_is_accepted_when_the_callback_is_saved(self, mode):
+        saved = AddTeamCallback(
+            callback_name="langfuse_otel",
+            callback_type="success",
+            callback_vars={"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "capture_message_content": mode},
+        )
+
+        assert saved.callback_vars["capture_message_content"] == mode
+
+    def test_saving_a_callback_leaves_the_callers_vars_alone(self):
+        given = {"arize_api_key": "k", "arize_space_id": "s", "arize_success_sampling_rate": 0.5}
+
+        saved = AddTeamCallback(callback_name="arize", callback_type="success", callback_vars=given)
+
+        assert saved.callback_vars["arize_success_sampling_rate"] == "0.5"
+        assert given["arize_success_sampling_rate"] == 0.5

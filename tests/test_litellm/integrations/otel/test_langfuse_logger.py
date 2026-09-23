@@ -10,16 +10,19 @@ import pytest
 
 pytest.importorskip("opentelemetry")
 
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: E402
 
 import litellm  # noqa: E402
 from litellm.caching.dual_cache import DualCache  # noqa: E402
 from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger  # noqa: E402
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config, is_otel_v2_enabled  # noqa: E402
+from litellm.integrations.otel.model.destination import OtelDestination  # noqa: E402
 from litellm.integrations.otel.model.spans import LITELLM_PROXY_REQUEST_SPAN_NAME, SpanRole  # noqa: E402
 from litellm.integrations.otel.plumbing import context as otel_context  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
-from litellm.integrations.otel.plumbing.context import set_request_root_span  # noqa: E402
+from litellm.integrations.otel.plumbing.context import set_request_destinations, set_request_root_span  # noqa: E402
+from litellm.integrations.otel.plumbing.providers import TenantFanOutSpanProcessor  # noqa: E402
 from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2  # noqa: E402
 from litellm.proxy._types import UserAPIKeyAuth  # noqa: E402
 from litellm.proxy.utils import ProxyLogging  # noqa: E402
@@ -49,8 +52,10 @@ CHAT_DATA: Final = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "cont
 @pytest.fixture(autouse=True)
 def _reset_request_root_span():
     otel_context._request_root_span.set(None)
+    otel_context._request_destinations.set(())
     yield
     otel_context._request_root_span.set(None)
+    otel_context._request_destinations.set(())
 
 
 def _logger(*, capture: str = "span_only", mappers: Sequence[str] = ("genai", "langfuse")):
@@ -519,3 +524,51 @@ def test_langfuse_otel_preset_builds_a_logger_that_stamps_the_root(monkeypatch):
         assert INPUT_ATTR in attrs and OUTPUT_ATTR in attrs
     finally:
         is_otel_v2_enabled.cache_clear()
+
+
+def _team_destination(capture: str | None) -> OtelDestination:
+    return OtelDestination(
+        endpoint="http://team.local/api/public/otel",
+        headers={"Authorization": "Basic dGVuYW50"},
+        callback_name="langfuse_otel",
+        capture_message_content=capture,
+    )
+
+
+def _logger_with_team(*, operator_capture: str, team_capture: str | None):
+    """The operator's Langfuse logger with one team destination fanned out to its own exporter."""
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory", mapper_names=["genai", "langfuse"], capture_message_content=operator_capture
+    )
+    operator, team = InMemorySpanExporter(), InMemorySpanExporter()
+    tracer_provider = providers.build_tracer_provider(cfg, exporter=operator)
+    tracer_provider.add_span_processor(
+        TenantFanOutSpanProcessor(
+            processor_factory=lambda _d: SimpleSpanProcessor(team),
+            operator_captures_content=cfg.capture_span_content,
+        )
+    )
+    set_request_destinations((_team_destination(team_capture),))
+    return build_otel_v2_logger(config=cfg, tracer_provider=tracer_provider), operator, team
+
+
+@pytest.mark.parametrize(
+    ("operator_capture", "team_capture", "team_sees_io"),
+    [("no_content", "span_only", True), ("no_content", None, False), ("span_only", "no_content", False)],
+)
+def test_the_teams_own_mode_decides_its_root_observation_io(operator_capture, team_capture, team_sees_io):
+    logger, operator, team = _logger_with_team(operator_capture=operator_capture, team_capture=team_capture)
+    response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="pong"))])
+
+    _run_request(logger, CHAT_DATA, "acompletion", response)
+
+    team_attrs, operator_attrs = _root_attrs(team), _root_attrs(operator)
+    assert (INPUT_ATTR in team_attrs and OUTPUT_ATTR in team_attrs) is team_sees_io, team_attrs
+    assert (INPUT_ATTR in operator_attrs) is (operator_capture == "span_only"), operator_attrs
+
+
+def test_a_team_that_opted_in_alone_keeps_streams_on_the_fast_path(monkeypatch):
+    logger, _, _ = _logger_with_team(operator_capture="no_content", team_capture="span_only")
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+
+    assert ProxyLogging._callback_capabilities().has_iterator_override is False

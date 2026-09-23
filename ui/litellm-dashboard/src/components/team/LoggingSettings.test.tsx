@@ -239,6 +239,31 @@ describe("LoggingSettings", () => {
     ]);
   });
 
+  it.each(["arize", "langfuse_otel", "newrelic"])(
+    "offers the %s capture message content mode as a pick among the four OTEL v2 modes",
+    async (callbackName) => {
+      const user = userEvent.setup({ delay: null });
+      const mockOnChange = vi.fn();
+      const initialValue = [{ callback_name: callbackName, callback_type: "success", callback_vars: {} }];
+
+      renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
+
+      expect(screen.queryByPlaceholderText("os.environ/CAPTURE_MESSAGE_CONTENT")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("combobox", { name: "capture message content" }));
+      expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+        "no_content",
+        "span_only",
+        "event_only",
+        "span_and_event",
+      ]);
+      await user.click(screen.getByRole("option", { name: "span_only" }));
+
+      expect(mockOnChange).toHaveBeenCalledWith([
+        expect.objectContaining({ callback_vars: expect.objectContaining({ capture_message_content: "span_only" }) }),
+      ]);
+    },
+  );
+
   it("renders sampling rate inputs for the Arize callback and records changes", () => {
     const mockOnChange = vi.fn();
 

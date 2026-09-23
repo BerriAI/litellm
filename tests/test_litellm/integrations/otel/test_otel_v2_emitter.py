@@ -606,7 +606,9 @@ def test_shedding_stops_exactly_at_the_limit(monkeypatch):
 
 def test_error_and_pre_stamped_attributes_keep_their_room_on_a_long_conversation():
     """Attributes already on the span and the error set stamped after mapping both count against the budget."""
-    cfg = OpenTelemetryV2Config(exporter="in_memory", mapper_names=["genai", "openinference"])
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory", mapper_names=["genai", "openinference"], capture_message_content="span_only"
+    )
     provider, exporter = providers.in_memory_provider(cfg)
     engine = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
     span = engine.start_span(SpanRole.LLM_CALL, "chat")

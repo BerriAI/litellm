@@ -7,10 +7,14 @@ to feed a Weave backend.
 """
 
 from collections.abc import Callable
+from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import collect, json_or_none
 from litellm.integrations.otel.model.payloads import LLMCallSpanData
+
+_OUTPUT: Final = "weave.output"
+WEAVE_CONTENT_KEYS: Final[frozenset[str]] = frozenset({_OUTPUT})
 
 
 class WeaveMapper:
@@ -26,7 +30,7 @@ class WeaveMapper:
     # JSON-payload attributes: each builder returns the serialized blob or None.
     _BLOB_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         # Weave treats the response choices as the "output" payload.
-        "weave.output": lambda d: json_or_none(list(d.choices_out)) if d.choices_out else None,
+        _OUTPUT: lambda d: json_or_none(list(d.choices_out)) if d.choices_out else None,
     }
 
     def map(self, data: SpanData) -> AttributeMap:

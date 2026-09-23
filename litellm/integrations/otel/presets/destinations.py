@@ -156,4 +156,5 @@ def destination_for(
         callback_name=callback_name,
         protocol=protocol,
         span_scope=_span_scope(callback_name, params),
+        capture_message_content=params.get("capture_message_content"),
     )

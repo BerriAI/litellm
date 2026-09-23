@@ -15,12 +15,21 @@ from litellm.integrations.otel.mappers.base import (
     AttrValue,
 )
 from litellm.integrations.otel.mappers.genai import GenAIMapper
-from litellm.integrations.otel.mappers.langfuse import LangfuseMapper
-from litellm.integrations.otel.mappers.langtrace import LangtraceMapper
+from litellm.integrations.otel.mappers.langfuse import (
+    LANGFUSE_OBSERVATION_INPUT,
+    LANGFUSE_OBSERVATION_OUTPUT,
+    LangfuseMapper,
+)
+from litellm.integrations.otel.mappers.langtrace import LANGTRACE_CONTENT_KEYS, LangtraceMapper
 from litellm.integrations.otel.mappers.legacy import LegacyMapper
-from litellm.integrations.otel.mappers.openinference import OpenInferenceMapper
+from litellm.integrations.otel.mappers.openinference import (
+    OPENINFERENCE_CONTENT_KEY_PREFIXES,
+    OPENINFERENCE_CONTENT_KEYS,
+    OpenInferenceMapper,
+)
 from litellm.integrations.otel.mappers.utils import tool_attr_budget
-from litellm.integrations.otel.mappers.weave import WeaveMapper
+from litellm.integrations.otel.mappers.weave import WEAVE_CONTENT_KEYS, WeaveMapper
+from litellm.integrations.otel.model.semconv import GenAI
 
 # Registries keyed by ``config.mapper_names`` entries, split by whether the
 # vocabulary spells declared tool definitions out per index. Those share one
@@ -36,6 +45,25 @@ _PLAIN_MAPPERS: Final[dict[str, Callable[[], AttributeMapper]]] = {
     "weave": WeaveMapper,
     "langtrace": LangtraceMapper,
 }
+
+
+_CONTENT_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        GenAI.INPUT_MESSAGES,
+        GenAI.OUTPUT_MESSAGES,
+        GenAI.TOOL_CALL_ARGUMENTS,
+        GenAI.TOOL_CALL_RESULT,
+        LANGFUSE_OBSERVATION_INPUT,
+        LANGFUSE_OBSERVATION_OUTPUT,
+        *OPENINFERENCE_CONTENT_KEYS,
+        *LANGTRACE_CONTENT_KEYS,
+        *WEAVE_CONTENT_KEYS,
+    }
+)
+
+
+def is_content_attribute(key: str) -> bool:
+    return key in _CONTENT_KEYS or key.startswith(OPENINFERENCE_CONTENT_KEY_PREFIXES)
 
 
 def resolve_mappers(names: Iterable[str]) -> list[AttributeMapper]:
@@ -65,5 +93,6 @@ __all__ = [
     "LegacyMapper",
     "OpenInferenceMapper",
     "WeaveMapper",
+    "is_content_attribute",
     "resolve_mappers",
 ]

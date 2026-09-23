@@ -3613,6 +3613,8 @@ OPENAI_RESPONSE_HEADERS: Final = [
 
 OtelSpanScope = Literal["full", "llm_only"]
 OTEL_SPAN_SCOPES: Final[frozenset[str]] = frozenset(get_args(OtelSpanScope))
+OtelCaptureMessageContent = Literal["no_content", "span_only", "event_only", "span_and_event"]
+OTEL_CAPTURE_MESSAGE_CONTENT_MODES: Final[frozenset[str]] = frozenset(get_args(OtelCaptureMessageContent))
 
 
 class StandardCallbackDynamicParams(TypedDict, total=False):
@@ -3670,6 +3672,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # Logging settings
     turn_off_message_logging: bool | None  # when true will not log messages
     litellm_disabled_callbacks: list[str] | None
+    capture_message_content: ReadOnly[OtelCaptureMessageContent | None]
 
 
 class MirroredPricingParams(BaseModel):

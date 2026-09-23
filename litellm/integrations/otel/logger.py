@@ -53,6 +53,7 @@ from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import (
     is_recordable_span,
     mcp_message_transport_span,
+    request_captures_span_content,
     request_root_http_route,
     request_root_span,
     resolve_mcp_span_context,
@@ -421,7 +422,7 @@ class OpenTelemetryV2(CustomLogger):
             return False
         payload: Final = cast("StandardLoggingPayload", raw_payload)
         data: Final = MCPToolCallSpanData.from_standard_logging_payload(
-            payload, capture_content=self.config.capture_span_content
+            payload, capture_content=request_captures_span_content(self.config.capture_span_content)
         )
         # A stray LLM carrier from a ``pre_call`` that mis-fired for this id would
         # otherwise linger until evicted; drop it so it's neither leaked nor closed
@@ -465,7 +466,7 @@ class OpenTelemetryV2(CustomLogger):
             return False
         payload: Final = cast("StandardLoggingPayload", raw_payload)
         data: Final = MCPListToolsSpanData.from_standard_logging_payload(
-            payload, capture_content=self.config.capture_span_content
+            payload, capture_content=request_captures_span_content(self.config.capture_span_content)
         )
         if data.identity.call_id:
             self._release_carrier(self._open_llm_calls.pop(data.identity.call_id, None))
@@ -557,7 +558,7 @@ class OpenTelemetryV2(CustomLogger):
             return None
         data: Final = LLMCallSpanData.from_standard_logging_payload(
             payload,
-            capture_content=self.config.capture_span_content,
+            capture_content=request_captures_span_content(self.config.capture_span_content),
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
             request_route=request_root_http_route(),
             trace=call.trace,

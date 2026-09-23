@@ -18,6 +18,7 @@ _ARIZE_CALLBACK: Final = "arize"
 _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
     {"arize_success_sampling_rate", "arize_error_sampling_rate"}
 )
+_CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
 
 
 def callback_config_error(callback_name: str | None, callback_vars: Mapping[str, str] | None) -> str | None:
@@ -31,6 +32,9 @@ def callback_config_error(callback_name: str | None, callback_vars: Mapping[str,
     )
     if langfuse_error is not None:
         return langfuse_error
+    capture_error: Final = _capture_message_content_error(callback_name, callback_vars)
+    if capture_error is not None:
+        return capture_error
     if callback_name != _NEWRELIC_CALLBACK:
         return None
     return _newrelic_config_error(callback_vars)
@@ -70,6 +74,33 @@ def _langfuse_span_scope_error(callback_name: str | None, callback_vars: Mapping
 
     try:
         validate_langfuse_span_scope_value(value)
+    except ValueError as e:
+        return str(e)
+    return None
+
+
+def _capture_message_content_error(callback_name: str | None, callback_vars: Mapping[str, str]) -> str | None:
+    """Per-team prompt/response capture rides the OTel v2 destination path only.
+
+    Accepting the mode on a callback that never reads it would 200 the write and
+    then silently export whatever the operator's global mode says.
+    """
+    value: Final = callback_vars.get(_CAPTURE_MESSAGE_CONTENT_VAR)
+    if value is None:
+        return None
+    from litellm.integrations.otel.presets.destinations import destination_capable_backends
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        validate_capture_message_content_value,
+    )
+
+    readers: Final = destination_capable_backends()
+    if callback_name not in readers:
+        return (
+            f"{_CAPTURE_MESSAGE_CONTENT_VAR} applies to the {', '.join(sorted(readers))} callbacks only, "
+            f"not {callback_name!r}"
+        )
+    try:
+        validate_capture_message_content_value(value)
     except ValueError as e:
         return str(e)
     return None

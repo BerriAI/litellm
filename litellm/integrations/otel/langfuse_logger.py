@@ -10,7 +10,7 @@ from litellm.integrations.otel.mappers.langfuse import (
 )
 from litellm.integrations.otel.model.request_io import request_input, response_output, stream_output
 from litellm.integrations.otel.model.trace_controls import caller_trace_controls
-from litellm.integrations.otel.plumbing.context import request_root_span
+from litellm.integrations.otel.plumbing.context import request_captures_span_content, request_root_span
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -19,7 +19,13 @@ if TYPE_CHECKING:
 
 class LangfuseOpenTelemetryV2(OpenTelemetryV2):
     """Stamps the caller's trace controls (name, user, session, tags) on the request. Langfuse reads them off
-    the root observation, and the proxy's root span is still recording when the LLM call starts."""
+    the root observation, and the proxy's root span is still recording when the LLM call starts.
+
+    Langfuse also shows a trace's input and output from its root observation. The proxy's root span
+    ends when the response is sent, before the success callback runs, so the stamp comes from the
+    post-call hook in the request task, for the call types whose response renders as a message,
+    whenever the operator or a destination of the request captures content.
+    """
 
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         root: Final = request_root_span()
@@ -27,35 +33,14 @@ class LangfuseOpenTelemetryV2(OpenTelemetryV2):
             root.set_attributes(LangfuseMapper.trace_attributes(caller_trace_controls(kwargs)))
         super().log_pre_api_call(model, messages, kwargs)
 
-
-class LangfuseContentOpenTelemetryV2(LangfuseOpenTelemetryV2):
-    """Stamps the request's input and output on the root observation while it is still recording.
-
-    Langfuse shows a trace's input and output from its root observation. The proxy's root span ends
-    when the response is sent, before the success callback runs, so both stamps come from the
-    post-call hooks in the request task: the request as it stands after the pre-call chain and the
-    response as it is returned, for the call types whose response renders as a message.
-    """
-
     async def async_post_call_success_hook(
         self,
         data: Mapping[str, object],
         user_api_key_dict: "UserAPIKeyAuth",
         response: object,
     ) -> None:
-        self._stamp_root_io(data, lambda: response_output(response))
-
-    async def async_post_call_streaming_iterator_hook(
-        self,
-        user_api_key_dict: "UserAPIKeyAuth",
-        response: "AsyncIterator[ModelResponseStream]",
-        request_data: Mapping[str, object],
-    ) -> "AsyncGenerator[ModelResponseStream, None]":
-        relayed: Final[list[ModelResponseStream]] = []  # mutable-ok: relayed as they arrive, assembled at end of stream
-        async for chunk in response:
-            relayed.append(chunk)
-            yield chunk
-        self._stamp_root_io(request_data, lambda: stream_output(tuple(relayed), request_data))
+        if request_captures_span_content(self.config.capture_span_content):
+            self._stamp_root_io(data, lambda: response_output(response))
 
     def _stamp_root_io(self, data: Mapping[str, object], render_output: Callable[[], str | None]) -> None:
         root: Final = request_root_span()
@@ -74,3 +59,24 @@ class LangfuseContentOpenTelemetryV2(LangfuseOpenTelemetryV2):
             return
         if rendered_input is not None:
             root.set_attribute(LANGFUSE_OBSERVATION_INPUT, rendered_input)
+
+
+class LangfuseContentOpenTelemetryV2(LangfuseOpenTelemetryV2):
+    """Relays proxy streams so the streamed output can be stamped on the root observation too.
+
+    Relaying takes every stream off the proxy's fast path, so only an operator whose own capture
+    mode keeps content pays for it; a destination that opted in on its own gets the streamed
+    generation spans but no root output.
+    """
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: "UserAPIKeyAuth",
+        response: "AsyncIterator[ModelResponseStream]",
+        request_data: Mapping[str, object],
+    ) -> "AsyncGenerator[ModelResponseStream, None]":
+        relayed: Final[list[ModelResponseStream]] = []  # mutable-ok: relayed as they arrive, assembled at end of stream
+        async for chunk in response:
+            relayed.append(chunk)
+            yield chunk
+        self._stamp_root_io(request_data, lambda: stream_output(tuple(relayed), request_data))

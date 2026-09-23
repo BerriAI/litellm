@@ -11,6 +11,8 @@ import openmeterLogo from "../../public/assets/logos/openmeter.png";
 import otelLogo from "../../public/assets/logos/otel.png";
 import pointfiveLogo from "../../public/assets/logos/pointfive.png";
 
+const CAPTURE_MESSAGE_CONTENT_MODES = ["no_content", "span_only", "event_only", "span_and_event"] as const;
+
 interface CallbackConfig {
   id: string;
   displayName: string;
@@ -32,6 +34,10 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       arize_space_id: "password",
       arize_success_sampling_rate: "number",
       arize_error_sampling_rate: "number",
+      capture_message_content: "select",
+    },
+    dynamic_param_options: {
+      capture_message_content: CAPTURE_MESSAGE_CONTENT_MODES,
     },
     description: "Arize Logging Integration",
   },
@@ -90,6 +96,10 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     dynamic_params: {
       newrelic_api_key: "password",
       newrelic_region: "text",
+      capture_message_content: "select",
+    },
+    dynamic_param_options: {
+      capture_message_content: CAPTURE_MESSAGE_CONTENT_MODES,
     },
     description: "New Relic Logging Integration",
   },
@@ -128,9 +138,11 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langfuse_host: "text",
       langfuse_environment: "text",
       langfuse_span_scope: "select",
+      capture_message_content: "select",
     },
     dynamic_param_options: {
       langfuse_span_scope: ["full", "llm_only"],
+      capture_message_content: CAPTURE_MESSAGE_CONTENT_MODES,
     },
     description: "Langfuse v3 OTEL Logging Integration",
   },

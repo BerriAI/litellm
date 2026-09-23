@@ -23,6 +23,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_capture_message_content_value,
     validate_langfuse_environment_value,
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
@@ -2255,16 +2256,18 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
     def validate_callback_vars(cls, values):
         callback_vars: Final = values.get("callback_vars", {})
         valid_keys: Final = set(StandardCallbackDynamicParams.__annotations__.keys())
-        for key, value in callback_vars.items():
+        normalized: Final = {key: str(value) for key, value in callback_vars.items()}
+        for key, value in normalized.items():
             if key not in valid_keys:
                 raise ValueError(f"Invalid callback variable: {key}. Must be one of {valid_keys}")
-            callback_vars[key] = str(value)
-            validate_no_callback_env_reference(key, callback_vars[key], source="key/team callback metadata")
+            validate_no_callback_env_reference(key, value, source="key/team callback metadata")
             if key == "langfuse_environment":
-                validate_langfuse_environment_value(callback_vars[key])
+                validate_langfuse_environment_value(value)
             if key == "langfuse_span_scope":
-                validate_langfuse_span_scope_value(callback_vars[key])
-        return values
+                validate_langfuse_span_scope_value(value)
+            if key == "capture_message_content":
+                validate_capture_message_content_value(value)
+        return {**values, "callback_vars": normalized} if "callback_vars" in values else values
 
 
 class TeamCallbackDeleteResponseData(LiteLLMPydanticObjectBase):

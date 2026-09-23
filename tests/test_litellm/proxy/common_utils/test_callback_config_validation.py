@@ -128,3 +128,23 @@ def test_arize_sampling_rates_are_not_family_credentials():
     stored = [{"arize_api_key": "k1", "arize_success_sampling_rate": "0.5"}]
     assert cross_entry_family_error({"arize_success_sampling_rate": "0.1"}, stored) is None
     assert cross_entry_family_error({"arize_error_sampling_rate": "0.5"}, stored) is None
+
+
+@pytest.mark.parametrize("callback_name", ["arize", "langfuse_otel", "newrelic", "weave_otel"])
+@pytest.mark.parametrize("mode", ["no_content", "span_only", "event_only", "span_and_event"])
+def test_a_capture_mode_is_accepted_on_a_destination_backend(callback_name, mode):
+    assert callback_config_error(callback_name, {"capture_message_content": mode}) is None
+
+
+@pytest.mark.parametrize("bad", ["SPAN_ONLY", "span-only", "true", ""])
+def test_an_unknown_capture_mode_is_rejected(bad):
+    error = callback_config_error("langfuse_otel", {"capture_message_content": bad})
+    assert error is not None and repr(bad) in error and "span_and_event" in error
+
+
+@pytest.mark.parametrize("callback_name", ["langfuse", "datadog", "otel", None])
+def test_a_capture_mode_on_a_callback_that_never_reads_it_is_rejected(callback_name):
+    """A 200 on the write would leave the team believing its content setting took
+    effect while the operator's global mode kept deciding what is exported."""
+    error = callback_config_error(callback_name, {"capture_message_content": "span_only"})
+    assert error is not None and "capture_message_content" in error and "langfuse_otel" in error

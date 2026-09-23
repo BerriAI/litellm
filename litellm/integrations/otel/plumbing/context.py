@@ -382,6 +382,18 @@ def request_destinations() -> 'tuple["OtelDestination", ...]':
     return _request_destinations.get()
 
 
+def request_captures_span_content(operator_captures: bool) -> bool:
+    """Whether any exporter this request reaches keeps prompt/response content on its spans.
+
+    The span is stamped once; every exporter that does not capture strips the content
+    on its way out, so a tenant that opted in gets the bodies while the operator's own
+    backend, or a tenant that opted out, never sees them.
+    """
+    if operator_captures:
+        return True
+    return any(destination.captures_span_content(False) for destination in _request_destinations.get())
+
+
 #: ``litellm_settings: otel_tenant_destination_mode`` and its env equivalent.
 ADDITIVE_DESTINATION_MODE: Final = "additive"
 OTEL_TENANT_DESTINATION_MODE_ENV: Final = "LITELLM_OTEL_TENANT_DESTINATION_MODE"

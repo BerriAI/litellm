@@ -16,6 +16,13 @@
         "ui_name": "Space ID",
         "description": "Arize Space ID to identify your workspace",
         "required": true
+      },
+      "capture_message_content": {
+        "type": "select",
+        "ui_name": "Capture Message Content",
+        "description": "Whether this team's traces carry prompt and response content (OTEL v2); unset follows the proxy default",
+        "options": ["no_content", "span_only", "event_only", "span_and_event"],
+        "required": false
       }
     },
     "description": "Arize Logging Integration"
@@ -266,6 +273,13 @@
         "description": "full sends the whole request trace, llm_only sends just the model-call spans",
         "options": ["full", "llm_only"],
         "required": false
+      },
+      "capture_message_content": {
+        "type": "select",
+        "ui_name": "Capture Message Content",
+        "description": "Whether this team's traces carry prompt and response content (OTEL v2); unset follows the proxy default",
+        "options": ["no_content", "span_only", "event_only", "span_and_event"],
+        "required": false
       }
     },
     "description": "Langfuse v3 OTEL Logging Integration"
@@ -325,6 +339,13 @@
         "type": "text",
         "ui_name": "New Relic Region (us or eu)",
         "description": "Data center region for this team's account. Defaults to us.",
+        "required": false
+      },
+      "capture_message_content": {
+        "type": "select",
+        "ui_name": "Capture Message Content",
+        "description": "Whether this team's traces carry prompt and response content (OTEL v2); unset follows the proxy default",
+        "options": ["no_content", "span_only", "event_only", "span_and_event"],
         "required": false
       }
     },

@@ -29,6 +29,7 @@ from opentelemetry.sdk.trace.export import (
     ConsoleSpanExporter,
     SimpleSpanProcessor,
     SpanExporter,
+    SpanExportResult,
 )
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -39,6 +40,7 @@ from opentelemetry.util.types import Attributes, AttributeValue
 
 from litellm._logging import verbose_logger
 from litellm._version import version as litellm_version
+from litellm.integrations.otel.mappers import is_content_attribute
 from litellm.integrations.otel.mappers.langfuse import LANGFUSE_TRACE_NAME
 from litellm.integrations.otel.model.config import ExporterOwner, ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.semconv import (
@@ -220,16 +222,35 @@ def _exporter_from_spec(spec: ExporterSpec) -> SpanExporter:
     return ConsoleSpanExporter()
 
 
-def _processor_for(exporter: SpanExporter, use_simple: bool | None) -> SpanProcessor:
+def _processor_for(exporter: SpanExporter, use_simple: bool | None, captures_content: bool) -> SpanProcessor:
     """Pick a Simple or Batch span processor for ``exporter``.
 
     When ``use_simple`` is unset, default to Simple for console and in-memory
     exporters (spans export synchronously, which tests rely on) and Batch for
-    everything else (the right export semantics for production).
+    everything else (the right export semantics for production). With
+    ``captures_content`` off the exporter sees every span without its prompt,
+    response and tool bodies: a span carries them whenever any destination of the
+    request opted in, and the operator's own exporter must still see none of them.
     """
-    if use_simple is None:
-        use_simple = isinstance(exporter, (ConsoleSpanExporter, InMemorySpanExporter))
-    return SimpleSpanProcessor(exporter) if use_simple else BatchSpanProcessor(exporter)
+    simple: Final = (
+        isinstance(exporter, (ConsoleSpanExporter, InMemorySpanExporter)) if use_simple is None else use_simple
+    )
+    sink: Final = exporter if captures_content else _ContentStrippingExporter(exporter)
+    return SimpleSpanProcessor(sink) if simple else BatchSpanProcessor(sink)
+
+
+class _ContentStrippingExporter(SpanExporter):
+    def __init__(self, inner: SpanExporter) -> None:
+        self._inner: Final = inner
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        return self._inner.export(tuple(_without_content(span) for span in spans))
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
 
 
 #: Distinct tenant destinations whose exporters stay alive. Each holds a connection
@@ -459,8 +480,10 @@ def _guardrail_unreachable(attributes: Mapping[str, AttributeValue]) -> bool:
     return attributes.get(LiteLLM.GUARDRAIL_STATUS) in _GUARDRAIL_UNREACHABLE_STATUSES
 
 
-def _tenant_visible(key: str, database: bool, owned: bool, unreachable_guardrail: bool) -> bool:
+def _tenant_visible(key: str, database: bool, owned: bool, unreachable_guardrail: bool, content: bool) -> bool:
     if key.startswith(_CAPTURED_HEADER_PREFIXES) or key in (LiteLLMError.STACK_TRACE, _URL_QUERY_KEY):
+        return False
+    if not content and is_content_attribute(key):
         return False
     if database and key in _DATASTORE_ENDPOINT_KEYS:
         return False
@@ -492,7 +515,17 @@ def _without_stack_trace(event: Event) -> Event:
     )
 
 
-def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> ReadableSpan:
+def _without_content(span: ReadableSpan) -> ReadableSpan:
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    kept: Final = MappingProxyType({key: value for key, value in attributes.items() if not is_content_attribute(key)})
+    if len(kept) == len(attributes):
+        return span
+    return _SpanView(span, span.resource, kept, span.events, span.status, parent=span.parent)
+
+
+def _for_destination(
+    span: ReadableSpan, destination: "OtelDestination", operator_captures_content: bool
+) -> ReadableSpan:
     """The view of ``span`` a tenant destination receives.
 
     A span the tenant's own call produced keeps its error text. Every other span is
@@ -503,19 +536,22 @@ def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> Read
     exception it raised and names the operator's guardrail endpoint. Stack traces walk
     the operator's install and come off every span, as do the headers the operator
     captures on the server span, whose request side holds the caller's bearer token,
-    and the query string of the request URL, which can hold the same key. The span
-    itself stays, so the tenant still gets the whole trace tree.
+    and the query string of the request URL, which can hold the same key. Prompt,
+    response and tool bodies come off unless the destination's own capture mode (or,
+    when it has none, the operator's) keeps them. The span itself stays, so the tenant
+    still gets the whole trace tree.
     """
     extra: Final = destination.resource_attributes
     attributes: Final = span.attributes or _NO_ATTRIBUTES
     database: Final = _is_database_span(attributes)
     owned: Final = _is_tenant_owned_span(attributes)
     unreachable: Final = _guardrail_unreachable(attributes)
+    content: Final = destination.captures_span_content(operator_captures_content)
     kept: Final = MappingProxyType(
         {
             key: _without_query(key, value)
             for key, value in attributes.items()
-            if _tenant_visible(key, database, owned, unreachable)
+            if _tenant_visible(key, database, owned, unreachable, content)
         }
     )
     recorded: Final = span.events
@@ -551,8 +587,10 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         operator_sinks: 'Mapping[_SinkKey, "OtelSpanScope"]' = MappingProxyType({}),
         pending_drains: int = _MAX_PENDING_DRAINS,
         drain_pool: _DrainPool | None = None,
+        operator_captures_content: bool = False,
     ) -> None:
         self._operator_sinks: Final = operator_sinks
+        self._operator_captures_content: Final = operator_captures_content
         self._drain_seconds: Final = shutdown_drain_seconds
         self._lock: Final = threading.Condition()
         self._closed = False  # guarded by ``_lock``: an unlocked read races the teardown it gates
@@ -576,7 +614,12 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             if processor is None:
                 continue
             try:
-                processor.on_end(_scoped(_for_destination(span, destination), destination.span_scope))
+                processor.on_end(
+                    _scoped(
+                        _for_destination(span, destination, self._operator_captures_content),
+                        destination.span_scope,
+                    )
+                )
             except Exception as exc:  # noqa: BLE001  # one destination's failure must not cost the others their span
                 verbose_logger.debug("OTel V2 fan-out: forwarding to %s failed: %s", destination.endpoint, exc)
             finally:
@@ -779,7 +822,7 @@ def _destination_processor(destination: "OtelDestination") -> SpanProcessor | No
             headers=destination.header_string(),
             owner=None,
         )
-        return _processor_for(_exporter_from_spec(spec), use_simple=False)
+        return _processor_for(_exporter_from_spec(spec), use_simple=False, captures_content=True)
     except Exception as exc:  # noqa: BLE001  # a malformed destination must not break the request or the other destinations
         verbose_logger.debug("OTel V2 fan-out: no processor for %s: %s", destination.endpoint, exc)
         return None
@@ -1127,8 +1170,9 @@ def build_tracer_provider(
         baggage_processor = LiteLLMBaggageSpanProcessor(allowed_keys=config.baggage_promoted_keys)
     provider.add_span_processor(baggage_processor)
 
+    captures: Final = config.capture_span_content
     if exporter is not None:
-        provider.add_span_processor(_processor_for(exporter, use_simple_processor))
+        provider.add_span_processor(_processor_for(exporter, use_simple_processor, captures))
         return provider
 
     # ``config._normalize`` guarantees at least one spec (it folds the top-level
@@ -1140,6 +1184,7 @@ def build_tracer_provider(
         processor = _processor_for(
             exp,
             (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
+            captures,
         )
         owner = spec.owner.value if tenant_overrides and spec.owner is not None else None
         scope = _operator_scope(config, spec)
@@ -1164,12 +1209,18 @@ def attach_tenant_fan_out(provider: TracerProvider, *configs: OpenTelemetryV2Con
     so exactly one fan-out lands. ``configs`` name the operator's own exporters, one
     config per v2 logger since each keeps its own provider and still writes its
     account, so an additive destination pointing at any of them is delivered once
-    rather than twice.
+    rather than twice. The published logger's config comes first: a destination with
+    no capture mode of its own follows it, as the spans it stamps do.
     """
     with _FAN_OUT_ATTACH_LOCK:
         if any(isinstance(processor, TenantFanOutSpanProcessor) for processor in _attached_processors(provider)):
             return
-        provider.add_span_processor(TenantFanOutSpanProcessor(operator_sinks=operator_sink_scopes(*configs)))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                operator_sinks=operator_sink_scopes(*configs),
+                operator_captures_content=bool(configs) and configs[0].capture_span_content,
+            )
+        )
 
 
 def deliverable_destinations(
