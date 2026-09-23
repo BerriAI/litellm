@@ -8,8 +8,11 @@ fi
 
 suite="${1:?integration suite required}"
 mode="${2:-standard}"
+side="${3:-}"
 if [ "$mode" = replica ]; then
   results="test-results/integration-${suite}-replica"
+elif [ "$mode" = parity ]; then
+  results="test-results/parity-${suite}/${side:?parity side required}"
 else
   results="test-results/integration-${suite}"
 fi
@@ -88,15 +91,13 @@ uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma > "$result
 export INTEGRATION_PROXY_DATABASE_URL=""
 export INTEGRATION_PROXY_READ_REPLICA_URL=""
 export INTEGRATION_ROUTING=""
-if [ "$mode" = replica ]; then
+if [ "$mode" = replica ] || [ "$mode" = parity ]; then
   .venv/bin/python .circleci/scripts/prepare_replica_roles.py > "$results/prepare-replica-roles.log" 2>&1
   export INTEGRATION_PROXY_DATABASE_URL="postgresql://litellm_writer:litellm-writer@127.0.0.1:5432/circle_test"
   export INTEGRATION_PROXY_READ_REPLICA_URL="postgresql://litellm_reader:litellm-reader@127.0.0.1:5432/circle_test"
-  if [ -f "tests/integration/routing/${suite}.json" ]; then
-    export INTEGRATION_ROUTING=check
-  else
-    export INTEGRATION_ROUTING=record
-  fi
+fi
+if [ "$mode" = parity ]; then
+  export INTEGRATION_ROUTING=capture
 fi
 
 sudo iptables -N integration_only
@@ -222,13 +223,6 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_PROXY_READ_REPLICA_URL="$INTEGRATION_PROXY_READ_REPLICA_URL" \
   INTEGRATION_ROUTING="$INTEGRATION_ROUTING" \
   .venv/bin/python tests/integration/run.py "$suite" --results "$results"
-
-if [ "$mode" = replica ]; then
-  .venv/bin/python -m integration._support.routing record "$suite" "$results"
-  if [ "$INTEGRATION_ROUTING" = check ]; then
-    .venv/bin/python -m integration._support.routing check "$suite" "$results"
-  fi
-fi
 
 if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
   for covered_pid in "$proxy_pid" "$peer_pid"; do

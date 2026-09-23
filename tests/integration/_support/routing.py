@@ -22,10 +22,8 @@ READER_ROLE: Final = "litellm_reader"
 ROLES: Final = (READER_ROLE, WRITER_ROLE)
 DATABASE_NAME: Final = "circle_test"
 OBSERVED_FILE: Final = "routing-observed.json"
-RECORDED_FILE: Final = "routing-recorded.json"
 DIFF_FILE: Final = "routing-diff.txt"
-EXPECTED_DIRECTORY: Final = Path(__file__).resolve().parents[1] / "routing"
-EITHER_ROLE_FILE: Final = EXPECTED_DIRECTORY / "either_role.json"
+EITHER_ROLE_FILE: Final = Path(__file__).resolve().parents[1] / "routing" / "either_role.json"
 
 RoleSet = frozenset[str]
 RoutingMap = Mapping[str, frozenset[str]]
@@ -41,12 +39,6 @@ def normalize(query: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class Expectation:
-    queries: RoutingMap
-    tests: Mapping[str, RoutingMap]
-
-
-@dataclass(frozen=True, slots=True)
 class Observation:
     queries: RoutingMap
     tests: Mapping[str, RoutingMap]
@@ -58,84 +50,86 @@ class Observation:
 class Mismatch:
     test: str | None
     query: str
-    expected: tuple[str, ...]
-    observed: tuple[str, ...]
+    base: tuple[str, ...]
+    head: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class Report:
     mismatches: tuple[Mismatch, ...]
-    only_expected: tuple[str, ...]
-    only_observed: tuple[str, ...]
-    calls: Mapping[str, int]
-    dealloc: int
+    only_base: tuple[str, ...]
+    only_head: tuple[str, ...]
+    calls: Mapping[str, Mapping[str, int]]
+    dealloc: Mapping[str, int]
     either_role: tuple[str, ...] = ()
 
     def failures(self) -> tuple[str, ...]:
         mismatch_failures: Final = tuple(
             f"{mismatch.test if mismatch.test is not None else 'global'}: {mismatch.query}: "
-            f"expected [{', '.join(mismatch.expected)}] observed [{', '.join(mismatch.observed)}]"
+            f"base [{', '.join(mismatch.base)}] head [{', '.join(mismatch.head)}]"
             for mismatch in self.mismatches
         )
-        dealloc_failures: Final = (
-            (f"pg_stat_statements evicted {self.dealloc} entries (dealloc > 0)",) if self.dealloc > 0 else ()
+        side_failures: Final = tuple(
+            failure
+            for side in ("base", "head")
+            for failure in (
+                *(
+                    (f"{side}: pg_stat_statements evicted {self.dealloc[side]} entries (dealloc > 0)",)
+                    if self.dealloc[side] > 0
+                    else ()
+                ),
+                *(f"{side}: no {role} calls observed" for role in ROLES if self.calls[side].get(role, 0) == 0),
+            )
         )
-        liveness_failures: Final = tuple(f"no {role} calls observed" for role in ROLES if self.calls.get(role, 0) == 0)
-        return (*mismatch_failures, *dealloc_failures, *liveness_failures)
+        return (*mismatch_failures, *side_failures)
 
 
 def _sorted_map(value: RoutingMap) -> RoutingMap:
     return MappingProxyType(dict(sorted(value.items())))
 
 
-def compare(expected: Expectation, observed: Observation, either_role: frozenset[str] = frozenset()) -> Report:
+def compare(base: Observation, head: Observation, either_role: frozenset[str] = frozenset()) -> Report:
     mismatches: Final = (
         *(
             Mismatch(
                 None,
                 query,
-                tuple(sorted(expected_roles)),
-                tuple(sorted(observed.queries[query])),
+                tuple(sorted(base_roles)),
+                tuple(sorted(head.queries[query])),
             )
-            for query, expected_roles in expected.queries.items()
-            if query in observed.queries and observed.queries[query] != expected_roles and query not in either_role
+            for query, base_roles in base.queries.items()
+            if query in head.queries and head.queries[query] != base_roles and query not in either_role
         ),
         *(
             Mismatch(
                 test,
                 query,
-                tuple(sorted(expected_roles)),
-                tuple(sorted(observed.tests[test][query])),
+                tuple(sorted(base_roles)),
+                tuple(sorted(head.tests[test][query])),
             )
-            for test, queries in expected.tests.items()
-            if test in observed.tests
-            for query, expected_roles in queries.items()
-            if query in observed.tests[test]
-            and observed.tests[test][query] != expected_roles
-            and query not in either_role
+            for test, queries in base.tests.items()
+            if test in head.tests
+            for query, base_roles in queries.items()
+            if query in head.tests[test] and head.tests[test][query] != base_roles and query not in either_role
         ),
     )
     varying: Final = frozenset(
         query
         for query in either_role
-        if (
-            query in expected.queries
-            and query in observed.queries
-            and observed.queries[query] != expected.queries[query]
-        )
+        if (query in base.queries and query in head.queries and head.queries[query] != base.queries[query])
         or any(
-            query in expected.tests[test]
-            and query in observed.tests[test]
-            and observed.tests[test][query] != expected.tests[test][query]
-            for test in frozenset(expected.tests) & frozenset(observed.tests)
+            query in base.tests[test]
+            and query in head.tests[test]
+            and head.tests[test][query] != base.tests[test][query]
+            for test in frozenset(base.tests) & frozenset(head.tests)
         )
     )
     return Report(
         mismatches,
-        tuple(sorted(query for query in expected.queries if query not in observed.queries)),
-        tuple(sorted(query for query in observed.queries if query not in expected.queries)),
-        observed.calls,
-        observed.dealloc,
+        tuple(sorted(query for query in base.queries if query not in head.queries)),
+        tuple(sorted(query for query in head.queries if query not in base.queries)),
+        MappingProxyType({"base": base.calls, "head": head.calls}),
+        MappingProxyType({"base": base.dealloc, "head": head.dealloc}),
         tuple(sorted(varying)),
     )
 
@@ -149,15 +143,21 @@ def render(report: Report) -> str:
         "== either role ==",
         *(report.either_role or ("none",)),
         "",
-        "== queries only in expected ==",
-        *(report.only_expected or ("none",)),
+        "== queries only in base ==",
+        *(report.only_base or ("none",)),
         "",
-        "== queries only in observed ==",
-        *(report.only_observed or ("none",)),
+        "== queries only in head ==",
+        *(report.only_head or ("none",)),
         "",
         "== calls ==",
-        *(f"{role}: {report.calls.get(role, 0)}" for role in ROLES),
-        f"dealloc: {report.dealloc}",
+        *(
+            line
+            for side in ("base", "head")
+            for line in (
+                *(f"{side} {role}: {report.calls[side].get(role, 0)}" for role in ROLES),
+                f"{side} dealloc: {report.dealloc[side]}",
+            )
+        ),
     )
     return "\n".join(lines) + "\n"
 
@@ -168,13 +168,6 @@ def _roles(document: Mapping[str, tuple[str, ...]]) -> RoutingMap:
 
 def _tests(document: Mapping[str, Mapping[str, tuple[str, ...]]]) -> Mapping[str, RoutingMap]:
     return MappingProxyType({node: _roles(queries) for node, queries in document.items()})
-
-
-def load_expectation(path: Path) -> Expectation:
-    document: Final = _OBSERVED.validate_python(json.loads(path.read_text()))
-    queries: Final = _QUERIES.validate_python(document.get("queries", {}))
-    tests: Final = TypeAdapter(dict[str, dict[str, tuple[str, ...]]]).validate_python(document.get("tests", {}))
-    return Expectation(_roles(queries), _tests(tests))
 
 
 def load_observation(path: Path) -> Observation:
@@ -198,10 +191,6 @@ def _serializable(queries: RoutingMap, tests: Mapping[str, RoutingMap]) -> dict[
         "queries": {query: sorted(roles) for query, roles in queries.items()},
         "tests": {node: {query: sorted(roles) for query, roles in mapping.items()} for node, mapping in tests.items()},
     }
-
-
-def dump_expectation(observation: Observation) -> str:
-    return json.dumps(_serializable(observation.queries, observation.tests), indent=2, sort_keys=True) + "\n"
 
 
 def dump_observation(observation: Observation) -> str:
@@ -316,33 +305,26 @@ class RoutingPlugin:
 
 def main(argv: tuple[str, ...] | list[str]) -> int:
     parser: Final = argparse.ArgumentParser()
-    commands: Final = parser.add_subparsers(dest="command", required=True)
-    for name in ("record", "check"):
-        subcommand: Final = commands.add_parser(name)
-        subcommand.add_argument("group")
-        subcommand.add_argument("results_dir", type=Path)
-    check_command: Final = commands.choices["check"]
-    check_command.add_argument("--expected", type=Path, default=None)
-    check_command.add_argument("--either-role", type=Path, default=EITHER_ROLE_FILE)
+    parser.add_argument("command", choices=("check",))
+    parser.add_argument("base_dir", type=Path)
+    parser.add_argument("head_dir", type=Path)
+    parser.add_argument("--either-role", type=Path, default=EITHER_ROLE_FILE)
+    parser.add_argument("--diff", type=Path, default=None)
     options: Final = parser.parse_args(argv)
-    observed_path: Final = options.results_dir / OBSERVED_FILE
-    if options.command == "record":
-        observation: Final = load_observation(observed_path)
-        recorded: Final = options.results_dir / RECORDED_FILE
-        recorded.write_text(dump_expectation(observation))
-        sys.stdout.write(f"recorded routing expectation at {recorded}\n")
-        return 0
-    expected_path: Final = options.expected or EXPECTED_DIRECTORY / f"{options.group}.json"
-    if not expected_path.exists():
-        sys.stderr.write(f"expected routing file missing: {expected_path}\n")
+    base_path: Final = options.base_dir / OBSERVED_FILE
+    head_path: Final = options.head_dir / OBSERVED_FILE
+    for path in (base_path, head_path):
+        if not path.exists():
+            sys.stderr.write(f"observed routing file missing: {path}\n")
+    if not base_path.exists() or not head_path.exists():
         return 1
     report: Final = compare(
-        load_expectation(expected_path),
-        load_observation(observed_path),
+        load_observation(base_path),
+        load_observation(head_path),
         load_either_role(options.either_role),
     )
     diff: Final = render(report)
-    (options.results_dir / DIFF_FILE).write_text(diff)
+    (options.diff or options.head_dir.parent / DIFF_FILE).write_text(diff)
     sys.stdout.write(diff)
     return 1 if report.failures() else 0
 
