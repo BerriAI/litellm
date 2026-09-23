@@ -262,6 +262,23 @@ async def test_inference_resolver_uses_the_configured_native_cache_directly() ->
     assert facade.get_cache(cache_key="inference-python") == {"answer": 7}
 
 
+async def test_inference_resolver_refuses_a_native_runtime_whose_facade_changed() -> None:
+    rules: Final = (
+        RouteRule(Route.OCR, Rollout.PYTHON_ONLY),
+        SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({"local"})),
+        CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({"local"})),
+    )
+    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    facade._native_cache = resolve_response_cache(facade, rules)
+    assert _native._CacheResolver(SimpleNamespace(cache=facade)).resolve().kind == "native"
+
+    facade.cache = InMemoryCache()
+    selected: Final = _native._CacheResolver(SimpleNamespace(cache=facade)).resolve()
+    assert selected.kind == "python_callback"
+    await selected.async_store(None, {"answer": 7}, callback_kwargs={"cache_key": "swapped-backend"})
+    assert facade.get_cache(cache_key="swapped-backend") == {"answer": 7}
+
+
 def test_existing_global_lifecycle_remains_the_resolver_source_of_truth() -> None:
     resolver: Final = _CacheTestResolver(litellm)
 

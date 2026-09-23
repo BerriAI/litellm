@@ -29,6 +29,7 @@ pub(super) enum CacheBinding {
 #[pyclass(frozen, name = "_ResponseCacheRuntime")]
 pub(crate) struct ResolvedCache {
     binding: CacheBinding,
+    guard: Option<super::facade::FacadeGuard>,
     pid: u32,
 }
 
@@ -36,8 +37,14 @@ impl ResolvedCache {
     pub(super) fn new(binding: CacheBinding) -> Self {
         Self {
             binding,
+            guard: None,
             pid: std::process::id(),
         }
+    }
+
+    pub(super) fn with_guard(mut self, guard: super::facade::FacadeGuard) -> Self {
+        self.guard = Some(guard);
+        self
     }
 
     pub(super) fn native_service(&self) -> PyResult<Option<NativeResponseCache>> {
@@ -91,10 +98,15 @@ impl ResolvedCache {
             .getattr_opt("_native_cache")?
             .filter(|value| !value.is_none())
         {
-            match runtime
+            let resolved = runtime
                 .getattr("native")?
-                .extract::<PyRef<'_, ResolvedCache>>()?
-                .native_service()?
+                .extract::<PyRef<'_, ResolvedCache>>()?;
+            match resolved
+                .guard
+                .as_ref()
+                .filter(|guard| guard.matches(py, cache).unwrap_or(false))
+                .and_then(|_| resolved.native_service().transpose())
+                .transpose()?
             {
                 Some(service) => CacheBinding::Native(service),
                 None => CacheBinding::PythonCallback(PythonCallback::new(cache.clone().unbind())),
@@ -115,7 +127,13 @@ impl ResolvedCache {
         };
         let backend = cache.getattr("cache")?;
         let service = activate(cache.py(), &backend, config)?;
-        Ok(Self::new(CacheBinding::Native(service)))
+        let resolved = Self::new(CacheBinding::Native(service.clone()));
+        Ok(
+            match super::facade::FacadeGuard::capture(cache.py(), cache, &service) {
+                Ok(guard) => resolved.with_guard(guard),
+                Err(_) => resolved,
+            },
+        )
     }
 
     #[getter]
@@ -357,6 +375,9 @@ impl ResolvedCache {
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
         if let CacheBinding::PythonCallback(callback) = &self.binding {
             callback.traverse(&visit)?;
+        }
+        if let Some(guard) = &self.guard {
+            guard.traverse(visit)?;
         }
         Ok(())
     }
