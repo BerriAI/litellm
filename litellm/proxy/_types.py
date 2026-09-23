@@ -2961,10 +2961,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     maximum_daily_tag_spend_retention_period: str | None = Field(
         None,
         description=(
-            "Maximum retention period for LiteLLM_DailyTagSpend rows (e.g., '90d'). Rows whose date is older than "
-            "this are deleted by the spend log cleanup job, on that job's schedule. The table only feeds usage "
-            "analytics (tag usage dashboards, /spend/tags), so deleting old rows truncates historical tag usage "
-            "charts but does not affect budget enforcement. Unset means rows are never deleted."
+            "Maximum retention period for per-day tag spend aggregate rows (e.g., '90d'). Rows whose day is older "
+            "than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never "
+            "deleted. Only historical tag usage analytics are affected; tag budgets read the lifetime counter."
         ),
     )
     use_spend_logs_partitioning: bool | None = Field(

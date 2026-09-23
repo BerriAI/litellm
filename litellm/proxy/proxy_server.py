@@ -7526,6 +7526,7 @@ class ProxyConfig:
                 "maximum_spend_logs_retention_period",
                 "maximum_autorouter_session_retention_period",
                 "maximum_health_check_retention_period",
+                "maximum_daily_tag_spend_retention_period",
             )
         )
 
@@ -17744,6 +17745,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "store_prompts_in_spend_logs": "Boolean",
         "maximum_spend_logs_retention_period": "String",
         "maximum_health_check_retention_period": "String",
+        "maximum_daily_tag_spend_retention_period": "String",
         "maximum_spend_logs_cleanup_batch_size": "Integer",
         "maximum_spend_logs_cleanup_max_batches": "Integer",
         "maximum_spend_logs_cleanup_run_budget": "String",
