@@ -2,7 +2,6 @@ import base64
 import binascii
 import json
 import threading
-import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -980,8 +979,9 @@ def test_langfuse_otel_slow_sink_does_not_deadlock_exports(gateway: Gateway, tmp
     marker: Final = "lf-chaos-slow-" + uuid.uuid4().hex
 
     def sink_reply(request: Request) -> Reply:
-        time.sleep(2)
-        return Reply()
+        gate: Final = threading.Event()
+        threading.Timer(2, gate.set).start()
+        return Reply(chunks=(b"{}",), gate_after_first=gate)
 
     with (
         _langfuse_rig(gateway, tmp_path, {}, marker, sink_reply=sink_reply) as rig,
