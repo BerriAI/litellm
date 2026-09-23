@@ -8618,7 +8618,7 @@ def test_pre_call_warns_for_mapping_body(caplog: pytest.LogCaptureFixture, loggi
 
     assert caplog.records[-1].getMessage() == (
         "LiteLLM-owned keys reached the provider request body. provider=None "
-        "model=bedrock/claude-haiku-4-5-20251001-v1:0 keys=user_api_key_hash"
+        "model='bedrock/claude-haiku-4-5-20251001-v1:0' keys=user_api_key_hash"
     )
 
 
@@ -8641,9 +8641,41 @@ def test_pre_call_ignores_non_object_json_body(
     assert caplog.records == []
 
 
-def test_pre_call_preserves_callback_input_identity(logging_obj: LitellmLogging) -> None:
+def test_pre_call_warns_for_single_line_repr_model(caplog: pytest.LogCaptureFixture) -> None:
+    logging_obj: Final = LitellmLogging(
+        model="bedrock/model\nforged",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        logging_obj._pre_call(
+            input="",
+            api_key="",
+            additional_args={"complete_input_dict": {"metadata": {"user_api_key_hash": "h"}}},
+        )
+
+    message: Final = caplog.records[-1].getMessage()
+    assert "\n" not in message
+    assert "keys=user_api_key_hash" in message
+
+
+def test_pre_call_preserves_callback_input_identity() -> None:
     recorder: Final = _OwnedKeysInputRecorder()
-    logging_obj.dynamic_input_callbacks = [recorder]
+    logging_obj: Final = LitellmLogging(
+        model="bedrock/claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+        dynamic_input_callbacks=[recorder],
+    )
     additional_args: Final = {
         "complete_input_dict": {"metadata": {"user_api_key_hash": "h"}},
         "api_base": "",

@@ -1,6 +1,6 @@
 import copy
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Final
 
 import pytest
@@ -17,17 +17,53 @@ from litellm.litellm_core_utils.owned_keys import (
 )
 
 _JSON_SCALAR: Final = st.none() | st.booleans() | st.integers() | st.text()
-_JSON_VALUE: Final = st.recursive(
-    _JSON_SCALAR,
-    lambda children: st.lists(children, max_size=5) | st.dictionaries(st.text(), children, max_size=5),
-    max_leaves=30,
-)
 _KEY: Final = st.one_of(
     st.sampled_from(sorted(OWNED_KEYS)),
     st.text().map(lambda value: "_litellm_" + value),
     st.text(),
 )
-_BODY: Final = st.dictionaries(_KEY, _JSON_VALUE, max_size=10)
+_JSON_VALUE: Final = st.recursive(
+    _JSON_SCALAR,
+    lambda children: st.lists(children, max_size=5) | st.dictionaries(_KEY, children, max_size=5),
+    max_leaves=30,
+)
+_MAPPING: Final = st.dictionaries(_KEY, _JSON_VALUE, max_size=5)
+_NESTED_MAPPING: Final = st.dictionaries(_KEY, _MAPPING, max_size=5)
+_NON_MAPPING: Final = st.one_of(_JSON_SCALAR, st.lists(_JSON_SCALAR, max_size=5))
+
+
+def _build_body(
+    top: dict[str, object], nested: dict[str, object], deep: dict[str, dict[str, object]], extra: object
+) -> dict[str, object]:
+    return {
+        **top,
+        "nested": nested,
+        "deep": deep,
+        "extra_body": extra,
+    }
+
+
+_BODY: Final = st.builds(
+    _build_body,
+    st.dictionaries(_KEY, _JSON_VALUE, max_size=10),
+    _MAPPING,
+    _NESTED_MAPPING,
+    st.one_of(_MAPPING, _NON_MAPPING),
+)
+
+
+class _RepeatingMapping(Mapping[str, object]):
+    def __init__(self, entries: tuple[tuple[str, object], ...]) -> None:
+        self._entries = entries
+
+    def __getitem__(self, key: str) -> object:
+        return next(value for entry_key, value in self._entries if entry_key == key)
+
+    def __iter__(self) -> Iterator[str]:
+        return (key for key, _ in self._entries)
+
+    def __len__(self) -> int:
+        return len(self._entries)
 
 
 def test_top_level_owned_key_is_flagged() -> None:
@@ -87,6 +123,17 @@ def test_extra_body_flatten_reports_every_owned_key_once() -> None:
         "metadata.user_api_key_hash",
         "model_info",
     )
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        {"metadata": _RepeatingMapping((("user_api_key_hash", 1), ("user_api_key_hash", 2)))},
+        {"extra_body": {"metadata": _RepeatingMapping((("user_api_key_hash", 1), ("user_api_key_hash", 2)))}},
+    ),
+)
+def test_owned_keys_in_deduplicates_colliding_paths(body: Mapping[str, object]) -> None:
+    assert owned_keys_in(body) == ("metadata.user_api_key_hash",)
 
 
 def test_key_two_levels_deep_is_not_flagged() -> None:
@@ -181,6 +228,32 @@ def test_result_is_sorted_regardless_of_insertion_order() -> None:
 
 @settings(max_examples=40, deadline=None)
 @given(_BODY)
+def test_owned_keys_in_reports_every_owned_key_at_supported_depth(body: dict[str, object]) -> None:
+    view: Final = request_body_view(body)
+    expected: Final = tuple(
+        sorted(
+            {
+                *(
+                    key
+                    for key in view
+                    if isinstance(key, str) and is_owned_key(key)
+                ),
+                *(
+                    f"{container}.{key}"
+                    for container, value in view.items()
+                    if isinstance(container, str) and isinstance(value, Mapping)
+                    for key in value
+                    if isinstance(key, str) and is_owned_key(key)
+                ),
+            }
+        )
+    )
+
+    assert owned_keys_in(body) == expected
+
+
+@settings(max_examples=40, deadline=None)
+@given(_BODY)
 def test_owned_keys_in_does_not_mutate_and_never_raises(body: dict[str, object]) -> None:
     before: Final = copy.deepcopy(body)
     serialized_before: Final = json.dumps(body, sort_keys=True, default=str)
@@ -220,6 +293,19 @@ def test_parse_request_body_arbitrary_text_never_raises(text: str) -> None:
 @pytest.mark.parametrize("text", ("[1,2]", "not json"))
 def test_parse_request_body_non_object_json_is_none(text: str) -> None:
     assert parse_request_body(text) is None
+
+
+@pytest.mark.parametrize("body", (b"\xff", "[" * 10000 + "0" + "]" * 10000))
+def test_parse_request_body_malformed_bytes_and_deep_json_are_none(body: bytes | str) -> None:
+    assert parse_request_body(body) is None
+
+
+@settings(max_examples=40, deadline=None)
+@given(st.binary())
+def test_parse_request_body_arbitrary_bytes_never_raises(body: bytes) -> None:
+    parsed: Final = parse_request_body(body)
+
+    assert parsed is None or isinstance(parsed, Mapping)
 
 
 @settings(max_examples=30, deadline=None)

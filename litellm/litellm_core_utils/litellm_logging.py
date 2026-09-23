@@ -1350,7 +1350,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if not flagged:
             return
         verbose_logger.warning(
-            "LiteLLM-owned keys reached the provider request body. provider=%s model=%s keys=%s",
+            "LiteLLM-owned keys reached the provider request body. provider=%r model=%r keys=%s",
             self.model_call_details.get("custom_llm_provider"),
             self.model_call_details.get("model"),
             ", ".join(loggable_owned_keys(flagged)),

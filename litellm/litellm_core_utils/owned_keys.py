@@ -1,6 +1,5 @@
 import json
 from collections.abc import Mapping
-from json import JSONDecodeError
 from typing import Final
 
 OWNED_KEYS: Final[frozenset[str]] = frozenset(
@@ -35,7 +34,7 @@ def parse_request_body(body: object) -> Mapping[str, object] | None:
         return None
     try:
         parsed: Final = json.loads(body)
-    except (JSONDecodeError, UnicodeDecodeError):
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
         return None
     return parsed if isinstance(parsed, Mapping) else None
 
@@ -57,7 +56,7 @@ def owned_keys_in(body: Mapping[str, object]) -> tuple[str, ...]:
         for key in inner
         if isinstance(key, str) and is_owned_key(key)
     )
-    return tuple(sorted((*top_level, *nested)))
+    return tuple(sorted({*top_level, *nested}))
 
 
 def loggable_owned_keys(flagged: tuple[str, ...]) -> tuple[str, ...]:
