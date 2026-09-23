@@ -2604,8 +2604,9 @@ def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
             if isinstance(latest_usage_chunk, dict)
             else getattr(latest_usage_chunk, "cost", None)
         )
-        if latest_cost is not None:
-            returned_usage_chunk.cost = latest_cost
+        resolved_cost: Final = CustomStreamWrapper._resolve_provider_reported_cost(latest_cost)
+        if resolved_cost is not None:
+            returned_usage_chunk.cost = resolved_cost
 
     return returned_usage_chunk
 
