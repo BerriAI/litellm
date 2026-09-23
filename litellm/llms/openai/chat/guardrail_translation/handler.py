@@ -143,7 +143,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
         scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
-        scan_attachments: Final = guardrail_to_apply.scans_attachments
+        scan_attachments: Final = getattr(guardrail_to_apply, "scans_attachments", False)
 
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []

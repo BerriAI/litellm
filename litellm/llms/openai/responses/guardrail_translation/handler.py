@@ -567,7 +567,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         flattened_tool_groups: Final = tuple(
             form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(original_tools)
         )
-        scan_attachments: Final = guardrail_to_apply.scans_attachments
+        scan_attachments: Final = getattr(guardrail_to_apply, "scans_attachments", False)
         extracted: Final = self._extract_guardrail_inputs(data, input_data, flattened_tool_groups, scan_attachments)
         if not (
             extracted.inputs.get("texts")
