@@ -88,7 +88,7 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
     return generic_cost_per_token(
         model=model,
         usage=usage,
-        custom_llm_provider="fireworks_ai",
+        custom_llm_provider=model_info["litellm_provider"],
         model_info=model_info,
         current_time=current_time,
     )
