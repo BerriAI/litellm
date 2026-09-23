@@ -93,6 +93,72 @@ def _json_escaped_len(text: str) -> int:
     return len(json.dumps(text).encode("utf-8")) - 2  # strip the surrounding quotes
 
 
+def _collect_presidio_scan_targets(messages: list) -> list[tuple[str, tuple]]:
+    """Return every request-side string that must be scanned for PII, each paired with a
+    mapping describing where to write the redacted result back.
+
+    Covers plain string content, text items in list content, assistant tool-call
+    arguments, and the legacy ``function_call`` arguments. Arguments in history carry
+    the same PII as user text (e.g. an email the model passed to a tool) and otherwise
+    reach the provider in clear; this mirrors the response-side handling in
+    ``_process_response_for_pii``.
+    """
+    targets: list[tuple[str, tuple]] = []
+    for msg_idx, m in enumerate(messages):
+        content = m.get("content", None)
+        if isinstance(content, str):
+            targets.append((content, ("content_str", msg_idx)))
+        elif isinstance(content, list):
+            for content_idx, c in enumerate(content):
+                text_str = c.get("text", None)
+                if text_str is not None:
+                    targets.append((text_str, ("content_item", msg_idx, int(content_idx))))
+
+        tool_calls = m.get("tool_calls", None)
+        if isinstance(tool_calls, list):
+            for tc_idx, tc in enumerate(tool_calls):
+                if not isinstance(tc, dict):
+                    continue
+                function = tc.get("function", None)
+                if not isinstance(function, dict):
+                    continue
+                args = function.get("arguments", None)
+                if isinstance(args, str) and args:
+                    targets.append((args, ("tool_call_args", msg_idx, int(tc_idx))))
+
+        # Legacy function_call carries the same argument PII as tool_calls.
+        function_call = m.get("function_call", None)
+        if isinstance(function_call, dict):
+            args = function_call.get("arguments", None)
+            if isinstance(args, str) and args:
+                targets.append((args, ("function_call_args", msg_idx)))
+    return targets
+
+
+def _apply_presidio_scan_result(messages: list, mapping: tuple, redacted: str) -> None:
+    """Write a redacted string back to the field named by ``mapping``.
+
+    Indices are rebuilt with ``int(...)`` rather than ``cast`` since the mapping is
+    constructed locally in ``_collect_presidio_scan_targets`` from real ``int`` indices.
+    """
+    kind = mapping[0]
+    msg_idx = int(mapping[1])
+    if kind == "content_str":
+        messages[msg_idx]["content"] = redacted
+    elif kind == "content_item":
+        content = messages[msg_idx].get("content", None)
+        if isinstance(content, list):
+            content[int(mapping[2])]["text"] = redacted
+    elif kind == "tool_call_args":
+        tool_calls = messages[msg_idx].get("tool_calls", None)
+        if isinstance(tool_calls, list):
+            tool_calls[int(mapping[2])]["function"]["arguments"] = redacted
+    elif kind == "function_call_args":
+        function_call = messages[msg_idx].get("function_call", None)
+        if isinstance(function_call, dict):
+            function_call["arguments"] = redacted
+
+
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     user_api_key_cache = None
     ad_hoc_recognizers: list[str] | None = None
@@ -957,52 +1023,21 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             messages: Final = data.get("messages", None)
             if messages is None:
                 return data
-            tasks: Final = []
-            task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
-
-            for msg_idx, m in enumerate(messages):
-                content = m.get("content", None)
-                if content is None:
-                    continue
-                if isinstance(content, str):
-                    tasks.append(
-                        self.check_pii(
-                            text=content,
-                            output_parse_pii=self.output_parse_pii,
-                            presidio_config=presidio_config,
-                            request_data=data,
-                        )
-                    )
-                    task_mappings.append((msg_idx, None))  # None indicates string content
-                elif isinstance(content, list):
-                    for content_idx, c in enumerate(content):
-                        text_str = c.get("text", None)
-                        if text_str is None:
-                            continue
-                        tasks.append(
-                            self.check_pii(
-                                text=text_str,
-                                output_parse_pii=self.output_parse_pii,
-                                presidio_config=presidio_config,
-                                request_data=data,
-                            )
-                        )
-                        task_mappings.append((msg_idx, int(content_idx)))
+            targets: Final = _collect_presidio_scan_targets(messages)
+            tasks: Final = [
+                self.check_pii(
+                    text=text,
+                    output_parse_pii=self.output_parse_pii,
+                    presidio_config=presidio_config,
+                    request_data=data,
+                )
+                for text, _mapping in targets
+            ]
 
             responses: Final = await asyncio.gather(*tasks)
 
-            # Map responses back to the correct message and content item
-            for task_idx, r in enumerate(responses):
-                mapping = task_mappings[task_idx]
-                msg_idx = cast(int, mapping[0])
-                content_idx_optional = cast(int | None, mapping[1])
-                content = messages[msg_idx].get("content", None)
-                if content is None:
-                    continue
-                if isinstance(content, str) and content_idx_optional is None:
-                    messages[msg_idx]["content"] = r  # replace content with redacted string
-                elif isinstance(content, list) and content_idx_optional is not None:
-                    messages[msg_idx]["content"][content_idx_optional]["text"] = r
+            for (_text, mapping), r in zip(targets, responses):
+                _apply_presidio_scan_result(messages, mapping, r)
 
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", data["messages"])
             data["messages"] = messages

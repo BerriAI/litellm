@@ -175,6 +175,89 @@ async def test_multimodal_message_format_completion_call_type(presidio_guardrail
 
 
 @pytest.mark.asyncio
+async def test_pre_call_masks_pii_in_assistant_tool_call_arguments(presidio_guardrail, mock_user_api_key, mock_cache):
+    """PII inside an assistant tool-call's arguments (OpenAI history) must be masked before
+    the request reaches the provider. The pre-call hook previously scanned only text content
+    and left tool_calls[].function.arguments in clear."""
+    test_data = {
+        "messages": [
+            {"role": "user", "content": "look up my account"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "arguments": '{"email": "test@example.com", "phone": "555-123-4567"}',
+                        },
+                    }
+                ],
+            },
+        ],
+        "model": "gpt-4",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("test@example.com", "[EMAIL]").replace("555-123-4567", "[PHONE]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="completion",
+    )
+
+    args = result["messages"][1]["tool_calls"][0]["function"]["arguments"]
+    assert "[EMAIL]" in args
+    assert "[PHONE]" in args
+    assert "test@example.com" not in args
+    assert "555-123-4567" not in args
+
+
+@pytest.mark.asyncio
+async def test_pre_call_masks_pii_in_legacy_function_call_arguments(presidio_guardrail, mock_user_api_key, mock_cache):
+    """PII inside the legacy assistant function_call.arguments must also be masked on the
+    request path, matching the tool_calls handling (and the response-side handler)."""
+    test_data = {
+        "messages": [
+            {"role": "user", "content": "look up my account"},
+            {
+                "role": "assistant",
+                "content": None,
+                "function_call": {
+                    "name": "lookup",
+                    "arguments": '{"email": "test@example.com", "phone": "555-123-4567"}',
+                },
+            },
+        ],
+        "model": "gpt-4",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("test@example.com", "[EMAIL]").replace("555-123-4567", "[PHONE]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="completion",
+    )
+
+    args = result["messages"][1]["function_call"]["arguments"]
+    assert "[EMAIL]" in args
+    assert "[PHONE]" in args
+    assert "test@example.com" not in args
+    assert "555-123-4567" not in args
+
+
+@pytest.mark.asyncio
 async def test_multimodal_message_format_anthropic_messages_call_type(
     presidio_guardrail, mock_user_api_key, mock_cache
 ):
