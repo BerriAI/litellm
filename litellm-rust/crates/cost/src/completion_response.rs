@@ -21,6 +21,7 @@ use crate::realtime_cost::{
     partition_results_by_service_tier,
 };
 use crate::responses_usage::{ChatUsage, UsageError};
+use crate::speech_cost::count_characters;
 use crate::tool_call_cost_tracking::{DefaultToolRates, ResponseKind as ToolResponseKind};
 use crate::tool_cost_dispatch::BuiltInToolCostRequest;
 
@@ -53,6 +54,7 @@ pub struct CompletionResponseCostRequest<'a> {
     pub at: Timestamp,
     pub response_time_ms: Option<f64>,
     pub prompt_characters: Option<f64>,
+    pub speech_prompt: Option<&'a str>,
     pub completion_characters: Option<f64>,
     pub transcription_duration_seconds: Option<f64>,
     pub request_model: Option<&'a str>,
@@ -251,7 +253,11 @@ fn cost_call<'a>(
 ) -> Result<CostCall<'a>, CompletionResponseCostError> {
     match call_type {
         "speech" | "aspeech" => Ok(CostCall::Speech {
-            prompt_characters: request.prompt_characters,
+            prompt_characters: request.prompt_characters.or_else(|| {
+                request
+                    .speech_prompt
+                    .map(|prompt| count_characters(prompt) as f64)
+            }),
         }),
         "transcription" | "atranscription" => Ok(CostCall::Transcription {
             duration_seconds: duration(request),

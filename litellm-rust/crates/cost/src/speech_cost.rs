@@ -15,6 +15,14 @@ pub enum SpeechCostError {
     MissingInputCharacterRate,
 }
 
+pub fn count_characters(text: &str) -> usize {
+    text.chars()
+        .filter(|character| {
+            !character.is_whitespace() && !matches!(character, '\u{001c}'..='\u{001f}')
+        })
+        .count()
+}
+
 pub fn select_cost_metric_for_model(
     model_info: &Value,
 ) -> Result<SpeechCostMetric, SpeechCostError> {

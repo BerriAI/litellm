@@ -4,8 +4,9 @@ use jiff::Timestamp;
 use litellm_cost::catalog::{CatalogSpeechError, ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::responses_usage::ChatUsage;
 use litellm_cost::speech_cost::{
-    SpeechCostError, SpeechCostMetric, cost_per_second, generic_cost_per_character,
-    lyria_generation_cost, select_cost_metric_for_model, transcription_usage_has_token_details,
+    SpeechCostError, SpeechCostMetric, cost_per_second, count_characters,
+    generic_cost_per_character, lyria_generation_cost, select_cost_metric_for_model,
+    transcription_usage_has_token_details,
 };
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
@@ -23,6 +24,14 @@ fn request<'a>(model: &'a str, provider: &'a str, usage: &'a ChatUsage) -> Model
         at: "2026-09-22T12:00:00Z".parse::<Timestamp>().unwrap(),
         response_time_ms: None,
     }
+}
+
+#[rstest]
+#[case("hello world", 10)]
+#[case(" a\t雪\u{2003}b ", 3)]
+#[case("a\u{001c}b", 2)]
+fn count_characters_excludes_whitespace(#[case] prompt: &str, #[case] expected: usize) {
+    assert_eq!(count_characters(prompt), expected);
 }
 
 #[rstest]

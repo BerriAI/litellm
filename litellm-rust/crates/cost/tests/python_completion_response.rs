@@ -67,6 +67,7 @@ fn request<'a>(
         at: "2026-01-01T12:00Z".parse().unwrap(),
         response_time_ms: None,
         prompt_characters: None,
+        speech_prompt: None,
         completion_characters: None,
         transcription_duration_seconds: None,
         request_model: None,
@@ -214,6 +215,42 @@ fn completion_cost_counts_prompt_and_completion_without_response() {
     )
     .unwrap();
     assert!((result.cost.total - 0.11).abs() < 1e-12);
+}
+
+#[rstest]
+#[case(None, 10.0)]
+#[case(Some(3.0), 3.0)]
+fn speech_response_cost_counts_prompt_characters_when_not_supplied(
+    #[case] prompt_characters: Option<f64>,
+    #[case] billable_characters: f64,
+) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/speech".to_owned(),
+        json!({"input_cost_per_character": 0.01}),
+    )]));
+    let response = json!({});
+    let empty = json!({});
+    let base = request(
+        Some(&response),
+        Some("speech"),
+        Some("openai"),
+        &empty,
+        &empty,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                response_kind: Some(ResponseKind::Speech),
+                ..base.input
+            },
+            prompt_characters,
+            speech_prompt: Some("hello world"),
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.total - billable_characters * 0.01).abs() < 1e-12);
 }
 
 #[rstest]
