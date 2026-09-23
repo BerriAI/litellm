@@ -141,10 +141,20 @@ class GoogleAIStudioTokenCounter:
                 "generateContentRequest": {  # mutable-ok: httpx json body takes a plain dict
                     "model": f"models/{model}",
                     "contents": cleaned_contents,
-                    **(  # mutable-ok: httpx json body takes a plain dict
-                        {"systemInstruction": system_instruction} if system_instruction is not None else {}
+                    **(
+                        {  # mutable-ok: httpx json body takes a plain dict
+                            "systemInstruction": system_instruction,
+                        }
+                        if system_instruction is not None
+                        else {}  # mutable-ok: httpx json body takes a plain dict
                     ),
-                    **({"tools": tools} if tools is not None else {}),  # mutable-ok: httpx json body takes a plain dict
+                    **(
+                        {  # mutable-ok: httpx json body takes a plain dict
+                            "tools": tools,
+                        }
+                        if tools is not None
+                        else {}  # mutable-ok: httpx json body takes a plain dict
+                    ),
                 }
             }
         )
