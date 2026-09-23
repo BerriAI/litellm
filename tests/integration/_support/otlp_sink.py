@@ -274,7 +274,7 @@ def owned_sinks(directory: Path) -> Iterator[SpanSinks]:
     with ExitStack() as stack:
         processes: Final = tuple(
             subprocess.Popen(
-                [sys.executable, "-m", "integration._support.otlp_sink", "--port", str(port)],
+                [sys.executable, "-P", "-m", "integration._support.otlp_sink", "--port", str(port)],
                 cwd=root,
                 stdout=stack.enter_context((directory / f"otlp-sink-{port}.log").open("w")),
                 stderr=subprocess.STDOUT,
