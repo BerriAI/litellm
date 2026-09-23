@@ -50,7 +50,7 @@ def gateway(
             directory,
             {"LITELLM_OTEL_V2": "1", "ARIZE_HTTP_ENDPOINT": audit_sinks.arize},
             config=otel_audit_config(directory, {}),
-            num_workers=2,
+            workers=2,
         ) as candidate:
             yield candidate
 
@@ -303,7 +303,7 @@ def _candidate(
 ) -> Iterator[Gateway]:
     overrides: Final = {"LITELLM_OTEL_V2": "1", "ARIZE_HTTP_ENDPOINT": audit_sinks.arize, **dict(env)}
     with owned_proxy(
-        gateway, tmp_path, overrides, config=otel_audit_config(tmp_path, settings), num_workers=2
+        gateway, tmp_path, overrides, config=otel_audit_config(tmp_path, settings), workers=2
     ) as candidate:
         yield candidate
 
@@ -630,7 +630,7 @@ def test_guardrail_span_survives_exclude(gateway: Gateway, audit_sinks: SpanSink
     path: Final = tmp_path / "audit-guardrail.yaml"
     path.write_text(yaml.safe_dump(config))
     with owned_proxy(
-        gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=path, num_workers=2
+        gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=path, workers=2
     ) as candidate:
         with candidate.scenario() as scenario:
             model: Final = _audit_model(scenario, candidate.upstream_url)

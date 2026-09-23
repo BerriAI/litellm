@@ -7,13 +7,12 @@ import uuid
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Final
-from urllib.parse import urlparse
 
 import httpx
 import pytest
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.otlp_sink import Span, SpanSinks, configure_sink, recorded_spans, sink_pid, span_class
-from integration._support.process import owned_proxy
+from integration._support.process import owned_proxy, owned_proxy_process
 from pydantic import JsonValue
 
 AuditConfigWriter = Callable[[Path, Mapping[str, JsonValue]], Path]
@@ -33,7 +32,7 @@ def gateway(
             directory,
             {"LITELLM_OTEL_V2": "1", "ARIZE_HTTP_ENDPOINT": audit_sinks.arize},
             config=otel_audit_config(directory, {}),
-            num_workers=2,
+            workers=2,
         ) as candidate:
             yield candidate
 
@@ -157,7 +156,7 @@ def test_slow_tenant_sink_exports_each_span_once(gateway: Gateway, audit_sinks: 
 def test_proxy_restart_mid_burst_keeps_serving(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue], otel_audit_config: AuditConfigWriter, tmp_path: Path) -> None:
     path: Final = otel_audit_config(tmp_path, {})
     overrides: Final = {"LITELLM_OTEL_V2": "1", "ARIZE_HTTP_ENDPOINT": audit_sinks.arize}
-    with owned_proxy(gateway, tmp_path, overrides, config=path, num_workers=2) as candidate:
+    with owned_proxy(gateway, tmp_path, overrides, config=path, workers=2) as candidate:
         with candidate.scenario() as scenario:
             model: Final = scenario.model(model="openai/audit-chat", api_base=f"{candidate.upstream_url}/v1")
             team_id: Final = scenario.team()
@@ -177,7 +176,7 @@ def test_proxy_restart_mid_burst_keeps_serving(gateway: Gateway, audit_sinks: Sp
                 return any(span["attributes"].get("litellm.call_id") == first_call_id for span in spans)
 
             assert eventually(first_landed, bool, seconds=40), "pre-restart trace never reached the tenant sink"
-    with owned_proxy(gateway, tmp_path, overrides, config=path, num_workers=2) as candidate:
+    with owned_proxy(gateway, tmp_path, overrides, config=path, workers=2) as candidate:
         with candidate.scenario() as scenario:
             model: Final = scenario.model(model="openai/audit-chat", api_base=f"{candidate.upstream_url}/v1")
             team_id: Final = scenario.team()
@@ -200,29 +199,29 @@ def test_proxy_restart_mid_burst_keeps_serving(gateway: Gateway, audit_sinks: Sp
 
 
 @pytest.mark.covers("other.observability.otel.tenant_internal_spans.c5_worker_kill_survivor_serves")
-def test_killing_one_worker_leaves_serving(gateway: Gateway, langfuse_vars: dict[str, JsonValue]) -> None:
+def test_killing_one_worker_leaves_serving(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    langfuse_vars: dict[str, JsonValue],
+    otel_audit_config: AuditConfigWriter,
+    tmp_path: Path,
+) -> None:
     import psutil
 
-    port: Final = int(urlparse(str(gateway.client.base_url)).port or 0)
-    listeners: Final = {
-        connection.laddr.port: connection.pid
-        for connection in psutil.net_connections(kind="tcp")
-        if connection.status == "LISTEN" and connection.pid
-    }
-    owner: Final = listeners.get(port)
-    assert owner is not None, f"no process listening on {port}"
-    process: Final = psutil.Process(owner)
-    children: Final = process.children(recursive=True)
-    assert children, "leg proxy has no worker children to kill"
-    with gateway.scenario() as scenario:
-        model: Final = scenario.model(model="openai/audit-chat", api_base=f"{gateway.upstream_url}/v1")
-        team_id: Final = scenario.team()
-        callback: Final = gateway.request(
-            "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": langfuse_vars}
-        )
-        assert callback.status_code == 200, callback.text
-        key: Final = scenario.key(team_id=team_id)
-        victim: Final = children[-1]
-        victim.terminate()
-        responses: Final = _send_burst(gateway, key, model, 10)
-        assert all(response.status_code == 200 for response in responses), [r.status_code for r in responses]
+    overrides: Final = {"LITELLM_OTEL_V2": "1", "ARIZE_HTTP_ENDPOINT": audit_sinks.arize}
+    with owned_proxy_process(gateway, tmp_path, overrides, config=otel_audit_config(tmp_path, {}), workers=2) as owned:
+        candidate: Final = owned.gateway
+        children: Final = psutil.Process(owned.process.pid).children(recursive=True)
+        assert children, "audit proxy has no worker children to kill"
+        with candidate.scenario() as scenario:
+            model: Final = scenario.model(model="openai/audit-chat", api_base=f"{candidate.upstream_url}/v1")
+            team_id: Final = scenario.team()
+            callback: Final = candidate.request(
+                "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": langfuse_vars}
+            )
+            assert callback.status_code == 200, callback.text
+            key: Final = scenario.key(team_id=team_id)
+            victim: Final = children[-1]
+            victim.terminate()
+            responses: Final = _send_burst(candidate, key, model, 10)
+            assert all(response.status_code == 200 for response in responses), [r.status_code for r in responses]
