@@ -79,13 +79,10 @@ def _langfuse_rig(
 
 
 def _observation_span(collector: Wire, response_id: str) -> dict[str, object]:
-    batches: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, so accumulating needs a mutable list
-
     def spans() -> tuple[dict[str, object], ...]:
-        batches.extend(collector.drain())
         return tuple(
             attributes
-            for batch in batches
+            for batch in collector.drain()
             for attributes in _span_attributes(batch.body)
             if attributes.get("llm.response.id") == response_id
         )
