@@ -153,11 +153,14 @@ class Collector:
     rejection: threading.Event
     slow: threading.Event
     accepted: Sequence[Request]
+    guard: threading.Lock
 
     def attributes(self) -> tuple[dict[str, dict[str, JsonValue]], ...]:
+        with self.guard:
+            batches: Final = tuple(self.accepted)
         return tuple(
             {attribute["key"]: attribute["value"] for attribute in span.get("attributes", ())}
-            for batch in tuple(self.accepted)
+            for batch in batches
             for resource in json.loads(batch.body)["resourceSpans"]
             for scope in resource["scopeSpans"]
             for span in scope["spans"]
@@ -191,6 +194,7 @@ def collector() -> Iterator[Collector]:
     rejection: Final = threading.Event()
     slow: Final = threading.Event()
     accepted: Final[deque[Request]] = deque()  # mutable-ok: sink thread appends each accepted batch
+    guard: Final = threading.Lock()
 
     def sink(request: Request) -> Reply:
         if slow.is_set():
@@ -199,11 +203,12 @@ def collector() -> Iterator[Collector]:
             return Reply(status=503, body=b'{"error":"sink down"}')
         if rejection.is_set():
             return Reply(status=403, body=b'{"error":"forbidden"}')
-        accepted.append(request)
+        with guard:
+            accepted.append(request)
         return Reply()
 
     with wire_server(sink) as wire:
-        yield Collector(wire, outage, rejection, slow, accepted)
+        yield Collector(wire, outage, rejection, slow, accepted, guard)
 
 
 @pytest.fixture(scope="session")
