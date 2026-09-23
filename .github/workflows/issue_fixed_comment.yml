@@ -68,6 +68,7 @@ jobs:
           bun-version: "1.4.0"
 
       - name: Name the release that carries the fix and close the pull requests it supersedes
+        shell: bash
         run: bun run scripts/comment-fixed-issue.ts | tee -a "${GITHUB_STEP_SUMMARY}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

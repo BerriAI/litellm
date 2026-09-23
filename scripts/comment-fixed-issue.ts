@@ -127,6 +127,7 @@ const MAX_LINKED_ISSUES = 10;
 const SWEEP_PAGE_SIZE = 100;
 const CLOSE_PAUSE_MS = 1000;
 const WORKFLOW_LOGIN = "github-actions[bot]";
+const OPEN_AGAIN = "the issue is open again";
 const isReleaseLine = (base: string): boolean => base.startsWith("release/") || base.includes("stable");
 
 const CLOSURE_FRAGMENT = `fragment Closure on Issue {
@@ -182,7 +183,7 @@ const skip = (reason: string): { readonly kind: "skip"; readonly reason: string 
 
 export function closerOf(issue: IssueClosure, repo: string, defaultBranch: string): Closer {
   if (issue.state !== "CLOSED") {
-    return skip("the issue is open again");
+    return skip(OPEN_AGAIN);
   }
   const closer = issue.timelineItems.nodes[0]?.closer ?? null;
   if (closer === null) {
@@ -438,11 +439,11 @@ export async function handleFixedIssue(
   if (issue === null) {
     return { comment: skip("not an issue in this repository"), pullRequests: [] };
   }
-  const closer = closerOf(issue, config.repo, config.defaultBranch);
-  if (closer.kind === "skip") {
-    return { comment: closer, pullRequests: [] };
+  if (issue.state !== "CLOSED") {
+    return { comment: skip(OPEN_AGAIN), pullRequests: [] };
   }
-  const comment = await commentFixedIssue(api, config, issueNumber, closer);
+  const closer = closerOf(issue, config.repo, config.defaultBranch);
+  const comment = closer.kind === "skip" ? closer : await commentFixedIssue(api, config, issueNumber, closer);
   const nextPage: NextPage = async (after) => {
     const more = await closedIssue(api, config, issueNumber, after);
     if (more === null) {

@@ -513,11 +513,39 @@ describe("handleFixedIssue", () => {
     expect(writes).toHaveLength(1);
   });
 
-  test("a hand-closed issue never reaches the release lookup, the linked pull requests, or the API writes", async () => {
-    const { api, writes } = fakeApi({ issue: closedBy(null, "CLOSED", [openPr(41760)]) });
+  test("a hand-closed issue gets no comment and leaves its linked pull requests open with the reason on each", async () => {
+    const byHand = openPr(41760, { closingIssuesReferences: links(linkedIssue(ISSUE, null)) });
+    const { api, writes } = fakeApi({ issue: closedBy(null, "CLOSED", [byHand]) });
     const outcome = await handleFixedIssue(api, config, ISSUE, noPause);
-    expect(outcome.comment.kind).toBe("skip");
-    expect(outcome.pullRequests).toEqual([]);
+    expect(outcome.comment).toEqual({ kind: "skip", reason: "closed by hand, not by a pull request" });
+    expect(outcome.pullRequests).toEqual([{ kind: "skip", number: 41760, reason: `#${ISSUE} was closed by hand` }]);
+    expect(writes).toEqual([]);
+  });
+
+  test("an issue closed by a commit on the default branch gets no comment but still closes its linked pull requests", async () => {
+    const byCommit = openPr(41760, { closingIssuesReferences: links(linkedIssue(ISSUE, commitCloser)) });
+    const { api, writes } = fakeApi({ issue: closedBy(commitCloser, "CLOSED", [byCommit]) });
+    const { comment, pullRequests } = await handleFixedIssue(api, config, ISSUE, noPause);
+    expect(comment).toEqual({ kind: "skip", reason: "closed by commit 68c4c82ac9, not by a pull request" });
+    expect(pullRequests).toEqual([{ kind: "closed", number: 41760, body: supersededBody([commitFix()], "main") }]);
+    expect(writes).toEqual([expect.stringContaining("/issues/41760/comments"), 'PATCH /repos/BerriAI/litellm/pulls/41760 {"state":"closed"}']);
+    expect(writes[0]).toContain("#41750 was fixed by commit 68c4c82ac9 on main");
+  });
+
+  test("an issue closed from the retired development branch gets no comment but still closes its linked pull requests once the fix is on the default branch", async () => {
+    const stagingPr = { ...mergedPr, baseRefName: "litellm_internal_staging" };
+    const staging = openPr(41760, { closingIssuesReferences: links(linkedIssue(ISSUE, stagingPr)) });
+    const { api, writes } = fakeApi({ issue: closedBy(stagingPr, "CLOSED", [staging]) });
+    const { comment, pullRequests } = await handleFixedIssue(api, config, ISSUE, noPause);
+    expect(comment).toEqual({ kind: "skip", reason: "#41767 merged into litellm_internal_staging, not main" });
+    expect(pullRequests).toEqual([{ kind: "closed", number: 41760, body: oneFixBody }]);
+    expect(writes.map((write) => write.split(" ")[1])).toEqual(["/repos/BerriAI/litellm/issues/41760/comments", "/repos/BerriAI/litellm/pulls/41760"]);
+  });
+
+  test("an issue that is open again gets no comment and its linked pull requests are neither read nor touched", async () => {
+    const { api, writes } = fakeApi({ issue: closedBy(mergedPr, "OPEN", [openPr(41760)]) });
+    const outcome = await handleFixedIssue(api, config, ISSUE, noPause);
+    expect(outcome).toEqual({ comment: { kind: "skip", reason: "the issue is open again" }, pullRequests: [] });
     expect(writes).toEqual([]);
   });
 
