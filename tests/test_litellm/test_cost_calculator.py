@@ -4512,7 +4512,7 @@ def test_cost_per_token_bedrock_nemotron_super_3_uses_eu_west_2_entry_not_us_rat
 
 def test_completion_cost_response_service_tier_beats_requested(_local_model_cost_map):
     """The tier the provider reports serving is what is billed, so it beats the requested tier."""
-    model = "databricks/offline-service-tier-precedence"
+    model: Final = "databricks/offline-service-tier-precedence"
     litellm.register_model(
         {
             model: {
@@ -4525,14 +4525,14 @@ def test_completion_cost_response_service_tier_beats_requested(_local_model_cost
             },
         },
     )
-    response = ModelResponse(
+    response: Final = ModelResponse(
         usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
         model=model,
     )
     response.service_tier = "default"
 
-    standard = completion_cost(completion_response=response, model=model, custom_llm_provider="databricks")
-    overridden = completion_cost(
+    standard: Final = completion_cost(completion_response=response, model=model, custom_llm_provider="databricks")
+    overridden: Final = completion_cost(
         completion_response=response,
         model=model,
         custom_llm_provider="databricks",
@@ -4543,5 +4543,5 @@ def test_completion_cost_response_service_tier_beats_requested(_local_model_cost
     assert overridden == pytest.approx(standard)
 
     response.service_tier = "priority"
-    priority = completion_cost(completion_response=response, model=model, custom_llm_provider="databricks")
+    priority: Final = completion_cost(completion_response=response, model=model, custom_llm_provider="databricks")
     assert priority == pytest.approx(standard * 2)

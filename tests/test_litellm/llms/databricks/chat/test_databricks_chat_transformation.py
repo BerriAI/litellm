@@ -85,7 +85,7 @@ def test_completion_merges_system_messages_when_one_has_empty_content(respx_mock
 
 
 def test_get_optional_params_passes_service_tier_through() -> None:
-    optional_params = litellm.utils.get_optional_params(
+    optional_params: Final = litellm.utils.get_optional_params(
         model="databricks-claude-opus-5",
         custom_llm_provider="databricks",
         service_tier="priority",
@@ -96,8 +96,8 @@ def test_get_optional_params_passes_service_tier_through() -> None:
 
 
 def test_chunk_parser_carries_service_tier() -> None:
-    iterator = DatabricksChatResponseIterator(None, sync_stream=True)
-    chunk = {
+    iterator: Final = DatabricksChatResponseIterator(None, sync_stream=True)
+    chunk: Final = {
         "id": "1",
         "object": "chat.completion.chunk",
         "created": 0,
@@ -107,14 +107,14 @@ def test_chunk_parser_carries_service_tier() -> None:
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
 
-    parsed = iterator.chunk_parser(chunk)
+    parsed: Final = iterator.chunk_parser(chunk)
 
     assert parsed.service_tier == "priority"
 
 
 def test_transform_response_carries_service_tier() -> None:
-    config = DatabricksConfig()
-    raw_response = MagicMock()
+    config: Final = DatabricksConfig()
+    raw_response: Final = MagicMock()
     raw_response.json.return_value = {
         "id": "chatcmpl-1",
         "object": "chat.completion",
@@ -131,7 +131,7 @@ def test_transform_response_carries_service_tier() -> None:
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
 
-    result = config.transform_response(
+    result: Final = config.transform_response(
         model="databricks/dbrx",
         raw_response=raw_response,
         model_response=litellm.ModelResponse(),

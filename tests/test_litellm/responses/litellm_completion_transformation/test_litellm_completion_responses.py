@@ -5175,7 +5175,7 @@ async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool
 
 
 def test_transform_request_reads_service_tier_from_responses_api_request() -> None:
-    result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
         model="databricks/offline-tier-test",
         input="hello",
         responses_api_request={"service_tier": "priority"},

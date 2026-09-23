@@ -1817,7 +1817,7 @@ def test_stream_chunk_builder_carries_terminal_chunk_service_tier() -> None:
         ),
     ]
 
-    response = stream_chunk_builder(chunks)
+    response: Final = stream_chunk_builder(chunks)
 
     assert response is not None
     assert getattr(response, "service_tier", None) == "default"
