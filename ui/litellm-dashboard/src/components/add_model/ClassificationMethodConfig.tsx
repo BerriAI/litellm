@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import React from "react";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
+import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
   ClassifierFallback,
@@ -306,6 +307,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               How long the classifier call has before it fails and the fallback below takes over.
             </span>
           </div>
+          <ClassifierCircuitBreakerConfig
+            value={value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS }}
+            onChange={(classifier_llm_config) => onChange({ ...value, classifier_llm_config })}
+          />
           <div>
             <div className="flex items-center gap-2 mb-1">
               <strong className="font-semibold">Classification Rubric</strong>

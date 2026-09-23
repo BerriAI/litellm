@@ -34,12 +34,26 @@ import {
 export const normalizeClassifierLlmConfig = ({
   model,
   timeout_ms,
+  circuit_breaker_enabled,
+  circuit_breaker_cooldown_seconds,
   classification_rubric,
   system_prompt,
 }: ClassifierLLMConfig): ClassifierLLMConfig =>
   system_prompt?.trim()
-    ? { model, timeout_ms, system_prompt }
-    : { model, timeout_ms, ...(classification_rubric && { classification_rubric }) };
+    ? {
+        model,
+        timeout_ms,
+        ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
+        ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
+        system_prompt,
+      }
+    : {
+        model,
+        timeout_ms,
+        ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
+        ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
+        ...(classification_rubric && { classification_rubric }),
+      };
 
 interface ScorerKnobInputs {
   classifierType: ClassifierType;
@@ -210,6 +224,123 @@ export const getSemanticConfigError = ({
   if (keywordTierRules.length === 0) return "Add at least one keyword tier rule to use semantic keyword matching";
   return null;
 };
+
+export const customTierWireFields = (
+  customTierSet: CustomTierSet,
+  classifierLlmConfig: ClassifierLLMConfig | undefined,
+  planModeMinTierId: string | undefined,
+  classificationPrompt: string | undefined,
+): Partial<ComplexityRouterConfigPayload> => {
+  const rows = customTierSet.tiers;
+  const fallback = tierRowById(rows, customTierSet.fallback_tier_id);
+  const floor = tierRowById(rows, planModeMinTierId);
+  return {
+    tiers: Object.fromEntries(rows.map((row) => [activeTierName(row), row.models])),
+    tier_definitions: tierDefinitionsFromRows(rows),
+    ...(fallback && { fallback_tier: activeTierName(fallback) }),
+    classifier_type: "llm",
+    // Rebuilt from the two fields an edited tier set allows. The backend rejects system_prompt and
+    // classification_rubric beside tier_definitions, and both live inside this object rather than at
+    // the top level the omit list covers. The opening instructions ride classification_prompt below.
+    ...(classifierLlmConfig && {
+      classifier_llm_config: {
+        model: classifierLlmConfig.model,
+        timeout_ms: classifierLlmConfig.timeout_ms,
+        ...(classifierLlmConfig.circuit_breaker_enabled !== undefined && {
+          circuit_breaker_enabled: classifierLlmConfig.circuit_breaker_enabled,
+        }),
+        ...(classifierLlmConfig.circuit_breaker_cooldown_seconds !== undefined && {
+          circuit_breaker_cooldown_seconds: classifierLlmConfig.circuit_breaker_cooldown_seconds,
+        }),
+      },
+    }),
+    session_affinity: false,
+    ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
+    ...(floor && { plan_mode_min_tier: activeTierName(floor) }),
+  };
+};
+
+// plan_mode_min_tier rides the strip list because the base payload carries it as a row id;
+// customTierWireFields re-emits it as the row's name, and an unresolvable floor stays off.
+const CUSTOM_TIER_STRIPPED_KEYS: readonly string[] = [...CUSTOM_TIER_OMITTED_KEYS, "plan_mode_min_tier"];
+
+export const hydrateCustomTierSet = (parsedConfig: {
+  tier_definitions?: unknown;
+  fallback_tier?: unknown;
+  tiers?: unknown;
+}): CustomTierSet | undefined => {
+  if (!Array.isArray(parsedConfig.tier_definitions) || parsedConfig.tier_definitions.length === 0) return undefined;
+  const storedTiers =
+    typeof parsedConfig.tiers === "object" && parsedConfig.tiers !== null && !Array.isArray(parsedConfig.tiers)
+      ? Object.entries(parsedConfig.tiers as Record<string, unknown>)
+      : [];
+  const rows = parsedConfig.tier_definitions.flatMap((entry, index): TierRow[] => {
+    if (typeof entry !== "object" || entry === null) return [];
+    const { name, description } = entry as { name?: unknown; description?: unknown };
+    if (typeof name !== "string" || !name.trim()) return [];
+    return [
+      {
+        id: TIER_KEYS.find((tier) => sameTierIdentity(tier, name)) ?? `stored-${index}`,
+        name: name.trim(),
+        definition: typeof description === "string" ? description.trim() : "",
+        models: normalizeTierModels(storedTiers.find(([tier]) => sameTierIdentity(tier, name))?.[1]),
+      },
+    ];
+  });
+  if (rows.length === 0) return undefined;
+  const storedFallback = typeof parsedConfig.fallback_tier === "string" ? parsedConfig.fallback_tier : "";
+  return { tiers: rows, fallback_tier_id: tierRowByName(rows, storedFallback)?.id ?? "" };
+};
+
+// Ids are session-ephemeral, so a stored floor hydrates by name; unresolvable means off, the same
+// rule the editor and the wire apply.
+export const hydratePlanModeMinTier = (
+  stored: unknown,
+  customTierSet: CustomTierSet | undefined,
+): string | undefined => {
+  if (typeof stored !== "string" || !stored.trim()) return undefined;
+  if (!customTierSet) return stored;
+  return tierRowByName(customTierSet.tiers, stored)?.id;
+};
+
+const classifierWireFields = (
+  effectiveType: ClassifierType,
+  {
+    classifierLlmConfig,
+    classifierFallback,
+    heuristicFirstMaxTier,
+    classifierContextWindowSize,
+    classifierContextBudgetChars,
+    classifierContextIncludeAssistantTurns,
+  }: Pick<
+    BuildComplexityRouterConfigParams,
+    | "classifierLlmConfig"
+    | "classifierFallback"
+    | "heuristicFirstMaxTier"
+    | "classifierContextWindowSize"
+    | "classifierContextBudgetChars"
+    | "classifierContextIncludeAssistantTurns"
+  >,
+): Partial<ComplexityRouterConfigPayload> => ({
+  ...(usesLlmClassifier(effectiveType) &&
+    classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
+  ...(usesLlmClassifier(effectiveType) &&
+    classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
+  ...(effectiveType === "heuristic_first" &&
+    heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
+  ...(usesLlmClassifier(effectiveType) &&
+    classifierContextWindowSize !== undefined && {
+      classifier_context_window_size: classifierContextWindowSize,
+    }),
+  ...(usesLlmClassifier(effectiveType) &&
+    classifierContextBudgetChars !== undefined && {
+      classifier_context_budget_chars: classifierContextBudgetChars,
+    }),
+  ...(usesLlmClassifier(effectiveType) &&
+    classifierContextIncludeAssistantTurns !== undefined && {
+      classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
+    }),
+});
 
 export const buildComplexityRouterConfig = ({
   tiers,

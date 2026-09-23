@@ -26,6 +26,8 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     DimensionScore,
     KeywordOverride,
     _built_in_prompt,
+    _ClassifierCircuitBreaker,
+    _is_classifier_timeout,
     _matched_plan_mode_sentinel,
     classification_system_prompt,
 )
@@ -1534,6 +1536,13 @@ def llm_complexity_router(mock_router_instance, llm_classifier_config):
 class TestLLMClassifierConfig:
     """Test config validation for the LLM classifier option."""
 
+    def test_classifier_circuit_breaker_defaults_on_and_requires_positive_cooldown(self):
+        config = ClassifierLLMConfig(model="haiku-classifier")
+        assert config.circuit_breaker_enabled is True
+        assert config.circuit_breaker_cooldown_seconds == 30.0
+        with pytest.raises(ValidationError):
+            ClassifierLLMConfig(model="haiku-classifier", circuit_breaker_cooldown_seconds=0)
+
     def test_llm_classifier_type_requires_config(self):
         """classifier_type='llm' without classifier_llm_config must raise."""
         with pytest.raises(ValidationError):
@@ -1757,6 +1766,7 @@ class TestLLMClassifier:
             complexity_router_config=llm_classifier_config,
         )
         outcome = await router.aclassify("hi")
+        next_outcome = await router.aclassify("hi again")
         assert outcome.cause == "llm_classifier"
         assert outcome.classifier_cost == pytest.approx(1.35e-05)
 
@@ -2095,6 +2105,8 @@ class TestLLMClassifier:
         outcome = await router.aclassify("Hello!")
 
         assert outcome.cause == "heuristic_scorer"
+        assert next_outcome.cause == "heuristic_scorer"
+        assert "classifier-circuit-open" in next_outcome.signals
         assert outcome.tier == ComplexityTier.SIMPLE
 
     @pytest.mark.asyncio

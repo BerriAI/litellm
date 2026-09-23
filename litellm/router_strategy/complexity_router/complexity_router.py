@@ -18,10 +18,67 @@ from __future__ import annotations
 import asyncio
 import random
 import re
-from collections.abc import Iterator, Mapping, Sequence
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from itertools import accumulate, islice
+from threading import Lock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
+
+class _ClassifierCircuitBreaker:
+    """Process-local timeout breaker for one complexity-router classifier.
+
+    The router instance serves every session assigned to that auto-router deployment, so the
+    breaker prevents one unhealthy classifier from charging the same timeout to each session.
+    Exactly one request becomes the recovery probe after the cooldown; the lock makes that state
+    transition atomic even when several request tasks arrive together.
+    """
+
+    CLOSED: Final = "closed"
+    OPEN: Final = "open"
+    HALF_OPEN: Final = "half_open"
+
+    def __init__(self, cooldown_seconds: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self._cooldown_seconds = cooldown_seconds
+        self._clock = clock
+        self._state = self.CLOSED
+        self._opened_at: float | None = None
+        self._lock = Lock()
+
+    def allow_request(self) -> bool:
+        """Allow ordinary calls while closed and exactly one probe after cooldown."""
+        with self._lock:
+            if self._state == self.CLOSED:
+                return True
+            if self._state == self.HALF_OPEN:
+                return False
+            opened_at: Final = self._opened_at
+            if opened_at is not None and self._clock() - opened_at >= self._cooldown_seconds:
+                self._state = self.HALF_OPEN
+                return True
+            return False
+
+    def record_success(self) -> None:
+        with self._lock:
+            self._state = self.CLOSED
+            self._opened_at = None
+
+    def record_failure(self, *, is_timeout: bool) -> None:
+        """Open on a normal timeout, or reopen when the single recovery probe fails."""
+        with self._lock:
+            if not is_timeout and self._state != self.HALF_OPEN:
+                return
+            self._state = self.OPEN
+            self._opened_at = self._clock()
+
+
+def _is_classifier_timeout(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    from litellm.exceptions import Timeout as LiteLLMTimeout
+
+    return isinstance(exc, LiteLLMTimeout)
+
 
 from pydantic import BaseModel, create_model
 
@@ -816,6 +873,15 @@ class ComplexityRouter(CustomLogger):
             if llm_classifier_configured
             else None
         )
+        self._classifier_circuit_breaker: _ClassifierCircuitBreaker | None = (
+            _ClassifierCircuitBreaker(self.config.classifier_llm_config.circuit_breaker_cooldown_seconds)
+            if (
+                llm_classifier_configured
+                and self.config.classifier_llm_config is not None
+                and self.config.classifier_llm_config.circuit_breaker_enabled
+            )
+            else None
+        )
 
         verbose_router_logger.debug("ComplexityRouter initialized for %s with tiers: %s", model_name, self.config.tiers)
 
@@ -855,6 +921,15 @@ class ComplexityRouter(CustomLogger):
         order, so every defined tier's models are candidates and resolve_baseline's
         cost ranking picks the counterfactual from the whole set.
         """
+        breaker: Final = self._classifier_circuit_breaker
+        if breaker is not None and not breaker.allow_request():
+            return self._classifier_failure_outcome(
+                "LLM classifier circuit is open",
+                prompt,
+                system_prompt,
+                scored,
+                signal="classifier-circuit-open",
+            )
         if self.config.has_custom_tiers:
             return tuple(dict.fromkeys(model for models in self._tier_pools().values() for model in models))
         for tier in reversed(TIER_SEVERITY_ORDER):
@@ -1196,6 +1271,8 @@ class ComplexityRouter(CustomLogger):
 
         try:
             tier, classifier_cost = await self._classify_with_llm(prompt, system_prompt, request_kwargs, messages)
+            if breaker is not None:
+                breaker.record_success()
             return ClassificationOutcome(
                 tier=tier,
                 score=None,
@@ -1204,27 +1281,45 @@ class ComplexityRouter(CustomLogger):
                 classifier_cost=classifier_cost,
             )
         except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the configured fallback path
-            return self._classifier_failure_outcome(f"LLM classifier failed ({e})", prompt, system_prompt)
+            if breaker is not None:
+                breaker.record_failure(is_timeout=_is_classifier_timeout(e))
+            return self._classifier_failure_outcome(f"LLM classifier failed ({e})", prompt, system_prompt, scored)
 
-    def _classifier_failure_outcome(self, reason: str, prompt: str, system_prompt: str | None) -> ClassificationOutcome:
+    def _classifier_failure_outcome(
+        self,
+        reason: str,
+        prompt: str,
+        system_prompt: str | None,
+        scored: ClassificationOutcome | None = None,
+        signal: str | None = None,
+    ) -> ClassificationOutcome:
         """The outcome when the LLM classifier or classifier plugin produced no usable tier:
         fallback_tier on a custom tier set, classifier_fallback otherwise."""
         fallback_tier: Final = self.config.fallback_tier
         if fallback_tier is not None:
             verbose_router_logger.warning("ComplexityRouter: %s, routing to fallback_tier %s", reason, fallback_tier)
-            return ClassificationOutcome(
+            outcome: Final = ClassificationOutcome(
                 tier=fallback_tier,
                 score=None,
                 signals=(f"classifier-fallback:{fallback_tier}",),
                 cause="classifier_fallback",
             )
+            return outcome if signal is None else outcome._replace(signals=(*outcome.signals, signal))
         verbose_router_logger.warning(
             "ComplexityRouter: %s, falling back to %s", reason, self.config.classifier_fallback
         )
         if self.config.classifier_fallback == "default_model":
-            return self._default_model_fallback_outcome()
+            outcome = self._default_model_fallback_outcome()
+            return outcome if signal is None else outcome._replace(signals=(*outcome.signals, signal))
+        if scored is not None:
+            return scored if signal is None else scored._replace(signals=(*scored.signals, signal))
         tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-        return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        return ClassificationOutcome(
+            tier=tier,
+            score=score,
+            signals=signals if signal is None else (*signals, signal),
+            cause=cause,
+        )
 
     async def _classify_with_plugin(
         self,
