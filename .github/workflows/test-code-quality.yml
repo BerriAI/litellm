@@ -146,6 +146,9 @@ jobs:
       - name: check_migrations_no_data_rewrites
         run: uv run --no-sync python ./tests/code_coverage_tests/check_migrations_no_data_rewrites.py
 
+      - name: check_unbounded_in_lists (warning only)
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_unbounded_in_lists.py
+
       - name: memory_test
         run: uv run --no-sync python ./tests/code_coverage_tests/memory_test.py
 
