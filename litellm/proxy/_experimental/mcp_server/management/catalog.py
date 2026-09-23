@@ -309,6 +309,8 @@ def _build_tool(
             required.append("path")
     if query_section is not None:
         properties["query"] = query_section
+        if query_section.get("required"):
+            required.append("query")
     if body_section is not None:
         properties["body"] = body_section
         body_map: Final = cast(  # cast-ok: spec JSON object

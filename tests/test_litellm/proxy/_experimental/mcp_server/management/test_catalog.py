@@ -242,3 +242,22 @@ def test_data_plane_execution_is_excluded_from_management(path):
     catalog = build_catalog(spec)
     assert not catalog.tools
     assert f"POST {path}" in catalog.exclusions
+
+
+@pytest.mark.parametrize("required", [True, False], ids=["required-query", "optional-query"])
+def test_query_section_requirement_matches_its_parameters(required):
+    spec = _spec(
+        {
+            "/admin/lookup": {
+                "get": _operation(
+                    operationId="lookup",
+                    parameters=[
+                        {"name": "resource_id", "in": "query", "required": required, "schema": {"type": "string"}}
+                    ],
+                )
+            }
+        }
+    )
+    schema = build_catalog(spec).tools["lookup"].mcp_tool.input_schema
+    assert ("query" in schema["required"]) is required
+    assert schema["properties"]["query"]["required"] == (["resource_id"] if required else [])
