@@ -32,7 +32,7 @@ _MODEL_READ_METHODS: Final = frozenset(
 )
 
 # Top-level Prisma client methods that read from the database.
-_TOP_LEVEL_READ_METHODS: Final = frozenset({"query_first", "query_raw"})
+_TOP_LEVEL_READ_METHODS: Final = frozenset({"query_first"})
 
 
 class _RoutedActions:
