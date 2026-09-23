@@ -1969,6 +1969,9 @@
     "tests/integration/providers/test_responses_bridge_incomplete.py::test_chat_over_responses_deployment_returns_length_when_output_tokens_run_out": [
       "other.provider_wire.responses_bridge.max_output_tokens_incomplete_maps_to_length"
     ],
+    "tests/integration/providers/test_responses_bridge_incomplete.py::test_messages_over_responses_deployment_with_max_tokens_1_is_clamped_to_16_instead_of_400": [
+      "other.provider_wire.responses_bridge.sub_minimum_max_tokens_clamped_to_provider_floor"
+    ],
     "tests/integration/providers/test_tencent_chat_wire.py::test_tencent_thinking_is_sent_in_provider_body_instead_of_failing_the_request[reasoning_effort_none]": [
       "other.provider_wire.tencent.thinking_reaches_provider_in_request_body"
     ],
