@@ -471,6 +471,17 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     setIsTestModalVisible(true);
   };
 
+  const jevConnectionTestParams =
+    effectiveClassifierType(complexityRouterConfig) === "jev"
+      ? {
+          prompt: JEV_CONNECTION_TEST_PROMPT,
+          config: buildComplexityRouterConfig(complexityRouterConfigParams),
+          defaultModel: resolveComplexityDefaultModel(complexityRouterConfig, complexityRouterConfig.default_model),
+          routerName: watchedName,
+          teamId: requiresTeamScope ? watchedTeamId ?? undefined : undefined,
+        }
+      : undefined;
+
   return (
     <TooltipProvider>
       <Card>
@@ -713,20 +724,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         testId={connectionTestId}
         accessToken={accessToken}
         targets={testTargets}
-        jevRequest={
-          effectiveClassifierType(complexityRouterConfig) === "jev"
-            ? buildAutoRouterRoutingTestRequest({
-                prompt: JEV_CONNECTION_TEST_PROMPT,
-                config: buildComplexityRouterConfig(complexityRouterConfigParams),
-                defaultModel: resolveComplexityDefaultModel(
-                  complexityRouterConfig,
-                  complexityRouterConfig.default_model,
-                ),
-                routerName: watchedName,
-                teamId: requiresTeamScope ? watchedTeamId ?? undefined : undefined,
-              })
-            : undefined
-        }
+        jevRequest={jevConnectionTestParams && buildAutoRouterRoutingTestRequest(jevConnectionTestParams)}
         onTestComplete={() => setIsTestingConnection(false)}
       />
     </TooltipProvider>

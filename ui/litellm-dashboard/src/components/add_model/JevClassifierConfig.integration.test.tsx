@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
-import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
 import JevEditor from "./JevClassifierConfig";
 import { type ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import {
@@ -50,7 +49,7 @@ const initial: ComplexityRouterConfigValue = {
 function Form() {
   const [value, setValue] = useState(initial);
   return (
-    <AutoRouterClassifierTabs value={value} onChange={setValue}>
+    <>
       <ClassificationMethodConfig
         value={value}
         onChange={setValue}
@@ -90,7 +89,7 @@ function Form() {
       >
         Probe current config
       </button>
-    </AutoRouterClassifierTabs>
+    </>
   );
 }
 
@@ -103,7 +102,6 @@ describe("JEV classifier editor", () => {
     expect(screen.getByText("Classifier Prompt")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Use images for classification" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("radio", { name: /JEV Classifier/ }));
-    expect(screen.getByRole("tab", { name: "Complexity" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByLabelText("JEV Model")).toHaveValue("jev-latest");
     expect(screen.getByLabelText("JEV Instructions")).toBeDisabled();
     expect(screen.queryByLabelText("Classifier Model")).not.toBeInTheDocument();

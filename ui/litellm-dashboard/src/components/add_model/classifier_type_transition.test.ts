@@ -66,39 +66,6 @@ describe("transitionClassifierType", () => {
     expect(result).toMatchObject(expectedSettings);
   });
 
-  it.each(["capability", "llm_v2"] as const)("requires explicit policy input for a new %s classifier", (target) => {
-    const result = transitionClassifierType(standard, target);
-    expect(result.classifier_llm_config).toEqual({ model: "judge", timeout_ms: 20000 });
-    expect(result.classifier_fallback).toBeUndefined();
-    if (target === "capability") {
-      expect(result.capability_classifier_config?.base_threshold).toBeNaN();
-    } else {
-      expect(result.llm_v2_config).toMatchObject({ efficient_profile: "", capable_profile: "", harness: "" });
-      expect(result.llm_v2_config?.max_quality_gap).toBeNaN();
-    }
-    expect(standard.tiers.MEDIUM).toEqual(["middle"]);
-    expect(standard.classifier_llm_config?.classification_rubric).toBe("business");
-  });
-
-  it.each([
-    ["capability", "llm"],
-    ["capability", "heuristic_first"],
-    ["capability", "hybrid"],
-    ["llm_v2", "llm"],
-    ["llm_v2", "heuristic_first"],
-    ["llm_v2", "hybrid"],
-  ] as const)("restores the complexity rubric from %s to %s while preserving the judge", (source, target) => {
-    const forecast = transitionClassifierType(standard, source);
-    const result = transitionClassifierType(forecast, target);
-    expect(result.classifier_llm_config).toEqual({
-      model: "judge",
-      timeout_ms: 20000,
-      classification_rubric: "agentic",
-    });
-    expect(result.capability_classifier_config).toBeUndefined();
-    expect(result.llm_v2_config).toBeUndefined();
-  });
-
   it("clears the inactive non-reasoning pool and plan floor when switching to local classification", () => {
     const initial: ComplexityRouterConfigValue = {
       ...standard,

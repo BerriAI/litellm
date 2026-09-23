@@ -11,19 +11,17 @@ import {
   usesClassifierContext,
 } from "./ComplexityRouterConfig";
 import { defaultJevClassifierConfig } from "./jev_classifier_config";
-import { isForecastClassifier, prepareForecastClassifier } from "./forecast_classifier_config";
 import { nonReasoningTierFields } from "./nonReasoningTierFields";
 
 export const transitionClassifierType = (
   value: ComplexityRouterConfigValue,
   classifierType: ClassifierType,
 ): ComplexityRouterConfigValue => {
-  const startsLlmRubric =
-    !value.classifier_llm_config ||
-    (isForecastClassifier(value.classifier_type) && !isForecastClassifier(classifierType));
+  const startsLlmRubric = !value.classifier_llm_config;
   const judgeConfig = value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS };
   const nextValue: ComplexityRouterConfigValue = {
     ...value,
+    classifier_type: classifierType,
     jev_classifier_config:
       classifierType === "jev" ? value.jev_classifier_config ?? defaultJevClassifierConfig() : undefined,
     classification_prompt: classifierType === "jev" ? undefined : value.classification_prompt,
@@ -55,5 +53,5 @@ export const transitionClassifierType = (
       classifierType === "hybrid" ? value.hybrid_boundary_margin ?? DEFAULT_HYBRID_BOUNDARY_MARGIN : undefined,
     ...nonReasoningTierFields(classifierType, value),
   };
-  return prepareForecastClassifier(nextValue, classifierType);
+  return nextValue;
 };
