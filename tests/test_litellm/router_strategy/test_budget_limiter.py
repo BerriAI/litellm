@@ -231,6 +231,30 @@ async def test_should_keep_increments_when_flush_is_cancelled_after_success() ->
 
 
 @pytest.mark.asyncio
+async def test_cancelled_push_waiting_for_flush_lock_still_writes_spend() -> None:
+    redis_cache = _MockRedisCache(initial_values={_SPEND_KEY: 0.0})
+    budget_limiter = _new_router_budget_limiter(
+        redis_cache=redis_cache,
+        redis_increment_operation_queue=[_increment(10.0)],
+    )
+    flush_lock = _ObservedLock()
+    budget_limiter._redis_increment_flush_lock = flush_lock
+
+    async with flush_lock:
+        push_task = asyncio.create_task(budget_limiter._push_in_memory_increments_to_redis())
+        await asyncio.wait_for(flush_lock.waiter_started.wait(), timeout=1)
+        push_task.cancel()
+        await asyncio.sleep(0)
+        assert not push_task.done()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(push_task, timeout=1)
+
+    assert redis_cache.values[_SPEND_KEY] == 10.0
+    assert budget_limiter.redis_increment_operation_queue == []
+
+
+@pytest.mark.asyncio
 async def test_empty_flush_does_not_block_later_increment_sync() -> None:
     redis_cache = _MockRedisCache(initial_values={_SPEND_KEY: 100.0})
     in_memory_cache = _MockInMemoryCache(initial_values={_SPEND_KEY: 100.0})

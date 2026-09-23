@@ -434,6 +434,9 @@ class RouterBudgetLimiting(CustomLogger):
 
     async def _flush_queued_increment_operations(self, redis_cache: RedisCache) -> bool:
         flush_task: Final = asyncio.create_task(self._write_queued_increment_operations(redis_cache))
+        return await self._await_flush_task(flush_task)
+
+    async def _await_flush_task(self, flush_task: asyncio.Task[bool]) -> bool:
         try:
             return await asyncio.shield(flush_task)
         except asyncio.CancelledError:
@@ -604,6 +607,10 @@ class RouterBudgetLimiting(CustomLogger):
         if redis_cache is None:
             return True
 
+        flush_task: Final = asyncio.create_task(self._flush_queued_increments_with_lock(redis_cache))
+        return await self._await_flush_task(flush_task)
+
+    async def _flush_queued_increments_with_lock(self, redis_cache: RedisCache) -> bool:
         async with self._redis_increment_flush_lock:
             return await self._flush_queued_increment_operations(redis_cache)
 
