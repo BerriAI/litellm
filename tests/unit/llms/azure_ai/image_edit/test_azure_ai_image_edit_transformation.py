@@ -23,7 +23,6 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 CAT_JPEG: Final = Path(__file__).parents[4] / "e2e" / "llm_translation" / "fixtures" / "cat.jpg"
 CAT_JPEG_WIDTH: Final = 512
 CAT_JPEG_HEIGHT: Final = 512
-FLUX2_FLEX_PIXEL_RATE: Final = 5e-08
 
 
 def _png_chunk(tag: bytes, payload: bytes) -> bytes:
@@ -210,7 +209,7 @@ def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[
     assert stream.tell() == len(png)
     assert response._hidden_params["reference_pixels"] == 1024 * 1024
     assert response._hidden_params["response_cost"] == pytest.approx(
-        FLUX2_FLEX_PIXEL_RATE * 2048 * 1024 * 2 + FLUX2_FLEX_PIXEL_RATE * 1024 * 1024
+        litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 2048 * 1024 * 2 + litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 1024 * 1024
     )
 
 
@@ -232,7 +231,7 @@ def test_flux2_image_edit_bills_jpeg_reference_and_sends_whole_file():
     assert [body["input_image"] for body in bodies] == [base64.b64encode(jpeg).decode()]
     assert response._hidden_params["reference_pixels"] == CAT_JPEG_WIDTH * CAT_JPEG_HEIGHT
     assert response._hidden_params["response_cost"] == pytest.approx(
-        FLUX2_FLEX_PIXEL_RATE * 2048 * 1024 * 2 + FLUX2_FLEX_PIXEL_RATE * CAT_JPEG_WIDTH * CAT_JPEG_HEIGHT
+        litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 2048 * 1024 * 2 + litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * CAT_JPEG_WIDTH * CAT_JPEG_HEIGHT
     )
 
 
@@ -253,7 +252,7 @@ def test_flux2_image_edit_sums_ten_references():
     assert [body["input_image_10"] for body in bodies] == [base64.b64encode(pngs[-1]).decode()]
     assert response._hidden_params["reference_pixels"] == 10 * 64 * 64
     assert response._hidden_params["response_cost"] == pytest.approx(
-        FLUX2_FLEX_PIXEL_RATE * 1024 * 1024 * 2 + FLUX2_FLEX_PIXEL_RATE * 10 * 64 * 64
+        litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 1024 * 1024 * 2 + litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 10 * 64 * 64
     )
 
 

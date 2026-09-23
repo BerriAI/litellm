@@ -127,7 +127,12 @@ def test_flux2_flex_model_info():
     assert model_info["max_input_tokens"] == 32000
     assert model_info["max_tokens"] == 32000
     assert model_info["supported_endpoints"] == ["/v1/images/generations", "/v1/images/edits"]
-    assert catalog_info["input_cost_per_pixel"] == 5e-08
+    assert catalog_info["input_cost_per_reference_pixel"] == catalog_info["input_cost_per_pixel"]
+    assert catalog_info["input_cost_per_pixel"] * 1024 * 1024 == pytest.approx(0.05), (
+        "Azure Retail Prices API, product 'Azure BFL Flux Models', meters 'Flex Megapixel' and "
+        "'Flex Ref Megapixel' are $0.05 per MP where 1 MP = 1024x1024 pixels; confirmed against "
+        "Azure Cost Management usage on 2026-09-22 (1024x1024 image metered as 1.0 MP)"
+    )
     assert catalog_info["supported_modalities"] == ["text", "image"]
     assert catalog_info["supported_output_modalities"] == ["image"]
 
@@ -148,7 +153,7 @@ def test_flux2_flex_cost_uses_generated_megapixels():
         call_type="image_generation",
     )
 
-    assert cost == pytest.approx(5e-08 * 2048 * 1024 * 2)
+    assert cost == pytest.approx(litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 2048 * 1024 * 2)
 
 
 def _patch_flux2_flex_pricing(monkeypatch: pytest.MonkeyPatch, **pricing: float) -> None:
@@ -266,7 +271,7 @@ def test_flux2_cost_uses_mapped_dimensions_after_response_transformation(dimensi
         completion_response=response,
         optional_params=params,
         call_type="image_generation",
-    ) == pytest.approx(5e-08 * 2048 * 1024 * 2)
+    ) == pytest.approx(litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 2048 * 1024 * 2)
 
 
 def test_flux2_flex_cost_accepts_lowercase_model_spelling():
@@ -279,7 +284,7 @@ def test_flux2_flex_cost_accepts_lowercase_model_spelling():
         call_type="image_generation",
     )
 
-    assert cost == pytest.approx(5e-08 * 1536 * 1024 * 2)
+    assert cost == pytest.approx(litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 1536 * 1024 * 2)
 
 
 def test_flux2_flex_cost_prefers_deployment_input_cost_per_pixel() -> None:
