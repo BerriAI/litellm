@@ -4,6 +4,7 @@ pub mod anthropic_usage;
 pub mod azure_ai_cost;
 pub mod azure_ai_image_cost;
 pub mod azure_cost;
+pub mod background_cost_polling;
 pub mod base_rate_selection;
 pub mod batch;
 pub mod bedrock_image_cost;
