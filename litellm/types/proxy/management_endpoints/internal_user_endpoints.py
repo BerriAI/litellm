@@ -28,6 +28,15 @@ class UserSearchWhere(TypedDict):
     OR: ReadOnly[tuple[Mapping[Literal["user_id", "user_email"], InsensitiveContains], ...]]
 
 
+class KeyActivitySearchWhere(TypedDict):
+    """Prisma filter behind `/user/daily/activity/aggregated/search`: exact token hash, or key alias
+    or user id containing the term, case-insensitive."""
+
+    OR: ReadOnly[
+        tuple[Mapping[Literal["token"], str] | Mapping[Literal["key_alias", "user_id"], InsensitiveContains], ...]
+    ]
+
+
 class UserListResponse(BaseModel):
     """
     Response model for the user list endpoint
