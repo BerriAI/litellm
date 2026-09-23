@@ -6,6 +6,7 @@ injected straight into change_password; no test here touches the network.
 """
 
 import hashlib
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -61,6 +62,14 @@ def _hibp_client_returning(body: str) -> AsyncHTTPHandler:
 def _hibp_client_never_called() -> AsyncHTTPHandler:
     def handler(request: httpx.Request) -> httpx.Response:
         raise AssertionError(f"unexpected HIBP call to {request.url}")
+
+    return AsyncHTTPHandler(transport=httpx.MockTransport(handler))
+
+
+def _hibp_client_recording(calls: list[httpx.Request]) -> AsyncHTTPHandler:
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, text="")
 
     return AsyncHTTPHandler(transport=httpx.MockTransport(handler))
 
@@ -300,10 +309,12 @@ async def test_change_password_rejects_breached_password():
 @pytest.mark.asyncio
 async def test_change_password_verifies_current_password_before_hibp_lookup():
     """A caller who fails current-password verification must not trigger any
-    HIBP traffic: the injected client raises if it is ever called."""
+    HIBP traffic: the injected client records each request it serves and the
+    test asserts none were made."""
     from litellm.proxy._types import ChangePasswordRequest
 
     prisma = _make_prisma(_make_user_row(hash_password(CURRENT_PASSWORD)))
+    hibp_calls: Final[list[httpx.Request]] = []
 
     with (
         patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
@@ -317,11 +328,12 @@ async def test_change_password_verifies_current_password_before_hibp_lookup():
             await change_password(
                 data=ChangePasswordRequest(current_password="not-the-password", new_password=NEW_PASSWORD),
                 user_api_key_dict=_caller(),
-                hibp_client=_hibp_client_never_called(),
+                hibp_client=_hibp_client_recording(hibp_calls),
             )
 
     assert exc_info.value.status_code == 400
     assert "Current password is incorrect" in exc_info.value.detail["error"]
+    assert hibp_calls == []
     prisma.db.litellm_usertable.update.assert_not_called()
 
 
