@@ -60,7 +60,7 @@ def _passthrough_scenario(scenario) -> ScenarioHandle:
     anthropic_body: Final = JsonResponse(
         content_type="application/json",
         body={
-            "id": "msg_$REQUEST_ID",
+            "id": "msg_$UNIQUE_ID",
             "type": "message",
             "role": "assistant",
             "model": "audit-pass",
@@ -73,7 +73,7 @@ def _passthrough_scenario(scenario) -> ScenarioHandle:
     responses_body: Final = JsonResponse(
         content_type="application/json",
         body={
-            "id": "resp_$REQUEST_ID",
+            "id": "resp_$UNIQUE_ID",
             "object": "response",
             "created_at": 0,
             "status": "completed",
