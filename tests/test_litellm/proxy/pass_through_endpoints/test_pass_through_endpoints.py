@@ -4353,6 +4353,79 @@ async def test_pass_through_request_upstream_error_log_strips_provider_key_from_
     assert "key=" not in logged_url
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("turn_off_message_logging", [True, False])
+async def test_passthrough_upstream_error_body_redacted_when_message_logging_off(
+    turn_off_message_logging: bool,
+):
+    upstream_content: Final = b'{"error": {"message": "upstream body says the project was not found"}}'
+    upstream_response: Final = httpx.Response(
+        status_code=404,
+        headers={"content-type": "application/json"},
+        content=upstream_content,
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:generateContent"),
+    )
+    user_api_key_dict: Final = MagicMock()
+    user_api_key_dict.metadata = {
+        "logging": [
+            {
+                "callback_name": "prometheus",
+                "callback_type": "success_and_failure",
+                "callback_vars": {"turn_off_message_logging": turn_off_message_logging},
+            }
+        ]
+    }
+    user_api_key_dict.team_metadata = None
+    user_api_key_dict.team_id = None
+
+    with patch.object(verbose_proxy_logger, "warning") as mock_warning:
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+            ) as mock_get_client:
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
+                ) as mock_processing:
+                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                    mock_processing.get_custom_headers.return_value = {}
+
+                    async_client: Final = MagicMock()
+                    async_client.build_request = MagicMock(return_value=MagicMock())
+                    async_client.send = AsyncMock(return_value=upstream_response)
+                    mock_get_client.return_value = MagicMock(client=async_client)
+
+                    response: Final = await pass_through_request(
+                        request=_upstream_error_request(),
+                        target="http://target-api.com/v1beta/models/claude-nope-9:generateContent",
+                        custom_headers={},
+                        user_api_key_dict=user_api_key_dict,
+                    )
+
+    assert response.status_code == 404
+    assert response.body == upstream_content
+
+    upstream_warnings: Final = [
+        call
+        for call in mock_warning.call_args_list
+        if call.args[0] == "pass_through_endpoint: upstream %s %s returned %s: %s"
+    ]
+    assert len(upstream_warnings) == 1, mock_warning.call_args_list
+    logged_body: Final = str(upstream_warnings[0].args[4])
+
+    mock_proxy_logging.post_call_failure_hook.assert_called_once()
+    detail: Final = mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
+
+    if turn_off_message_logging:
+        assert logged_body == "redacted-by-litellm"
+        assert "upstream body says the project was not found" not in logged_body
+        assert detail == "Upstream passthrough request failed with status 404: redacted-by-litellm"
+    else:
+        assert "upstream body says the project was not found" in logged_body
+        assert detail == f"Upstream passthrough request failed with status 404: {upstream_content.decode()}"
+
+
 class _UpstreamDroppingMidStream(httpx.AsyncByteStream):
     async def __aiter__(self):
         yield b'data: {"id": "chatcmpl-1", "choices": [{"delta": {"content": "hi"}}]}\n\n'

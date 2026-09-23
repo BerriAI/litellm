@@ -42,6 +42,7 @@ from litellm._uuid import uuid
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
+    REDACTED_BY_LITELLM,
     SESSION_ID_OMITTED_METADATA_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
 )
@@ -57,6 +58,7 @@ from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
@@ -865,6 +867,7 @@ async def _log_passthrough_upstream_failure(
     response: httpx.Response,
     user_api_key_dict: UserAPIKeyAuth,
     request_payload: dict,
+    logging_obj: LiteLLMLoggingObj,
 ) -> None:
     """Fire LiteLLM-side failure hooks (spend tracking, alerting callbacks) for
     an upstream 4xx/5xx passthrough response.
@@ -879,7 +882,11 @@ async def _log_passthrough_upstream_failure(
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     await response.aread()
-    upstream_error_body: Final = _truncate_upstream_error_body(response.text)
+    upstream_error_body: Final = (
+        REDACTED_BY_LITELLM
+        if should_redact_message_logging(logging_obj.model_call_details)
+        else _truncate_upstream_error_body(response.text)
+    )
     verbose_proxy_logger.warning(
         "pass_through_endpoint: upstream %s %s returned %s: %s",
         response.request.method,
@@ -1352,6 +1359,7 @@ async def pass_through_request(
                     custom_llm_provider=custom_llm_provider,
                     upstream_usage=upstream_usage,
                 ),
+                logging_obj=logging_obj,
             )
 
             # Call response headers hook for streaming pass-through
@@ -1443,6 +1451,7 @@ async def pass_through_request(
                     custom_llm_provider=custom_llm_provider,
                     upstream_usage=upstream_usage,
                 ),
+                logging_obj=logging_obj,
             )
 
             # Call response headers hook for detected streaming pass-through
@@ -1547,6 +1556,7 @@ async def pass_through_request(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_payload=failure_request_payload,
+            logging_obj=logging_obj,
         )
 
         if response.status_code < 400 and response_body is not None and guardrails_to_run:
