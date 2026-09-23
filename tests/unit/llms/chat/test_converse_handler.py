@@ -17,7 +17,6 @@ from tests._support.stream_chunk_size import (
 )
 
 
-
 def test_encode_model_id_with_inference_profile():
     """
     Test instance profile is properly encoded when used as a model
@@ -454,6 +453,26 @@ def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
     assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
     assert len(recorder.seen) == 1
     assert recorder.seen[0]["stream_chunk_size"] == stream_chunk_size
+
+
+def test_converse_stream_rejects_non_int_stream_chunk_size_before_calling_bedrock(monkeypatch: pytest.MonkeyPatch):
+    record_litellm_params(monkeypatch)
+    client = HTTPHandler()
+    client.post = MagicMock()
+
+    with pytest.raises(litellm.BadRequestError):
+        litellm.completion(
+            model="bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            stream_chunk_size="sixty-four",
+        )
+
+    client.post.assert_not_called()
 
 
 def _bedrock_error_response(status_code: int, request_id: str) -> httpx.Response:
