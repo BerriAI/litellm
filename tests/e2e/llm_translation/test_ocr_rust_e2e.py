@@ -11,6 +11,11 @@ well-formed OCR document comes back. Per the e2e hard-fail contract, a case
 fails when no proxy answers and also fails once a request reaches it: the proxy
 fetches each provider's referenced secrets, so a
 missing credential surfaces as a live provider error rather than silent green.
+
+The Mistral key is shared with the suites that run alongside this one and the
+deployment has no fallback group, so the OCR call tolerates a bounded number of
+provider 429s the proxy relays (tolerate_provider_rate_limit); a 429 the proxy
+issues itself still fails the case at once.
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ from typing import Protocol
 
 import pytest
 from e2e_config import unique_marker
-from e2e_http import assert_client_error, unwrap
+from e2e_http import assert_client_error, tolerate_provider_rate_limit, unwrap
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody, OcrBody, OcrDocument, OcrResponse
 from proxy_client import ProxyClient
@@ -156,7 +161,9 @@ class TestRustOcrGateway:
         resources.defer(lambda: proxy.delete_model(model_id))
         key = resources.key()
 
-        response = unwrap(proxy.ocr(key, OcrBody(model=model, document=case.document)))
+        response = unwrap(
+            tolerate_provider_rate_limit(lambda: proxy.ocr(key, OcrBody(model=model, document=case.document)))
+        )
         _assert_ocr_document(response)
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/ocr 500s (aocr TypeError) on missing document instead of 400")

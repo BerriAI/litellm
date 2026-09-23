@@ -15,9 +15,10 @@ reliability behavior.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Final
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from proxy_client import ProxyClient
 from e2e_config import CHEAP_OPENAI_MODEL, PROXY_BASE_URL, unique_marker
@@ -365,6 +366,31 @@ def open_chat_stream(
 def model_id_of(resp: StreamingResponse) -> str | None:
     """The deployment the proxy served this response from, as it reports it."""
     return resp.headers.get("x-litellm-model-id")
+
+
+class _AzurePromptFilterResult(BaseModel):
+    content_filter_results: Mapping[str, object] | None = None
+
+
+class _AzureAnnotatedChatBody(BaseModel):
+    prompt_filter_results: Sequence[_AzurePromptFilterResult] | None = None
+
+
+def azure_prompt_filter_skipped(resp: StreamingResponse) -> bool:
+    """True when Azure answered without running its prompt content filter: the body
+    carries ``prompt_filter_results`` whose ``content_filter_results`` are all empty,
+    where a filter that ran records a verdict per category (jailbreak included).
+    Azure does this intermittently and it says nothing about the prompt, so a test
+    that needs the filter's verdict sends the prompt again instead of reading a
+    skipped filter as a pass. A body without the field (an OpenAI completion served
+    by a fallback, or an error body) is not a skipped filter."""
+    try:
+        annotated: Final = _AzureAnnotatedChatBody.model_validate_json(resp.body)
+    except ValidationError:
+        return False
+    if not annotated.prompt_filter_results:
+        return False
+    return all(not entry.content_filter_results for entry in annotated.prompt_filter_results)
 
 
 def _parsed(resp: StreamingResponse) -> ChatResponse | None:
