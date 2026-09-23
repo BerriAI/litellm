@@ -232,6 +232,34 @@ func TestKeyTypeChangeForcesReplacement(t *testing.T) {
 	}
 }
 
+func TestKeyTypePresetRoutesDoNotDrift(t *testing.T) {
+	cases := map[string]struct {
+		read   *Key
+		config map[string]interface{}
+	}{
+		"llm_api preset":    {read: &Key{KeyType: "llm_api", AllowedRoutes: []string{"llm_api_routes"}}, config: map[string]interface{}{"key_type": "llm_api"}},
+		"default no routes": {read: &Key{KeyType: "default"}, config: map[string]interface{}{}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			res := resourceKey()
+			priorData := newKeyResourceData(t, map[string]interface{}{})
+			priorData.SetId("hash-1")
+			if err := priorData.Set("server_metadata", serverKeyMetadata(tc.read.Metadata)); err != nil {
+				t.Fatalf("set server_metadata: %v", err)
+			}
+			mapKeyToResourceData(priorData, tc.read)
+			diff, err := res.Diff(context.Background(), priorData.State(), terraform.NewResourceConfigRaw(tc.config), nil)
+			if err != nil {
+				t.Fatalf("diff failed: %v", err)
+			}
+			if diff != nil && !diff.Empty() {
+				t.Fatalf("server-derived allowed_routes must not drift, diff = %+v", diff)
+			}
+		})
+	}
+}
+
 // The proxy validates each model_max_budget entry as a BudgetConfig object and
 // 500s on a bare number, so the JSON string must reach /key/generate as nested
 // objects and the proxy's response must map back to equivalent JSON in state.

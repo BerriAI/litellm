@@ -172,6 +172,7 @@ func resourceKey() *schema.Resource {
 			"allowed_routes": {
 				Type:     schema.TypeList,
 				Optional: true,
+				Computed: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
 			"allowed_passthrough_routes": {
@@ -589,9 +590,7 @@ func mapKeyToResourceData(d *schema.ResourceData, key *Key) {
 	if len(key.EnforcedParams) > 0 {
 		d.Set("enforced_params", key.EnforcedParams)
 	}
-	if len(key.AllowedRoutes) > 0 {
-		d.Set("allowed_routes", key.AllowedRoutes)
-	}
+	d.Set("allowed_routes", append([]string{}, key.AllowedRoutes...))
 	if len(key.AllowedPassthroughRoutes) > 0 {
 		d.Set("allowed_passthrough_routes", key.AllowedPassthroughRoutes)
 	}
