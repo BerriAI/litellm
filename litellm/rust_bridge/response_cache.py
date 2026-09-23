@@ -156,7 +156,7 @@ class ResponseCacheRuntime:
 
 
 def select_response_cache(cache: CacheFacade) -> ResponseCacheRuntime | None:
-    current: Final = cache._native_cache
+    current: Final = getattr(cache, "_native_cache", None)
     if isinstance(current, ResponseCacheRuntime) and current.pid != os.getpid():
         cache._native_cache = resolve_response_cache(cache)
     factory: Final = _RUNTIME.load()
