@@ -729,8 +729,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if not isinstance(content, str):
             return
         for part in _serialized_tool_output_parts(content):
-            payload_key: Final = _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS.get(str(part.get("type")))
-            if (payload_key is not None and part.get(payload_key)) or part.get("file_id"):
+            if (
+                (payload_key := _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS.get(str(part.get("type")))) is not None
+                and part.get(payload_key)
+            ) or part.get("file_id"):
                 self._handle_unscannable_attachment(reason="a tool output attachment cannot be scanned")
 
     async def _build_image_content_item(self, image_url: str) -> BedrockContentItem:
