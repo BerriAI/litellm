@@ -5850,10 +5850,10 @@ class MCPServerManager:
             if auth_failure is None and not isinstance(exc, UpstreamSessionClosedError):
                 return MCPClient.error_tool_result(exc)
             if auth_failure is not None:
-                self._drop_upstream_session(persistent_session)
                 spec: Final = to_server_spec(mcp_server)
                 if spec is not None:
                     await self._cred_provider.invalidate_credentials(to_subject(user_api_key_auth, subject_token), spec)
+                self._drop_upstream_session(persistent_session)
             retry_client: Final = await self._create_mcp_client(
                 server=mcp_server,
                 mcp_auth_header=server_auth_header,
