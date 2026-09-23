@@ -2040,6 +2040,9 @@
         ],
         "tests/integration/spend/test_user_budget_on_team_keys.py::test_team_key_is_denied_before_provider_once_owner_personal_budget_is_exhausted_when_opted_in": [
             "spend.user_budget.opted_in_team_key_is_denied_once_owner_budget_is_exhausted"
+        ],
+        "tests/integration/observability/test_guardrail_effects.py::test_anthropic_messages_with_caller_metadata_keeps_guardrail_information_in_spend_log": [
+            "other.observability.guardrails.anthropic_messages_caller_metadata_keeps_guardrail_spend_log"
         ]
     },
     "browser": {
