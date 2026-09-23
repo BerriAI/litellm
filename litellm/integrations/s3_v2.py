@@ -501,7 +501,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             body="\n".join(safe_dumps(element.payload) for element in batch),
             content_type="application/x-ndjson",
             s3_object_key=get_s3_object_key(
-                s3_path=cast(str | None, self.s3_path) or "",
+                s3_path=cast(str | None, self.s3_path)  # cast-ok: self.s3_path comes from untyped s3_callback_params
+                or "",
                 prefix="",
                 start_time=now,
                 s3_file_name=batch_name,

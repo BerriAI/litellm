@@ -40,7 +40,7 @@ def resolve_s3_max_concurrent_uploads(configured: object, fallback: int) -> int:
     if configured is None or configured == "":
         return fallback
     try:
-        bound: Final = cast(
+        bound: Final = cast(  # cast-ok: TypeAdapter.validate_python is untyped in the pydantic stubs
             int,
             _UPLOAD_BOUND.validate_python(  # pyright: ignore[reportUnknownMemberType]  # TypeAdapter members are untyped in pydantic stubs
                 configured.strip() if isinstance(configured, str) else configured
@@ -63,7 +63,7 @@ def resolve_s3_batch_file_upload(configured: object) -> bool:
     if configured is None or configured == "":
         return False
     try:
-        enabled: Final = cast(
+        enabled: Final = cast(  # cast-ok: TypeAdapter.validate_python is untyped in the pydantic stubs
             bool,
             _S3_BOOL.validate_python(  # pyright: ignore[reportUnknownMemberType]  # TypeAdapter members are untyped in pydantic stubs
                 configured.strip() if isinstance(configured, str) else configured
