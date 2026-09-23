@@ -226,7 +226,7 @@ impl NativeSecretManager {
             litellm_secrets::read_python_provider(&backend, &request, &ProcessEnvironment)
                 .await
                 .map_err(|error| PyValueError::new_err(error.to_string()))
-                .and_then(|value| python_secret_value(value, &request.secret_name))
+                .and_then(python_secret_value)
         })
     }
 
@@ -252,7 +252,7 @@ impl NativeSecretManager {
             litellm_secrets::read_python_provider(&backend, &request, &ProcessEnvironment)
                 .await
                 .map_err(|error| PyValueError::new_err(error.to_string()))
-                .and_then(|value| python_secret_value(value, &request.secret_name))
+                .and_then(python_secret_value)
         })
     }
 

@@ -66,7 +66,12 @@ impl AwsSecretsManagerV2 {
                 self.read_with_policy(primary, ReadPolicy::Python).await?
             };
             return Ok(match value.filter(|value| !value.expose().is_empty()) {
-                Some(value) => PythonSecretRead::PrimaryJson(value),
+                Some(value) => {
+                    let object: Value =
+                        serde_json::from_str(value.expose()).map_err(|_| Error::PrimarySecret)?;
+                    let object = object.as_object().ok_or(Error::PrimarySecret)?;
+                    PythonSecretRead::Value(object.get(name).cloned().map(Secret::from_json))
+                }
                 None => PythonSecretRead::Value(None),
             });
         }
