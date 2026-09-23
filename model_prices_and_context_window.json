@@ -72219,14 +72219,15 @@
         "supports_web_search": false
     },
     "openrouter/stealth/space-bunny-alpha": {
-        "input_cost_per_token": 0,
+        "deprecation_date": "2098-12-31",
+        "input_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 0,
-        "source": "https://openrouter.ai/stealth/space-bunny-alpha",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/api/v1/models",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -72729,6 +72730,7 @@
     },
     "openrouter/z-ai/glm-5.3-flashx": {
         "cache_read_input_token_cost": 7.5e-08,
+        "deprecation_date": "2098-12-31",
         "input_cost_per_token": 3.7e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
