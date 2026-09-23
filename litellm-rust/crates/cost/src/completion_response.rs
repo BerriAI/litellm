@@ -8,6 +8,10 @@ use crate::catalog::{
 };
 use crate::completion_cost::{CompletionCost, completion_cost};
 use crate::completion_input::{CompletionInputRequest, PreparedCompletionInput, ResponseKind};
+use crate::custom_pricing::{
+    CustomCost, CustomPricing, CustomPricingError, RawUsage, cost_per_token_custom_pricing_helper,
+    normalize_cache_usage,
+};
 use crate::image_cost_router::{
     ImageCostRouteError, ImageCostRouteRequest, call_type_has_image_response,
     route_image_generation_cost_calculator,
@@ -41,6 +45,7 @@ pub struct CompletionResponseCostRequest<'a> {
     pub input: CompletionInputRequest<'a>,
     pub fallback_usage: Option<&'a ChatUsage>,
     pub text_input: Option<CompletionTextInput<'a>>,
+    pub custom_cost: CustomPricing,
     pub provider: Option<&'a str>,
     pub region: Option<&'a str>,
     pub data_residency: Option<&'a str>,
@@ -83,6 +88,7 @@ pub enum CompletionResponseCostError {
     Realtime(CatalogError),
     A2A(A2ACostError),
     TokenCount,
+    CustomPricing(CustomPricingError),
 }
 
 impl From<UsageError> for CompletionResponseCostError {
@@ -114,6 +120,30 @@ fn price_candidates<T: Copy, E: Copy>(
     match priced {
         Ok(cost) => Ok(((*model).clone(), *cost)),
         Err(error) => Err(CandidatePriceError::Price(*error)),
+    }
+}
+
+fn price_with_custom(
+    candidates: &[Option<String>; 3],
+    usage: &ChatUsage,
+    pricing: CustomPricing,
+    response_time_ms: Option<f64>,
+    catalog_price: impl Fn(&str) -> Result<(f64, f64), CompletionResponseCostError>,
+) -> Result<(String, (f64, f64)), CompletionResponseCostError> {
+    match custom_cost_for_response(usage, pricing, response_time_ms)
+        .map_err(CompletionResponseCostError::CustomPricing)?
+    {
+        Some(cost) => candidates
+            .iter()
+            .flatten()
+            .next()
+            .cloned()
+            .map(|model| (model, (cost.input, cost.output)))
+            .ok_or(CompletionResponseCostError::MissingModel),
+        None => price_candidates(candidates, catalog_price).map_err(|error| match error {
+            CandidatePriceError::MissingModel => CompletionResponseCostError::MissingModel,
+            CandidatePriceError::Price(error) => error,
+        }),
     }
 }
 
@@ -178,6 +208,34 @@ fn count_text_usage(
         total_tokens,
         ..ChatUsage::default()
     })
+}
+
+fn custom_cost_for_response(
+    usage: &ChatUsage,
+    pricing: CustomPricing,
+    response_time_ms: Option<f64>,
+) -> Result<Option<CustomCost>, CustomPricingError> {
+    if pricing == CustomPricing::NONE {
+        return Ok(None);
+    }
+    let details = usage.prompt_tokens_details.as_ref();
+    let top_level = |field: &str| usage.extra.get(field).and_then(Value::as_f64);
+    let normalized = normalize_cache_usage(RawUsage {
+        prompt_tokens: usage.prompt_tokens as f64,
+        completion_tokens: usage.completion_tokens as f64,
+        details_cached_tokens: details.map(|details| details.cached_tokens as f64),
+        details_cache_write_tokens: details
+            .and_then(|details| details.cache_write_tokens)
+            .map(|tokens| tokens as f64),
+        details_cache_creation_tokens: details
+            .and_then(|details| details.cache_creation_tokens)
+            .map(|tokens| tokens as f64),
+        top_level_cache_read_tokens: top_level("cache_read_input_tokens"),
+        top_level_cache_creation_tokens: top_level("cache_creation_input_tokens"),
+        fallback_cache_read_tokens: None,
+        fallback_cache_creation_tokens: None,
+    })?;
+    cost_per_token_custom_pricing_helper(normalized, pricing, response_time_ms)
 }
 
 pub fn response_time_ms_for_cost(response: Option<&Value>, fallback: Option<f64>) -> Option<f64> {
@@ -491,23 +549,30 @@ fn price_responses_websocket(
                     .map(event_usage)
                     .collect::<Result<Vec<_>, _>>()?,
             )?;
-            let (model, (prompt, output)) = price_candidates(&prepared.model_candidates, |model| {
-                catalog.cost_per_token(ModelCostRequest {
-                    model,
-                    provider,
-                    region,
-                    usage: &usage,
-                    service_tier: tier,
-                    data_residency: request.data_residency,
-                    vertex_location: request.vertex_location,
-                    at: request.at,
-                    response_time_ms: None,
-                })
-            })
-            .map_err(|error| match error {
-                CandidatePriceError::MissingModel => CompletionResponseCostError::MissingModel,
-                CandidatePriceError::Price(error) => CompletionResponseCostError::Realtime(error),
-            })?;
+            let (model, (prompt, output)) = price_with_custom(
+                &prepared.model_candidates,
+                &usage,
+                request.custom_cost,
+                response_time_ms_for_cost(
+                    request.input.model_selection.response,
+                    request.response_time_ms,
+                ),
+                |model| {
+                    catalog
+                        .cost_per_token(ModelCostRequest {
+                            model,
+                            provider,
+                            region,
+                            usage: &usage,
+                            service_tier: tier,
+                            data_residency: request.data_residency,
+                            vertex_location: request.vertex_location,
+                            at: request.at,
+                            response_time_ms: None,
+                        })
+                        .map_err(CompletionResponseCostError::Realtime)
+                },
+            )?;
             let built_in = if index == 0 {
                 built_in_tool_cost(catalog, request, &model, provider, region, Some(&usage))
             } else {
@@ -643,14 +708,6 @@ pub fn completion_cost_from_response(
     } else {
         None
     };
-    if needs_token_usage
-        && request.input.model_selection.response.is_none()
-        && prepared.usage.is_none()
-        && request.fallback_usage.is_none()
-        && counted_usage.is_none()
-    {
-        return Err(CompletionResponseCostError::MissingUsage);
-    }
     let empty_usage = ChatUsage::default();
     let usage = prepared
         .usage
@@ -658,8 +715,6 @@ pub fn completion_cost_from_response(
         .or(request.fallback_usage)
         .or(counted_usage.as_ref())
         .unwrap_or(&empty_usage);
-    let empty_params = Value::Null;
-    let call = cost_call(&prepared.call_type, request, &empty_params)?;
     let explicit_pricing = request.input.model_selection.custom_pricing
         || request.input.model_selection.base_model.is_some();
     let region = if explicit_pricing {
@@ -670,27 +725,41 @@ pub fn completion_cost_from_response(
             .and_then(Value::as_str)
             .or(request.region)
     };
-    let (model, (prompt, output)) = price_candidates(&prepared.model_candidates, |model| {
-        let cost_request = ModelCostRequest {
-            model,
-            provider,
-            region,
-            usage,
-            service_tier: prepared.service_tier.as_deref(),
-            data_residency: request.data_residency,
-            vertex_location: request.vertex_location,
-            at: request.at,
-            response_time_ms: response_time_ms_for_cost(
-                request.input.model_selection.response,
-                request.response_time_ms,
-            ),
-        };
-        catalog.cost_per_token_for_call(cost_request, call)
-    })
-    .map_err(|error| match error {
-        CandidatePriceError::MissingModel => CompletionResponseCostError::MissingModel,
-        CandidatePriceError::Price(error) => CompletionResponseCostError::Cost(error),
-    })?;
+    let custom_pricing = if matches!(prepared.call_type.as_str(), "search" | "asearch") {
+        CustomPricing::NONE
+    } else {
+        request.custom_cost
+    };
+    let empty_params = Value::Null;
+    let (model, (prompt, output)) = price_with_custom(
+        &prepared.model_candidates,
+        usage,
+        custom_pricing,
+        response_time_ms_for_cost(
+            request.input.model_selection.response,
+            request.response_time_ms,
+        ),
+        |model| {
+            let call = cost_call(&prepared.call_type, request, &empty_params)?;
+            let cost_request = ModelCostRequest {
+                model,
+                provider,
+                region,
+                usage,
+                service_tier: prepared.service_tier.as_deref(),
+                data_residency: request.data_residency,
+                vertex_location: request.vertex_location,
+                at: request.at,
+                response_time_ms: response_time_ms_for_cost(
+                    request.input.model_selection.response,
+                    request.response_time_ms,
+                ),
+            };
+            catalog
+                .cost_per_token_for_call(cost_request, call)
+                .map_err(CompletionResponseCostError::Cost)
+        },
+    )?;
     let cost = completion_cost(
         prompt,
         output,

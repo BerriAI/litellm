@@ -6,6 +6,7 @@ use litellm_cost::completion_response::{
     BuiltInToolCostConfig, CompletionResponseCostError, CompletionResponseCostRequest,
     CompletionTextInput, completion_cost_from_response, response_time_ms_for_cost,
 };
+use litellm_cost::custom_pricing::{CustomPricing, CustomTokenRates};
 use litellm_cost::model_selection::ModelSelectionRequest;
 use litellm_cost::tool_call_cost_tracking::{DefaultToolRates, ResponseKind as ToolResponseKind};
 use litellm_token_counter::{Error as TokenCounterError, TokenCounter, Tokenizer};
@@ -49,6 +50,7 @@ fn request<'a>(
         },
         fallback_usage: None,
         text_input: None,
+        custom_cost: CustomPricing::NONE,
         provider,
         region: None,
         data_residency: None,
@@ -179,6 +181,135 @@ fn response_without_usage_does_not_count_request_text(#[case] response: Value) {
     )
     .unwrap();
     assert_eq!(result.cost.total, 0.0);
+}
+
+#[rstest]
+fn custom_token_rates_override_catalog_and_provider_reported_cost() {
+    let catalog = ModelInfoCatalog::new(HashMap::new());
+    let response = json!({
+        "model": "custom",
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 3,
+            "prompt_tokens_details": {"cached_tokens": 4, "cache_write_tokens": 2},
+            "cost": 99.0
+        }
+    });
+    let empty = json!({});
+    let base = request(
+        Some(&response),
+        Some("custom"),
+        Some("openai"),
+        &empty,
+        &empty,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            custom_cost: CustomPricing {
+                token: Some(CustomTokenRates {
+                    input: 0.01,
+                    output: 0.02,
+                    cache_read: Some(0.001),
+                    cache_creation: Some(0.03),
+                }),
+                per_second: Some(1.0),
+            },
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.total - 0.164).abs() < 1e-12);
+}
+
+#[rstest]
+fn custom_seconds_use_stamped_response_duration_without_catalog_price() {
+    let catalog = ModelInfoCatalog::new(HashMap::new());
+    let response = json!({
+        "model": "custom",
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+        "_response_ms": 2500.0
+    });
+    let empty = json!({});
+    let base = request(
+        Some(&response),
+        Some("custom"),
+        Some("openai"),
+        &empty,
+        &empty,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            custom_cost: CustomPricing {
+                token: None,
+                per_second: Some(0.08),
+            },
+            response_time_ms: Some(5000.0),
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.total - 0.2).abs() < 1e-12);
+}
+
+#[rstest]
+fn custom_seconds_without_response_use_default_empty_text() {
+    let catalog = ModelInfoCatalog::new(HashMap::new());
+    let empty = json!({});
+    let base = request(None, Some("custom"), Some("openai"), &empty, &empty);
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            custom_cost: CustomPricing {
+                token: None,
+                per_second: Some(0.08),
+            },
+            response_time_ms: Some(2500.0),
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.total - 0.2).abs() < 1e-12);
+}
+
+#[rstest]
+fn custom_cache_rates_match_python_anthropic_usage() {
+    let catalog = ModelInfoCatalog::new(HashMap::new());
+    let response = json!({
+        "model": "custom",
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 3,
+            "cache_read_input_tokens": 4,
+            "cache_creation_input_tokens": 2
+        }
+    });
+    let empty = json!({});
+    let base = request(
+        Some(&response),
+        Some("custom"),
+        Some("anthropic"),
+        &empty,
+        &empty,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            custom_cost: CustomPricing {
+                token: Some(CustomTokenRates {
+                    input: 0.01,
+                    output: 0.02,
+                    cache_read: Some(0.001),
+                    cache_creation: Some(0.03),
+                }),
+                per_second: None,
+            },
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.total - 0.284).abs() < 1e-12);
 }
 
 #[rstest]
@@ -381,6 +512,15 @@ fn search_response_uses_query_list_without_token_usage() {
     let result = completion_cost_from_response(
         &catalog,
         CompletionResponseCostRequest {
+            custom_cost: CustomPricing {
+                token: Some(CustomTokenRates {
+                    input: 100.0,
+                    output: 100.0,
+                    cache_read: None,
+                    cache_creation: None,
+                }),
+                per_second: None,
+            },
             input: CompletionInputRequest {
                 call_type: Some("search"),
                 optional_params: Some(&optional_params),
@@ -814,6 +954,46 @@ fn responses_websocket_prices_each_tier_and_applies_fixed_margin_per_tier() {
     assert!((result.cost.total - 0.821).abs() < 1e-12);
     assert!((result.cost.margin_fixed_amount - 0.2).abs() < 1e-12);
     assert_eq!(result.cost.discount_percent, 0.1);
+}
+
+#[rstest]
+fn responses_websocket_applies_custom_rates_to_each_tier() {
+    let catalog = ModelInfoCatalog::new(HashMap::new());
+    let response = json!({"results": [
+        {"type": "response.completed", "response": {"service_tier": "default", "usage": {"input_tokens": 10, "output_tokens": 2}}},
+        {"type": "response.completed", "response": {"service_tier": "priority", "usage": {"input_tokens": 4, "output_tokens": 3}}}
+    ]});
+    let empty = json!({});
+    let margin = json!({"global": {"fixed_amount": 0.1}});
+    let base = request(
+        Some(&response),
+        Some("custom"),
+        Some("openai"),
+        &empty,
+        &margin,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                call_type: Some("_aresponses_websocket"),
+                ..base.input
+            },
+            custom_cost: CustomPricing {
+                token: Some(CustomTokenRates {
+                    input: 0.01,
+                    output: 0.02,
+                    cache_read: None,
+                    cache_creation: None,
+                }),
+                per_second: None,
+            },
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.original - 0.24).abs() < 1e-12);
+    assert!((result.cost.total - 0.44).abs() < 1e-12);
 }
 
 #[rstest]
