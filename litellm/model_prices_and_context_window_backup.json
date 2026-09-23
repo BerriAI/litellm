@@ -348,7 +348,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-writer-palmyra-vision-7b.html",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_vision": true
     },
     "amazon.nova-lite-v1:0": {
@@ -21058,6 +21058,7 @@
         "max_tokens": 81920,
         "mode": "chat",
         "output_cost_per_token": 1.68e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -45222,6 +45223,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 5.4e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": false,
         "supports_reasoning": true,
         "supports_tool_choice": false
@@ -55458,6 +55460,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_modalities": [
             "text",
             "image"
@@ -55488,6 +55491,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_modalities": [
             "text",
             "image"
@@ -55518,6 +55522,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_modalities": [
             "text",
             "image"
@@ -55548,6 +55553,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_modalities": [
             "text",
             "image"
@@ -55578,6 +55584,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_modalities": [
             "text",
             "image"
@@ -55608,6 +55615,7 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_modalities": [
             "text",
             "image"
@@ -55692,7 +55700,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html"
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.openai.gpt-6-astra": {
         "input_cost_per_token": 1e-05,
@@ -55724,7 +55732,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html"
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock_mantle/openai.gpt-5.5": {
         "input_cost_per_token": 5.5e-06,
