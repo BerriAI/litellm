@@ -146,7 +146,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         )
         if not isinstance(request_metadata, dict):
             return
-        observation_metadata: Final = {
+        observation_metadata: Final = {  # mutable-ok: stays a real dict for safe_dumps and .get reads below
             key: value
             for key, value in log_requester_metadata(redact_user_api_key_info(metadata=request_metadata)).items()
             if value is not None

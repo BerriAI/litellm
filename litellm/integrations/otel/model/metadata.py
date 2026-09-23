@@ -423,11 +423,16 @@ def exported_request_metadata(payload: StandardLoggingPayload) -> Mapping[str, o
     """The request metadata as the logging callbacks export it: ``user_api_key_*``
     dropped when ``litellm.redact_user_api_key_info`` is on, header keys nested
     under ``requester_metadata``, ``None`` values dropped."""
-    raw_meta: Final = cast(Mapping[str, object], payload.get("metadata") or {})
-    redacted: Final[Mapping[str, object]] = cast(
-        Mapping[str, object], redact_user_api_key_info(metadata=dict(raw_meta))
+    raw_meta: Final = cast(  # cast-ok: StandardLoggingPayload.get returns Any | None
+        Mapping[str, object], payload.get("metadata") or MappingProxyType({})
     )
-    exported: Final[Mapping[str, object]] = cast(Mapping[str, object], log_requester_metadata(redacted))
+    redacted: Final = cast(  # cast-ok: redact_user_api_key_info is untyped
+        Mapping[str, object],
+        redact_user_api_key_info(metadata=dict(raw_meta)),  # mutable-ok: the redactor requires a real dict
+    )
+    exported: Final = cast(  # cast-ok: log_requester_metadata is untyped
+        Mapping[str, object], log_requester_metadata(redacted)
+    )
     return MappingProxyType({key: value for key, value in exported.items() if value is not None})
 
 

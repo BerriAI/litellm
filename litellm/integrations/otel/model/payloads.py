@@ -388,7 +388,7 @@ class LLMCallSpanData:
     response_cost: float | None
     server: ServerInfo | None
     identity: RequestIdentity
-    request_metadata: Mapping[str, object] = field(default_factory=lambda: cast(Mapping[str, object], {}))
+    request_metadata: Mapping[str, object] = field(default_factory=dict)
     is_streaming: bool | None = None
     cost: LLMCost = field(default_factory=LLMCost)
     tools: tuple[ToolDefinition, ...] = ()

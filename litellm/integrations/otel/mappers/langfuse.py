@@ -12,6 +12,7 @@ the JSON-serialized payloads. ``trace_attributes`` maps the caller's trace contr
 
 import json
 from collections.abc import Callable
+from types import MappingProxyType
 from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
@@ -60,7 +61,9 @@ class LangfuseMapper:
         "langfuse.observation.id": lambda d: d.identity.call_id or None,
         "langfuse.trace.metadata.team_id": lambda d: d.identity.team_id or None,
         "langfuse.trace.metadata.team_alias": lambda d: d.identity.team_alias or None,
-        **{f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}": _identity_field(name) for name in TRACE_IDENTITY_FIELDS},
+        **MappingProxyType(
+            {f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}": _identity_field(name) for name in TRACE_IDENTITY_FIELDS}
+        ),
     }
 
     # Sub-tables folded into their respective JSON blobs.
@@ -80,7 +83,13 @@ class LangfuseMapper:
 
     # JSON-payload attributes: each builder returns the serialized blob or None.
     _BLOB_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
-        LANGFUSE_OBSERVATION_METADATA: lambda d: safe_dumps(dict(d.request_metadata)) if d.request_metadata else None,
+        LANGFUSE_OBSERVATION_METADATA: lambda d: (
+            safe_dumps(  # mutable-ok: safe_dumps only serializes real dicts
+                dict(d.request_metadata)
+            )
+            if d.request_metadata
+            else None
+        ),
         "langfuse.observation.model.parameters": lambda d: json_if(
             collect(LangfuseMapper._MODEL_PARAMS, d.request_params)
         ),
