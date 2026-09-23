@@ -72375,5 +72375,38 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro": {
+        "cache_read_input_token_cost": 6e-07,
+        "cache_read_input_token_cost_priority": 6e-07,
+        "input_cost_per_token": 1.2e-06,
+        "input_cost_per_token_priority": 1.2e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "output_cost_per_token_priority": 1.2e-06,
+        "source": "https://api.fireworks.ai/v1/serverless/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "fireworks_ai/accounts/fireworks/models/minimax-m2p7": {
+        "cache_read_input_token_cost_priority": 6e-07,
+        "input_cost_per_token_priority": 1.2e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 196608,
+        "max_output_tokens": 196608,
+        "max_tokens": 196608,
+        "mode": "chat",
+        "output_cost_per_token_priority": 1.2e-06,
+        "source": "https://api.fireworks.ai/v1/serverless/models",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     }
 }
