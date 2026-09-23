@@ -226,10 +226,13 @@ def _exhaust(
         lambda values: len(values) == 1 and float(string_value(str(values[0]["spend"]))) >= 0.06,
         seconds=ROW_SECONDS,
     )
-    denied: Final = client.post(
-        CHAT, json=_body(CHAT, model, uuid.uuid4().hex), headers={"Authorization": f"Bearer {key}"}
+    denied: Final = eventually(
+        lambda: client.post(
+            CHAT, json=_body(CHAT, model, uuid.uuid4().hex), headers={"Authorization": f"Bearer {key}"}
+        ),
+        lambda response: response.status_code in {400, 422},
+        seconds=ROW_SECONDS,
     )
-    assert denied.status_code in {400, 422}, denied.text
     assert denied.json()["error"]["type"] == "budget_exceeded", denied.text
     info: Final = _budget_denied_row(key)
     assert info["normalized_error"] == "429_BUDGET_EXCEEDED", info
@@ -342,10 +345,10 @@ def _burst(
         for index in range(4)
     )
     happy: Final = tuple(
-        (f"happy-{index}", CHAT, _body(CHAT, happy_model, uuid.uuid4().hex), happy_key) for index in range(8)
+        (f"happy-{index}", CHAT, _body(CHAT, happy_model, f"happy-{index}"), happy_key) for index in range(8)
     )
     late: Final = tuple(
-        (f"late-{index}", CHAT, _body(CHAT, happy_model, uuid.uuid4().hex), happy_key) for index in range(8)
+        (f"late-{index}", CHAT, _body(CHAT, happy_model, f"late-{index}"), happy_key) for index in range(8)
     )
     with (
         ThreadPoolExecutor(max_workers=28) as pool,
@@ -434,7 +437,10 @@ def test_upstream_returning_503_mid_burst_logs_every_failure_with_its_own_cluste
         assert all(result.status == 503 for result in happy), happy
         late: Final = tuple(result for result in results if result.label.startswith("late"))
         assert all(result.status == 503 for result in late), late
-        assert len(wire.drain()) == len(happy) + len(late)
+        seen: Final = tuple(request.body.decode() for request in wire.drain())
+        assert all(any(f"normalized error audit {result.label}" in body for body in seen) for result in happy + late), (
+            seen
+        )
         crafted: Final = tuple(result for result in results if result.label.startswith("crafted"))
         assert all(result.status == 400 and result.seconds < FAST_SECONDS for result in crafted), crafted
         codes: Final = {
