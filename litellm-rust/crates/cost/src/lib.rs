@@ -12,6 +12,7 @@ pub mod guardrail_cost;
 pub mod interactions_usage;
 pub mod non_token;
 pub mod off_peak;
+pub mod regional_uplift;
 pub mod responses_usage;
 pub mod tiered_pricing;
 pub mod tool_call_cost_tracking;

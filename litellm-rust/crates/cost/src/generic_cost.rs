@@ -9,6 +9,7 @@ use crate::generic_input::{InputBaseRates, calculate_input_cost};
 use crate::generic_output::{calculate_output_cost, resolve_reasoning_token_cost};
 use crate::generic_usage::{ParsedPromptDetails, parse_prompt_tokens_details};
 use crate::off_peak::{open_off_peak_block, parse_off_peak_rate};
+use crate::regional_uplift::combined_regional_multiplier;
 use crate::responses_usage::ChatUsage;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -154,4 +155,29 @@ pub fn calculate_generic_cost_from_model_info(
         .or_else(|| get_tiered_reasoning_rate(model_info, usage.prompt_tokens))
         .unwrap_or_else(|| resolve_reasoning_token_cost(model_info, service_tier, base.output));
     calculate_with_base_rates(usage, model_info, base, service_tier, reasoning, multiplier)
+}
+
+pub fn calculate_generic_cost_from_model_info_with_region(
+    usage: &ChatUsage,
+    model_info: &Value,
+    service_tier: Option<&str>,
+    threshold_inclusive: bool,
+    data_residency: Option<&str>,
+    vertex_location: Option<&str>,
+    at: Timestamp,
+) -> (f64, f64) {
+    let multiplier = combined_regional_multiplier(
+        model_info,
+        usage.extra.get("inference_geo").and_then(Value::as_str),
+        data_residency,
+        vertex_location,
+    );
+    calculate_generic_cost_from_model_info(
+        usage,
+        model_info,
+        service_tier,
+        threshold_inclusive,
+        multiplier,
+        at,
+    )
 }

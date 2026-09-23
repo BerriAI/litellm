@@ -12,6 +12,7 @@ use litellm_cost::custom_pricing::{
 use litellm_cost::gemini_cost::cost_per_web_search_request;
 use litellm_cost::generic_cost::{
     ResolvedTokenRates, calculate_generic_cost_from_model_info,
+    calculate_generic_cost_from_model_info_with_region,
     calculate_generic_cost_from_model_info_without_off_peak,
     calculate_generic_cost_with_resolved_rates,
 };
@@ -472,4 +473,18 @@ fn main() {
         },
     );
     println!("file_search_cost={file_search_cost:.2}");
+    let (regional_prompt, regional_output) = calculate_generic_cost_from_model_info_with_region(
+        &off_peak_usage,
+        &json!({
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": 4e-6,
+            "regional_processing_uplift_multiplier_eu": 1.2
+        }),
+        None,
+        false,
+        Some("eu"),
+        None,
+        at,
+    );
+    println!("regional_prompt={regional_prompt:.5} regional_output={regional_output:.5}");
 }
