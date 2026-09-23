@@ -34,6 +34,7 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_a
     SkillVisibility,
     skill_visibility,
 )
+from litellm.proxy.auth.auth_exception_handler import DB_UNAVAILABLE_FALLBACK_USER_ID
 from litellm.proxy.auth.user_api_key_auth import is_strict_marketplace_auth, user_api_key_auth
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
@@ -100,7 +101,7 @@ async def _marketplace_caller(request: Request, key: str | None) -> UserAPIKeyAu
             headers=MappingProxyType({"WWW-Authenticate": "Bearer"}),
         )
     caller: Final = await user_api_key_auth(request=request, api_key=f"Bearer {token}")
-    if not caller.via_virtual_key:
+    if caller.user_id == DB_UNAVAILABLE_FALLBACK_USER_ID:
         raise HTTPException(status_code=401, detail="A valid LiteLLM key is required")
     return caller
 
