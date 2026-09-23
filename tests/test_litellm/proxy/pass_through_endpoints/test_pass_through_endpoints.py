@@ -4629,6 +4629,7 @@ async def test_pass_through_request_streaming_upstream_error_body_read_failure_k
         chunk if isinstance(chunk, bytes) else chunk.encode("utf-8") for chunk in streamed_chunks
     )
     assert streamed_bytes == b'{"error": "half'
+    await upstream_response.aclose()
 
     rendered: Final = [str(args[0]) for args in recorded_warnings]
     formats: Final = [args[0] for args in recorded_warnings]
