@@ -22,7 +22,7 @@ class CacheControlMessageInjectionPoint(TypedDict):
 
 
 class CacheControlToolConfigInjectionPoint(TypedDict):
-    """Type for tool_config-level injection points (Bedrock)."""
+    """Type for tool_config-level injection points (Anthropic and Bedrock)."""
 
     location: Literal["tool_config"]
     control: ChatCompletionCachedContent | None
