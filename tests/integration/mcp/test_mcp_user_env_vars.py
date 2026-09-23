@@ -130,7 +130,6 @@ def missing_count(response: httpx.Response) -> JsonValue:
     return body(response)["missing_count"]
 
 
-@pytest.mark.covers("mcp.user_env_vars.lifecycle.store_rotate_clear_reach_upstream")
 def test_stored_value_is_forwarded_rotated_and_cleared(gateway: Gateway) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         identity: Final = register_user_var_server(scenario, peer, TOKEN)
@@ -157,7 +156,6 @@ def test_stored_value_is_forwarded_rotated_and_cleared(gateway: Gateway) -> None
         assert set_names(clear(gateway, key, identity)) == {TOKEN: False}
 
 
-@pytest.mark.covers("mcp.user_env_vars.store.merges_and_ignores_undeclared_and_empty")
 def test_store_merges_per_variable_and_drops_undeclared_or_empty_values(gateway: Gateway) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         identity: Final = register_user_var_server(scenario, peer, TOKEN, WORKSPACE)
@@ -181,7 +179,6 @@ def test_store_merges_per_variable_and_drops_undeclared_or_empty_values(gateway:
         assert len(stored_user_ids(identity)) == 1
 
 
-@pytest.mark.covers("mcp.user_env_vars.errors.malformed_unauthenticated_and_foreign_servers_are_rejected")
 def test_malformed_bodies_missing_users_and_foreign_servers_are_rejected(gateway: Gateway) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         identity: Final = register_user_var_server(scenario, peer, TOKEN)
@@ -204,7 +201,6 @@ def test_malformed_bodies_missing_users_and_foreign_servers_are_rejected(gateway
         assert stored_user_ids(identity) == () and stored_user_ids(other) == ()
 
 
-@pytest.mark.covers("mcp.user_env_vars.status_list.reports_set_servers_and_omits_global_only")
 def test_status_list_keeps_fully_set_servers_and_is_scoped_to_the_caller(gateway: Gateway) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         per_user: Final = register_user_var_server(scenario, peer, TOKEN)
@@ -243,7 +239,6 @@ def test_status_list_keeps_fully_set_servers_and_is_scoped_to_the_caller(gateway
         assert add_upstream_authorization(gateway, peer, first_user, per_user) == b"Bearer mine"
 
 
-@pytest.mark.covers("mcp.user_env_vars.cross_process.store_and_clear_converge_within_cache_ttl")
 def test_store_and_clear_on_one_process_are_honored_by_the_other(gateway: Gateway, peer: Gateway) -> None:
     with mcp_peer() as upstream, gateway.scenario() as scenario:
         identity: Final = register_user_var_server(scenario, upstream, TOKEN)
@@ -269,7 +264,6 @@ def test_store_and_clear_on_one_process_are_honored_by_the_other(gateway: Gatewa
 
 
 @pytest.mark.timeout(240)
-@pytest.mark.covers("mcp.user_env_vars.chaos.concurrent_users_survive_process_loss_without_leakage")
 def test_concurrent_users_across_processes_never_leak_and_survive_a_killed_process(
     gateway: Gateway, peer: Gateway, tmp_path: Path
 ) -> None:
@@ -334,7 +328,6 @@ def test_concurrent_users_across_processes_never_leak_and_survive_a_killed_proce
         assert sorted(string_value(user_id) for user_id in stored_user_ids(identity)) == sorted(users)
 
 
-@pytest.mark.covers("mcp.user_env_vars.store.concurrent_writes_to_different_variables_both_land")
 def test_concurrent_stores_of_different_variables_do_not_lose_an_update(gateway: Gateway, peer: Gateway) -> None:
     with mcp_peer() as upstream, gateway.scenario() as scenario:
         identity: Final = register_user_var_server(scenario, upstream, TOKEN, WORKSPACE)
