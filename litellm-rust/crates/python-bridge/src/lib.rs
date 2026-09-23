@@ -30,6 +30,8 @@ mod _native {
         achat_completions, chat_completions, chat_completions_decline,
     };
     #[pymodule_export]
+    use crate::routes::embeddings::{aembedding, embedding};
+    #[pymodule_export]
     use crate::routes::messages::{amessages, messages};
     #[pymodule_export]
     use crate::routes::ocr::{aocr, ocr};
@@ -83,6 +85,8 @@ mod tests {
                 "ProcessReservedForForking",
                 "ocr",
                 "aocr",
+                "embedding",
+                "aembedding",
                 "transcription",
                 "atranscription",
                 "messages",
