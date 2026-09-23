@@ -422,7 +422,9 @@ async def test_async_realtime_ws_url_has_no_ssl():
 async def test_async_realtime_upstream_handshake_refusal_sends_error_event_then_policy_close():
     from typing import cast
 
-    import websockets
+    from websockets.datastructures import Headers
+    from websockets.exceptions import InvalidStatus
+    from websockets.http11 import Response
 
     from litellm.llms.openai.realtime.handler import OpenAIRealtime
     from litellm.types.realtime import RealtimeErrorEvent
@@ -445,9 +447,7 @@ async def test_async_realtime_upstream_handshake_refusal_sends_error_event_then_
     dummy_websocket = RecordingClientWebSocket()
     dummy_logging_obj = MagicMock()
 
-    refused = websockets.exceptions.InvalidStatus(
-        websockets.http11.Response(401, "Unauthorized", websockets.datastructures.Headers())
-    )
+    refused = InvalidStatus(Response(401, "Unauthorized", Headers()))
 
     with patch("websockets.connect", side_effect=refused):
         await handler.async_realtime(  # pyright: ignore[reportUnknownMemberType]  # handler's websocket param is Any

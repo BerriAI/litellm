@@ -537,7 +537,7 @@ def test_dynamic_drop_params_e2e():
     ) as mock_response:
         try:
             response = litellm.completion(
-                model="command-r",
+                model="command-r-08-2024",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 response_format={"key": "value"},
                 drop_params=True,
@@ -556,7 +556,7 @@ def test_dynamic_pass_additional_params():
     ) as mock_response:
         try:
             response = litellm.completion(
-                model="command-r",
+                model="command-r-08-2024",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 custom_param="test",
                 api_key="my-custom-key",
@@ -606,7 +606,7 @@ def test_dynamic_drop_params_parallel_tool_calls():
     ) as mock_response:
         try:
             response = litellm.completion(
-                model="command-r",
+                model="command-r-08-2024",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 parallel_tool_calls=True,
                 drop_params=True,
@@ -663,7 +663,7 @@ def test_dynamic_drop_additional_params_e2e():
     ) as mock_response:
         try:
             response = litellm.completion(
-                model="command-r",
+                model="command-r-08-2024",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 response_format={"key": "value"},
                 additional_drop_params=["response_format"],
