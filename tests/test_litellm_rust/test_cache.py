@@ -44,7 +44,13 @@ from litellm.caching.s3_cache import S3Cache
 from litellm.rust_bridge import _native, catalog
 from litellm.rust_bridge.catalog import CacheRule, Route, RouteRule, SecretManagerRule
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.response_cache import NativeResponseCacheRuntime, ResponseCacheRuntime, resolve_response_cache
+from litellm.rust_bridge.response_cache import (
+    CacheFacade,
+    NativeResponseCacheRuntime,
+    ResponseCacheRuntime,
+    resolve_response_cache,
+    select_response_cache,
+)
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.llms.custom_llm import CustomLLMItem
 from litellm.types.utils import EmbeddingResponse
@@ -2171,6 +2177,15 @@ async def test_python_facade_and_rust_resolver_share_the_selected_native_cache(m
 
         await native.async_store(request("rust-write"), {"source": "rust"})
         assert await facade.async_get_cache(cache_key="rust-write") == {"source": "rust"}
+
+
+def test_custom_facade_without_native_runtime_field_uses_python() -> None:
+    custom: Final = SimpleNamespace(
+        type="local", ttl=None, semantic_cache_scope="global", get_cache_key=lambda **_: "key"
+    )
+    assert (
+        select_response_cache(cast(CacheFacade, custom)) is None
+    )  # cast-ok: this test facade implements the cache facade contract
 
 
 async def test_native_redis_handler_reads_the_same_store_as_rust(
