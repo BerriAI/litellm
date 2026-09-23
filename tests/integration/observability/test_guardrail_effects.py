@@ -328,6 +328,110 @@ def test_bedrock_passthrough_converse_guardrail_ignores_denied_term_in_tool_defi
             assert [json.loads(request.body)["texts"] for request in policy.drain()] == [[allowed], [denied]]
 
 
+@pytest.mark.covers("other.observability.guardrails.bedrock_post_call_scans_streamed_anthropic_messages_tool_use")
+def test_bedrock_guardrail_streams_anthropic_messages_tool_use_instead_of_chunk_builder_500(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    guardrail_id: Final = "synthetic" + uuid.uuid4().hex[:8]
+    spoken: Final = "Checking the forecast"
+    frames: Final = (
+        'event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_synthetic", "type": "message", '
+        '"role": "assistant", "model": "claude-sonnet-4-5-20250929", "content": [], "stop_reason": null, '
+        '"stop_sequence": null, "usage": {"input_tokens": 11, "output_tokens": 1}}}\n\n',
+        'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, '
+        '"content_block": {"type": "text", "text": ""}}\n\n',
+        'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
+        f'"delta": {{"type": "text_delta", "text": "{spoken}"}}}}\n\n',
+        'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n',
+        'event: content_block_start\ndata: {"type": "content_block_start", "index": 1, '
+        '"content_block": {"type": "tool_use", "id": "toolu_synthetic", "name": "lookup_weather", "input": {}}}\n\n',
+        'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 1, '
+        '"delta": {"type": "input_json_delta", "partial_json": "{\\"city\\": \\"Paris\\"}"}}\n\n',
+        'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 1}\n\n',
+        'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "tool_use", '
+        '"stop_sequence": null}, "usage": {"output_tokens": 9}}\n\n',
+        'event: message_stop\ndata: {"type": "message_stop"}\n\n',
+    )
+    tools: Final = [
+        {
+            "name": "lookup_weather",
+            "description": "Look up the forecast for a city",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+        }
+    ]
+
+    def guardrail(request: Request) -> Reply:
+        assert request.target == f"/guardrail/{guardrail_id}/version/DRAFT/apply", request.target
+        body: Final = json.loads(request.body)
+        assert body["source"] == "OUTPUT", body
+        assert body["content"] == [{"text": {"text": spoken}}], body
+        return Reply(body=json.dumps({"action": "NONE", "outputs": [], "assessments": []}).encode())
+
+    def provider(request: Request) -> Reply:
+        assert request.target == "/v1/messages"
+        body: Final = json.loads(request.body)
+        assert body["stream"] is True, body
+        assert body["tools"] == tools, body
+        return Reply(content_type="text/event-stream", chunks=tuple(frame.encode() for frame in frames))
+
+    with wire_server(guardrail) as policy, wire_server(provider) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["guardrails"] = [
+            {
+                "guardrail_name": identity,
+                "litellm_params": {
+                    "guardrail": "bedrock",
+                    "mode": "post_call",
+                    "default_on": True,
+                    "mask_response_content": True,
+                    "guardrailIdentifier": guardrail_id,
+                    "guardrailVersion": "DRAFT",
+                    "aws_region_name": "us-east-1",
+                    "aws_access_key_id": "AKIASYNTHETICGUARDRAIL",
+                    "aws_secret_access_key": "synthetic-secret",
+                    "aws_bedrock_runtime_endpoint": policy.url,
+                },
+            }
+        ]
+        path: Final = tmp_path / "bedrock-stream.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(
+                model="anthropic/claude-sonnet-4-5-20250929", api_base=upstream.url, api_key="synthetic-anthropic-key"
+            )
+            response: Final = candidate.request(
+                "POST",
+                "/v1/messages",
+                {
+                    "model": model,
+                    "max_tokens": 64,
+                    "stream": True,
+                    "tools": tools,
+                    "messages": [{"role": "user", "content": f"What is the weather in Paris? {identity}"}],
+                },
+            )
+            assert response.status_code == 200, response.text
+            head, separator, tail = response.text.partition("\n\n")
+            assert separator == "\n\n", response.text
+            assert head.startswith("event: message_start\ndata: "), response.text
+            assert json.loads(head.removeprefix("event: message_start\ndata: ")) == {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_synthetic",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": model,
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 11, "output_tokens": 1},
+                },
+            }, response.text
+            assert tail == "".join(frames[1:]), response.text
+            assert len(policy.drain()) == len(upstream.drain()) == 1
+
+
 @pytest.mark.covers("other.mcp.guardrails.request_selection_blocks_resolved_tool_without_execution")
 def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway: Gateway, tmp_path: Path) -> None:
     guardrail = "mcp-policy-" + uuid.uuid4().hex
