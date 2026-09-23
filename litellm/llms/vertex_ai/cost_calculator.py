@@ -184,9 +184,7 @@ def _handle_128k_pricing(
     output_cost_per_token_above_128k_tokens = model_info.get("output_cost_per_token_above_128k_tokens")
 
     prompt_tokens_details: Final = usage.prompt_tokens_details
-    cache_read_tokens: Final = (
-        (prompt_tokens_details.cached_tokens or 0) if prompt_tokens_details is not None else 0
-    )
+    cache_read_tokens: Final = (prompt_tokens_details.cached_tokens or 0) if prompt_tokens_details is not None else 0
     cache_creation_tokens: Final = (
         (prompt_tokens_details.cache_creation_tokens or 0) if prompt_tokens_details is not None else 0
     )
@@ -203,9 +201,7 @@ def _handle_128k_pricing(
     cache_creation_rate: Final = model_info.get("cache_creation_input_token_cost") or input_rate
 
     prompt_cost = (
-        text_tokens * input_rate
-        + cache_read_tokens * cache_read_rate
-        + cache_creation_tokens * cache_creation_rate
+        text_tokens * input_rate + cache_read_tokens * cache_read_rate + cache_creation_tokens * cache_creation_rate
     )
 
     ## CALCULATE OUTPUT COST
