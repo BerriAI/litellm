@@ -22,7 +22,6 @@ _MODEL_READ_METHODS: Final = frozenset(
         "find_first",
         "find_first_or_raise",
         "find_many",
-        "find_unique",
         "find_unique_or_raise",
         "count",
         "group_by",
