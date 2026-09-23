@@ -4,6 +4,7 @@ Tests PII detection and masking for different message formats
 """
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
@@ -18,7 +19,7 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
 )
 from litellm.exceptions import GuardrailRaisedException
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
 from litellm.exceptions import BlockedPiiEntityError
 
 
@@ -2331,47 +2332,320 @@ async def test_apply_guardrail_masks_on_request():
     assert "John Smith" not in result["texts"][0]
 
 
+def _anthropic_sse(event_type: str, payload: dict) -> bytes:
+    return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n".encode()
+
+
+def _anthropic_text_deltas(chunks: list[bytes]) -> list[tuple[int, str]]:
+    deltas = []
+    for line in b"".join(chunks).decode().split("\n"):
+        if not line.startswith("data: "):
+            continue
+        event = json.loads(line[6:])
+        if event.get("type") == "content_block_delta" and event["delta"].get("type") == "text_delta":
+            deltas.append((event["index"], event["delta"]["text"]))
+    return deltas
+
+
+def _chat_delta_chunk(text: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-out-mask",
+        choices=[StreamingChoices(index=0, delta=Delta(content=text, role="assistant"), finish_reason=finish_reason)],
+        created=1,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+
 @pytest.mark.asyncio
-async def test_apply_to_output_streaming_bytes_only_logs_warning():
+async def test_apply_to_output_streaming_chat_chunks_are_masked_as_one_response():
     """
-    Regression test: when apply_to_output=True and the stream contains only
-    bytes chunks (Anthropic native SSE), output masking is skipped.
-    A warning must be logged so operators are aware.
+    Structured chat completion chunks are buffered, assembled and masked as a
+    whole, so a card number split across deltas cannot reach the caller.
     """
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
+        mock_redacted_text={"text": "my card is <CREDIT_CARD>"},
+    )
+
+    async def mock_stream():
+        yield _chat_delta_chunk("my card is 4111")
+        yield _chat_delta_chunk(" 1111 1111 1111")
+        yield _chat_delta_chunk("", finish_reason="stop")
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={"messages": [{"role": "user", "content": "what is my card"}]},
+    ):
+        collected.append(chunk)
+
+    assert all(isinstance(chunk, ModelResponseStream) for chunk in collected)
+    joined = "".join(chunk.choices[0].delta.content or "" for chunk in collected)
+    assert joined == "my card is <CREDIT_CARD>"
+    assert collected[-1].choices[0].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_bytes_after_chat_chunks_are_passed_through_in_order():
+    """
+    Once structured chunks have been buffered, a trailing bytes frame belongs to
+    the same stream and must be forwarded rather than treated as a new SSE stream.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "hello"},
+    )
+    trailer = b"data: [DONE]\n\n"
+
+    async def mock_stream():
+        yield _chat_delta_chunk("hello", finish_reason="stop")
+        yield trailer
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert collected[0] == trailer
+    assert len(collected) == 2
+    assert isinstance(collected[1], ModelResponseStream)
+    assert collected[1].choices[0].delta.content == "hello"
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_bytes_masks_text_split_across_deltas():
+    """
+    Anthropic native /v1/messages streams reach the post_call hook as raw SSE
+    bytes. Output masking must run over the whole content block so a card
+    number split across text_delta events cannot reach the caller.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<CREDIT_CARD>"},
     )
 
     byte_chunks = [
-        b'data: {"type":"content_block_delta","delta":{"text":"Hello"}}\n\n',
-        b'data: {"type":"content_block_delta","delta":{"text":" world"}}\n\n',
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "4111"}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " 1111 1111 1111"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
     ]
 
     async def mock_stream():
         for b in byte_chunks:
             yield b
 
-    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert all(isinstance(chunk, bytes) for chunk in collected)
+    joined = b"".join(collected).decode()
+    assert "4111" not in joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<CREDIT_CARD>"
+    assert joined.count("event: message_start") == 1
+    assert joined.count("event: message_stop") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_bytes_without_pii_are_forwarded_unchanged():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "Hello world"},
+    )
+
+    byte_chunks = [
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " world"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
 
     collected = []
-    with patch("litellm.proxy.guardrails.guardrail_hooks.presidio.verbose_proxy_logger") as mock_logger:
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert collected == byte_chunks
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_bytes_fail_closed_when_presidio_is_unreachable():
+    """
+    The raw SSE stream is fully drained before masking, so a Presidio outage
+    must surface as an error to the caller: replaying the unscanned frames
+    would hand over whatever PII the model generated.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        presidio_analyzer_api_base="http://127.0.0.1:9",
+        presidio_anonymizer_api_base="http://127.0.0.1:9",
+    )
+
+    byte_chunks = [
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello world"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    collected = []
+
+    async def collect_masked_stream():
         async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=mock_user_api_key,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
             response=mock_stream(),
             request_data={},
         ):
             collected.append(chunk)
 
-        # All bytes should be yielded through
-        assert len(collected) == len(byte_chunks)
-        for original, received in zip(byte_chunks, collected):
-            assert original == received
+    with pytest.raises(Exception, match="Presidio PII analysis failed"):
+        await collect_masked_stream()
 
-        # Warning must be logged about skipped masking
-        mock_logger.warning.assert_called_once()
-        warning_msg = mock_logger.warning.call_args[0][0]
-        assert "Output PII masking was skipped" in warning_msg
+    assert collected == []
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_bytes_block_action_raises_instead_of_replaying():
+    """
+    A BLOCK on generated PII must refuse the streaming /v1/messages response the
+    same way it refuses the non streaming one, not replay the raw frames.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        apply_to_output=True,
+        mock_testing=False,
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        pii_entities_config={PiiEntityType.CREDIT_CARD: PiiAction.BLOCK},
+    )
+
+    byte_chunks = [
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "4111 1111 1111 1111"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    analyzer_hit = [{"entity_type": "CREDIT_CARD", "score": 0.99, "start": 0, "end": 19}]
+    collected = []
+
+    async def collect_masked_stream():
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=mock_stream(),
+            request_data={},
+        ):
+            collected.append(chunk)
+
+    with patch.object(guardrail, "_get_session_iterator", _make_mock_session_iterator(analyzer_hit)):
+        with pytest.raises(BlockedPiiEntityError):
+            await collect_masked_stream()
+
+    assert collected == []
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_propagates_upstream_error_when_nothing_was_buffered():
+    """
+    An upstream guardrail that rejects the stream before the first chunk must
+    surface as an error to the caller, not as an empty 200 stream.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<CREDIT_CARD>"},
+    )
+
+    async def failing_stream():
+        raise RuntimeError("upstream guardrail rejected the stream")
+        yield b""
+
+    with pytest.raises(RuntimeError, match="upstream guardrail rejected the stream"):
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=failing_stream(),
+            request_data={},
+        ):
+            pass
 
 
 @pytest.mark.asyncio

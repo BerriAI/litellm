@@ -205,6 +205,36 @@ def test_flux2_flex_cost_accepts_lowercase_model_spelling():
     assert cost == pytest.approx(5e-08 * 1536 * 1024 * 2)
 
 
+def test_flux2_flex_cost_prefers_deployment_input_cost_per_pixel() -> None:
+    response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n"), ImageObject(b64_json="aW1n")])
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="FLUX.2-flex",
+        completion_response=response,
+        custom_llm_provider="azure_ai",
+        size="2048x1024",
+        call_type="image_generation",
+        model_info={"input_cost_per_pixel": 2e-07},
+    )
+
+    assert cost == pytest.approx(2e-07 * 2048 * 1024 * 2)
+
+
+def test_unlisted_azure_ai_model_bills_deployment_input_cost_per_pixel() -> None:
+    response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n"), ImageObject(b64_json="aW1n")])
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="unlisted-flux-deployment",
+        completion_response=response,
+        custom_llm_provider="azure_ai",
+        size="1024x1024",
+        call_type="image_generation",
+        model_info={"input_cost_per_pixel": 1e-07},
+    )
+
+    assert cost == pytest.approx(1e-07 * 1024 * 1024 * 2)
+
+
 def test_flux2_response_preserves_mapped_dimensions():
     config = AzureFoundryFluxImageGenerationConfig()
     params = config.map_openai_params(

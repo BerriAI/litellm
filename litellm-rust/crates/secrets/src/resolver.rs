@@ -72,6 +72,7 @@ impl SecretResolver {
             Ok(value) => Ok(value
                 .or_else(|| self.environment_secret(name))
                 .or(default_value)),
+            Err(error @ Error::ExternalManager(_)) => Err(error),
             Err(error) => match self.failure_policy {
                 FailurePolicy::Propagate => Err(error),
                 FailurePolicy::EnvironmentFallback => self
