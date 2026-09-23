@@ -2070,6 +2070,9 @@
         ],
         "tests/integration/spend/test_end_user_spend_without_proxy_user.py::test_end_user_spend_lands_for_key_without_user_id_when_auth_cache_is_redis": [
             "spend.end_user.charged_when_key_has_no_user_id_and_auth_cache_is_redis"
+        ],
+        "tests/integration/authorization/test_object_permission_lookup.py::test_chat_request_without_vector_stores_does_not_read_object_permission_table": [
+            "authorization.vector_store.plain_request_skips_object_permission_lookup"
         ]
     },
     "browser": {
