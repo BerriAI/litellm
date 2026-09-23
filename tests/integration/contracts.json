@@ -263,6 +263,57 @@
     "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_metadata_redacts_user_api_key_fields_like_vanilla_langfuse": [
       "other.observability.langfuse_otel.request_metadata_redaction_matches_vanilla"
     ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_metadata_reaches_langfuse_for_openai_sdk_stream": [
+      "other.observability.langfuse_otel.request_metadata_openai_sdk_stream"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_metadata_reaches_langfuse_for_openai_sdk_async": [
+      "other.observability.langfuse_otel.request_metadata_openai_sdk_async"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_metadata_reaches_langfuse_for_anthropic_sdk_messages": [
+      "other.observability.langfuse_otel.request_metadata_anthropic_sdk_messages"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_metadata_reaches_langfuse_for_anthropic_sdk_stream": [
+      "other.observability.langfuse_otel.request_metadata_anthropic_sdk_stream"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_metadata_reaches_langfuse_for_responses_api": [
+      "other.observability.langfuse_otel.request_metadata_responses_api"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_metadata_reaches_langfuse_for_responses_sse_stream": [
+      "other.observability.langfuse_otel.request_metadata_responses_stream_sse"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_caller_trace_metadata_survives_flattened_identity": [
+      "other.observability.langfuse_otel.caller_trace_metadata_preserved_with_flattened_identity"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_failure_span_carries_request_metadata": [
+      "other.observability.langfuse_otel.failure_span_carries_request_metadata"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_teamless_key_emits_no_team_identity": [
+      "other.observability.langfuse_otel.teamless_key_omits_team_identity"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_teamless_key_keeps_caller_trace_metadata": [
+      "other.observability.langfuse_otel.teamless_key_keeps_caller_trace_metadata"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_spend_logs_metadata_roundtrips_oversized_and_nonstring_values": [
+      "other.observability.langfuse_otel.spend_logs_metadata_roundtrips_nonstring_values"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_unauthenticated_request_emits_no_span": [
+      "other.observability.langfuse_otel.unauthenticated_request_emits_no_span"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_repeated_identical_requests_emit_one_span_each": [
+      "other.observability.langfuse_otel.repeated_requests_each_emit_one_span"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_sink_outage_mid_burst_lands_every_response_id_once": [
+      "other.observability.langfuse_otel.sink_outage_burst_lands_each_id_once"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_worker_kill_mid_burst_keeps_serving_and_exports": [
+      "other.observability.langfuse_otel.worker_kill_burst_keeps_serving"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_slow_sink_does_not_deadlock_exports": [
+      "other.observability.langfuse_otel.slow_sink_does_not_deadlock_exports"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_v2_mapper_keeps_existing_trace_metadata_keys": [
+      "other.observability.langfuse_otel.v2_mapper_unchanged"
+    ],
     "tests/integration/observability/test_guardrail_effects.py::test_guardrail_rewrites_system_and_user_in_actual_anthropic_request": [
       "other.observability.guardrails.rewrite_reaches_correct_anthropic_positions"
     ],
