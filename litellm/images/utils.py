@@ -96,7 +96,7 @@ def _jpeg_sof_dimensions(stream: IO[bytes], start: int, offset: int, segments_le
 def _header_dimensions(stream: IO[bytes], position: int) -> tuple[int, int] | None:
     stream.seek(position)
     head: Final = stream.read(_HEADER_READ_SIZE)
-    match get_image_type(head):
+    match get_image_type(head):  # pyright: ignore[reportMatchNotExhaustive]  # unmatched types fall through to the None below
         case "png":
             return _png_dimensions(head)
         case "webp":
