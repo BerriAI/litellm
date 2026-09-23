@@ -5,7 +5,8 @@ use litellm_cost::batch::{
     BatchCostRates, BatchPricing, BatchUsage, ModalityRates, batch_cost_calculator,
 };
 use litellm_cost::catalog::{
-    CompletionCostRequest, CostCatalog, ModelCostRequest, ModelInfoCatalog, ResponseCostRequest,
+    BuiltInToolCharge, CompletionCostRequest, CostCatalog, ModelCostRequest, ModelInfoCatalog,
+    ResponseCostRequest,
 };
 use litellm_cost::custom_pricing::{
     CustomPricing, CustomTokenRates, RawUsage, cost_per_token_custom_pricing_helper,
@@ -27,7 +28,10 @@ use litellm_cost::non_token::{
 };
 use litellm_cost::responses_usage::transform_response_api_usage_to_chat_usage;
 use litellm_cost::tiered_pricing::{select_tier_for_input, tier_rate};
-use litellm_cost::tool_call_cost_tracking::{DefaultToolRates, get_cost_for_file_search};
+use litellm_cost::tool_call_cost_tracking::{
+    DefaultToolRates, ResponseKind, get_cost_for_file_search,
+};
+use litellm_cost::tool_cost_dispatch::BuiltInToolCostRequest;
 use litellm_cost::usage_dispatch::get_usage_object;
 use litellm_cost::{
     Pricing, PromptConvention, Rate, Rates, Request, ServiceTier, ThresholdPolicy, Usage,
@@ -459,20 +463,23 @@ fn main() {
         at,
     );
     println!("off_peak_prompt={off_peak_prompt:.5} off_peak_output={off_peak_output:.5}");
+    let tool_defaults = DefaultToolRates {
+        file_search_per_call: 0.25,
+        azure_file_search_per_gb_day: 0.1,
+        azure_vector_store_per_gb_day: 0.2,
+        azure_computer_input_per_1k_tokens: 3.0,
+        azure_computer_output_per_1k_tokens: 12.0,
+        code_interpreter_per_session: Some(0.03),
+        xai_web_search_per_call: 0.005,
+        groq_browser_open_per_call: 0.001,
+    };
     let file_search_cost = get_cost_for_file_search(
         Some(&json!({"type": "file_search"})),
         Some("azure"),
         Some(&json!({"file_search_cost_per_gb_per_day": 0.4})),
         Some(1.5),
         Some(10.0),
-        DefaultToolRates {
-            file_search_per_call: 0.25,
-            azure_file_search_per_gb_day: 0.1,
-            azure_vector_store_per_gb_day: 0.2,
-            azure_computer_input_per_1k_tokens: 3.0,
-            azure_computer_output_per_1k_tokens: 12.0,
-            code_interpreter_per_session: Some(0.03),
-        },
+        tool_defaults,
     );
     println!("file_search_cost={file_search_cost:.2}");
     let (regional_prompt, regional_output) = calculate_generic_cost_from_model_info_with_region(
@@ -495,6 +502,7 @@ fn main() {
             json!({
                 "input_cost_per_token": 2e-6,
                 "output_cost_per_token": 4e-6,
+                "search_context_cost_per_query": {"search_context_size_medium": 0.01},
                 "regional_processing_uplift_multiplier_eu": 1.2,
                 "off_peak_pricing": {
                     "hours_utc": "16:30-00:30",
@@ -555,6 +563,16 @@ fn main() {
     println!("rerank={} vector_search={}", rerank.0, search.0);
     let discount = json!({"openai": 0.1});
     let margin = json!({"global": {"percentage": 0.2, "fixed_amount": 0.001}});
+    let completion_response = json!({"output": [{"type": "web_search_call"}]});
+    let tool_params = json!({});
+    let tool_request = BuiltInToolCostRequest {
+        response: &completion_response,
+        response_kind: ResponseKind::Responses,
+        usage: Some(&off_peak_usage),
+        provider: Some("openai"),
+        params: &tool_params,
+        defaults: tool_defaults,
+    };
     let completion_request = CompletionCostRequest {
         token: ModelCostRequest {
             model: "openai/model",
@@ -567,7 +585,7 @@ fn main() {
             at,
             response_time_ms: None,
         },
-        built_in_tools: 0.01,
+        built_in_tools: BuiltInToolCharge::FromResponse(tool_request),
         additional_costs: &[0.02],
         discount_config: &discount,
         margin_config: &margin,
@@ -588,4 +606,7 @@ fn main() {
         "completion_total={:.8} provider_total={provider_total:.3}",
         completion_total.total
     );
+    let dispatched_tool_cost =
+        model_info_catalog.built_in_tool_cost("openai/model", Some("openai"), None, tool_request);
+    println!("dispatched_tool_cost={dispatched_tool_cost:.2}");
 }

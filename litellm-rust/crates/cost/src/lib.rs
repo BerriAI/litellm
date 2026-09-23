@@ -19,6 +19,7 @@ pub mod responses_usage;
 pub mod retrieval_cost;
 pub mod tiered_pricing;
 pub mod tool_call_cost_tracking;
+pub mod tool_cost_dispatch;
 pub mod transcription_usage;
 pub mod usage_dispatch;
 

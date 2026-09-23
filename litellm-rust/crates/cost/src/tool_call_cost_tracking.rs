@@ -8,6 +8,8 @@ pub struct DefaultToolRates {
     pub azure_computer_input_per_1k_tokens: f64,
     pub azure_computer_output_per_1k_tokens: f64,
     pub code_interpreter_per_session: Option<f64>,
+    pub xai_web_search_per_call: f64,
+    pub groq_browser_open_per_call: f64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

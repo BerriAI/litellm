@@ -10,6 +10,7 @@ use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::per_second::per_second_pricing_cost;
 use crate::responses_usage::ChatUsage;
 use crate::retrieval_cost::{rerank_cost, vector_store_search_cost};
+use crate::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
 use crate::{Cost, Pricing, PricingError, Rates, Request, calculate};
 
 #[derive(Clone, Debug, Default)]
@@ -38,10 +39,16 @@ pub struct ModelCostRequest<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct CompletionCostRequest<'a> {
     pub token: ModelCostRequest<'a>,
-    pub built_in_tools: f64,
+    pub built_in_tools: BuiltInToolCharge<'a>,
     pub additional_costs: &'a [f64],
     pub discount_config: &'a Value,
     pub margin_config: &'a Value,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum BuiltInToolCharge<'a> {
+    Provided(f64),
+    FromResponse(BuiltInToolCostRequest<'a>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -215,15 +222,37 @@ impl ModelInfoCatalog {
         vector_store_search_cost(provider, api_type, self.entries.get("vertex_ai/search_api"))
     }
 
+    pub fn built_in_tool_cost(
+        &self,
+        model: &str,
+        provider: Option<&str>,
+        region: Option<&str>,
+        request: BuiltInToolCostRequest<'_>,
+    ) -> f64 {
+        let model_info = self
+            .select_model_key(model, provider, region)
+            .and_then(|key| self.entries.get(key));
+        get_cost_for_built_in_tools(request, model_info)
+    }
+
     pub fn completion_cost(
         &self,
         request: CompletionCostRequest<'_>,
     ) -> Result<CompletionCost, CatalogError> {
         let (prompt, output) = self.cost_per_token(request.token)?;
+        let built_in_tools = match request.built_in_tools {
+            BuiltInToolCharge::Provided(cost) => cost,
+            BuiltInToolCharge::FromResponse(tool_request) => self.built_in_tool_cost(
+                request.token.model,
+                request.token.provider,
+                request.token.region,
+                tool_request,
+            ),
+        };
         Ok(completion_cost(
             prompt,
             output,
-            request.built_in_tools,
+            built_in_tools,
             request.additional_costs,
             request.token.provider,
             request.discount_config,

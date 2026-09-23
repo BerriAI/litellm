@@ -15,6 +15,8 @@ fn defaults() -> DefaultToolRates {
         azure_computer_input_per_1k_tokens: 3.0,
         azure_computer_output_per_1k_tokens: 12.0,
         code_interpreter_per_session: Some(0.03),
+        xai_web_search_per_call: 0.005,
+        groq_browser_open_per_call: 0.001,
     }
 }
 

@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use jiff::Timestamp;
 use litellm_cost::catalog::{
-    CompletionCostRequest, ModelCostRequest, ModelInfoCatalog, ResponseCostRequest,
+    BuiltInToolCharge, CompletionCostRequest, ModelCostRequest, ModelInfoCatalog,
+    ResponseCostRequest,
 };
 use litellm_cost::completion_cost::{
     ResponseCostError, apply_cost_discount, apply_cost_margin, completion_cost,
@@ -98,7 +99,7 @@ fn model_info_catalog_completion_and_response_cost_use_selected_metadata() {
             at,
             response_time_ms: None,
         },
-        built_in_tools: 0.01,
+        built_in_tools: BuiltInToolCharge::Provided(0.01),
         additional_costs: &[0.02],
         discount_config: &discount,
         margin_config: &margin,
