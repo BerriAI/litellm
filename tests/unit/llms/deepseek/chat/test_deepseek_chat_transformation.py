@@ -180,12 +180,13 @@ async def test_transform_request_normalizes_tool_choice_for_thinking(
     monkeypatch.setattr(litellm, "drop_params", global_drop_params)
     config = DeepSeekChatConfig()
     tool_choice_param = {"tool_choice": tool_choice} if tool_choice is not None else {}
+    tools = [_function_tool("shell"), _function_tool("read_file")]
     request = {
         "model": model,
         "messages": [{"role": "user", "content": "hi"}],
         "optional_params": {
             "thinking": thinking,
-            "tools": [_function_tool("shell"), _function_tool("read_file")],
+            "tools": tools,
             **tool_choice_param,
         },
         "litellm_params": {"drop_params": request_drop_params},
@@ -199,6 +200,7 @@ async def test_transform_request_normalizes_tool_choice_for_thinking(
     )
 
     assert body.get("tool_choice") == expected
+    assert body["tools"] == tools
 
 
 @pytest.mark.parametrize("is_async", [False, True])
