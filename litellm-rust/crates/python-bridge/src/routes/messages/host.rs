@@ -20,7 +20,7 @@ use crate::{
 
 /// The Anthropic Messages body fields a caller may pass besides `model` and `messages`,
 /// as `AnthropicMessagesRequestOptionalParams` declares them.
-const BODY_FIELDS: [&str; 20] = [
+const BODY_FIELDS: [&str; 22] = [
     "max_tokens",
     "metadata",
     "stop_sequences",
@@ -41,7 +41,32 @@ const BODY_FIELDS: [&str; 20] = [
     "output_config",
     "cache_control",
     "reasoning_effort",
+    "compaction",
+    "safeguards",
 ];
+
+fn provider_specific_headers(value: Value, provider: &str) -> Map<String, Value> {
+    let scoped = match value {
+        Value::Array(entries) => entries,
+        value => vec![value],
+    };
+    scoped
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .get("custom_llm_provider")
+                .and_then(Value::as_str)
+                .is_some_and(|providers| providers.split(',').any(|name| name.trim() == provider))
+        })
+        .filter_map(|entry| {
+            entry
+                .get("extra_headers")
+                .and_then(Value::as_object)
+                .cloned()
+        })
+        .flat_map(Map::into_iter)
+        .collect()
+}
 
 /// The Python side of the Messages route: projects the prepared arguments and builds the
 /// public response, chunks and exceptions.
@@ -84,15 +109,31 @@ impl MessagesRouteHost {
             .map(|value| python_timeout_seconds(py, value.unbind()))
             .transpose()?
             .flatten();
+        let forwarded_headers = argument("headers")?
+            .map(|value| from_py::<Map<String, Value>>(&value))
+            .transpose()?;
+        let extra_headers = argument("extra_headers")?
+            .map(|value| from_py::<Map<String, Value>>(&value))
+            .transpose()?;
+        let provider = string("custom_llm_provider")?.unwrap_or_else(|| self.provider(py));
+        let scoped_headers = argument("provider_specific_header")?
+            .map(|value| {
+                from_py::<Value>(&value).map(|value| provider_specific_headers(value, &provider))
+            })
+            .transpose()?;
+        let headers = forwarded_headers
+            .into_iter()
+            .chain(extra_headers)
+            .chain(scoped_headers)
+            .flat_map(Map::into_iter)
+            .collect::<Map<String, Value>>();
         Ok(MessagesCall {
             model,
             body,
             api_key: string("api_key")?,
             api_base: string("api_base")?,
             custom_llm_provider: string("custom_llm_provider")?,
-            extra_headers: argument("extra_headers")?
-                .map(|value| from_py(&value))
-                .transpose()?,
+            extra_headers: (!headers.is_empty()).then_some(headers),
             timeout: optional_timeout(timeout),
         })
     }

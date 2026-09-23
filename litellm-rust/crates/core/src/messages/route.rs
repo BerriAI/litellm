@@ -9,13 +9,15 @@ use litellm_host::{
     machine::{HostChannel, MachineFault, RouteMachine},
     route::Route,
 };
+use litellm_llms::anthropic::common_utils::{
+    is_invalid_thinking_error, strip_thinking_blocks_from_request,
+};
 use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
 use serde_json::{Map, Value};
 
 use super::{
     Error,
-    common_utils::messages_provider_config,
-    handler::{decode_response, network, provider_error, send},
+    handler::{decode_response, network, provider_error, provider_error_text, send},
     prepare::prepare_provider_request,
     types::MessagesRequest,
 };
@@ -79,15 +81,11 @@ pub type MessagesMachine = RouteMachine<Messages>;
 
 /// Whether this route serves the request, decided before any callback runs so a host
 /// can still run its own path.
-pub fn supports(model: &str, custom_llm_provider: Option<&str>, stream: bool) -> bool {
+pub fn supports(model: &str, custom_llm_provider: Option<&str>, _stream: bool) -> bool {
     let provider = get_custom_llm_provider(model, custom_llm_provider)
         .map(|resolved| resolved.custom_llm_provider)
         .or(custom_llm_provider);
-    match provider {
-        Some(ANTHROPIC_MESSAGES_PROVIDER) => true,
-        Some(provider) => !stream && messages_provider_config(provider).is_some(),
-        None => false,
-    }
+    provider == Some(ANTHROPIC_MESSAGES_PROVIDER)
 }
 
 /// The in-process host for a request already in hand. It answers projection once and
@@ -163,6 +161,17 @@ async fn execute(host: MessagesHost) -> Result<MessagesOutput, Error> {
         )
         .await?;
     let response = send(&wire.url, &wire.headers, &wire.body, request.timeout).await?;
+    let response =
+        if request.provider == ANTHROPIC_MESSAGES_PROVIDER && response.status().as_u16() == 400 {
+            let text = response.text().await.map_err(network)?;
+            if !is_invalid_thinking_error(&text) {
+                return Err(provider_error_text(400, &text));
+            }
+            let retry_body = strip_thinking_blocks_from_request(&wire.body);
+            send(&wire.url, &wire.headers, &retry_body, request.timeout).await?
+        } else {
+            response
+        };
     if !response.status().is_success() {
         return Err(provider_error(response).await);
     }

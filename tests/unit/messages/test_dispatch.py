@@ -5,6 +5,8 @@ from typing import Final, cast  # noqa: TID251  # narrows legacy callable signat
 import pytest
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages import handler as python_messages
 from litellm.messages.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
@@ -51,6 +53,127 @@ def test_public_signature_is_the_legacy_signature() -> None:
     legacy_amessages: Final = cast(Callable[..., object], python_messages.anthropic_messages)
     assert inspect.signature(public_messages) == inspect.signature(legacy_messages)
     assert inspect.signature(public_amessages) == inspect.signature(legacy_amessages)
+
+
+@pytest.mark.parametrize(
+    ("model", "provider", "expected_provider"),
+    (
+        ("anthropic/claude-sonnet-4-5", None, "anthropic"),
+        ("claude-sonnet-4-5", None, "anthropic"),
+        ("claude-sonnet-4-5", "anthropic", "anthropic"),
+        ("azure_ai/claude-sonnet-4-5", None, "azure_ai"),
+    ),
+)
+def test_provider_resolution_selects_only_anthropic_for_native_messages(
+    monkeypatch: pytest.MonkeyPatch, model: str, provider: str | None, expected_provider: str
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    captured: Final[list[str]] = []
+    kwargs: Final = {"custom_llm_provider": provider} if provider is not None else {}
+
+    def python(*args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: observes fallback
+        captured.append("python")
+        return response()
+
+    def native(
+        request: LiteLLMMessagesRequest,
+        args: tuple[object, ...],
+        call_kwargs: Mapping[str, object],
+    ) -> AnthropicMessagesResponse:
+        assert request.custom_llm_provider == expected_provider
+        captured.append("rust")
+        return response()
+
+    _DISPATCH.run(
+        (16, MESSAGES, model),
+        kwargs,
+        python=python,
+        binding=messages_binding(native),
+        native=lambda hook, request, args, call_kwargs: hook(request, args, call_kwargs),
+    )
+    assert captured == (["rust"] if expected_provider == "anthropic" else ["python"])
+
+
+def test_unavailable_native_extension_uses_python_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    called: Final[list[str]] = []
+
+    def python(*args: object, **kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: observes fallback
+        called.append("python")
+        return response()
+
+    _DISPATCH.run(
+        (16, MESSAGES, "claude-sonnet-4-5"),
+        {},
+        python=python,
+        binding=messages_binding(None),
+        native=lambda hook, request, args, kwargs: hook(request, args, kwargs),
+    )
+
+    assert called == ["python"]
+
+
+@pytest.mark.parametrize("model", ("claude-sonnet-5", "claude-sonnet-4-5"))
+def test_sampling_params_follow_python_model_capability(monkeypatch: pytest.MonkeyPatch, model: str) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    called: Final[list[str]] = []
+
+    def python(*args: object, **kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: observes provider selection
+        called.append("python")
+        return response()
+
+    def native(
+        request: LiteLLMMessagesRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
+    ) -> AnthropicMessagesResponse:
+        called.append("rust")
+        return response()
+
+    _DISPATCH.run(
+        (16, MESSAGES, model),
+        {"temperature": 0.3},
+        python=python,
+        binding=messages_binding(native),
+        native=lambda hook, request, args, kwargs: hook(request, args, kwargs),
+    )
+
+    expected: Final = "rust" if AnthropicModelInfo._supports_sampling_params(model) else "python"  # pyright: ignore[reportPrivateUsage]  # match the Python Messages capability gate
+    assert called == [expected]
+
+
+@pytest.mark.asyncio
+async def test_provider_changing_python_hook_bypasses_native_before_effects(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    called: Final[list[str]] = []
+
+    class Reroute(CustomLogger):
+        async def async_pre_request_hook(self, model: str, messages: list, kwargs: dict) -> dict:
+            return {**kwargs, "litellm_params": {"custom_llm_provider": "openai"}}
+
+    reroute: Final = Reroute()
+    monkeypatch.setattr(litellm, "callbacks", [reroute])
+
+    async def python(*args: object, **kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: observes fallback
+        called.append("python")
+        modified: Final = await reroute.async_pre_request_hook("claude-sonnet-4-5", MESSAGES, {})
+        assert modified["litellm_params"] == {"custom_llm_provider": "openai"}
+        called.append("hook")
+        return response()
+
+    async def native(
+        request: LiteLLMMessagesRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
+    ) -> AnthropicMessagesResponse:
+        called.append("rust")
+        return response()
+
+    await _ADISPATCH.arun(
+        (16, MESSAGES, "claude-sonnet-4-5"),
+        {},
+        python=python,
+        binding=amessages_binding(native),
+        native=lambda hook, request, args, kwargs: hook(request, args, kwargs),
+    )
+
+    assert called == ["python", "hook"]
 
 
 def test_python_route_forwards_original_call_shape() -> None:

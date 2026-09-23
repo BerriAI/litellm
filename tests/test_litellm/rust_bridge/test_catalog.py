@@ -57,6 +57,10 @@ def test_shipped_decisions(
     elif route is Route.TRANSCRIPTION and provider == "bedrock":
         assert catalog.rollout(context) is Rollout.RUST_REQUIRED
         assert catalog.decision(context) is Decision.RUST_REQUIRED
+    elif route is Route.MESSAGES and provider == "anthropic" and delivery is not Delivery.WEBSOCKET:
+        enabled: Final = environment == "1" if environment is not None else process is not False
+        assert catalog.rollout(context) is Rollout.RUST_OPT_OUT
+        assert catalog.decision(context) is (Decision.RUST_WITH_FALLBACK if enabled else Decision.PYTHON)
     else:
         assert catalog.rollout(context) is Rollout.PYTHON_ONLY
         assert catalog.decision(context) is Decision.PYTHON

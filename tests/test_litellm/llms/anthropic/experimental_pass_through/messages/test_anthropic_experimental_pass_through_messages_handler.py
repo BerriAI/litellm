@@ -1073,7 +1073,8 @@ async def test_messages_strips_provider_prefix_exactly_once(requested_model, exp
 
 
 @pytest.mark.asyncio
-async def test_native_messages_strips_replayed_provider_specific_fields_from_wire():
+async def test_python_messages_strips_replayed_provider_specific_fields_from_wire(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_RUST", "0")
     captured = {}
 
     async def fake_send(self, request, **kwargs):

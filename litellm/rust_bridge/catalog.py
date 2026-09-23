@@ -107,6 +107,12 @@ RULES: Final[Rules] = (
     LoggerRule(Rollout.RUST_OPT_IN),
     RouteRule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),
     RouteRule(Route.OCR, Rollout.RUST_OPT_OUT),
+    RouteRule(
+        Route.MESSAGES,
+        Rollout.RUST_OPT_OUT,
+        providers=frozenset({"anthropic"}),
+        deliveries=frozenset({Delivery.COMPLETED, Delivery.STREAMING}),
+    ),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
     RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
     RouteRule(Route.TOKENIZER, Rollout.PYTHON_ONLY),

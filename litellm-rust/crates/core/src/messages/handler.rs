@@ -31,12 +31,16 @@ pub(super) async fn send(
 pub(super) async fn provider_error(response: reqwest::Response) -> Error {
     let status = response.status().as_u16();
     match response.text().await {
-        Ok(text) => Error::Transport(TransportError::Http {
-            status,
-            body: truncate_error_body(&text),
-        }),
+        Ok(text) => provider_error_text(status, &text),
         Err(error) => network(error),
     }
+}
+
+pub(super) fn provider_error_text(status: u16, text: &str) -> Error {
+    Error::Transport(TransportError::Http {
+        status,
+        body: truncate_error_body(text),
+    })
 }
 
 pub(super) fn decode_response(

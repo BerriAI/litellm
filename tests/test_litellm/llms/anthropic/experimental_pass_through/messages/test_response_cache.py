@@ -14,6 +14,11 @@ from litellm.llms.anthropic.experimental_pass_through.messages.response_cache im
     AnthropicMessagesStreamCacheWriter,
 )
 
+
+@pytest.fixture(autouse=True)
+def python_messages_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "0")
+
 STREAM_EVENTS: List[bytes] = [
     b'event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_stream_1", "type": "message", '
     b'"role": "assistant", "model": "claude-sonnet-4-5", "content": [], "stop_reason": null, '

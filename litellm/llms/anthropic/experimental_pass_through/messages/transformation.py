@@ -643,10 +643,21 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
 
         # Check for context management
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
         context_management_param: Final = optional_params.get("context_management")
+        normalized_context_management: Final = (
+            AnthropicConfig.map_openai_context_management_to_anthropic(context_management_param)
+            if isinstance(context_management_param, list)
+            else context_management_param
+        )
         if context_management_param is not None:
             # Check edits array for compact_20260112 type
-            edits: Final = context_management_param.get("edits", ())
+            edits: Final = (
+                normalized_context_management.get("edits", ())
+                if isinstance(normalized_context_management, dict)
+                else ()
+            )
             has_compact = False
             has_other = False
 

@@ -1,5 +1,6 @@
 pub mod batches;
 pub mod chat;
+pub mod common_utils;
 pub mod count_tokens;
 pub mod experimental_pass_through;
 

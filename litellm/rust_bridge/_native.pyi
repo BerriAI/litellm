@@ -1,6 +1,6 @@
 from asyncio import Future
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
-from typing import Never, final
+from typing import Never, TypeAlias, final
 
 import httpx
 from pydantic import JsonValue
@@ -9,6 +9,9 @@ from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+
+NativeMessagesSyncResult: TypeAlias = AnthropicMessagesResponse | Iterator[bytes]
+NativeMessagesAsyncResult: TypeAlias = AnthropicMessagesResponse | AsyncIterator[bytes]
 
 class RustBridgeDeclined(Exception): ...
 class RustUpstreamError(Exception): ...
@@ -65,12 +68,12 @@ def messages(
     request: LiteLLMMessagesRequest,
     args: tuple[object, ...],
     kwargs: dict[str, object],
-) -> AnthropicMessagesResponse | Iterator[bytes]: ...
+) -> NativeMessagesSyncResult: ...
 def amessages(
     request: LiteLLMMessagesRequest,
     args: tuple[object, ...],
     kwargs: dict[str, object],
-) -> Coroutine[object, object, AnthropicMessagesResponse | AsyncIterator[bytes]]: ...
+) -> Coroutine[object, object, NativeMessagesAsyncResult]: ...
 def chat_completions_decline(
     model: str,
     messages: Sequence[object],
