@@ -2031,6 +2031,9 @@
         ],
         "tests/integration/providers/test_rerank_latency_headers_wire.py::test_rerank_response_carries_call_id_latency_and_cost_headers_like_chat_completions": [
             "providers.rerank.response_carries_latency_and_cost_headers"
+        ],
+        "tests/integration/providers/test_bedrock_knowledge_base_user_context_wire.py::test_vector_store_search_user_context_reaches_bedrock_retrieve_body": [
+            "providers.bedrock_knowledge_base.search_forwards_user_context_to_retrieve"
         ]
     },
     "browser": {
