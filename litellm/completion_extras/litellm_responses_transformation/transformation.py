@@ -683,7 +683,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         merged_message_texts.append(response_text if response_text else "")
         raw_annotations = getattr(content, "annotations", None)
         annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(raw_annotations)
-        merged_annotations.extend(annotations or [])
+        if annotations:
+            merged_annotations.extend(annotations)
 
     @staticmethod
     def _typed_tool_call_dict(item: object, tool_call_index: int) -> "Mapping[str, object] | None":
@@ -818,7 +819,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 annotations=merged_annotations,
                 reasoning_items=cast(
                     list[ChatCompletionReasoningItem] | None,
-                    ([merged_reasoning_item] if merged_reasoning_item is not None else None),
+                    (
+                        [merged_reasoning_item]  # mutable-ok: reasoning_items is a list field
+                        if merged_reasoning_item is not None
+                        else None
+                    ),
                 ),
             )
             choices.append(
