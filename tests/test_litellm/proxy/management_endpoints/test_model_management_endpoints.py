@@ -4797,6 +4797,30 @@ class TestPatchModelCredentialName:
         credentials_repository.find_by_name.assert_awaited_once_with("ghost-credential")
 
     @pytest.mark.asyncio
+    async def test_patch_model_resending_unchanged_dangling_credential_name_is_not_validated(self, monkeypatch):
+        credentials_repository = MagicMock()
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                api_base="https://api.openai.com/v1",
+                litellm_credential_name="ghost-credential",
+            ),
+            model_info=ModelInfo(id="dep-cred-1"),
+        )
+
+        persisted: Final = await self._patch_model(
+            monkeypatch,
+            db_model,
+            self._admin_user(),
+            "ghost-credential",
+            credentials_repository=credentials_repository,
+        )
+        params: Final = json.loads(persisted[0]["litellm_params"])
+        assert params["litellm_credential_name"] == "ghost-credential"
+        credentials_repository.find_by_name.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_patch_model_accepts_credential_known_only_in_db(self, monkeypatch):
         db_model: Final = Deployment(
             model_name="gpt-4",
