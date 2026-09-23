@@ -624,6 +624,7 @@ _CREDENTIAL_FIELDS: Final = frozenset(
 
 _OBJECT_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_SEQ_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+_REDACT_CREDENTIAL_MAX_DEPTH: Final = 10
 
 
 def _str_object_dict(value: object) -> dict[str, object] | None:
@@ -632,39 +633,43 @@ def _str_object_dict(value: object) -> dict[str, object] | None:
     return _OBJECT_DICT_ADAPTER.validate_python(value)
 
 
-def _redact_credential_value(value: object) -> object:
+def _redact_credential_value(value: object, depth: int = 0) -> object:
     if isinstance(value, str):
         return hash_token(value) if value.startswith("sk-") else "***"
+    if depth >= _REDACT_CREDENTIAL_MAX_DEPTH:
+        return "***"
     mapping: Final = _str_object_dict(value)
     if mapping is not None:
         return {  # mutable-ok: rebuilt alert payload dict
-            str(k): _redact_credential_field(str(k), v) for k, v in mapping.items()
+            str(k): _redact_credential_field(str(k), v, depth + 1) for k, v in mapping.items()
         }
     if isinstance(value, (list, tuple)):
         items: Final = _OBJECT_SEQ_ADAPTER.validate_python(value)
-        return [_redact_credential_value(item) for item in items]  # mutable-ok: rebuilt alert payload list
+        return [_redact_credential_value(item, depth + 1) for item in items]  # mutable-ok: rebuilt alert payload list
     if isinstance(value, BaseModel):
-        return _redact_management_kwargs_inner(value.model_dump(exclude_unset=True))
+        return _redact_management_kwargs_inner(value.model_dump(exclude_unset=True), depth + 1)
     return "***"
 
 
-def _redact_credential_field(field_name: str, value: object) -> object:
+def _redact_credential_field(field_name: str, value: object, depth: int = 0) -> object:
     if field_name in _CREDENTIAL_FIELDS:
-        return _redact_credential_value(value)
+        return _redact_credential_value(value, depth)
+    if depth >= _REDACT_CREDENTIAL_MAX_DEPTH:
+        return "***"
     mapping: Final = _str_object_dict(value)
     if mapping is not None:
         return {  # mutable-ok: rebuilt alert payload dict
-            str(k): _redact_credential_field(str(k), v) for k, v in mapping.items()
+            str(k): _redact_credential_field(str(k), v, depth + 1) for k, v in mapping.items()
         }
     if isinstance(value, (list, tuple)):
         items: Final = _OBJECT_SEQ_ADAPTER.validate_python(value)
         return [  # mutable-ok: rebuilt alert payload list
             (
-                _redact_management_kwargs_inner(item.model_dump(exclude_unset=True))
+                _redact_management_kwargs_inner(item.model_dump(exclude_unset=True), depth + 1)
                 if isinstance(item, BaseModel)
                 else (
                     {  # mutable-ok: rebuilt alert payload dict
-                        str(k): _redact_credential_field(str(k), v) for k, v in nested.items()
+                        str(k): _redact_credential_field(str(k), v, depth + 1) for k, v in nested.items()
                     }
                     if (nested := _str_object_dict(item)) is not None
                     else item
@@ -673,13 +678,13 @@ def _redact_credential_field(field_name: str, value: object) -> object:
             for item in items
         ]
     if isinstance(value, BaseModel):
-        return _redact_management_kwargs_inner(value.model_dump(exclude_unset=True))
+        return _redact_management_kwargs_inner(value.model_dump(exclude_unset=True), depth + 1)
     return value
 
 
-def _redact_management_kwargs_inner(mapping: Mapping[str, object]) -> dict[str, object]:
+def _redact_management_kwargs_inner(mapping: Mapping[str, object], depth: int = 0) -> dict[str, object]:
     return {  # mutable-ok: rebuilt alert payload dict
-        str(k): _redact_credential_field(str(k), v) for k, v in mapping.items()
+        str(k): _redact_credential_field(str(k), v, depth + 1) for k, v in mapping.items()
     }
 
 

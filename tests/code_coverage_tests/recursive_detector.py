@@ -69,6 +69,8 @@ IGNORE_FUNCTIONS = [
     "_unqualified",  # bounded by the qualifier depth of a static TypedDict annotation (Annotated, Required/NotRequired, ReadOnly around one type, no cycles possible).
     "_render_json",  # bounded by the nesting depth of a pydantic-validated JsonValue from the operator's config (a finite JSON tree, no cycles possible).
     "completion_cost",  # max depth 1: recursion only fires for mixed-tier Responses WS logging objects, and each split part carries a single service_tier so _split_responses_ws_logging_object_by_service_tier returns None.
+    "_redact_credential_value",  # max depth set (_REDACT_CREDENTIAL_MAX_DEPTH); fails closed by returning "***" at the cap.
+    "_redact_credential_field",  # max depth set (_REDACT_CREDENTIAL_MAX_DEPTH); fails closed by returning "***" at the cap.
 ]
 
 
