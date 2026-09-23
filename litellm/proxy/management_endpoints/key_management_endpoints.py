@@ -5619,6 +5619,21 @@ async def _execute_virtual_key_regeneration(
     return response
 
 
+def _check_regenerate_guardrail_opt_out(
+    data: RegenerateKeyRequest | None,
+    existing_metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if data is None:
+        return
+    _check_disable_global_guardrails_caller_permission(
+        data.disable_global_guardrails,
+        data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        user_api_key_dict,
+        existing_metadata=existing_metadata,
+    )
+
+
 @router.post(
     "/key/{key:path}/regenerate",
     tags=["key management"],
@@ -5802,13 +5817,11 @@ async def regenerate_key_fn(
                 detail={"error": f"Key {key} not found."},
             )
 
-        if data is not None:
-            _check_disable_global_guardrails_caller_permission(
-                data.disable_global_guardrails,
-                data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
-                user_api_key_dict,
-                existing_metadata=_key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
-            )
+        _check_regenerate_guardrail_opt_out(
+            data,
+            _key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+            user_api_key_dict,
+        )
 
         # check if user has permission to regenerate key
         await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
