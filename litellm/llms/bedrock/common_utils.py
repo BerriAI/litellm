@@ -1593,7 +1593,7 @@ def _resolve_s3_setting(
         source.get(param_name) for source in (litellm_params, optional_params) if source is not None
     )
     explicit: Final = next((value for value in candidates if isinstance(value, str) and value), None)
-    return explicit or get_secret_str(env_var)
+    return explicit or get_secret_str(env_var) or None
 
 
 class CommonBatchFilesUtils:

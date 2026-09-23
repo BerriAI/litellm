@@ -281,6 +281,12 @@
     "tests/integration/spend/test_filtered_ledger.py::test_rotated_keys_users_and_model_groups_preserve_success_failure_cache_ledger": [
       "quota_management.spend_tracking.filtered_ledger_preserves_owner_identity_and_totals"
     ],
+    "tests/integration/spend/test_shutdown_flush.py::test_daily_spend_batch_cancelled_while_waiting_for_a_pool_connection_is_written_by_the_final_flush": [
+      "quota_management.spend_tracking.shutdown_cancel_keeps_in_flight_daily_batch"
+    ],
+    "tests/integration/spend/test_shutdown_flush.py::test_daily_spend_batch_cancelled_while_waiting_for_a_row_lock_is_written_exactly_once": [
+      "quota_management.spend_tracking.shutdown_cancel_keeps_in_flight_daily_batch"
+    ],
     "tests/integration/spend/test_spend_calculate.py::test_spend_calculate_rejects_unpriced_model_with_400": [
       "quota_management.spend_tracking.spend_calculate.rejects_unpriced_model"
     ],
@@ -1776,6 +1782,18 @@
     ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[bearer]": [
       "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
+    ],
+    "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[chat]": [
+      "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[embeddings]": [
+      "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[responses]": [
+      "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
+      "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
     ]
   },
   "browser": {
