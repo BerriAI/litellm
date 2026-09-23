@@ -1248,7 +1248,7 @@ class PersistentMCPSession:
             raise RuntimeError("upstream MCP session closed")
         future: Final[asyncio.Future[object]] = asyncio.get_running_loop().create_future()
         await self._queue.put((operation, future))
-        return cast(TSessionResult, await future)
+        return cast(TSessionResult, await future)  # cast-ok: one queue serves operations of every result type
 
     def close(self) -> None:
         _ = self._task.cancel()
