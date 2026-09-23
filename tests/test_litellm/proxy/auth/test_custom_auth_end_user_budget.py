@@ -36,7 +36,7 @@ async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
         assert getattr(result, "end_user_id", None) is None
         mock_common.assert_not_awaited()
 
-    # With opt-in flag: still not from the helper 鈥?the centralized gate
+    # With opt-in flag: still not from the helper — the centralized gate
     # in the wrapper handles it.
     with (
         patch(
