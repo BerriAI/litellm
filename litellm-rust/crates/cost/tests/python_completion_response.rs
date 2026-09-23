@@ -9,7 +9,7 @@ use litellm_cost::model_selection::ModelSelectionRequest;
 use rstest::rstest;
 use serde_json::{Value, json};
 
-const PROVIDERS: &[&str] = &["anthropic", "exa_ai", "openai"];
+const PROVIDERS: &[&str] = &["anthropic", "exa_ai", "openai", "recraft"];
 
 fn request<'a>(
     response: Option<&'a Value>,
@@ -48,6 +48,9 @@ fn request<'a>(
         transcription_duration_seconds: None,
         request_model: None,
         deployment_info: None,
+        image_quality: None,
+        image_size: None,
+        image_count: None,
         built_in_tool_cost: 0.0,
         additional_costs: &[],
         discount_config: discount,
@@ -352,6 +355,135 @@ fn explicit_base_model_suppresses_regional_catalog_lookup() {
     .unwrap();
     assert_eq!(result.model, "openai/base");
     assert!((result.cost.total - 0.1).abs() < 1e-12);
+}
+
+#[rstest]
+fn image_response_uses_image_route_before_discount_and_margin() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "recraft/image".to_owned(),
+        json!({"output_cost_per_image": 0.2}),
+    )]));
+    let response = json!({"data": [{}, {}]});
+    let discount = json!({"recraft": 0.5});
+    let margin = json!({"global": 0.5});
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                response_kind: Some(ResponseKind::ImageGeneration),
+                call_type: Some("image_generation"),
+                ..request(
+                    Some(&response),
+                    Some("image"),
+                    Some("recraft"),
+                    &discount,
+                    &margin,
+                )
+                .input
+            },
+            ..request(
+                Some(&response),
+                Some("image"),
+                Some("recraft"),
+                &discount,
+                &margin,
+            )
+        },
+    )
+    .unwrap();
+    assert!((result.cost.total - 0.4).abs() < 1e-12);
+    assert_eq!(result.cost.discount_percent, 0.0);
+    assert_eq!(result.cost.margin_percent, 0.0);
+}
+
+#[rstest]
+fn video_response_prefers_provider_total_without_deployment_and_multiplies_custom_rate() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/video".to_owned(),
+        json!({"output_cost_per_second": 0.02, "output_cost_per_second_1080p": 0.08}),
+    )]));
+    let response = json!({"usage": {
+        "duration_seconds": 10.0,
+        "video_resolution": " 1080P ",
+        "video_count": 2,
+        "provider_reported_cost_usd": 0.31
+    }});
+    let discount = json!({"openai": 0.5});
+    let empty = json!({});
+    let base = request(
+        Some(&response),
+        Some("video"),
+        Some("openai"),
+        &discount,
+        &empty,
+    );
+    let reported = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                call_type: Some("create_video"),
+                ..base.input
+            },
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((reported.cost.total - 0.31).abs() < 1e-12);
+    let deployment = json!({"output_cost_per_video_per_second": 0.05});
+    let custom = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                call_type: Some("video_edit"),
+                model_selection: ModelSelectionRequest {
+                    custom_pricing: true,
+                    ..base.input.model_selection
+                },
+                ..base.input
+            },
+            deployment_info: Some(&deployment),
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((custom.cost.total - 1.0).abs() < 1e-12);
+    assert_eq!(custom.cost.discount_percent, 0.0);
+}
+
+#[rstest]
+fn video_status_poll_does_not_bill_response_time_as_generation_duration() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/video".to_owned(),
+        json!({"mode": "video_generation", "output_cost_per_second": 0.2}),
+    )]));
+    let response = json!({"status": "completed"});
+    let empty = json!({});
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                call_type: Some("video_retrieve"),
+                ..request(
+                    Some(&response),
+                    Some("video"),
+                    Some("openai"),
+                    &empty,
+                    &empty,
+                )
+                .input
+            },
+            response_time_ms: Some(2000.0),
+            ..request(
+                Some(&response),
+                Some("video"),
+                Some("openai"),
+                &empty,
+                &empty,
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(result.cost.total, 0.0);
 }
 
 #[rstest]

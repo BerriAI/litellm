@@ -1234,15 +1234,25 @@ fn main() {
         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "service_tier": "priority"}
     });
     let request_tier = json!("auto");
-    let response_catalog = ModelInfoCatalog::new(HashMap::from([(
-        "anthropic/served".to_owned(),
-        json!({
-            "input_cost_per_token": 0.01,
-            "output_cost_per_token": 0.02,
-            "input_cost_per_token_priority": 0.03,
-            "output_cost_per_token_priority": 0.04
-        }),
-    )]));
+    let response_catalog = ModelInfoCatalog::new(HashMap::from([
+        (
+            "anthropic/served".to_owned(),
+            json!({
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02,
+                "input_cost_per_token_priority": 0.03,
+                "output_cost_per_token_priority": 0.04
+            }),
+        ),
+        (
+            "recraft/image".to_owned(),
+            json!({"output_cost_per_image": 0.2}),
+        ),
+        (
+            "openai/video".to_owned(),
+            json!({"output_cost_per_second_720p": 0.05}),
+        ),
+    ]));
     let input_request = CompletionInputRequest {
         model_selection: ModelSelectionRequest {
             model: Some("requested"),
@@ -1268,28 +1278,81 @@ fn main() {
         prepared.model_candidates[0].as_deref().unwrap(),
         prepared.service_tier.as_deref().unwrap()
     );
-    let priced_response = completion_cost_from_response(
+    let empty_config = json!({});
+    let response_request = CompletionResponseCostRequest {
+        input: input_request,
+        fallback_usage: None,
+        provider: Some("anthropic"),
+        region: None,
+        data_residency: None,
+        vertex_location: None,
+        at,
+        response_time_ms: None,
+        prompt_characters: None,
+        completion_characters: None,
+        transcription_duration_seconds: None,
+        request_model: None,
+        deployment_info: None,
+        image_quality: None,
+        image_size: None,
+        image_count: None,
+        built_in_tool_cost: 0.0,
+        additional_costs: &[],
+        discount_config: &empty_config,
+        margin_config: &empty_config,
+    };
+    let priced_response =
+        completion_cost_from_response(&response_catalog, response_request).unwrap();
+    println!("response_total={:.2}", priced_response.cost.total);
+    let image_response = json!({"data": [{}, {}]});
+    let image_input = CompletionInputRequest {
+        model_selection: ModelSelectionRequest {
+            model: Some("image"),
+            response: Some(&image_response),
+            provider: Some("recraft"),
+            known_providers: &["recraft"],
+            ..input_request.model_selection
+        },
+        call_type: Some("image_generation"),
+        response_kind: Some(CompletionResponseKind::ImageGeneration),
+        service_tier: None,
+        ..input_request
+    };
+    let image_cost = completion_cost_from_response(
         &response_catalog,
         CompletionResponseCostRequest {
-            input: input_request,
-            fallback_usage: None,
-            provider: Some("anthropic"),
-            region: None,
-            data_residency: None,
-            vertex_location: None,
-            at,
-            response_time_ms: None,
-            prompt_characters: None,
-            completion_characters: None,
-            transcription_duration_seconds: None,
-            request_model: None,
-            deployment_info: None,
-            built_in_tool_cost: 0.0,
-            additional_costs: &[],
-            discount_config: &json!({}),
-            margin_config: &json!({}),
+            input: image_input,
+            provider: Some("recraft"),
+            ..response_request
         },
     )
     .unwrap();
-    println!("response_total={:.2}", priced_response.cost.total);
+    let video_response =
+        json!({"usage": {"duration_seconds": 4.0, "video_resolution": "720p", "video_count": 2}});
+    let video_input = CompletionInputRequest {
+        model_selection: ModelSelectionRequest {
+            model: Some("video"),
+            response: Some(&video_response),
+            provider: Some("openai"),
+            known_providers: &["openai"],
+            ..input_request.model_selection
+        },
+        call_type: Some("create_video"),
+        response_kind: None,
+        service_tier: None,
+        ..input_request
+    };
+    let video_cost = completion_cost_from_response(
+        &response_catalog,
+        CompletionResponseCostRequest {
+            input: video_input,
+            provider: Some("openai"),
+            ..response_request
+        },
+    )
+    .unwrap();
+    println!(
+        "response_image={:.2} response_video={:.2}",
+        image_cost.cost.total, video_cost.cost.total
+    );
 }

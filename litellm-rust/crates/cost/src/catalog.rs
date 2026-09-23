@@ -44,6 +44,7 @@ use crate::image_response_cost::{
 use crate::model_selection::{ModelSelectionRequest, select_model_name_for_cost_calc};
 use crate::non_token::{Error as NonTokenError, ImageRates, ImageUsage, calculate_image};
 use crate::ocr_cost::{OcrCostError, ocr_cost};
+use crate::openai_cost::video_generation_cost as calculate_video_generation_cost;
 use crate::openai_image_cost::cost_calculator as openai_image_cost_calculator;
 use crate::per_second::per_second_pricing_cost;
 use crate::perplexity_cost::cost_per_token as perplexity_cost_per_token;
@@ -1119,6 +1120,27 @@ impl ModelInfoCatalog {
     ) -> Result<f64, CatalogError> {
         bedrock_image_cost_calculator(model, image_response, size, optional_params, &self.entries)
             .ok_or(CatalogError::ModelNotFound)
+    }
+
+    pub fn video_generation_cost(
+        &self,
+        model: &str,
+        provider: Option<&str>,
+        deployment_info: Option<&Value>,
+        duration_seconds: f64,
+        video_resolution: Option<&str>,
+    ) -> Result<f64, CatalogImageError> {
+        let model_info = deployment_info
+            .or_else(|| {
+                self.select_model_key(model, provider, None)
+                    .and_then(|key| self.entries.get(key))
+            })
+            .ok_or(CatalogError::ModelNotFound)?;
+        Ok(calculate_video_generation_cost(
+            model_info,
+            duration_seconds,
+            video_resolution,
+        )?)
     }
 
     pub fn default_image_cost_calculator(

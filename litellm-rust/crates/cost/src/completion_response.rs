@@ -1,9 +1,15 @@
 use jiff::Timestamp;
 use serde_json::Value;
 
-use crate::catalog::{CatalogCallError, CostCall, ModelCostRequest, ModelInfoCatalog};
+use crate::catalog::{
+    CatalogCallError, CatalogImageError, CostCall, ModelCostRequest, ModelInfoCatalog,
+};
 use crate::completion_cost::{CompletionCost, completion_cost};
-use crate::completion_input::{CompletionInputRequest, PreparedCompletionInput};
+use crate::completion_input::{CompletionInputRequest, PreparedCompletionInput, ResponseKind};
+use crate::image_cost_router::{
+    ImageCostRouteError, ImageCostRouteRequest, call_type_has_image_response,
+    route_image_generation_cost_calculator,
+};
 use crate::responses_usage::{ChatUsage, UsageError};
 
 #[derive(Clone, Copy, Debug)]
@@ -21,6 +27,9 @@ pub struct CompletionResponseCostRequest<'a> {
     pub transcription_duration_seconds: Option<f64>,
     pub request_model: Option<&'a str>,
     pub deployment_info: Option<&'a Value>,
+    pub image_quality: Option<&'a str>,
+    pub image_size: Option<&'a str>,
+    pub image_count: Option<u64>,
     pub built_in_tool_cost: f64,
     pub additional_costs: &'a [f64],
     pub discount_config: &'a Value,
@@ -41,6 +50,54 @@ pub enum CompletionResponseCostError {
     MissingModel,
     UnsupportedCallType,
     Cost(CatalogCallError),
+    Image(ImageCostRouteError),
+    Video(CatalogImageError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CandidatePriceError<E> {
+    MissingModel,
+    Price(E),
+}
+
+fn price_candidates<T: Copy, E: Copy>(
+    candidates: &[Option<String>; 3],
+    price: impl Fn(&str) -> Result<T, E>,
+) -> Result<(String, T), CandidatePriceError<E>> {
+    let prices: Vec<_> = candidates
+        .iter()
+        .flatten()
+        .map(|model| (model, price(model)))
+        .collect();
+    let (model, priced) = prices
+        .iter()
+        .find(|(_, result)| result.is_ok())
+        .or_else(|| prices.last())
+        .ok_or(CandidatePriceError::MissingModel)?;
+    match priced {
+        Ok(cost) => Ok(((*model).clone(), *cost)),
+        Err(error) => Err(CandidatePriceError::Price(*error)),
+    }
+}
+
+fn flat_priced(
+    prepared: PreparedCompletionInput,
+    model: String,
+    total: f64,
+) -> PricedCompletionResponse {
+    PricedCompletionResponse {
+        model,
+        prepared,
+        cost: completion_cost(total, 0.0, 0.0, &[], None, &Value::Null, &Value::Null),
+    }
+}
+
+fn number(value: Option<&Value>) -> Option<f64> {
+    match value? {
+        Value::Number(value) => value.as_f64(),
+        Value::String(value) => value.parse().ok(),
+        _ => None,
+    }
 }
 
 fn duration(request: CompletionResponseCostRequest<'_>) -> f64 {
@@ -105,21 +162,135 @@ fn cost_call<'a>(
                 .model_selection
                 .response
                 .ok_or(CompletionResponseCostError::MissingUsage)?,
-            deployment_info: request.deployment_info,
+            deployment_info: request
+                .input
+                .model_selection
+                .custom_pricing
+                .then_some(request.deployment_info)
+                .flatten(),
         }),
         "retrieve_batch" | "aretrieve_batch" => Ok(CostCall::Batch {
-            deployment_info: request.deployment_info,
+            deployment_info: request
+                .input
+                .model_selection
+                .custom_pricing
+                .then_some(request.deployment_info)
+                .flatten(),
         }),
         "completion" | "acompletion" | "embedding" | "aembedding" | "text_completion"
         | "atext_completion" | "responses" | "aresponses" | "moderation" | "amoderation"
-        | "generate_content" | "agenerate_content" => Ok(CostCall::Token {
-            call_type,
-            prompt_characters: request.prompt_characters,
-            completion_characters: request.completion_characters,
-            request_model: request.request_model,
-        }),
+        | "generate_content" | "agenerate_content" | "video_retrieve" | "avideo_retrieve" => {
+            Ok(CostCall::Token {
+                call_type,
+                prompt_characters: request.prompt_characters,
+                completion_characters: request.completion_characters,
+                request_model: request.request_model,
+            })
+        }
         _ => Err(CompletionResponseCostError::UnsupportedCallType),
     }
+}
+
+fn price_image_response(
+    catalog: &ModelInfoCatalog,
+    request: CompletionResponseCostRequest<'_>,
+    prepared: PreparedCompletionInput,
+    provider: Option<&str>,
+    deployment_info: Option<&Value>,
+) -> Result<PricedCompletionResponse, CompletionResponseCostError> {
+    let response = request
+        .input
+        .model_selection
+        .response
+        .ok_or(CompletionResponseCostError::MissingUsage)?;
+    let empty_params = Value::Null;
+    let (model, total) = price_candidates(&prepared.model_candidates, |model| {
+        route_image_generation_cost_calculator(
+            catalog,
+            ImageCostRouteRequest {
+                model,
+                provider,
+                image_response: response,
+                call_type: Some(&prepared.call_type),
+                quality: request.image_quality,
+                size: request.image_size,
+                n: request.image_count,
+                optional_params: request.input.optional_params.unwrap_or(&empty_params),
+                supplied_model_info: deployment_info,
+                at: request.at,
+            },
+        )
+    })
+    .map_err(|error| match error {
+        CandidatePriceError::MissingModel => CompletionResponseCostError::MissingModel,
+        CandidatePriceError::Price(error) => CompletionResponseCostError::Image(error),
+    })?;
+    Ok(flat_priced(prepared, model, total))
+}
+
+fn is_video_call(call_type: &str) -> bool {
+    matches!(
+        call_type,
+        "create_video"
+            | "acreate_video"
+            | "video_edit"
+            | "avideo_edit"
+            | "video_remix"
+            | "avideo_remix"
+    )
+}
+
+fn price_video_response(
+    catalog: &ModelInfoCatalog,
+    request: CompletionResponseCostRequest<'_>,
+    prepared: PreparedCompletionInput,
+    provider: Option<&str>,
+    deployment_info: Option<&Value>,
+) -> Result<PricedCompletionResponse, CompletionResponseCostError> {
+    let usage = request
+        .input
+        .model_selection
+        .response
+        .and_then(|response| response.get("usage"));
+    let reported = number(usage.and_then(|usage| usage.get("provider_reported_cost_usd")));
+    if deployment_info.is_none()
+        && let Some(total) = reported
+    {
+        let model = prepared
+            .model_candidates
+            .iter()
+            .flatten()
+            .next()
+            .ok_or(CompletionResponseCostError::MissingModel)?
+            .clone();
+        return Ok(flat_priced(prepared, model, total));
+    }
+    let duration = number(usage.and_then(|usage| usage.get("duration_seconds"))).unwrap_or(0.0);
+    let count = usage
+        .and_then(|usage| usage.get("video_count"))
+        .and_then(Value::as_u64)
+        .filter(|count| *count > 1)
+        .unwrap_or(1);
+    let resolution = usage
+        .and_then(|usage| usage.get("video_resolution"))
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase());
+    let (model, total) = price_candidates(&prepared.model_candidates, |model| {
+        catalog
+            .video_generation_cost(
+                model,
+                provider,
+                deployment_info,
+                duration,
+                resolution.as_deref(),
+            )
+            .map(|cost| cost * count as f64)
+    })
+    .map_err(|error| match error {
+        CandidatePriceError::MissingModel => CompletionResponseCostError::MissingModel,
+        CandidatePriceError::Price(error) => CompletionResponseCostError::Video(error),
+    })?;
+    Ok(flat_priced(prepared, model, total))
 }
 
 pub fn completion_cost_from_response(
@@ -129,6 +300,25 @@ pub fn completion_cost_from_response(
     let prepared = catalog
         .prepare_completion_input(request.input)
         .map_err(CompletionResponseCostError::Usage)?;
+    let hidden_params = request.input.model_selection.hidden_params;
+    let provider = hidden_params
+        .and_then(|hidden| hidden.get("custom_llm_provider"))
+        .and_then(Value::as_str)
+        .or(request.provider);
+    let deployment_info = request
+        .input
+        .model_selection
+        .custom_pricing
+        .then_some(request.deployment_info)
+        .flatten();
+    if call_type_has_image_response(&prepared.call_type)
+        && request.input.response_kind == Some(ResponseKind::ImageGeneration)
+    {
+        return price_image_response(catalog, request, prepared, provider, deployment_info);
+    }
+    if is_video_call(&prepared.call_type) {
+        return price_video_response(catalog, request, prepared, provider, deployment_info);
+    }
     if matches!(
         prepared.call_type.as_str(),
         "completion"
@@ -158,11 +348,6 @@ pub fn completion_cost_from_response(
         .unwrap_or(&empty_usage);
     let empty_params = Value::Null;
     let call = cost_call(&prepared.call_type, request, &empty_params)?;
-    let hidden_params = request.input.model_selection.hidden_params;
-    let provider = hidden_params
-        .and_then(|hidden| hidden.get("custom_llm_provider"))
-        .and_then(Value::as_str)
-        .or(request.provider);
     let explicit_pricing = request.input.model_selection.custom_pricing
         || request.input.model_selection.base_model.is_some();
     let region = if explicit_pricing {
@@ -173,32 +358,24 @@ pub fn completion_cost_from_response(
             .and_then(Value::as_str)
             .or(request.region)
     };
-    let attempts: Vec<_> = prepared.model_candidates.iter().flatten().collect();
-    let prices: Vec<_> = attempts
-        .iter()
-        .map(|model| {
-            let cost_request = ModelCostRequest {
-                model,
-                provider,
-                region,
-                usage,
-                service_tier: prepared.service_tier.as_deref(),
-                data_residency: request.data_residency,
-                vertex_location: request.vertex_location,
-                at: request.at,
-                response_time_ms: request.response_time_ms,
-            };
-            (model, catalog.cost_per_token_for_call(cost_request, call))
-        })
-        .collect();
-    let (model, priced) = prices
-        .iter()
-        .find(|(_, result)| result.is_ok())
-        .or_else(|| prices.last())
-        .ok_or(CompletionResponseCostError::MissingModel)?;
-    let (prompt, output) = *priced
-        .as_ref()
-        .map_err(|error| CompletionResponseCostError::Cost(*error))?;
+    let (model, (prompt, output)) = price_candidates(&prepared.model_candidates, |model| {
+        let cost_request = ModelCostRequest {
+            model,
+            provider,
+            region,
+            usage,
+            service_tier: prepared.service_tier.as_deref(),
+            data_residency: request.data_residency,
+            vertex_location: request.vertex_location,
+            at: request.at,
+            response_time_ms: request.response_time_ms,
+        };
+        catalog.cost_per_token_for_call(cost_request, call)
+    })
+    .map_err(|error| match error {
+        CandidatePriceError::MissingModel => CompletionResponseCostError::MissingModel,
+        CandidatePriceError::Price(error) => CompletionResponseCostError::Cost(error),
+    })?;
     let cost = completion_cost(
         prompt,
         output,
@@ -209,7 +386,7 @@ pub fn completion_cost_from_response(
         request.margin_config,
     );
     Ok(PricedCompletionResponse {
-        model: (*model).to_string(),
+        model,
         prepared,
         cost,
     })
