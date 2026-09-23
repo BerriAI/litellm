@@ -85,7 +85,6 @@ async def _fire_burst(
     return tuple(result for result in results if isinstance(result, httpx.Response))
 
 
-@pytest.mark.covers("observability.passthrough.upstream_outage_still_produces_one_spend_row_per_call")
 async def test_passthrough_upstream_outage_mid_burst_still_logs_errors_once(gateway: Gateway, tmp_path: Path) -> None:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     path: Final = tmp_path / "chaos-outage.yaml"
@@ -115,7 +114,6 @@ async def test_passthrough_upstream_outage_mid_burst_still_logs_errors_once(gate
                 ), response.text
 
 
-@pytest.mark.covers("observability.passthrough.worker_kill_leaves_sibling_serving_errors")
 async def test_passthrough_worker_sigkill_leaves_sibling_serving_and_logging(gateway: Gateway, tmp_path: Path) -> None:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     path: Final = tmp_path / "chaos-kill.yaml"

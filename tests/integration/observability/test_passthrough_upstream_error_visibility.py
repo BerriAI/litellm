@@ -23,7 +23,6 @@ _UPSTREAM_ERROR: Final[dict[str, JsonValue]] = {
 }
 
 
-@pytest.mark.covers("observability.passthrough.upstream_error_body_logged_and_in_spend_log")
 def test_gemini_passthrough_upstream_error_body_reaches_proxy_log_and_spend_row(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -118,7 +117,6 @@ def _upstream_warnings(log: Path, needle: str = "pass_through_endpoint: upstream
     return tuple(line for line in log.read_text().splitlines() if needle in line)
 
 
-@pytest.mark.covers("observability.passthrough.async_client_404_body_logged_and_in_spend_log")
 async def test_gemini_passthrough_async_client_404_body_reaches_proxy_log_and_spend_row(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -145,7 +143,6 @@ async def test_gemini_passthrough_async_client_404_body_reaches_proxy_log_and_sp
             assert error_information["error_code"] == "404", response.text
 
 
-@pytest.mark.covers("observability.passthrough.streaming_500_full_body_relayed_with_bounded_log")
 def test_gemini_passthrough_streaming_500_relays_full_body_and_logs_bounded_preview(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -179,7 +176,6 @@ def test_gemini_passthrough_streaming_500_relays_full_body_and_logs_bounded_prev
             assert error_information["error_code"] == "500", error_message
 
 
-@pytest.mark.covers("observability.passthrough.success_200_leaves_log_and_spend_row_clean")
 def test_gemini_passthrough_success_logs_nothing_and_spend_row_is_success(gateway: Gateway, tmp_path: Path) -> None:
     upstream_ok: Final = {
         "candidates": [{"content": {"parts": [{"text": "hello"}], "role": "model"}}],
@@ -203,7 +199,6 @@ def test_gemini_passthrough_success_logs_nothing_and_spend_row_is_success(gatewa
             assert not _upstream_warnings(owned.log), owned.log.read_text()[-2000:]
 
 
-@pytest.mark.covers("observability.passthrough.streaming_200_relays_all_chunks")
 def test_gemini_passthrough_streaming_200_relays_every_chunk(gateway: Gateway, tmp_path: Path) -> None:
     chunks: Final = tuple(f"data: chunk-{index}\n\n".encode() for index in range(5))
 
@@ -228,7 +223,6 @@ def test_gemini_passthrough_streaming_200_relays_every_chunk(gateway: Gateway, t
             assert not _upstream_warnings(owned.log), owned.log.read_text()[-2000:]
 
 
-@pytest.mark.covers("observability.passthrough.config_route_body_logged_and_url_query_stripped")
 def test_config_pass_through_route_logs_body_and_strips_query(gateway: Gateway, tmp_path: Path) -> None:
     upstream_error: Final = {"error": {"message": "max budget reached for this deployment"}}
 
@@ -271,7 +265,6 @@ def _openai_config(path: Path, wire_url: str) -> None:
     path.write_text(yaml.safe_dump(config))
 
 
-@pytest.mark.covers("observability.passthrough.openai_sdk_404_body_logged_and_in_spend_log")
 def test_openai_passthrough_sdk_error_body_reaches_proxy_log_and_spend_row(gateway: Gateway, tmp_path: Path) -> None:
     def respond(request: Request) -> Reply:
         return Reply(status=404, body=json.dumps(_OPENAI_UPSTREAM_404).encode())
@@ -296,7 +289,6 @@ def test_openai_passthrough_sdk_error_body_reaches_proxy_log_and_spend_row(gatew
             assert "does not exist" in str(error_information["error_message"])
 
 
-@pytest.mark.covers("observability.passthrough.openai_async_sdk_404_body_logged_and_in_spend_log")
 async def test_openai_passthrough_async_sdk_error_body_reaches_proxy_log_and_spend_row(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -323,7 +315,6 @@ async def test_openai_passthrough_async_sdk_error_body_reaches_proxy_log_and_spe
             assert "does not exist" in str(error_information["error_message"])
 
 
-@pytest.mark.covers("observability.passthrough.control_characters_cannot_forge_log_lines")
 def test_gemini_passthrough_control_characters_cannot_forge_log_lines(gateway: Gateway, tmp_path: Path) -> None:
     forged: Final = b'{"error": "line one"}\n2026-01-01 FAKE LOG LINE\x1b[31m\r' + b"x" * 4943 + b"\x00tail"
     assert len(forged) == 5000
@@ -349,7 +340,6 @@ def test_gemini_passthrough_control_characters_cannot_forge_log_lines(gateway: G
             assert error_information["error_code"] == "502", response.text
 
 
-@pytest.mark.covers("observability.passthrough.empty_error_body_still_logged_and_serving")
 def test_gemini_passthrough_empty_error_body_still_logged_and_proxy_serves(gateway: Gateway, tmp_path: Path) -> None:
     def respond(request: Request) -> Reply:
         if "claude-nope-9" in request.target:
@@ -379,7 +369,6 @@ def test_gemini_passthrough_empty_error_body_still_logged_and_proxy_serves(gatew
             assert follow_up.status_code == 200, follow_up.text
 
 
-@pytest.mark.covers("observability.passthrough.gzip_body_decoded_for_log_and_client")
 def test_gemini_passthrough_gzip_error_body_decoded_for_log_and_client(gateway: Gateway, tmp_path: Path) -> None:
     upstream_error: Final = {"error": {"message": "gzipped upstream says the model is gone"}}
 
@@ -404,7 +393,6 @@ def test_gemini_passthrough_gzip_error_body_decoded_for_log_and_client(gateway: 
             assert "gzipped upstream says the model is gone" in warning, warning
 
 
-@pytest.mark.covers("observability.passthrough.streaming_gzip_body_decoded_for_log_and_client")
 def test_gemini_passthrough_streaming_gzip_error_body_decoded_for_log_and_client(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -438,7 +426,6 @@ def test_gemini_passthrough_streaming_gzip_error_body_decoded_for_log_and_client
             assert "streamed gzip upstream denies the deployment" in warning, warning
 
 
-@pytest.mark.covers("observability.passthrough.turn_off_message_logging_redacts_upstream_body")
 def test_gemini_passthrough_error_body_redacted_when_message_logging_off(gateway: Gateway, tmp_path: Path) -> None:
     upstream_error: Final = {"error": {"message": "sensitive upstream explanation"}}
 
@@ -467,7 +454,6 @@ def test_gemini_passthrough_error_body_redacted_when_message_logging_off(gateway
             assert "sensitive upstream explanation" not in error_message, error_message
 
 
-@pytest.mark.covers("observability.passthrough.exact_4096_byte_body_logged_without_marker")
 def test_gemini_passthrough_exact_4096_byte_body_logged_without_marker(gateway: Gateway, tmp_path: Path) -> None:
     body: Final = b'{"error": "' + b"y" * 4083 + b'"}'
     assert len(body) == 4096
@@ -489,7 +475,6 @@ def test_gemini_passthrough_exact_4096_byte_body_logged_without_marker(gateway: 
             assert "(truncated at 4096 chars)" not in warning, warning
 
 
-@pytest.mark.covers("observability.passthrough.body_over_4096_chars_marked_truncated")
 def test_gemini_passthrough_4097_byte_body_truncated_with_marker(gateway: Gateway, tmp_path: Path) -> None:
     body: Final = b'{"error": "' + b"y" * 4084 + b'"}'
     assert len(body) == 4097
@@ -511,7 +496,6 @@ def test_gemini_passthrough_4097_byte_body_truncated_with_marker(gateway: Gatewa
             assert warning.endswith("... (truncated at 4096 chars)"), warning
 
 
-@pytest.mark.covers("observability.passthrough.one_byte_stream_chunks_reassembled_and_logged")
 def test_gemini_passthrough_one_byte_stream_chunks_reassembled_and_logged(gateway: Gateway, tmp_path: Path) -> None:
     body: Final = json.dumps(_UPSTREAM_ERROR).encode()
 
@@ -537,7 +521,6 @@ def test_gemini_passthrough_one_byte_stream_chunks_reassembled_and_logged(gatewa
             assert "was not found or your project" in warning, warning
 
 
-@pytest.mark.covers("observability.passthrough.each_error_gets_own_log_line_and_spend_row")
 def test_gemini_passthrough_repeated_errors_each_get_row_and_log_line(gateway: Gateway, tmp_path: Path) -> None:
     def respond(request: Request) -> Reply:
         return Reply(status=404, body=json.dumps(_UPSTREAM_ERROR).encode())
@@ -566,7 +549,6 @@ def test_gemini_passthrough_repeated_errors_each_get_row_and_log_line(gateway: G
             )
 
 
-@pytest.mark.covers("observability.passthrough.budget_rejection_keeps_budget_normalized_error")
 def test_budget_rejected_call_keeps_budget_normalized_error(gateway: Gateway, tmp_path: Path) -> None:
     path: Final = tmp_path / "budget.yaml"
     path.write_text(Path("tests/integration/proxy_config.yaml").read_text())
