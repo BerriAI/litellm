@@ -8,8 +8,10 @@ import pytest
 import yaml
 from pydantic import JsonValue
 
+from litellm import get_model_info
 from tests.integration._support.client import Gateway, eventually, object_value, string_value
 from tests.integration._support.database import read_rows
+from tests.integration._support.process import owned_proxy
 
 
 @pytest.mark.covers("quota_management.spend_tracking.custom_price.matches_input_rates")
@@ -167,6 +169,49 @@ def test_saving_echoed_model_info_does_not_freeze_cost_map_price_into_deployment
         stored: Final = persisted_model_info(identity)
         assert stored["description"] == "echoed ui save", stored
         assert {key: value for key, value in stored.items() if key in COST_MAP_DISPLAY_PRICING_KEYS} == {}, stored
+
+
+def displayed_model_info(gateway: Gateway, model: str) -> dict[str, JsonValue]:
+    entries: Final = gateway.get("/model/info")["data"]
+    assert isinstance(entries, list)
+    target: Final = next(object_value(entry) for entry in entries if object_value(entry)["model_name"] == model)
+    return object_value(target["model_info"])
+
+
+@pytest.mark.covers("pricing.model_update.echoed_cost_map_metadata_is_not_persisted_as_override")
+def test_saving_echoed_model_info_does_not_persist_cost_map_metadata_as_overrides(gateway: Gateway) -> None:
+    catalog_entry: Final = get_model_info("openai/gpt-4o-mini")
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        displayed: Final = displayed_model_info(gateway, model)
+        identity: Final = string_value(displayed["id"])
+        assert displayed["key"] == catalog_entry["key"], displayed
+        assert displayed["max_input_tokens"] == catalog_entry["max_input_tokens"], displayed
+        saved: Final = gateway.request(
+            "PATCH", f"/model/{identity}/update", {"model_info": {**displayed, "description": "echoed ui save"}}
+        )
+        assert saved.status_code == 200, saved.text
+        stored: Final = persisted_model_info(identity)
+        assert stored["description"] == "echoed ui save", stored
+        assert {key: value for key, value in stored.items() if key in catalog_entry} == {}, stored
+
+
+@pytest.mark.covers("pricing.model_update.echoing_cost_map_value_back_clears_stored_override")
+def test_saving_the_cost_map_value_back_over_a_stored_override_clears_it(gateway: Gateway, tmp_path: Path) -> None:
+    catalog_limit: Final = get_model_info("openai/gpt-4o-mini")["max_input_tokens"]
+    assert isinstance(catalog_limit, int) and catalog_limit != 4321, catalog_limit
+    with owned_proxy(gateway, tmp_path, {}) as candidate, candidate.scenario() as scenario:
+        overridden: Final = scenario.model(model_info={"max_input_tokens": 4321})
+        displayed: Final = displayed_model_info(candidate, overridden)
+        identity: Final = string_value(displayed["id"])
+        assert displayed["max_input_tokens"] == 4321, displayed
+        assert persisted_model_info(identity)["max_input_tokens"] == 4321
+        saved: Final = candidate.request(
+            "PATCH", f"/model/{identity}/update", {"model_info": {**displayed, "max_input_tokens": catalog_limit}}
+        )
+        assert saved.status_code == 200, saved.text
+        stored: Final = persisted_model_info(identity)
+        assert "max_input_tokens" not in stored, stored
 
 
 @pytest.mark.covers("quota_management.spend_tracking.default_prices.loaded_router_preserves_cached_defaults")
