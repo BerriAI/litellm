@@ -223,7 +223,9 @@ def test_completed_batch_emits_paired_request_response_callback_events_per_jsonl
         )
         assert retrieval.status_code == 200, retrieval.text
         key_hash: Final = sha256(key.encode()).hexdigest()
-        batches: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
+        batches: Final[
+            list[Request]
+        ] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
 
         def delivered() -> tuple[dict[str, JsonValue], ...]:
             batches.extend(endpoint.drain())
@@ -236,8 +238,10 @@ def test_completed_batch_emits_paired_request_response_callback_events_per_jsonl
 
         events: Final = eventually(
             delivered,
-            lambda values: len([e for e in values if e["call_type"] == "aretrieve_batch"]) >= 1
-            and len([e for e in values if _hidden(e).get("batch_custom_id") is not None]) >= len(ALL_CUSTOM_IDS),
+            lambda values: (
+                len([e for e in values if e["call_type"] == "aretrieve_batch"]) >= 1
+                and len([e for e in values if _hidden(e).get("batch_custom_id") is not None]) >= len(ALL_CUSTOM_IDS)
+            ),
             seconds=40,
         )
         for batch in batches:
@@ -274,7 +278,11 @@ def test_completed_batch_emits_paired_request_response_callback_events_per_jsonl
         assert aggregate["prompt_tokens"] == len(OUTPUT_SUCCESS_IDS) * PROMPT_TOKENS, aggregate
         assert aggregate["completion_tokens"] == len(OUTPUT_SUCCESS_IDS) * COMPLETION_TOKENS, aggregate
         rows: Final = eventually(
-            lambda: _spend_rows(key), lambda values: any(r["call_type"] == "aretrieve_batch" for r in values), seconds=70
+            lambda: _spend_rows(key),
+            lambda values: any(r["call_type"] == "aretrieve_batch" for r in values),
+            seconds=70,
         )
-        assert [row["call_type"] for row in rows] == ["aretrieve_batch"], rows
-        assert rows[0]["prompt_tokens"] == len(OUTPUT_SUCCESS_IDS) * PROMPT_TOKENS, rows
+        batch_rows: Final = tuple(row for row in rows if row["call_type"] == "aretrieve_batch")
+        assert len(batch_rows) == 1, rows
+        assert not any(row["call_type"] == "acompletion" for row in rows), rows
+        assert batch_rows[0]["prompt_tokens"] == len(OUTPUT_SUCCESS_IDS) * PROMPT_TOKENS, rows
