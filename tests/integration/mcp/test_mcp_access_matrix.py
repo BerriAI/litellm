@@ -73,7 +73,8 @@ def test_subject_grant_lists_only_reachable_tools_and_denies_the_rest(
         _assert_denied(blocked, denied_peer, _name(entry, denied_alias, "add"), denied, entry)
         denied_listed: Final = blocked.list_tools(_server_scoped(entry, denied))
         if entry == "rest":
-            assert denied_listed.error is not None or denied_listed.tools == (), denied_listed.raw
+            assert denied_listed.status == 403 and "access_denied" in denied_listed.raw, denied_listed.raw
+            assert denied_listed.tools == ()
         else:
             assert not any(name.startswith(denied_alias) for name in denied_listed.tools), denied_listed.tools
 
