@@ -230,6 +230,13 @@ def test_get_model_info_prefers_exact_dated_key_over_stripped(
     assert info["key"] == expected_key
 
 
+def test_get_model_info_internal_failure_is_not_reported_as_unmapped() -> None:
+    with patch("litellm.utils._get_potential_model_names", side_effect=RuntimeError("malformed metadata")):
+        with pytest.raises(Exception, match="This model isn't mapped yet") as exc_info:
+            litellm.utils._get_model_info_helper(model="gpt-4o", custom_llm_provider="openai")
+    assert not isinstance(exc_info.value, litellm.ModelNotMappedError)
+
+
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
     """
     Test that azure_ai provider can match openai and azure models.
@@ -624,6 +631,9 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_character",
         "input_cost_per_image",
         "output_cost_per_image",
+        "output_cost_per_image_512",
+        "output_cost_per_image_1024",
+        "output_cost_per_image_1536",
         "input_cost_per_pixel",
         "output_cost_per_pixel",
         "input_cost_per_second",
@@ -851,6 +861,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_character": {"type": "number"},
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
+                "output_cost_per_image_512": {"type": "number"},
+                "output_cost_per_image_1024": {"type": "number"},
+                "output_cost_per_image_1536": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
                 "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},

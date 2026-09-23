@@ -3090,6 +3090,50 @@ async def test_update_key_by_alias_only(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_key_changed_alias_must_match_key_alias_pattern(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    monkeypatch.setattr(litellm, "key_alias_pattern", r"^[a-z0-9]+(-[a-z0-9]+)*$")
+    hashed_token = "0d62f396c1317066f55a96086517047c737087c61eb2bf016b72e6298927b15b"
+    key_in_db = LiteLLM_VerificationToken(token=hashed_token, key_alias="Legacy Alias", user_id="test-user")
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_in_db)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[key_in_db])
+    mock_prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.update_data = AsyncMock(return_value={"data": {"max_budget": 50.0}})
+    _setup_update_key_mocks(monkeypatch, mock_prisma_client)
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_key_fn(
+            request=MagicMock(),
+            data=UpdateKeyRequest(key=hashed_token, key_alias="Prod Key"),
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+    assert str(exc_info.value.code) == "400"
+    assert "key_alias_pattern" in str(exc_info.value.message)
+    mock_prisma_client.update_data.assert_not_awaited()
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+        return_value=None,
+    ):
+        await update_key_fn(
+            request=MagicMock(),
+            data=UpdateKeyRequest(key=hashed_token, key_alias="Legacy Alias", max_budget=50.0),
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+    mock_prisma_client.update_data.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_update_key_by_alias_not_found_returns_404(monkeypatch):
     """
     /key/update with a key_alias matching no key returns 404.
@@ -10562,6 +10606,10 @@ class TestValidateKeyAliasFormat:
     def reset_key_alias_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(litellm, "enable_key_alias_format_validation", False)
 
+    @pytest.fixture(autouse=True)
+    def reset_key_alias_pattern(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "key_alias_pattern", None)
+
     def test_validation_skipped_when_flag_disabled(self):
         """When enable_key_alias_format_validation is False (default), no charset/length validation occurs."""
         from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -10643,6 +10691,67 @@ class TestValidateKeyAliasFormat:
                 _validate_key_alias_format(alias)
             assert str(exc.value.code) == "400"
             assert "Invalid key_alias format" in str(exc.value.message)
+
+    def test_configured_pattern_applies_with_flag_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_key_alias_format,
+        )
+
+        monkeypatch.setattr(litellm, "key_alias_pattern", r"^[a-z0-9]+(-[a-z0-9]+)*$")
+        with pytest.raises(ProxyException) as exc:
+            _validate_key_alias_format("Prod Key")
+        assert str(exc.value.code) == "400"
+        assert exc.value.param == "key_alias"
+        assert "key_alias_pattern" in str(exc.value.message)
+        assert r"^[a-z0-9]+(-[a-z0-9]+)*$" in str(exc.value.message)
+        assert _validate_key_alias_format("prod-key-001") is None
+        assert _validate_key_alias_format(None) is None
+
+    def test_configured_pattern_must_match_the_whole_alias(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_key_alias_format,
+        )
+
+        monkeypatch.setattr(litellm, "key_alias_pattern", r"team-[a-z]+")
+        _validate_key_alias_format("team-search")
+        for partial_match in ("team-search-2", "xteam-search"):
+            with pytest.raises(ProxyException):
+                _validate_key_alias_format(partial_match)
+
+    def test_configured_pattern_replaces_the_builtin_rule(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_key_alias_format,
+        )
+
+        monkeypatch.setattr(litellm, "enable_key_alias_format_validation", True)
+        monkeypatch.setattr(litellm, "key_alias_pattern", r"^[a-z ]+$")
+        _validate_key_alias_format("alias with spaces")
+        with pytest.raises(ProxyException) as exc:
+            _validate_key_alias_format("Uppercase")
+        assert "key_alias_pattern" in str(exc.value.message)
+
+    def test_configured_pattern_keeps_the_baseline_safety_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_key_alias_format,
+        )
+
+        monkeypatch.setattr(litellm, "key_alias_pattern", r".*")
+        with pytest.raises(ProxyException) as exc:
+            _validate_key_alias_format("../../../other-app/creds")
+        assert str(exc.value.code) == "400"
+        assert "key_alias_pattern" not in str(exc.value.message)
+
+    def test_configured_pattern_bounds_the_alias_length(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_key_alias_format,
+        )
+
+        monkeypatch.setattr(litellm, "key_alias_pattern", r"^[a-z]+$")
+        _validate_key_alias_format("a" * 255)
+        with pytest.raises(ProxyException) as exc:
+            _validate_key_alias_format("a" * 256)
+        assert str(exc.value.code) == "400"
+        assert "at most 255 characters" in str(exc.value.message)
 
 
 @pytest.mark.asyncio
@@ -12731,6 +12840,55 @@ async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(monk
     assert "duration" in str(exc_info.value.detail)
     # Rejected regenerate must not reach the DB update.
     persist_deleted_verification_tokens.assert_not_awaited()
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_virtual_key_regeneration_changed_alias_must_match_key_alias_pattern(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    monkeypatch.setattr(litellm, "key_alias_pattern", r"^[a-z0-9]+(-[a-z0-9]+)*$")
+    mock_prisma_client = _make_regenerate_mock_prisma()
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await _execute_virtual_key_regeneration(
+                prisma_client=mock_prisma_client,
+                key_in_db=_make_regenerate_existing_key(),
+                hashed_api_key="abc123",
+                key="abc123",
+                data=RegenerateKeyRequest(key_alias="Regenerated Key"),
+                user_api_key_dict=_make_regenerate_user_api_key_dict(),
+                litellm_changed_by=None,
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=MagicMock(),
+            )
+    assert str(exc_info.value.code) == "400"
+    assert exc_info.value.param == "key_alias"
+    assert r"^[a-z0-9]+(-[a-z0-9]+)*$" in str(exc_info.value.message)
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
 
 
