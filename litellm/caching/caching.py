@@ -317,8 +317,6 @@ class Cache:
 
         from litellm.rust_bridge.response_cache import resolve_response_cache
 
-        # Creation stays catalog-driven; every storage call below re-selects at use time
-        # through select_response_cache so a stale native runtime is never served.
         self._native_cache = resolve_response_cache(self)
 
     # Params whose values carry prompt content. Excluded from semantic-cache
@@ -624,7 +622,7 @@ class Cache:
                 cache_key = kwargs["cache_key"]
             else:
                 cache_key = self.get_cache_key(**kwargs)
-            native: Final = select_response_cache(self)
+            native: Final = select_response_cache(self) if dynamic_cache_object is None else None
             if cache_key is not None and native is not None:
                 request = native.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
                 if request is None:
@@ -666,7 +664,7 @@ class Cache:
                 cache_key = kwargs["cache_key"]
             else:
                 cache_key = self.get_cache_key(**kwargs)
-            native: Final = select_response_cache(self)
+            native: Final = select_response_cache(self) if dynamic_cache_object is None else None
             if cache_key is not None and native is not None:
                 request = native.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
                 if request is None:
@@ -757,7 +755,7 @@ class Cache:
         try:
             if self.should_use_cache(**kwargs) is not True:
                 return
-            native: Final = select_response_cache(self)
+            native: Final = select_response_cache(self) if dynamic_cache_object is None else None
             if native is not None:
                 request = self._native_request(kwargs, native)
                 if request is not None:
@@ -944,7 +942,7 @@ class Cache:
                 cache_key, cached_data, kwargs = self.add_embedding_response_to_cache(result, kwargs["input"], kwargs)
                 cache_list.append((cache_key, cached_data))
 
-            native: Final = select_response_cache(self)
+            native: Final = select_response_cache(self) if dynamic_cache_object is None else None
             if native is not None:
                 entries: Final = tuple(
                     (request, cached_data["response"])

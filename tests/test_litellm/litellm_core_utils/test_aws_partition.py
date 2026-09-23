@@ -21,6 +21,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
 from litellm.llms.bedrock.common_utils import init_bedrock_client
+from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig
 from litellm.llms.sagemaker.chat.transformation import SagemakerChatConfig
 
 
@@ -151,6 +152,10 @@ ENDPOINT_BUILDERS: Final = {
         optional_params={"aws_region_name": region},
         litellm_params={},
         stream=True,
+    ),
+    "bedrock_openai_responses": lambda region: BedrockOpenAIResponsesConfig().get_complete_url(
+        api_base=None,
+        litellm_params={"aws_region_name": region},
     ),
     "s3_object_url": _s3_object_url,
 }
