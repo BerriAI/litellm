@@ -1315,7 +1315,9 @@ class TestNativeWebSocketDeploymentDefaults:
         assert dict(defaults.fill_missing) == {"reasoning": {"effort": "xhigh", "summary": "auto"}}
 
     @pytest.mark.parametrize("reasoning_effort", [5, ["low"], "hgih"])
-    def test_builder_forwards_non_enum_reasoning_effort_like_the_http_path(self, reasoning_effort):
+    def test_builder_forwards_non_enum_reasoning_effort_like_the_http_path(
+        self, reasoning_effort: int | list[str] | str
+    ):
         from litellm.responses.main import _build_responses_websocket_request_defaults
 
         defaults = _build_responses_websocket_request_defaults({"model": "gpt-5-pro", "reasoning_effort": reasoning_effort})

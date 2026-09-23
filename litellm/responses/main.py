@@ -1313,10 +1313,14 @@ def responses(
             _raise_responses_compatibility_failure(compatibility_failure, model, custom_llm_provider)
 
         local_vars.update(kwargs)
+        current_reasoning: Final = cast(  # cast-ok: prompt-managed reasoning arrives as a plain dict
+            Reasoning | None, local_vars.get("reasoning")
+        )
+        reasoning_effort: Final = local_vars.get("reasoning_effort")
         request_reasoning: Final = (
-            LiteLLMResponsesTransformationHandler()._map_reasoning_effort(kwargs["reasoning_effort"])
-            if reasoning is None and kwargs.get("reasoning_effort") is not None
-            else reasoning
+            LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
+            if current_reasoning is None and reasoning_effort is not None
+            else current_reasoning
         )
         response_api_optional_params: Final[ResponsesAPIOptionalRequestParams] = (
             ResponsesAPIRequestUtils.get_requested_response_api_optional_param(

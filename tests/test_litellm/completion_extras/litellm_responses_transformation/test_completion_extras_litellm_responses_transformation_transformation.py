@@ -2495,7 +2495,9 @@ def test_transform_request_bedrock_mantle_tools_keeps_reasoning_effort(monkeypat
     "reasoning_effort",
     [5, ["low"], "hgih", "", {"effort": 5}, {"effort": "max"}, *get_args(REASONING_EFFORT)],
 )
-def test_transform_request_never_drops_reasoning_effort(monkeypatch, reasoning_effort):
+def test_transform_request_never_drops_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch, reasoning_effort: int | list[str] | str | dict[str, object]
+):
     monkeypatch.setattr(litellm, "reasoning_auto_summary", False)
     monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
     handler: Final = LiteLLMResponsesTransformationHandler()

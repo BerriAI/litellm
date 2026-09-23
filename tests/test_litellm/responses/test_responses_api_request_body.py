@@ -224,7 +224,9 @@ async def test_aresponses_drops_stream_options():
 
 
 @pytest.mark.asyncio
-async def test_aresponses_forwards_non_enum_reasoning_effort(monkeypatch, respx_mock: respx.MockRouter):
+async def test_aresponses_forwards_non_enum_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
     monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
@@ -242,7 +244,7 @@ async def test_aresponses_forwards_non_enum_reasoning_effort(monkeypatch, respx_
 
 @pytest.mark.asyncio
 async def test_acompletion_with_tools_forwards_non_enum_reasoning_effort_over_the_bridge(
-    monkeypatch, respx_mock: respx.MockRouter
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ):
     monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -270,6 +272,61 @@ async def test_acompletion_with_tools_forwards_non_enum_reasoning_effort_over_th
     request_body: Final = json.loads(upstream.calls[0].request.read())
     assert request_body["reasoning"] == {"effort": 5}
     assert response.id == "resp_bridge_int"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_forwards_prompt_managed_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    from litellm.responses.main import _AsyncPromptManagementOutcome
+
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_prompt_effort", "gpt-5.4"))
+    )
+
+    response: Final = await litellm.aresponses(
+        model="openai/gpt-5.4",
+        input="hi",
+        _async_prompt_merged_params=_AsyncPromptManagementOutcome(
+            merged_optional_params={"reasoning_effort": 5}, deployment_model_info=None
+        ),
+    )
+
+    assert upstream.call_count == 1
+    request_body: Final = json.loads(upstream.calls[0].request.read())
+    assert request_body["reasoning"] == {"effort": 5}
+    assert "reasoning_effort" not in request_body
+    assert response.output[0].content[0].text == "Done."
+
+
+@pytest.mark.asyncio
+async def test_aresponses_forwards_prompt_managed_reasoning_dict(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    from litellm.responses.main import _AsyncPromptManagementOutcome
+
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_prompt_reasoning", "gpt-5.4"))
+    )
+
+    response: Final = await litellm.aresponses(
+        model="openai/gpt-5.4",
+        input="hi",
+        _async_prompt_merged_params=_AsyncPromptManagementOutcome(
+            merged_optional_params={"reasoning": {"effort": "high", "summary": "detailed"}}, deployment_model_info=None
+        ),
+    )
+
+    assert upstream.call_count == 1
+    request_body: Final = json.loads(upstream.calls[0].request.read())
+    assert request_body["reasoning"] == {"effort": "high", "summary": "detailed"}
+    assert response.output[0].content[0].text == "Done."
 
 
 @pytest.mark.asyncio
