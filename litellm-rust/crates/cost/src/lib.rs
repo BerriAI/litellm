@@ -11,6 +11,7 @@ pub mod generic_usage;
 pub mod guardrail_cost;
 pub mod interactions_usage;
 pub mod non_token;
+pub mod off_peak;
 pub mod responses_usage;
 pub mod tiered_pricing;
 pub mod transcription_usage;

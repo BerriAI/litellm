@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
+use jiff::Timestamp;
 use litellm_cost::batch::{
     BatchCostRates, BatchPricing, BatchUsage, ModalityRates, batch_cost_calculator,
 };
@@ -10,7 +11,8 @@ use litellm_cost::custom_pricing::{
 };
 use litellm_cost::gemini_cost::cost_per_web_search_request;
 use litellm_cost::generic_cost::{
-    ResolvedTokenRates, calculate_generic_cost_from_model_info_without_off_peak,
+    ResolvedTokenRates, calculate_generic_cost_from_model_info,
+    calculate_generic_cost_from_model_info_without_off_peak,
     calculate_generic_cost_with_resolved_rates,
 };
 use litellm_cost::generic_input::{InputBaseRates, calculate_input_cost};
@@ -422,4 +424,35 @@ fn main() {
             1.0,
         );
     println!("threshold_prompt={threshold_prompt:.6} threshold_output={threshold_output:.5}");
+    let off_peak_usage = get_usage_object(&json!({
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 100,
+            "total_tokens": 200,
+            "prompt_tokens_details": {"cached_tokens": 40},
+            "completion_tokens_details": {"reasoning_tokens": 20}
+        }
+    }))
+    .unwrap()
+    .unwrap();
+    let at: Timestamp = "2026-01-01T18:00Z".parse().unwrap();
+    let (off_peak_prompt, off_peak_output) = calculate_generic_cost_from_model_info(
+        &off_peak_usage,
+        &json!({
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": 4e-6,
+            "output_cost_per_reasoning_token": 8e-6,
+            "off_peak_pricing": {
+                "hours_utc": "16:30-00:30",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "output_cost_per_reasoning_token": 3e-6
+            }
+        }),
+        None,
+        false,
+        1.0,
+        at,
+    );
+    println!("off_peak_prompt={off_peak_prompt:.5} off_peak_output={off_peak_output:.5}");
 }

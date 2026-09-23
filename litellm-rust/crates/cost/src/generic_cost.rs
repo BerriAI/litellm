@@ -1,9 +1,14 @@
+use jiff::Timestamp;
 use serde_json::Value;
 
-use crate::base_rate_selection::{get_tiered_reasoning_rate, get_token_base_cost_without_off_peak};
+use crate::base_rate_selection::{
+    TokenBaseRates, get_tiered_reasoning_rate, get_token_base_cost,
+    get_token_base_cost_without_off_peak,
+};
 use crate::generic_input::{InputBaseRates, calculate_input_cost};
 use crate::generic_output::{calculate_output_cost, resolve_reasoning_token_cost};
 use crate::generic_usage::{ParsedPromptDetails, parse_prompt_tokens_details};
+use crate::off_peak::{open_off_peak_block, parse_off_peak_rate};
 use crate::responses_usage::ChatUsage;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -84,21 +89,14 @@ pub fn calculate_generic_cost_with_resolved_rates(
     (prompt * rates.multiplier, completion * rates.multiplier)
 }
 
-pub fn calculate_generic_cost_from_model_info_without_off_peak(
+fn calculate_with_base_rates(
     usage: &ChatUsage,
     model_info: &Value,
+    base: TokenBaseRates,
     service_tier: Option<&str>,
-    threshold_inclusive: bool,
+    reasoning: f64,
     multiplier: f64,
 ) -> (f64, f64) {
-    let base = get_token_base_cost_without_off_peak(
-        model_info,
-        usage.prompt_tokens,
-        service_tier,
-        threshold_inclusive,
-    );
-    let reasoning = get_tiered_reasoning_rate(model_info, usage.prompt_tokens)
-        .unwrap_or_else(|| resolve_reasoning_token_cost(model_info, service_tier, base.output));
     calculate_generic_cost_with_resolved_rates(
         usage,
         model_info,
@@ -115,4 +113,45 @@ pub fn calculate_generic_cost_from_model_info_without_off_peak(
         },
         service_tier,
     )
+}
+
+pub fn calculate_generic_cost_from_model_info_without_off_peak(
+    usage: &ChatUsage,
+    model_info: &Value,
+    service_tier: Option<&str>,
+    threshold_inclusive: bool,
+    multiplier: f64,
+) -> (f64, f64) {
+    let base = get_token_base_cost_without_off_peak(
+        model_info,
+        usage.prompt_tokens,
+        service_tier,
+        threshold_inclusive,
+    );
+    let reasoning = get_tiered_reasoning_rate(model_info, usage.prompt_tokens)
+        .unwrap_or_else(|| resolve_reasoning_token_cost(model_info, service_tier, base.output));
+    calculate_with_base_rates(usage, model_info, base, service_tier, reasoning, multiplier)
+}
+
+pub fn calculate_generic_cost_from_model_info(
+    usage: &ChatUsage,
+    model_info: &Value,
+    service_tier: Option<&str>,
+    threshold_inclusive: bool,
+    multiplier: f64,
+    at: Timestamp,
+) -> (f64, f64) {
+    let base = get_token_base_cost(
+        model_info,
+        usage.prompt_tokens,
+        service_tier,
+        threshold_inclusive,
+        at,
+    );
+    let off_peak_reasoning = open_off_peak_block(model_info, at)
+        .and_then(|block| parse_off_peak_rate(block.get("output_cost_per_reasoning_token")));
+    let reasoning = off_peak_reasoning
+        .or_else(|| get_tiered_reasoning_rate(model_info, usage.prompt_tokens))
+        .unwrap_or_else(|| resolve_reasoning_token_cost(model_info, service_tier, base.output));
+    calculate_with_base_rates(usage, model_info, base, service_tier, reasoning, multiplier)
 }

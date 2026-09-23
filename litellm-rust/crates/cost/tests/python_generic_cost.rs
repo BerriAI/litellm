@@ -1,5 +1,6 @@
+use jiff::Timestamp;
 use litellm_cost::generic_cost::{
-    ResolvedTokenRates, billable_prompt_details,
+    ResolvedTokenRates, billable_prompt_details, calculate_generic_cost_from_model_info,
     calculate_generic_cost_from_model_info_without_off_peak,
     calculate_generic_cost_with_resolved_rates,
 };
@@ -168,4 +169,34 @@ fn calculate_generic_cost_from_model_info_without_off_peak_uses_selected_tier_fo
     );
     assert!((actual.0 - 32_001.0 * 5e-6).abs() < 1e-12);
     assert!((actual.1 - (60.0 * 4e-6 + 40.0 * 9e-6)).abs() < 1e-12);
+}
+
+#[rstest]
+fn calculate_generic_cost_from_model_info_uses_off_peak_reasoning_and_cache_rates() {
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 100,
+        "completion_tokens": 100,
+        "total_tokens": 200,
+        "prompt_tokens_details": {"cached_tokens": 40},
+        "completion_tokens_details": {"reasoning_tokens": 20}
+    }}))
+    .unwrap()
+    .unwrap();
+    let model_info = json!({
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 4e-6,
+        "output_cost_per_reasoning_token": 8e-6,
+        "off_peak_pricing": {
+            "hours_utc": "16:30-00:30",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "output_cost_per_reasoning_token": 3e-6
+        }
+    });
+    let at: Timestamp = "2026-01-01T18:00Z".parse().unwrap();
+    let actual = calculate_generic_cost_from_model_info(&usage, &model_info, None, false, 1.0, at);
+    let expected_prompt = 60.0 * 1e-6 + 40.0 * 1e-6;
+    let expected_output = 80.0 * 2e-6 + 20.0 * 3e-6;
+    assert!((actual.0 - expected_prompt).abs() < 1e-12);
+    assert!((actual.1 - expected_output).abs() < 1e-12);
 }

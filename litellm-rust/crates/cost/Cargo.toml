@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+jiff = "=0.2.37"
 
 [dev-dependencies]
 criterion.workspace = true

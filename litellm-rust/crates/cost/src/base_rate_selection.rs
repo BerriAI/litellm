@@ -1,6 +1,8 @@
+use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::generic_input::get_cost_per_unit;
+use crate::off_peak::{open_off_peak_block, parse_off_peak_rate};
 use crate::tiered_pricing::{select_tier_for_input, tier_rate};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -10,6 +12,13 @@ pub struct TokenBaseRates {
     pub cache_creation: f64,
     pub cache_creation_above_1hr: f64,
     pub cache_read: f64,
+}
+
+#[derive(Clone, Copy)]
+struct MissingCacheRates {
+    read: bool,
+    creation: bool,
+    one_hour: bool,
 }
 
 fn tier_key(base: &str, service_tier: Option<&str>) -> String {
@@ -110,14 +119,21 @@ fn crossed_threshold(
         .max_by(|left, right| left.1.total_cmp(&right.1))
 }
 
-pub fn get_token_base_cost_without_off_peak(
+fn select_base_rates(
     model_info: &Value,
     prompt_tokens: u64,
     service_tier: Option<&str>,
     threshold_inclusive: bool,
-) -> TokenBaseRates {
+) -> (TokenBaseRates, MissingCacheRates) {
     if let Some(rates) = tiered_base_rates(model_info, prompt_tokens) {
-        return rates;
+        return (
+            rates,
+            MissingCacheRates {
+                read: false,
+                creation: false,
+                one_hour: false,
+            },
+        );
     }
     let input = get_cost_per_unit(
         model_info,
@@ -187,11 +203,69 @@ pub fn get_token_base_cost_without_off_peak(
         });
     let (input, output, cache_creation, one_hour, cache_read) =
         selected.unwrap_or((input, output, cache_creation, one_hour, cache_read));
+    (
+        TokenBaseRates {
+            input,
+            output,
+            cache_creation: cache_creation.unwrap_or(input),
+            cache_creation_above_1hr: one_hour.unwrap_or(cache_creation.unwrap_or(input)),
+            cache_read: cache_read.unwrap_or(input),
+        },
+        MissingCacheRates {
+            read: cache_read.is_none(),
+            creation: cache_creation.is_none(),
+            one_hour: one_hour.is_none(),
+        },
+    )
+}
+
+pub fn get_token_base_cost_without_off_peak(
+    model_info: &Value,
+    prompt_tokens: u64,
+    service_tier: Option<&str>,
+    threshold_inclusive: bool,
+) -> TokenBaseRates {
+    select_base_rates(model_info, prompt_tokens, service_tier, threshold_inclusive).0
+}
+
+pub fn get_token_base_cost(
+    model_info: &Value,
+    prompt_tokens: u64,
+    service_tier: Option<&str>,
+    threshold_inclusive: bool,
+    at: Timestamp,
+) -> TokenBaseRates {
+    let (standard, missing) =
+        select_base_rates(model_info, prompt_tokens, service_tier, threshold_inclusive);
+    let Some(off_peak) = open_off_peak_block(model_info, at) else {
+        return standard;
+    };
+    let rate = |key| {
+        off_peak
+            .get(key)
+            .and_then(|value| parse_off_peak_rate(Some(value)))
+    };
+    let input = rate("input_cost_per_token").unwrap_or(standard.input);
+    let output = rate("output_cost_per_token").unwrap_or(standard.output);
+    let cache_read = rate("cache_read_input_token_cost").unwrap_or(if missing.read {
+        input
+    } else {
+        standard.cache_read
+    });
+    let cache_creation = rate("cache_creation_input_token_cost").unwrap_or(if missing.creation {
+        input
+    } else {
+        standard.cache_creation
+    });
     TokenBaseRates {
         input,
         output,
-        cache_creation: cache_creation.unwrap_or(input),
-        cache_creation_above_1hr: one_hour.unwrap_or(cache_creation.unwrap_or(input)),
-        cache_read: cache_read.unwrap_or(input),
+        cache_creation,
+        cache_creation_above_1hr: if missing.one_hour {
+            cache_creation
+        } else {
+            standard.cache_creation_above_1hr
+        },
+        cache_read,
     }
 }
