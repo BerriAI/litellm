@@ -72,7 +72,8 @@ BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
 )
 BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS: Final = frozenset({"background"})
 REMOTE_IMAGE_URL_SCHEMES: Final = ("http://", "https://")
-IMAGE_BLOCK_LIST_KEYS: Final = ("content", "output")
+IMAGE_BLOCK_KEYS: Final = ("content", "output")
+IMAGE_BLOCK_TYPES: Final = frozenset({"input_image", "computer_screenshot"})
 
 
 def resolve_bedrock_bearer_token(api_key: str | None) -> str | None:
@@ -80,7 +81,7 @@ def resolve_bedrock_bearer_token(api_key: str | None) -> str | None:
 
 
 def _remote_image_url(block: object) -> str | None:
-    if not isinstance(block, dict) or block.get("type") != "input_image":
+    if not isinstance(block, dict) or block.get("type") not in IMAGE_BLOCK_TYPES:
         return None
     image_url: Final = block.get("image_url")
     if not isinstance(image_url, str) or not image_url.startswith(REMOTE_IMAGE_URL_SCHEMES):
@@ -88,23 +89,28 @@ def _remote_image_url(block: object) -> str | None:
     return image_url
 
 
-def _block_lists(item: object) -> "tuple[tuple[str, tuple[object, ...]], ...]":
+def _blocks_under(value: object) -> "tuple[object, ...]":
+    if isinstance(value, list):
+        return tuple(value)
+    if isinstance(value, dict):
+        return (value,)
+    return ()
+
+
+def _image_blocks(item: object) -> "tuple[object, ...]":
+    """The blocks of ``item`` that can carry an image: its content and tool output lists, or a screenshot output dict."""
     if not isinstance(item, dict):
         return ()
-    return tuple((key, tuple(item[key])) for key in IMAGE_BLOCK_LIST_KEYS if isinstance(item.get(key), list))
+    return tuple(block for key in IMAGE_BLOCK_KEYS for block in _blocks_under(item.get(key)))
 
 
 def collect_remote_image_urls(input: "str | ResponseInputParam") -> "tuple[str, ...]":
-    """The distinct http(s) ``input_image`` URLs in message content and tool output lists, in first-seen order."""
+    """The distinct http(s) image URLs in message content, tool output lists, and computer screenshots, in first-seen order."""
     if not isinstance(input, list):
         return ()
     return tuple(
         dict.fromkeys(
-            url
-            for item in input
-            for _, blocks in _block_lists(item)
-            for block in blocks
-            if (url := _remote_image_url(block)) is not None
+            url for item in input for block in _image_blocks(item) if (url := _remote_image_url(block)) is not None
         )
     )
 
@@ -116,21 +122,27 @@ def _inline_block(block: object, inlined: "Mapping[str, str]") -> object:
     return {**block, "image_url": inlined[url]}  # mutable-ok: outgoing JSON request item
 
 
+def _inline_value(value: object, inlined: "Mapping[str, str]") -> object:
+    if isinstance(value, list):
+        return [_inline_block(block, inlined) for block in value]  # mutable-ok: outgoing JSON request item
+    return _inline_block(value, inlined)
+
+
 def _inline_item(item: object, inlined: "Mapping[str, str]") -> object:
-    block_lists: Final = _block_lists(item)
-    if not isinstance(item, dict) or not block_lists:
+    if not isinstance(item, dict):
         return item
-    inlined_lists: Final = {  # mutable-ok: outgoing JSON request item
-        key: [_inline_block(block, inlined) for block in blocks]  # mutable-ok: same
-        for key, blocks in block_lists
+    inlined_fields: Final = {  # mutable-ok: outgoing JSON request item
+        key: _inline_value(item[key], inlined) for key in IMAGE_BLOCK_KEYS if isinstance(item.get(key), (list, dict))
     }
-    return {**item, **inlined_lists}  # mutable-ok: same
+    if not inlined_fields:
+        return item
+    return {**item, **inlined_fields}  # mutable-ok: same
 
 
 def inline_remote_image_urls(
     input: "str | ResponseInputParam", inlined: "Mapping[str, str]"
 ) -> "str | ResponseInputParam":
-    """``input`` with every http(s) ``input_image`` URL replaced by its entry in ``inlined``."""
+    """``input`` with every http(s) image URL replaced by its entry in ``inlined``."""
     if not isinstance(input, list) or not inlined:
         return input
     items: Final = [_inline_item(item, inlined) for item in input]  # mutable-ok: downstream narrows on isinstance(list)

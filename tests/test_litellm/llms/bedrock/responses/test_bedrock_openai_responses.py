@@ -204,12 +204,14 @@ class TestUnsupportedToolDrop:
 
     _WEB_SEARCH_TOOL = {"type": "web_search", "external_web_access": False}
     _SHELL_TOOL = {"type": "function", "name": "shell", "parameters": {"type": "object", "properties": {}}}
-    _NAMESPACE_TOOL = {"type": "namespace", "name": "multi_agent_v1", "tools": [{"type": "function", "name": "spawn_agent"}]}
+    _NAMESPACE_TOOL = {
+        "type": "namespace",
+        "name": "multi_agent_v1",
+        "tools": [{"type": "function", "name": "spawn_agent"}],
+    }
 
     def _outbound_tools(self, tools: list[dict]) -> object:
-        params = _cfg().map_openai_params(
-            response_api_optional_params={"tools": tools}, model=MODEL, drop_params=False
-        )
+        params = _cfg().map_openai_params(response_api_optional_params={"tools": tools}, model=MODEL, drop_params=False)
         body = _cfg().transform_responses_api_request(
             model=MODEL,
             input="count the lines",
@@ -368,7 +370,10 @@ class TestRemoteImageInlining:
                 {
                     "type": "function_call_output",
                     "call_id": "call_1",
-                    "output": [{"type": "input_text", "text": "the chart"}, {"type": "input_image", "image_url": remote}],
+                    "output": [
+                        {"type": "input_text", "text": "the chart"},
+                        {"type": "input_image", "image_url": remote},
+                    ],
                 },
                 {"type": "function_call_output", "call_id": "call_2", "output": "https://example.com/plain-text.png"},
                 {"role": "user", "content": [{"type": "input_image", "image_url": remote}]},
@@ -384,6 +389,45 @@ class TestRemoteImageInlining:
             headers={},
         )
         assert body["input"] == tool_turn(self._INLINED)
+        assert fetched == [self._REMOTE]
+
+    def test_computer_screenshot_outputs_are_inlined(self):
+        fetched: list[str] = []
+
+        def fetch(url: str) -> str:
+            fetched.append(url)
+            return self._INLINED
+
+        def computer_turn(remote: str) -> list[dict]:
+            return [
+                {"type": "computer_call", "call_id": "call_1", "id": "cu_1", "actions": [{"type": "screenshot"}]},
+                {
+                    "type": "computer_call_output",
+                    "call_id": "call_1",
+                    "output": {"type": "computer_screenshot", "image_url": remote},
+                },
+                {
+                    "type": "computer_call_output",
+                    "call_id": "call_2",
+                    "output": {"type": "computer_screenshot", "file_id": "file-1"},
+                },
+                {
+                    "type": "computer_call_output",
+                    "call_id": "call_3",
+                    "output": {"type": "computer_screenshot", "image_url": self._DATA_URI},
+                },
+            ]
+
+        body = BedrockOpenAIResponsesConfig(
+            fetch_image=fetch, async_fetch_image=_never_fetch_async
+        ).transform_responses_api_request(
+            model=MODEL,
+            input=computer_turn(self._REMOTE),
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["input"] == computer_turn(self._INLINED)
         assert fetched == [self._REMOTE]
 
     @pytest.mark.asyncio
