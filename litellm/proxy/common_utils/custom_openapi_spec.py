@@ -1,5 +1,7 @@
 from collections.abc import Mapping, Sequence
-from typing import Final, TypeAlias, Union
+from typing import Final, TypeAlias, Union, cast
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 
@@ -28,7 +30,7 @@ class CustomOpenAPISpec:
         "/openai/deployments/{model}/embeddings",
     ]
 
-    RESPONSES_API_PATHS = ["/v1/responses", "/responses"]
+    RESPONSES_API_PATHS = ["/v1/responses", "/responses", "/openai/v1/responses"]
 
     @staticmethod
     def _as_object(node: JsonValue) -> JsonObject:
@@ -44,26 +46,18 @@ class CustomOpenAPISpec:
         return CustomOpenAPISpec._as_object(components.setdefault("schemas", {}))
 
     @staticmethod
-    def get_pydantic_schema(model_class) -> JsonObject | None:
+    def get_pydantic_schema(model_class: type) -> JsonObject | None:
         """
-        Get JSON schema from a Pydantic model, handling both v1 and v2 APIs.
+        Get JSON schema for a request or response model class, including TypedDicts.
 
         Args:
-            model_class: Pydantic model class
+            model_class: Pydantic model class or TypedDict
 
         Returns:
             JSON schema dict or None if failed
         """
         try:
-            # Try Pydantic v2 method first
-            return model_class.model_json_schema()
-        except AttributeError:
-            try:
-                # Fallback to Pydantic v1 method
-                return model_class.schema()
-            except AttributeError:
-                # If both methods fail, return None
-                return None
+            return cast(JsonObject, TypeAdapter(model_class).json_schema())  # cast-ok: pydantic returns dict[str, Any]
         except Exception as e:
             # FastAPI 0.120+ may fail schema generation for certain types (e.g., openai.Timeout)
             # Log the error and return None to skip schema generation for this model

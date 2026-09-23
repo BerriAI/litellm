@@ -196,3 +196,31 @@ def test_rewrite_defs_refs():
         rewritten["properties"]["messages"]["items"]["anyOf"][1]["$ref"]
         == "#/components/schemas/AssistantMessage"
     )
+
+
+def test_get_pydantic_schema_generates_schema_for_responses_request_typed_dict():
+    from litellm.types.llms.openai import ResponsesAPIRequestParams
+
+    schema = CustomOpenAPISpec.get_pydantic_schema(ResponsesAPIRequestParams)
+
+    assert schema is not None
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    for field in (
+        "model",
+        "input",
+        "instructions",
+        "tools",
+        "previous_response_id",
+        "background",
+        "stream",
+    ):
+        assert field in properties
+
+
+def test_responses_api_paths_covers_all_three_routes():
+    assert CustomOpenAPISpec.RESPONSES_API_PATHS == [
+        "/v1/responses",
+        "/responses",
+        "/openai/v1/responses",
+    ]
