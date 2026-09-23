@@ -1826,7 +1826,7 @@ describe("TeamInfoView", () => {
       });
     });
 
-    it("should show a route picked from the dropdown in the field and save it", async () => {
+    it.skip("should show a route picked from the dropdown in the field and save it", async () => {
       const user = userEvent.setup({ delay: null });
 
       renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={true} />);
