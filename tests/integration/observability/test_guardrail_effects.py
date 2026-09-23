@@ -168,6 +168,15 @@ def test_panw_latest_role_message_only_scans_only_latest_turn_on_responses_input
                 {"role": "user", "content": latest},
             ]
         },
+        "tool_loop_after_latest": {
+            "input": [
+                *history,
+                {"role": "user", "content": latest},
+                {"type": "reasoning", "id": "rs_2", "content": [{"type": "reasoning_text", "text": "thinking"}]},
+                {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_2", "output": "tool result"},
+            ]
+        },
     }
 
     def scanner(request: Request) -> Reply:

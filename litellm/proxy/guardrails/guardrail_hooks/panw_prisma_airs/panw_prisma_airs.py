@@ -6,6 +6,7 @@ Provides real-time threat detection, DLP, URL filtering, content masking, and po
 """
 
 import functools
+import itertools
 import json
 import os
 import re
@@ -16,7 +17,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -90,6 +91,32 @@ class _ToolCallSlice(BaseModel):
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
     function: _ToolCallFunctionSlice | None = None
+
+
+class _ResponsesContentPart(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    text: str | None = None
+
+
+class _ResponsesInputItem(BaseModel):
+    """The slice of a raw Responses ``input`` item that decides which ``texts`` it flattens to."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: str | None = None
+    content: str | tuple[_ResponsesContentPart, ...] | None = None
+
+    def text_count(self) -> int:
+        if isinstance(self.content, str):
+            return 1
+        if self.content is None:
+            return 0
+        return sum(part.text is not None for part in self.content)
+
+
+_ResponsesInput: TypeAlias = str | tuple[_ResponsesInputItem, ...] | None
+_RESPONSES_INPUT: Final[TypeAdapter[_ResponsesInput]] = TypeAdapter(_ResponsesInput)
 
 
 if TYPE_CHECKING:
@@ -1634,24 +1661,64 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         return forward if len(forward) == len(texts) and forward == backward else None
 
     @classmethod
+    def _reasoning_item_text_indices(
+        cls,
+        texts: Sequence[str],
+        request_data: Mapping[str, object],
+    ) -> frozenset[int] | None:
+        """Return the ``texts`` indices flattened from Responses ``reasoning`` input items.
+
+        The Responses translation handler gives those model-authored items the default
+        ``user`` role, so the latest-turn selection must not mistake one for a human turn.
+        Empty for requests without a Responses ``input`` item list; None when the raw items
+        do not account for every entry of ``texts``.
+        """
+        try:
+            raw_input: Final = _RESPONSES_INPUT.validate_python(request_data.get("input"))
+        except ValidationError:
+            return None
+        if not isinstance(raw_input, tuple):
+            return frozenset()
+        counts: Final = tuple(item.text_count() for item in raw_input)
+        if sum(counts) != len(texts):
+            return None
+        starts: Final = itertools.accumulate(counts, initial=0)
+        return frozenset(
+            text_idx
+            for item, count, start in zip(raw_input, counts, starts)
+            if item.type == "reasoning"
+            for text_idx in range(start, start + count)
+        )
+
+    @classmethod
     def _get_latest_user_text_indices(
         cls,
         texts: Sequence[str],
         messages: Sequence[AllMessageValues],
+        request_data: Mapping[str, object],
     ) -> frozenset[int] | None:
         """Return text indices belonging to only the latest scannable human-authored (user or developer) message.
 
         The latest user/developer message is chosen from ``messages`` itself, so a latest turn
         without text (image only) yields an empty set rather than promoting an earlier turn.
-        Returns None when ``texts`` cannot be aligned with ``messages``, no user/developer
-        message exists, or the latest one carries text that never reached ``texts`` (safety
-        fallback to the role-filter scan).
+        Messages flattened from Responses ``reasoning`` items are never that turn.
+        Returns None when ``texts`` cannot be aligned with ``messages`` or ``request_data``, no
+        user/developer message exists, or the latest one carries text that never reached
+        ``texts`` (safety fallback to the role-filter scan).
         """
         sources: Final = cls._text_source_message_indices(texts, messages)
         if sources is None:
             return None
+        reasoning: Final = cls._reasoning_item_text_indices(texts, request_data)
+        if reasoning is None:
+            return None
+        reasoning_messages: Final = frozenset(sources[text_idx] for text_idx in reasoning)
         latest_human: Final = max(
-            (idx for idx, message in enumerate(messages) if message.get("role") in ("user", "developer")),
+            (
+                idx
+                for idx, message in enumerate(messages)
+                if idx not in reasoning_messages and message.get("role") in ("user", "developer")
+            ),
             default=None,
         )
         if latest_human is None:
@@ -1779,7 +1846,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             structured_messages: Final = inputs.get("structured_messages")
             if structured_messages:
                 if self._use_latest_user_only(request_data, logging_obj):
-                    scannable_indices = self._get_latest_user_text_indices(texts, structured_messages)
+                    scannable_indices = self._get_latest_user_text_indices(texts, structured_messages, request_data)
                     if scannable_indices is not None and not scannable_indices:
                         verbose_proxy_logger.debug(
                             "PANW Prisma AIRS: latest user message has no text, so "
