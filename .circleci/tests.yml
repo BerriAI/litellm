@@ -74,6 +74,7 @@ commands:
     steps:
       - run:
           name: Install Codecov CLI (pinned v11.3.1)
+          when: always
           command: |
             curl -sSLf -o /tmp/codecov https://cli.codecov.io/v11.3.1/linux/codecov
             curl -sSLf -o /tmp/codecov.SHA256SUM https://cli.codecov.io/v11.3.1/linux/codecov.SHA256SUM
@@ -90,7 +91,6 @@ commands:
             uv run --no-sync python -c "import litellm_enterprise; print('litellm-enterprise OK:', litellm_enterprise.__file__)"
   setup_test_deps:
     steps:
-      - checkout
       - install_uv
       - install_rust
       - restore_cache:
@@ -186,12 +186,14 @@ jobs:
     working_directory: ~/project
     parallelism: << parameters.shards >>
     environment:
+      COVERAGE_CORE: sysmon
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
     steps:
-      - setup_test_deps
+      - checkout
       - skip_unless_relevant:
           base_ref: << parameters.base_ref >>
           pull_request_url: << parameters.pull_request_url >>
+      - setup_test_deps
       - run:
           name: "Run << parameters.tests_path >> shard"
           no_output_timeout: 20m
@@ -224,6 +226,7 @@ jobs:
     resource_class: large
     working_directory: ~/project
     steps:
+      - checkout
       - setup_test_deps
       - run:
           name: Checkout litellm-docs
@@ -250,10 +253,11 @@ jobs:
     resource_class: large
     working_directory: ~/project
     steps:
-      - setup_test_deps
+      - checkout
       - skip_unless_relevant:
           base_ref: << parameters.base_ref >>
           pull_request_url: << parameters.pull_request_url >>
+      - setup_test_deps
       - start_postgres:
           image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
       - start_redis
