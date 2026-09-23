@@ -347,6 +347,39 @@ describe("RoutingDecisionCard", () => {
     expect(screen.getByText("SECURITY_REVIEW")).toBeInTheDocument();
   });
 
+  it("shows a matched semantic route that carries a tier but no cause", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          router_model_name: "semantic-live",
+          router_type: "semantic",
+          routed_model: "chat-code",
+          tier: "chat-code",
+        }}
+      />,
+    );
+    expect(screen.getByText("semantic-live")).toBeInTheDocument();
+    expect(screen.getByText("(Semantic router)")).toBeInTheDocument();
+    expect(screen.getByText("Tier")).toBeInTheDocument();
+    expect(screen.getAllByText("chat-code")).toHaveLength(2);
+    expect(screen.queryByText("Decided by")).not.toBeInTheDocument();
+  });
+
+  it("explains a semantic route that fell back to the default model", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          router_model_name: "semantic-live",
+          router_type: "semantic",
+          routed_model: "chat-cheap",
+          cause: "default_fallback",
+        }}
+      />,
+    );
+    expect(screen.getByText("Default model, no route matched")).toBeInTheDocument();
+    expect(screen.queryByText("Tier")).not.toBeInTheDocument();
+  });
+
   it("shows the keyword that fired a tier rule", () => {
     render(
       <RoutingDecisionCard

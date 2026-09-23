@@ -249,7 +249,7 @@ export function RoutingDecisionCard({
   decision?: RoutingDecision | null;
   className?: string;
 }) {
-  if (!decision || !decision.cause) return null;
+  if (!decision || (!decision.cause && !decision.router_type)) return null;
 
   const {
     router_model_name: routerModelName,
@@ -300,7 +300,7 @@ export function RoutingDecisionCard({
 
         {requestType && <Row label="Request type">{requestType}</Row>}
 
-        <Row label="Decided by">{describeCause(decision)}</Row>
+        {decision.cause && <Row label="Decided by">{describeCause(decision)}</Row>}
         {decision.classifier_model && <Row label="Classifier model">{decision.classifier_model}</Row>}
         {decision.classifier_confidence != null && (
           <Row label="Confidence">{(decision.classifier_confidence * 100).toFixed(1)}%</Row>
