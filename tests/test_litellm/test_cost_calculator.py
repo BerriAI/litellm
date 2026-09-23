@@ -4635,6 +4635,24 @@ def test_gemini_live_native_audio_limits_and_capabilities_match_vendor_model_car
     assert info["supports_pdf_input"] is False
 
 
+def test_baseten_glm_5_3_fast_is_priced_from_registry(_local_model_cost_map: None) -> None:
+    model: Final = "baseten/zai-org/GLM-5.3-Fast"
+    prompt_tokens: Final = 1000
+    completion_tokens: Final = 500
+
+    prompt_usd, completion_usd = litellm.cost_per_token(
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+
+    entry: Final = litellm.model_cost[model]
+    assert prompt_usd == pytest.approx(prompt_tokens * entry["input_cost_per_token"])
+    assert completion_usd == pytest.approx(completion_tokens * entry["output_cost_per_token"])
+    assert prompt_usd > 0
+    assert completion_usd > 0
+
+
 def test_completion_cost_charges_explicit_per_token_rates_over_registered_ones(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
