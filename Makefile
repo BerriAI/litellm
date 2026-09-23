@@ -304,7 +304,7 @@ test-rust-extension:
 		--mypy-config-file tests/test_litellm/rust_bridge/stubtest.ini \
 		litellm.rust_bridge._native && \
 	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
-	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
+	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust $(RUST_EXTENSION_PYTEST_ARGS)
 
 test: install-test-deps
 	$(UV_RUN) pytest tests/
