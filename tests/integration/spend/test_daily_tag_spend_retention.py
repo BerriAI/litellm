@@ -14,7 +14,7 @@ from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy
 
 CLEANUP_EVERY_MINUTE: Final = "* * * * *"
-_CONFIG: Final = TypeAdapter(dict[str, dict[str, JsonValue]])
+_MAPPING: Final = TypeAdapter(dict[str, JsonValue])
 
 
 def _day(days_ago: int) -> str:
@@ -55,11 +55,11 @@ def _spend_log_present(request_id: str) -> bool:
 
 
 def _cleanup_config(tmp_path: Path, retention: dict[str, JsonValue]) -> Path:
-    base: Final = _CONFIG.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    base: Final = _MAPPING.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     config: Final = {
         **base,
         "general_settings": {
-            **base["general_settings"],
+            **_MAPPING.validate_python(base["general_settings"]),
             **retention,
             "maximum_spend_logs_cleanup_cron": CLEANUP_EVERY_MINUTE,
             "scheduled_job_stagger": {"enabled": False},

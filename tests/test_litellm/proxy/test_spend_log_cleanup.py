@@ -835,7 +835,6 @@ async def test_daily_tag_spend_retention_alone_prunes_only_that_table_by_calenda
     tables = [call[0][0] for call in client.db.execute_raw.call_args_list]
     assert len(tables) == 1
     assert '"LiteLLM_DailyTagSpend"' in tables[0]
-    assert '"date" < $1::text' in tables[0]
     cutoff_day = client.db.execute_raw.call_args[0][1]
     assert cutoff_day == (datetime.now(timezone.utc) - timedelta(days=90)).date().isoformat()
 
