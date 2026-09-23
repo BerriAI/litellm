@@ -329,9 +329,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         like deepseek-v3.2 that support thinking as opt-in but not always-on.
         """
         sanitized_optional_params: Final = self._drop_unsupported_tools(optional_params)
-        thinking_mode_active: Final = self._thinking_mode_active(
-            model=model, optional_params=sanitized_optional_params
-        )
+        thinking_mode_active: Final = self._thinking_mode_active(model=model, optional_params=sanitized_optional_params)
         transformed_optional_params: Final = (
             self._normalize_thinking_tool_choice(
                 optional_params=sanitized_optional_params,
@@ -341,9 +339,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             if thinking_mode_active
             else sanitized_optional_params
         )
-        transformed_messages: Final = (
-            self._fill_reasoning_content(messages) if thinking_mode_active else messages
-        )
+        transformed_messages: Final = self._fill_reasoning_content(messages) if thinking_mode_active else messages
         return super().transform_request(
             model=model,
             messages=transformed_messages,
@@ -365,9 +361,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         fix for multi-turn thinking-mode conversations.
         """
         sanitized_optional_params: Final = self._drop_unsupported_tools(optional_params)
-        thinking_mode_active: Final = self._thinking_mode_active(
-            model=model, optional_params=sanitized_optional_params
-        )
+        thinking_mode_active: Final = self._thinking_mode_active(model=model, optional_params=sanitized_optional_params)
         transformed_optional_params: Final = (
             self._normalize_thinking_tool_choice(
                 optional_params=sanitized_optional_params,
@@ -377,9 +371,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             if thinking_mode_active
             else sanitized_optional_params
         )
-        transformed_messages: Final = (
-            self._fill_reasoning_content(messages) if thinking_mode_active else messages
-        )
+        transformed_messages: Final = self._fill_reasoning_content(messages) if thinking_mode_active else messages
         return await super().async_transform_request(
             model=model,
             messages=transformed_messages,
