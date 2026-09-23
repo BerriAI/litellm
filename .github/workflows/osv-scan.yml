@@ -4,7 +4,6 @@ on:
   pull_request:
     branches:
       - main
-      - litellm_oss_staging
       - "litellm_**"
   schedule:
     - cron: "23 6 * * *"

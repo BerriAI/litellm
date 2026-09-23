@@ -9,7 +9,6 @@ on:
   pull_request:
     branches:
       - main
-      - litellm_oss_staging
       - "litellm_**"
     paths:
       - "terraform/litellm/aws/**"
