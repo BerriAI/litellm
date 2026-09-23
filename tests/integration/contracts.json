@@ -2079,6 +2079,9 @@
         ],
         "tests/integration/authorization/test_jwt_default_team_provisioning.py::test_jwt_subject_without_team_claim_is_provisioned_into_configured_default_team": [
             "authorization.jwt.new_subject_without_team_claim_joins_default_team"
+        ],
+        "tests/integration/spend/test_team_member_spend.py::test_member_over_budget_is_blocked_when_redis_counter_reads_stale_low": [
+            "spend.team_member.stale_low_redis_counter_still_blocks_member_over_budget"
         ]
     },
     "browser": {
