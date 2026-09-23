@@ -66201,6 +66201,32 @@
         "output_cost_per_token": 9e-06,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
+    "vertex_ai/gemini-omni-1.1-flash-preview": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "vertex_ai",
+        "max_output_tokens": 57920,
+        "max_tokens": 57920,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 9e-06,
+        "output_cost_per_token": 9e-06,
+        "output_cost_per_video_token": 1.75e-05,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_endpoints": [
+            "/v1beta/interactions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "video"
+        ],
+        "supports_reasoning": true,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
     "vertex_ai/gemma-4-26b-a4b-it": {
         "cache_read_input_token_cost": 1.5e-08,
         "input_cost_per_token": 1.5e-07,
