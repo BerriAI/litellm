@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -228,22 +231,55 @@ def test_compare_skips_per_test_mismatches_for_xdist_shape() -> None:
     assert report.failures() == ()
 
 
-def test_dump_observation_sorts_role_lists_and_round_trips(tmp_path: Path) -> None:
-    queries: Final = {f"SELECT {index}": ("litellm_writer", "litellm_reader") for index in range(16)}
-    observation: Final = _observation(
-        queries, {NODE_ID: queries}, calls={"litellm_reader": 1, "litellm_writer": 2}, dealloc=0
+_DUMP_SNIPPET: Final = """
+import sys
+sys.path.insert(0, ".")
+from types import MappingProxyType
+from tests.integration._support.routing import Observation, dump_observation
+queries = {f"SELECT {index}": frozenset({"litellm_writer", "litellm_reader"}) for index in range(4)}
+observation = Observation(
+    MappingProxyType(queries),
+    MappingProxyType({"node": MappingProxyType(queries)}),
+    MappingProxyType({"litellm_reader": 1, "litellm_writer": 2}),
+    0,
+)
+print(dump_observation(observation), end="")
+"""
+
+
+def test_dump_observation_sorts_role_lists_for_every_hash_seed(tmp_path: Path) -> None:
+    queries: Final = [f"SELECT {index}" for index in range(4)]
+    expected: Final = (
+        json.dumps(
+            {
+                "queries": {query: ["litellm_reader", "litellm_writer"] for query in queries},
+                "tests": {"node": {query: ["litellm_reader", "litellm_writer"] for query in queries}},
+                "calls": {"litellm_reader": 1, "litellm_writer": 2},
+                "dealloc": 0,
+            },
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n"
     )
-    expected_document: Final = {
-        "queries": {query: ["litellm_reader", "litellm_writer"] for query in queries},
-        "tests": {NODE_ID: {query: ["litellm_reader", "litellm_writer"] for query in queries}},
-        "calls": {"litellm_reader": 1, "litellm_writer": 2},
-        "dealloc": 0,
-    }
-    dumped: Final = dump_observation(observation)
-    assert dumped == json.dumps(expected_document, sort_keys=True, indent=2) + "\n"
+    outputs: Final = [
+        subprocess.run(
+            [sys.executable, "-c", _DUMP_SNIPPET],
+            cwd=Path(__file__).resolve().parents[3],
+            env={"PATH": os.environ["PATH"], "PYTHONHASHSEED": seed},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        for seed in ("0", "1", "2", "3", "4", "5", "6", "7")
+    ]
+    for output in outputs:
+        assert output == expected
     path: Final = tmp_path / OBSERVED_FILE
-    path.write_text(dumped)
-    assert load_observation(path) == observation
+    path.write_text(outputs[0])
+    observation: Final = load_observation(path)
+    assert observation.queries == _routing({query: ("litellm_writer", "litellm_reader") for query in queries})
+    assert observation.tests == {"node": observation.queries}
 
 
 def _write_observed(results: Path, observation: Observation) -> None:

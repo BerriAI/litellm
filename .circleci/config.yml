@@ -3183,15 +3183,12 @@ jobs:
     steps:
       - setup_litellm_test_deps
       - run:
-          name: Fetch the parity base revision
+          name: Check out base litellm
           environment:
             ROUTING_PARITY_BASE: << pipeline.parameters.routing_parity_base >>
           command: |
             [[ "$ROUTING_PARITY_BASE" =~ ^[0-9a-f]{40}$ ]] || exit 1
             git fetch --depth 1 origin "$ROUTING_PARITY_BASE"
-      - run:
-          name: Check out base litellm
-          command: |
             rm -rf litellm
             git checkout "$ROUTING_PARITY_BASE" -- litellm
       - start_postgres:
