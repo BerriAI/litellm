@@ -35,10 +35,30 @@ jobs:
             exit 1
           fi
 
+      # The proxy's migrations ship in litellm-proxy-extras, so nothing in the generated notes
+      # tells an operator what this release does to their database. Summarize it here instead.
+      - name: Check out the release commit
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.commit_hash }}
+
+      - name: Summarize the database schema changes
+        # Never hold up a release over its own release notes: on failure the section is left out.
+        continue-on-error: true
+        env:
+          COMMIT_HASH: ${{ inputs.commit_hash }}
+          SCHEMA_SECTION: ${{ runner.temp }}/schema_section.md
+        run: |
+          python3 ci_cd/migration_impact.py --head "${COMMIT_HASH}" --output "${SCHEMA_SECTION}"
+          cat "${SCHEMA_SECTION}" >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Create release
         env:
           TAG: ${{ inputs.tag }}
           COMMIT_HASH: ${{ inputs.commit_hash }}
+          SCHEMA_SECTION: ${{ runner.temp }}/schema_section.md
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
@@ -67,6 +87,12 @@ jobs:
               }
               return true;
             };
+
+            const fs = require('fs');
+            const schemaPath = process.env.SCHEMA_SECTION;
+            const schemaSection = fs.existsSync(schemaPath)
+              ? `${fs.readFileSync(schemaPath, 'utf8').trim()}\n\n---\n\n`
+              : '';
 
             const cosignSection = [
               `## Verify Docker Image Signature`,
@@ -151,7 +177,7 @@ jobs:
                 tag_name: tag,
               });
 
-              const updatedBody = cosignSection + (response.data.body ?? '');
+              const updatedBody = schemaSection + cosignSection + (response.data.body ?? '');
               await github.rest.repos.updateRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,

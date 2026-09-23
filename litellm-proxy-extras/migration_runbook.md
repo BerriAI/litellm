@@ -121,6 +121,38 @@ rm -rf litellm-proxy-extras/litellm_proxy_extras/migrations/[empty_dir]
 - Never edit existing migration files
 - Commit schema + migration together
 
+## Upgrade Impact Report
+
+Migrations in this package are invisible to an operator reading a release: the notes list commit
+titles, and the first pod to boot applies the migrations with `prisma migrate deploy` while the
+pods running the previous version are still serving traffic. `ci_cd/migration_impact.py` diffs the
+migration set between two refs and rates every statement by what it does to those older pods:
+
+| Severity | Meaning |
+|---|---|
+| `breaking` | The old pods cannot recover on their own. A column their client selects is dropped, renamed or changed to a type it cannot read, or a NOT NULL now rejects the rows they write |
+| `write-reject` | A new constraint (foreign key, check, unique) on columns the old pods write. Rows they write that violate it are rejected; whether any do depends on the data |
+| `prepared-plan` | The result type of a query the old pods have prepared changes: a whole-row `SELECT <alias>.*` gains a column, or a column widens. The plans cached on their pooled connections are rejected with `cached plan must not change result type` until those connections are recreated ([#36418](https://github.com/BerriAI/litellm/issues/36418)) |
+| `lock` | The migration takes a blocking lock, or rewrites rows, on a table already serving traffic |
+| `info` | No effect on the old pods: new tables, changes to them, and columns the old pods do not know |
+
+The evidence is the base version itself, not a hardcoded list. `schema.prisma` at `--base` says
+which columns the old Prisma client selects and writes, so dropping a column that schema never
+declared is `info`, and dropping one it does declare is `breaking`. The source tree at `--base`
+holds the raw `SELECT <alias>.*` queries whose plans go stale. The report's footnote names both.
+
+`create-release.yml` runs this and puts the result at the top of the release body. To see it for
+any pair of versions yourself:
+
+```bash
+python3 ci_cd/migration_impact.py --base v1.93.0 --head v1.99.0
+python3 ci_cd/migration_impact.py --base v1.93.0 --head v1.99.0 --format json
+```
+
+Standard library only, so it needs no `uv sync`. `--fail-on breaking` exits non-zero when a
+migration in the range is not safe to apply under a rolling upgrade; `--fail-on write-reject`
+also stops on constraints the old pods might violate.
+
 ---
 
 **Done with migration?** See [build_and_publish.md](./build_and_publish.md) to publish a new `litellm-proxy-extras` package.
