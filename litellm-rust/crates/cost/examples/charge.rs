@@ -980,4 +980,14 @@ fn main() {
         )
         .unwrap();
     println!("vertex_image_generation={vertex_image:.3}");
+    let vertex_edit = model_info_catalog
+        .google_image_edit_cost(
+            "image-sample",
+            "vertex_ai",
+            &json!({"data": [{}, {}], "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}}),
+            None,
+            at,
+        )
+        .unwrap();
+    println!("vertex_image_edit={vertex_edit:.3}");
 }

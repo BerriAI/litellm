@@ -25,8 +25,8 @@ use crate::fireworks_cost::{
 };
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::image_response_cost::{
-    calculate_image_response_cost_from_usage, gemini_image_generation_cost,
-    resolve_image_model_info, vertex_image_generation_cost,
+    calculate_image_response_cost_from_usage, gemini_image_edit_cost, gemini_image_generation_cost,
+    resolve_image_model_info, vertex_image_edit_cost, vertex_image_generation_cost,
 };
 use crate::per_second::per_second_pricing_cost;
 use crate::perplexity_cost::cost_per_token as perplexity_cost_per_token;
@@ -716,6 +716,30 @@ impl ModelInfoCatalog {
                 &model_info,
                 at,
             )),
+            _ => Err(CatalogError::ModelNotFound),
+        }
+    }
+
+    pub fn google_image_edit_cost(
+        &self,
+        model: &str,
+        provider: &str,
+        image_response: &Value,
+        supplied_model_info: Option<&Value>,
+        at: Timestamp,
+    ) -> Result<f64, CatalogError> {
+        let shared = self
+            .select_model_key(model, Some(provider), None)
+            .and_then(|key| self.entries.get(key));
+        match provider {
+            "gemini" => {
+                let info = resolve_image_model_info(shared, supplied_model_info)
+                    .ok_or(CatalogError::ModelNotFound)?;
+                Ok(gemini_image_edit_cost(image_response, &info, at))
+            }
+            "vertex_ai" => shared
+                .map(|info| vertex_image_edit_cost(image_response, info))
+                .ok_or(CatalogError::ModelNotFound),
             _ => Err(CatalogError::ModelNotFound),
         }
     }

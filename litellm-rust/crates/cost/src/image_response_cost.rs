@@ -181,3 +181,11 @@ pub fn gemini_image_generation_cost(
 ) -> f64 {
     google_image_generation_cost(image_response, model_info, "gemini", at)
 }
+
+pub fn gemini_image_edit_cost(image_response: &Value, model_info: &Value, at: Timestamp) -> f64 {
+    gemini_image_generation_cost(image_response, model_info, at)
+}
+
+pub fn vertex_image_edit_cost(image_response: &Value, model_info: &Value) -> f64 {
+    flat_image_cost(image_response, model_info)
+}

@@ -4,8 +4,8 @@ use jiff::Timestamp;
 use litellm_cost::catalog::ModelInfoCatalog;
 use litellm_cost::image_response_cost::{
     calculate_image_response_cost_from_usage, calculate_image_response_web_search_cost,
-    flat_image_cost, gemini_image_generation_cost, resolve_image_model_info,
-    vertex_image_generation_cost,
+    flat_image_cost, gemini_image_edit_cost, gemini_image_generation_cost,
+    resolve_image_model_info, vertex_image_edit_cost, vertex_image_generation_cost,
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -175,4 +175,51 @@ fn google_image_generation_falls_back_to_images_and_preserves_supplied_prices() 
         .google_image_generation_cost("image-model", "vertex_ai", &response, Some(&supplied), at())
         .unwrap();
     assert!((cost - 0.52).abs() < 1e-12);
+}
+
+#[rstest]
+fn gemini_image_edit_shares_generation_token_and_search_billing() {
+    let info = json!({
+        "input_cost_per_token": 0.001,
+        "output_cost_per_image_token": 0.003,
+        "output_cost_per_image": 0.5,
+        "web_search_billing_unit": "per_query",
+        "search_context_cost_per_query": {"search_context_size_medium": 0.02}
+    });
+    let response = json!({"data": [{}], "usage": {
+        "input_tokens": 3, "output_tokens": 2, "total_tokens": 5, "web_search_requests": 2
+    }});
+    let generation = gemini_image_generation_cost(&response, &info, at());
+    assert!((generation - 0.049).abs() < 1e-12);
+    assert_eq!(gemini_image_edit_cost(&response, &info, at()), generation);
+    let catalog = ModelInfoCatalog::new(HashMap::from([("gemini/image-model".to_owned(), info)]));
+    assert_eq!(
+        catalog
+            .google_image_edit_cost("image-model", "gemini", &response, None, at())
+            .unwrap(),
+        generation
+    );
+}
+
+#[rstest]
+fn vertex_image_edit_uses_flat_shared_rate_even_with_token_usage() {
+    let info = json!({"output_cost_per_image": 0.25, "input_cost_per_token": 0.001, "output_cost_per_image_token": 0.003});
+    let response = json!({"data": [{}, {}], "usage": {
+        "input_tokens": 3, "output_tokens": 2, "total_tokens": 5
+    }});
+    assert_eq!(vertex_image_edit_cost(&response, &info), 0.5);
+    let catalog =
+        ModelInfoCatalog::new(HashMap::from([("vertex_ai/image-model".to_owned(), info)]));
+    assert_eq!(
+        catalog
+            .google_image_edit_cost(
+                "image-model",
+                "vertex_ai",
+                &response,
+                Some(&json!({"output_cost_per_image": 10.0})),
+                at()
+            )
+            .unwrap(),
+        0.5
+    );
 }
