@@ -17,6 +17,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ObjectPermissionDict, SpecialMCPServerName, SpecialMCPServerNames
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
@@ -188,26 +189,14 @@ async def invalidate_cached_object_permissions(
 ) -> None:
     """Drop permission rows an entitlement change makes stale.
 
-    ``get_object_permission`` caches a row under its own id and an upsert keeps that id, so clearing only
-    the entity's cache entry re-attaches the old grants until the management-object TTL expires. Pass both
-    the outgoing and incoming ids, since a change can also mint a new row. Non-string ids, which untyped
-    update payloads can carry, are ignored.
-
-    The local eviction only covers this worker and the shared backend, so each key is also broadcast:
-    other workers hold their own in-memory copy and would keep applying revoked grants until its TTL.
+    ``get_object_permission`` caches a row under its own id separate from the entity's cache entry, and an
+    upsert keeps that id, so pass both the outgoing and incoming ids since a change can also mint a new row.
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
-
     cache_keys: Final = tuple(
         object_permission_cache_key(object_permission_id)
         for object_permission_id in dict.fromkeys(pid for pid in object_permission_ids if isinstance(pid, str))
     )
-    for cache_key in cache_keys:
-        try:
-            await user_api_key_cache.async_delete_cache(key=cache_key)
-        except Exception as e:  # noqa: BLE001  # a cache we cannot clear still expires; never fail the write
-            verbose_proxy_logger.warning("Failed to invalidate cached object permission %r: %s", cache_key, e)
-        await publish_auth_cache_invalidation(cache_key=cache_key)
+    await evict_and_broadcast(cache_keys, user_api_key_cache)
 
 
 async def _set_object_permission(
