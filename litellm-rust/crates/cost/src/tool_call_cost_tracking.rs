@@ -73,6 +73,21 @@ pub fn response_includes_annotation_type(response: &Value, annotation_type: &str
         })
 }
 
+pub fn chat_completion_response_includes_annotations(response: &Value) -> bool {
+    response
+        .get("choices")
+        .and_then(Value::as_array)
+        .is_some_and(|choices| {
+            choices.iter().any(|choice| {
+                choice
+                    .get("message")
+                    .and_then(|message| message.get("annotations"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|annotations| !annotations.is_empty())
+            })
+        })
+}
+
 pub fn response_includes_output_type(response: &Value, output_type: &str) -> bool {
     response
         .get("output")

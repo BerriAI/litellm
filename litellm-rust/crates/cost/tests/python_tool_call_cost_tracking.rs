@@ -1,11 +1,26 @@
 use litellm_cost::tool_call_cost_tracking::{
-    DefaultToolRates, ResponseKind, count_web_search_calls, extract_file_search_params,
-    extract_token_counts, get_cost_for_code_interpreter, get_cost_for_computer_use,
-    get_cost_for_file_search, get_cost_for_vector_store, get_cost_for_web_search,
-    response_object_includes_file_search_call, response_object_includes_web_search_call,
+    DefaultToolRates, ResponseKind, chat_completion_response_includes_annotations,
+    count_web_search_calls, extract_file_search_params, extract_token_counts,
+    get_cost_for_code_interpreter, get_cost_for_computer_use, get_cost_for_file_search,
+    get_cost_for_vector_store, get_cost_for_web_search, response_object_includes_file_search_call,
+    response_object_includes_web_search_call,
 };
 use rstest::rstest;
 use serde_json::json;
+
+#[rstest]
+#[case(json!({"choices": [{"message": {"annotations": []}}]}), false)]
+#[case(json!({"choices": [{"message": {}}, {"message": {"annotations": [{"type": "unknown"}]}}]}), true)]
+#[case(json!({"choices": [{"message": {"annotations": null}}]}), false)]
+fn chat_completion_response_includes_any_annotation(
+    #[case] response: serde_json::Value,
+    #[case] expected: bool,
+) {
+    assert_eq!(
+        chat_completion_response_includes_annotations(&response),
+        expected
+    );
+}
 
 fn defaults() -> DefaultToolRates {
     DefaultToolRates {
