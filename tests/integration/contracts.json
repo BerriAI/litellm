@@ -257,6 +257,12 @@
     "tests/integration/observability/test_otel_text_completion_choices.py::test_otel_weave_output_keeps_text_completion_provider_fields_beside_the_synthesized_message": [
       "other.observability.otel.text_completion_choices_keep_provider_fields"
     ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_emits_request_metadata_under_langfuse_observation_and_trace_keys": [
+      "other.observability.langfuse_otel.request_metadata_on_langfuse_keys"
+    ],
+    "tests/integration/observability/test_langfuse_otel_metadata.py::test_langfuse_otel_metadata_redacts_user_api_key_fields_like_vanilla_langfuse": [
+      "other.observability.langfuse_otel.request_metadata_redaction_matches_vanilla"
+    ],
     "tests/integration/observability/test_guardrail_effects.py::test_guardrail_rewrites_system_and_user_in_actual_anthropic_request": [
       "other.observability.guardrails.rewrite_reaches_correct_anthropic_positions"
     ],

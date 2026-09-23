@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import litellm
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.opentelemetry import OpenTelemetryConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -481,6 +482,90 @@ class TestLangfuseOtelIntegration:
             config = LangfuseOtelLogger.get_langfuse_otel_config()
             assert isinstance(config, OpenTelemetryConfig)
             # Endpoint assertion removed as side effect is gone
+
+    def test_request_metadata_is_emitted_under_langfuse_observation_and_trace_metadata_keys(self, monkeypatch):
+        monkeypatch.setattr(litellm, "redact_user_api_key_info", False)
+        request_metadata = {
+            "user_api_key_hash": "hash123",
+            "user_api_key_alias": "prod-key",
+            "user_api_key_user_id": "user-1",
+            "user_api_key_end_user_id": "end-user-1",
+            "user_api_key_team_id": "team-1",
+            "user_api_key_team_alias": "team-a",
+            "spend_logs_metadata": {"env": "prod"},
+            "requester_ip_address": "10.0.0.1",
+            "requester_metadata": {"ticket": "LIT-8283"},
+        }
+        kwargs = {
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": {"metadata": request_metadata},
+        }
+
+        with patch(
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+
+            actual = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+
+            assert json.loads(actual["langfuse.observation.metadata"]) == {**request_metadata}
+            assert {
+                key: value for key, value in actual.items() if key.startswith("langfuse.trace.metadata.")
+            } == {
+                "langfuse.trace.metadata.key_alias": "prod-key",
+                "langfuse.trace.metadata.user_id": "user-1",
+                "langfuse.trace.metadata.end_user_id": "end-user-1",
+                "langfuse.trace.metadata.team_id": "team-1",
+                "langfuse.trace.metadata.team_alias": "team-a",
+            }
+
+    def test_request_metadata_redaction_matches_vanilla_langfuse(self, monkeypatch):
+        monkeypatch.setattr(litellm, "redact_user_api_key_info", True)
+        request_metadata = {
+            "user_api_key_hash": "hash123",
+            "user_api_key_alias": "prod-key",
+            "user_api_key_user_id": "user-1",
+            "user_api_key_end_user_id": "end-user-1",
+            "user_api_key_team_id": "team-1",
+            "user_api_key_team_alias": "team-a",
+            "spend_logs_metadata": {"env": "prod"},
+            "requester_ip_address": "10.0.0.1",
+            "requester_metadata": {"ticket": "LIT-8283"},
+        }
+        kwargs = {
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": {"metadata": request_metadata},
+        }
+
+        with patch(
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+
+            actual = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+
+            assert json.loads(actual["langfuse.observation.metadata"]) == {
+                "spend_logs_metadata": {"env": "prod"},
+                "requester_ip_address": "10.0.0.1",
+                "requester_metadata": {"ticket": "LIT-8283"},
+            }
+            assert not [key for key in actual if key.startswith("langfuse.trace.metadata.")]
+
+    def test_request_metadata_keys_are_absent_without_standard_logging_object(self, monkeypatch):
+        monkeypatch.setattr(litellm, "redact_user_api_key_info", False)
+        kwargs = {"litellm_params": {"metadata": {"trace_metadata": {"k": "v"}}}}
+
+        with patch(
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+
+            actual = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+
+            assert [key for key in actual if key.startswith("langfuse.trace.metadata")] == [
+                "langfuse.trace.metadata"
+            ]
+            assert "langfuse.observation.metadata" not in actual
 
 
 class TestLangfuseOtelKeyDynamicConfig:
