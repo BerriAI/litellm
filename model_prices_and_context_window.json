@@ -68564,6 +68564,26 @@
         "supports_vision": false,
         "supports_web_search": false
     },
+    "openrouter/aion-labs/aion-3.5-mini": {
+        "cache_read_input_token_cost": 1.8e-07,
+        "input_cost_per_token": 7e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-06,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false,
+        "supports_web_search": false
+    },
     "openrouter/aion-labs/aion-rp-llama-3.1-8b": {
         "input_cost_per_token": 8e-07,
         "litellm_provider": "openrouter",
