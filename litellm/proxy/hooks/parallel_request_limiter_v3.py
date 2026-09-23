@@ -4681,6 +4681,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         whose partial usage was recovered settles the reservation at that
         usage instead of refunding it.
         """
+        if is_batch_line_item_event(kwargs):
+            return
         from litellm.litellm_core_utils.core_helpers import (
             _get_parent_otel_span_from_kwargs,
         )

@@ -699,6 +699,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             self.print_verbose(e)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_line_item_event(kwargs):
+            return
         try:
             self.print_verbose("Inside Max Parallel Request Failure Hook")
             litellm_parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(kwargs=kwargs)

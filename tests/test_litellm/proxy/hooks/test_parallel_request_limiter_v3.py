@@ -7177,3 +7177,32 @@ async def test_async_log_success_event_skips_batch_line_item_events():
     )
 
     assert local_cache.in_memory_cache.cache_dict == {}
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_event_skips_batch_line_item_events():
+    """Failed line children were never admitted by the limiter, so the failure
+    hook must not release slots or refund TPM they never reserved."""
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    stash = get_or_create_request_stash()
+    stash.owner_litellm_call_id = "call-line-item"
+    stash.reserved_tokens = 50
+    stash.reserved_scopes = frozenset({("api_key", hash_token("sk-line-item"))})
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_call_id": "call-line-item",
+            "standard_logging_object": {"metadata": {"user_api_key_hash": hash_token("sk-line-item")}},
+            "litellm_params": {
+                "batch_parent_id": "batch_1",
+                "metadata": {"user_api_key_hash": hash_token("sk-line-item"), "model_group": "gpt-3.5-turbo"},
+            },
+            "model": "gpt-3.5-turbo",
+        },
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert local_cache.in_memory_cache.cache_dict == {}
