@@ -72,7 +72,10 @@ def test_subject_grant_lists_only_reachable_tools_and_denies_the_rest(
         blocked: Final = McpCaller(gateway, caller.key, entry, denied_alias, caller.headers)
         _assert_denied(blocked, denied_peer, _name(entry, denied_alias, "add"), denied, entry)
         denied_listed: Final = blocked.list_tools(_server_scoped(entry, denied))
-        assert not any(name.startswith(denied_alias) for name in denied_listed.tools), denied_listed.tools
+        if entry == "rest":
+            assert denied_listed.error is not None or denied_listed.tools == (), denied_listed.raw
+        else:
+            assert not any(name.startswith(denied_alias) for name in denied_listed.tools), denied_listed.tools
 
 
 @pytest.mark.parametrize("entry", ("mcp", "server_mcp", "rest"))
