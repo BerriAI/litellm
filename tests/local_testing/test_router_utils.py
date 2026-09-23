@@ -188,7 +188,7 @@ def test_router_get_model_info_wildcard_routes():
         ]
     )
     model_info = router.get_router_model_info(
-        deployment=None, received_model_name="gemini/gemini-1.5-flash", id="1"
+        deployment=None, received_model_name="gemini/gemini-2.5-flash", id="1"
     )
     print(model_info)
     assert model_info is not None
@@ -212,7 +212,7 @@ async def test_router_get_model_group_usage_wildcard_routes():
     )
 
     resp = await router.acompletion(
-        model="gemini/gemini-1.5-flash",
+        model="gemini/gemini-2.5-flash",
         messages=[{"role": "user", "content": "Hello, how are you?"}],
         mock_response="Hello, I'm good.",
     )
@@ -220,7 +220,7 @@ async def test_router_get_model_group_usage_wildcard_routes():
 
     await asyncio.sleep(2)
 
-    tpm, rpm = await router.get_model_group_usage(model_group="gemini/gemini-1.5-flash")
+    tpm, rpm = await router.get_model_group_usage(model_group="gemini/gemini-2.5-flash")
 
     assert tpm is not None, "tpm is None"
     assert rpm is not None, "rpm is None"
@@ -242,7 +242,7 @@ async def test_call_router_callbacks_on_success():
         router.cache, "async_increment_cache_pipeline", new=AsyncMock()
     ) as mock_callback:
         await router.acompletion(
-            model="gemini/gemini-1.5-flash",
+            model="gemini/gemini-2.5-flash",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
             mock_response="Hello, I'm good.",
         )
@@ -255,12 +255,12 @@ async def test_call_router_callbacks_on_success():
         for increment in increment_list:
             if "tpm" in increment["key"]:
                 assert increment["key"].startswith(
-                    "global_router:1:gemini/gemini-1.5-flash:tpm"
+                    "global_router:1:gemini/gemini-2.5-flash:tpm"
                 )
                 assert increment["increment_value"] == 30
             elif "rpm" in increment["key"]:
                 assert increment["key"].startswith(
-                    "global_router:1:gemini/gemini-1.5-flash:rpm"
+                    "global_router:1:gemini/gemini-2.5-flash:rpm"
                 )
                 assert increment["increment_value"] == 1
 
@@ -283,7 +283,7 @@ async def test_call_router_callbacks_on_failure():
     ) as mock_callback:
         with pytest.raises(litellm.RateLimitError):
             await router.acompletion(
-                model="gemini/gemini-1.5-flash",
+                model="gemini/gemini-2.5-flash",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 mock_response="litellm.RateLimitError",
                 num_retries=0,
@@ -295,7 +295,7 @@ async def test_call_router_callbacks_on_failure():
         assert (
             mock_callback.call_args_list[0]
             .kwargs["key"]
-            .startswith("global_router:1:gemini/gemini-1.5-flash:rpm")
+            .startswith("global_router:1:gemini/gemini-2.5-flash:rpm")
         )
 
 
@@ -317,7 +317,7 @@ async def test_router_model_group_headers():
 
     for _ in range(2):
         resp = await router.acompletion(
-            model="gemini/gemini-1.5-flash",
+            model="gemini/gemini-2.5-flash",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
             mock_response="Hello, I'm good.",
         )
@@ -325,7 +325,7 @@ async def test_router_model_group_headers():
 
     assert (
         resp._hidden_params["additional_headers"]["x-litellm-model-group"]
-        == "gemini/gemini-1.5-flash"
+        == "gemini/gemini-2.5-flash"
     )
 
     assert "x-ratelimit-remaining-requests" in resp._hidden_params["additional_headers"]
@@ -349,7 +349,7 @@ async def test_get_remaining_model_group_usage():
     )
     for _ in range(2):
         resp = await router.acompletion(
-            model="gemini/gemini-1.5-flash",
+            model="gemini/gemini-2.5-flash",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
             mock_response="Hello, I'm good.",
         )
@@ -363,7 +363,7 @@ async def test_get_remaining_model_group_usage():
         await asyncio.sleep(1)
 
     remaining_usage = await router.get_remaining_model_group_usage(
-        model_group="gemini/gemini-1.5-flash"
+        model_group="gemini/gemini-2.5-flash"
     )
     assert remaining_usage is not None
     assert "x-ratelimit-remaining-requests" in remaining_usage
