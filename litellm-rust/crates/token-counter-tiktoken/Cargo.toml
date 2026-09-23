@@ -1,0 +1,13 @@
+[package]
+name = "litellm-token-counter-tiktoken"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64.workspace = true
+once_cell = "1.21.3"
+rustc-hash = "2.1.3"
+thiserror.workspace = true
+tiktoken-rs.workspace = true

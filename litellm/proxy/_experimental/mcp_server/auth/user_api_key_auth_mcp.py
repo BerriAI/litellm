@@ -42,8 +42,14 @@ from litellm.proxy._types import (
     SpecialMCPServerName,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
+    hash_token,
     user_api_key_has_admin_view,
 )
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
+    CeilingResolver,
+    resolve_agent_access_group_ceiling,
+)
+from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import (
     _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
@@ -177,11 +183,40 @@ def _is_litellm_auth_admission_error(exc: Exception) -> bool:
     return False
 
 
+def _explicit_credential_matches_envelope(
+    explicit_auth: UserAPIKeyAuth,
+    presented_token: str,
+    identity: EnvelopeIdentity,
+) -> bool:
+    """Match the stored key hash or user ID, including token-only mapped JWT keys."""
+    match identity.subject_type:
+        case "key_hash":
+            return identity.subject in (hash_token(presented_token), explicit_auth.token)
+        case "user_id":
+            return explicit_auth.user_id is not None and explicit_auth.user_id == identity.subject
+    return assert_never(identity.subject_type)
+
+
 def _has_client_supplied_mcp_auth(
     mcp_auth_header: str | None,
     mcp_server_auth_headers: dict[str, dict[str, str]] | None,
 ) -> bool:
     return bool(mcp_auth_header) or bool(mcp_server_auth_headers)
+
+
+def _agent_capped_servers(
+    allowed_mcp_servers: Sequence[str],
+    agent_servers: Sequence[str],
+    agent_access_group_servers: frozenset[str] | None,
+) -> tuple[str, ...] | None:
+    if not agent_servers and agent_access_group_servers is None:
+        return None
+    return tuple(
+        s
+        for s in allowed_mcp_servers
+        if (not agent_servers or s in agent_servers)
+        and (agent_access_group_servers is None or s in agent_access_group_servers)
+    )
 
 
 def _is_mcp_admitted_user_subject(user_api_key_auth: UserAPIKeyAuth | None) -> bool:
@@ -455,6 +490,31 @@ class MCPRequestHandler:
         # Only OAuth metadata routes registered under /.well-known/ are public.
         if request_route.startswith("/.well-known/"):
             validated_user_api_key_auth = UserAPIKeyAuth()
+        elif (
+            has_explicit_litellm_key
+            and oauth2_headers
+            and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
+            and (
+                dual_bridge_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
+                    path=request_route,
+                    mcp_servers=mcp_servers,
+                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                )
+            )
+            is not None
+        ):
+            (
+                validated_user_api_key_auth,
+                mcp_server_auth_headers,
+            ) = await MCPRequestHandler._admit_dcr_bridge_dual_credential(
+                server=dual_bridge_target.server,
+                requested_name=dual_bridge_target.requested_name,
+                authorization_value=oauth2_headers["Authorization"],
+                litellm_api_key=litellm_api_key,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                request=request,
+                route=request_route,
+            )
         elif has_explicit_litellm_key:
             # An explicit x-litellm-api-key is always a LiteLLM credential, even
             # for a delegated server, so validate it: identity / spend / rate
@@ -643,6 +703,8 @@ class MCPRequestHandler:
         # with ``server.py::_get_mcp_servers_in_path``, which also accepts the
         # un-rewritten form (some entry points may skip the
         # ``dynamic_mcp_route`` rewrite).
+        if path.rstrip("/") in ("/mcp/sse", "/mcp/sse/messages"):
+            return []
         segments: Final = [s for s in path.split("/") if s]
         if len(segments) >= 2 and segments[1] == "mcp" and segments[0] != "mcp":
             return [segments[0]]
@@ -760,6 +822,45 @@ class MCPRequestHandler:
         higher-priority alias slot, pairing the admitted identity with an attacker's upstream
         credential; the alias-keyed injection overwrites any such caller value.
         """
+        result: Final = await MCPRequestHandler._open_dcr_bridge_envelope(
+            server=server,
+            requested_name=requested_name,
+            authorization_value=authorization_value,
+            request=request,
+            route=route,
+        )
+        header_key: Final = server.alias or server.server_name
+        if header_key is None:
+            raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
+        admitted: Final = await MCPRequestHandler._reload_admitted_principal(result.identity)
+        await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
+        injected: Final = {  # mutable-ok: mcp_server_auth_headers contract requires concrete dicts
+            header_key: {  # mutable-ok: concrete dict header payload
+                "Authorization": result.upstream_authorization.get_secret_value()
+            }
+        }
+        new_headers: Final = {  # mutable-ok: merged header map must stay a concrete dict
+            **(mcp_server_auth_headers or {}),  # mutable-ok: empty-dict fallback for the merge
+            **injected,
+        }
+        return admitted, new_headers
+
+    @staticmethod
+    async def _open_dcr_bridge_envelope(
+        server: MCPServer,
+        requested_name: str,
+        authorization_value: str,
+        request: Request,
+        route: str,
+    ) -> BridgeEnvelopeAdmitted:
+        """Open a bridge envelope after the pre-DB gates, or fail closed with the scope's challenge.
+
+        Shared by the envelope-only arm (:meth:`_admit_dcr_bridge_delegate`) and the dual-credential
+        arm (:meth:`_admit_dcr_bridge_dual_credential`): both require master_key, run the same
+        proxy-wide pre-DB checks the standard pipeline applies before any key lookup, and resolve
+        the envelope's crypto. Returns only the ``BridgeEnvelopeAdmitted`` result; an invalid,
+        expired, tampered, or non-envelope value raises the requested scope's ``invalid_token``
+        challenge instead."""
         from litellm.proxy.proxy_server import master_key
 
         if not master_key:
@@ -771,20 +872,67 @@ class MCPRequestHandler:
         result: Final = resolve_bridge_envelope(authorization_value, keys, datetime.now(timezone.utc), server.server_id)
         match result:
             case BridgeEnvelopeAdmitted():
-                header_key: Final = server.alias or server.server_name
-                if header_key is None:
-                    raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
-                admitted: Final = await MCPRequestHandler._reload_admitted_principal(result.identity)
-                await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
-                injected: Final = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
-                new_headers: Final = {**(mcp_server_auth_headers or {}), **injected}
-                return admitted, new_headers
+                return result
             case BridgeEnvelopeInvalid() | NotBridgeEnvelope():
                 raise MCPRequestHandler._dcr_bridge_invalid_token_challenge(
                     requested_name=requested_name, request=request
                 )
-            case _:
-                assert_never(result)
+        return assert_never(result)
+
+    @staticmethod
+    async def _admit_dcr_bridge_dual_credential(
+        server: MCPServer,
+        requested_name: str,
+        authorization_value: str,
+        litellm_api_key: str,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+        request: Request,
+        route: str,
+    ) -> tuple[UserAPIKeyAuth, dict[str, dict[str, str]] | None]:
+        """Admit a request carrying BOTH an explicit litellm credential and a bridge envelope.
+
+        MCP clients send ``x-litellm-api-key`` on every request, including the ``tools/list`` that
+        follows the ``/{server}/token`` mint, so the envelope arrives alongside the key rather than
+        alone. The explicit credential is validated first (its own pipeline, so a bad key keeps the
+        normal 401/403), then the envelope is opened and its sealed identity must match the explicit
+        credential's principal — a mismatch is a 403, never a fallback onto either credential alone.
+        On a match the explicit credential's ``UserAPIKeyAuth`` is the admission context (key
+        permissions, budgets, rate limits) and the sealed upstream token is injected under the
+        server's per-server auth-header key, while the leak-defense chokepoint strips the envelope
+        ``Authorization`` itself from egress."""
+        presented_token: Final = _get_bearer_token_or_received_api_key(litellm_api_key)
+        explicit_auth: Final = await user_api_key_auth(api_key=f"Bearer {presented_token}", request=request)
+        result: Final = await MCPRequestHandler._open_dcr_bridge_envelope(
+            server=server,
+            requested_name=requested_name,
+            authorization_value=authorization_value,
+            request=request,
+            route=route,
+        )
+        if not _explicit_credential_matches_envelope(
+            explicit_auth=explicit_auth,
+            presented_token=presented_token,
+            identity=result.identity,
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={  # mutable-ok: HTTPException detail payload requires a concrete dict
+                    "error": "oauth_principal_mismatch"
+                },
+            )
+        header_key: Final = server.alias or server.server_name
+        if header_key is None:
+            raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
+        injected: Final = {  # mutable-ok: mcp_server_auth_headers contract requires concrete dicts
+            header_key: {  # mutable-ok: concrete dict header payload
+                "Authorization": result.upstream_authorization.get_secret_value()
+            }
+        }
+        new_headers: Final = {  # mutable-ok: merged header map must stay a concrete dict
+            **(mcp_server_auth_headers or {}),  # mutable-ok: empty-dict fallback for the merge
+            **injected,
+        }
+        return explicit_auth, new_headers
 
     @staticmethod
     async def _admit_dcr_bridge_authorization(
@@ -946,10 +1094,11 @@ class MCPRequestHandler:
         on top of these direct grants, each source bounded by ITS OWN org, so a user spanning organizations
         cannot leak one org's servers past another's ceiling.
 
-        Error handling: ``get_user_object`` catches every DB failure and re-raises a bare ``ValueError``, so a
-        missing user and a real outage look identical (the cause survives only as ``__context__``).
-        ``_raise_503_if_db_unavailable`` walks the cause chain so an outage stays a retryable 503 while any
-        other failure fails closed as 401, not an opaque 500; the object-permission load shares that boundary."""
+        Error handling: ``get_user_object`` lets a database outage propagate as-is and re-raises every other
+        DB failure as a bare ``ValueError`` (the cause surviving only as ``__context__``).
+        ``_raise_503_if_db_unavailable`` walks the cause chain so an outage stays a retryable 503 whichever
+        shape it arrives in, while any other failure fails closed as 401, not an opaque 500; the
+        object-permission load shares that boundary."""
         from litellm.proxy.auth.auth_checks import get_object_permission, get_user_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -1068,9 +1217,15 @@ class MCPRequestHandler:
         project, org, and budget state are NOT re-checked here; the caller runs the admitted
         identity through ``_enforce_admitted_live_policy`` for those.
         """
+        from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
+            master_key_admin_auth,  # noqa: PLC0415  # inline import avoids a module-load circular import
+        )
         from litellm.proxy.auth.auth_checks import get_key_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
+        admin: Final = master_key_admin_auth(key_hash)
+        if admin is not None:
+            return admin
         if prisma_client is None:
             raise HTTPException(status_code=500, detail="Server misconfigured: no database connection")
         try:
@@ -1096,9 +1251,8 @@ class MCPRequestHandler:
         (401) or surface as an opaque 500; the caller retries. Mirrors ``UserAPIKeyAuthExceptionHandler``,
         which renders a service-unavailable database error as 503 on the standard pipeline.
 
-        Classifies across the ``__cause__``/``__context__`` chain, not just ``e`` itself: ``get_user_object``
-        re-raises every DB failure as a bare ``ValueError``, so a type-based check on the top exception
-        would miss a real outage wrapped inside it."""
+        Classifies across the ``__cause__``/``__context__`` chain, not just ``e`` itself, so an outage a
+        caller re-raised inside a domain exception is still recognized."""
         from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 
         outage: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(e)
@@ -1154,7 +1308,7 @@ class MCPRequestHandler:
 
         Failures surface with the status the standard pipeline would give them, mirroring
         ``UserAPIKeyAuthExceptionHandler``: a disallowed route is the route gate's own 403, an
-        over-budget identity is a 429, a sub-check that raised its own ``HTTPException``/
+        over-budget identity is a 422, a sub-check that raised its own ``HTTPException``/
         ``ProxyException`` keeps that status, a transient database outage is a retryable 503, and
         only a genuinely unresolvable failure (a blocked team/project raises a bare ``Exception``,
         same as the standard pipeline's fallback) becomes the fail-closed 401. Collapsing every
@@ -1546,25 +1700,33 @@ class MCPRequestHandler:
             # Check agent permissions if agent_id is set on the key
             #########################################################
             if user_api_key_auth and user_api_key_auth.agent_id:
-                allowed_mcp_servers_for_agent: Final = await MCPRequestHandler._get_allowed_mcp_servers_for_agent(
-                    user_api_key_auth
+                agent_capped: Final = _agent_capped_servers(
+                    allowed_mcp_servers,
+                    await MCPRequestHandler._get_allowed_mcp_servers_for_agent(user_api_key_auth),
+                    await MCPRequestHandler._get_agent_access_group_server_ceiling(user_api_key_auth),
                 )
-                if len(allowed_mcp_servers_for_agent) > 0:
+                if agent_capped is not None:
                     has_lower_level_mcp_restrictions = True
-                    # Intersect: agent can only use servers allowed by BOTH key/team AND agent config
-                    allowed_mcp_servers = [s for s in allowed_mcp_servers if s in allowed_mcp_servers_for_agent]
+                    allowed_mcp_servers = list(agent_capped)
                     verbose_logger.debug(
                         "Applied agent intersection filter. Final allowed servers: %s", allowed_mcp_servers
                     )
 
             #########################################################
+            # Cap an agent key at what the user and team that invoked the agent may reach
+            #########################################################
+            caller_capped, caller_restricts = await MCPRequestHandler._apply_agent_caller_ceiling(
+                allowed_mcp_servers, user_api_key_auth
+            )
+
+            #########################################################
             # Apply the internal user's own ceiling (the entitlement attached to the human)
             #########################################################
             capped, user_restricts = await MCPRequestHandler._apply_user_server_ceiling(
-                allowed_mcp_servers, user_api_key_auth, keyless_source=keyless_source
+                caller_capped, user_api_key_auth, keyless_source=keyless_source
             )
             allowed_mcp_servers = list(capped)
-            has_lower_level_mcp_restrictions = has_lower_level_mcp_restrictions or user_restricts
+            has_lower_level_mcp_restrictions = has_lower_level_mcp_restrictions or caller_restricts or user_restricts
 
             #########################################################
             # Apply org-level ceiling if org_id is set
@@ -2908,6 +3070,28 @@ class MCPRequestHandler:
         return capped, True
 
     @staticmethod
+    async def _apply_agent_caller_ceiling(
+        allowed_mcp_servers: Sequence[str],
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> tuple[tuple[str, ...], bool]:
+        """Narrow an agent key's servers to those the invoking user and team (echoed back by the agent
+        as ``x-litellm-user-id`` / ``x-litellm-team-id``) may reach: the echoed team's grants when it
+        names any, then the echoed user's own entitlement. Raises like the user ceiling when that
+        entitlement is known but unreadable, so the resolver denies rather than widens."""
+        caller_auth: Final = agent_caller_auth(user_api_key_auth) if user_api_key_auth else None
+        if caller_auth is None:
+            return tuple(allowed_mcp_servers), False
+        team_servers: Final = frozenset(await MCPRequestHandler._get_allowed_mcp_servers_for_team(caller_auth))
+        team_capped: Final = (
+            tuple(server for server in allowed_mcp_servers if server in team_servers)
+            if team_servers
+            else tuple(allowed_mcp_servers)
+        )
+        user_capped, user_restricts = await MCPRequestHandler._apply_user_server_ceiling(team_capped, caller_auth)
+        verbose_logger.debug("Applied agent caller ceiling. Final allowed servers: %s", user_capped)
+        return user_capped, bool(team_servers) or user_restricts
+
+    @staticmethod
     async def _user_places_mcp_ceiling(user_api_key_auth: UserAPIKeyAuth | None = None) -> bool:
         """Whether this human's own entitlement bounds their MCP access at all.
 
@@ -3136,6 +3320,27 @@ class MCPRequestHandler:
                 raise
             verbose_logger.warning("Failed to get allowed MCP servers for agent: %s", e)
             return []
+
+    @staticmethod
+    async def _get_agent_access_group_server_ceiling(
+        user_api_key_auth: UserAPIKeyAuth,
+        resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
+    ) -> frozenset[str] | None:
+        """
+        Server IDs the agent's attached unified access groups (``LiteLLM_AgentsTable.access_group_ids``)
+        allow, or None when the agent has none attached. Unlike the object_permission path above, an
+        attached group set that names no servers is an empty ceiling and denies every server.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        if not user_api_key_auth.agent_id:
+            return None
+        ceiling: Final = await resolve_ceiling(user_api_key_auth.agent_id)
+        if ceiling is None:
+            return None
+        return frozenset(global_mcp_server_manager.expand_permission_list(sorted(ceiling.mcp_server_ids)))
 
     @staticmethod
     async def _get_agent_tool_permissions_for_server(
