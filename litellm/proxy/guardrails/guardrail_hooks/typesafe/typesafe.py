@@ -160,10 +160,10 @@ class TypeSafeGuardrail(CustomGuardrail):
         max_result_chars_in_state: int | None = None,
         unreachable_fallback: str | None = None,
         guardrail_name: str | None = None,
-        event_hook: GuardrailEventHooks
+        event_hook: GuardrailEventHooks  # mutable-ok: event hook unions accept an ordered list
         | list[GuardrailEventHooks]
         | Mode
-        | None = None,  # mutable-ok: event hook unions accept an ordered list
+        | None = None,
         default_on: bool = False,
         async_handler: AsyncHTTPHandler | None = None,
     ) -> None:
@@ -208,8 +208,9 @@ class TypeSafeGuardrail(CustomGuardrail):
         raise HTTPException(status_code=502, detail={"error": error})  # mutable-ok: FastAPI wants a dict detail
 
     def _candidate_exchanges(
-        self, messages: Sequence[dict[str, object]]
-    ) -> tuple[tuple[int, ...], ...]:  # mutable-ok: message dicts come from the request payload
+        self,
+        messages: Sequence[dict[str, object]],  # mutable-ok: message dicts come from the request payload
+    ) -> tuple[tuple[int, ...], ...]:
         """Completed tool exchanges eligible for evaluation: unprotected, and long enough to be worth a call."""
         protected: Final = _protected_indices(messages)
         candidates: Final = tuple(
@@ -224,8 +225,9 @@ class TypeSafeGuardrail(CustomGuardrail):
 
     @staticmethod
     def _exchange_tool_text(
-        messages: Sequence[dict[str, object]], group: tuple[int, ...]
-    ) -> str:  # mutable-ok: message dicts come from the request payload
+        messages: Sequence[dict[str, object]],
+        group: tuple[int, ...],  # mutable-ok: message dicts come from the request payload
+    ) -> str:
         return "".join(
             content_to_text(messages[index].get("content"))
             for index in group[1:]
@@ -234,9 +236,9 @@ class TypeSafeGuardrail(CustomGuardrail):
 
     def _build_state(
         self,
-        messages: Sequence[dict[str, object]],
+        messages: Sequence[dict[str, object]],  # mutable-ok: candidate groups index request message dicts
         candidates: tuple[tuple[int, ...], ...],  # mutable-ok: candidate groups index request message dicts
-    ) -> dict[str, object]:  # mutable-ok: result dict feeds the JSON log record
+    ) -> dict[str, object]:
         task: Final = next(
             (
                 content_to_text(messages[index].get("content"))
@@ -261,8 +263,8 @@ class TypeSafeGuardrail(CustomGuardrail):
 
     async def _call_systemone(
         self,
-        state: dict[str, object],
-        question_ids: Sequence[str],  # mutable-ok: state dict is the parsed log record
+        state: dict[str, object],  # mutable-ok: state dict is the parsed log record
+        question_ids: Sequence[str],
     ) -> _JevSystemOneResponse | None:
         """Returns the response, or None when the service failed and fail_open applies."""
         payload: Final[dict[str, object]] = {  # mutable-ok: serialized to JSON by httpx
