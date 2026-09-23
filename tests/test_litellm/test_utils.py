@@ -1188,22 +1188,22 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
     """Regression LIT-4056: with the bedrock/ routing prefix (plain, converse/, or
     invoke/), the exact regional cost-map entry must win over the region-stripped
     base entry, matching the unprefixed control form."""
-    regional = litellm.model_cost["au.anthropic.claude-opus-4-8"]
-    base = litellm.model_cost["anthropic.claude-opus-4-8"]
+    regional = litellm.model_cost["eu.amazon.nova-pro-v1:0"]
+    base = litellm.model_cost["amazon.nova-pro-v1:0"]
     assert regional["input_cost_per_token"] > base["input_cost_per_token"]
 
     for model in (
-        "bedrock/au.anthropic.claude-opus-4-8",
-        "bedrock/converse/au.anthropic.claude-opus-4-8",
-        "bedrock/invoke/au.anthropic.claude-opus-4-8",
+        "bedrock/eu.amazon.nova-pro-v1:0",
+        "bedrock/converse/eu.amazon.nova-pro-v1:0",
+        "bedrock/invoke/eu.amazon.nova-pro-v1:0",
     ):
         info = litellm.get_model_info(model=model)
-        assert info["key"] == "au.anthropic.claude-opus-4-8", model
+        assert info["key"] == "eu.amazon.nova-pro-v1:0", model
         assert info["input_cost_per_token"] == regional["input_cost_per_token"], model
         assert info["output_cost_per_token"] == regional["output_cost_per_token"], model
 
-    control = litellm.get_model_info(model="au.anthropic.claude-opus-4-8", custom_llm_provider="bedrock")
-    assert control["key"] == "au.anthropic.claude-opus-4-8"
+    control = litellm.get_model_info(model="eu.amazon.nova-pro-v1:0", custom_llm_provider="bedrock")
+    assert control["key"] == "eu.amazon.nova-pro-v1:0"
 
 
 def test_get_model_info_bedrock_mantle_region_prefix_falls_back_to_the_mantle_row(local_model_cost_map):
