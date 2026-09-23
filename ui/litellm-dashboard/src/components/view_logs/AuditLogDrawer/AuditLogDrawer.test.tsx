@@ -138,9 +138,7 @@ describe("AuditLogDrawer", () => {
     });
 
     function sheetContent(): HTMLElement {
-      const el = document.querySelector('[data-slot="sheet-content"]');
-      if (!el) throw new Error("no sheet content");
-      return el as HTMLElement;
+      return screen.getByRole("dialog");
     }
 
     it("defaults to 75% width", () => {

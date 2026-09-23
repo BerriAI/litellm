@@ -4,9 +4,7 @@ import { Sheet, SheetTitle } from "@/components/ui/sheet";
 import { ResizableSheetContent } from "./ResizableSheetContent";
 
 function sheetContent(): HTMLElement {
-  const el = document.querySelector('[data-slot="sheet-content"]');
-  if (!el) throw new Error("no sheet content");
-  return el as HTMLElement;
+  return screen.getByRole("dialog");
 }
 
 describe("ResizableSheetContent", () => {
