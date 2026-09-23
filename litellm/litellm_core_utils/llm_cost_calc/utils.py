@@ -891,6 +891,14 @@ def calculate_cache_writing_cost(
 ) -> float:
     """
     Adjust cost of cache creation tokens based on the cache creation token details.
+
+    When a 5m/1h breakdown is present but covers fewer tokens than
+    ``cache_creation_tokens`` (common on streamed Anthropic server-tool
+    requests, where the stream merger keeps the ``message_start`` breakdown
+    while the top-level total grows across iterations), bill the undetailed
+    remainder at the default 5m rate — same rule
+    ``AnthropicConfig._aggregate_cache_creation_token_details`` uses for
+    non-streaming ``usage.iterations``.
     """
     total_cost: float = 0.0
     if cache_creation_token_details is not None:
@@ -902,6 +910,9 @@ def calculate_cache_writing_cost(
         total_cost += (
             cache_creation_tokens_1h * cache_creation_cost_above_1hr if cache_creation_tokens_1h is not None else 0.0
         )
+        detailed: Final = (cache_creation_tokens_5m or 0) + (cache_creation_tokens_1h or 0)
+        undetailed: Final = max(cache_creation_tokens - detailed, 0)
+        total_cost += undetailed * cache_creation_cost
     else:
         total_cost += cache_creation_tokens * cache_creation_cost
     return total_cost
