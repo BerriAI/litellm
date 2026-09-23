@@ -2033,6 +2033,66 @@
     ],
     "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_returns_json_with_typed_message_item": [
       "other.observability.guardrails.responses_pre_call_denial_returns_typed_message"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_openai_sdk_streams_typed_message": [
+      "other.observability.guardrails.responses_pre_call_denial_openai_sdk_streams_typed_message"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_openai_async_sdk_streams_typed_message": [
+      "other.observability.guardrails.responses_pre_call_denial_openai_async_sdk_streams_typed_message"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_openai_sdk_returns_typed_message": [
+      "other.observability.guardrails.responses_pre_call_denial_openai_sdk_returns_typed_message"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_reports_zero_usage": [
+      "other.observability.guardrails.responses_pre_call_denial_reports_zero_usage"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_stream_string_true_returns_json": [
+      "other.observability.guardrails.responses_pre_call_denial_stream_string_true_returns_json"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_stream_event_vocabulary": [
+      "other.observability.guardrails.responses_pre_call_denial_stream_event_vocabulary"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_stream_large_denial_text": [
+      "other.observability.guardrails.responses_pre_call_denial_stream_large_denial_text"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_stream_requests_have_distinct_ids": [
+      "other.observability.guardrails.responses_pre_call_denial_stream_requests_have_distinct_ids"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_post_call_pipeline_denial_streams_real_usage": [
+      "other.observability.guardrails.responses_post_call_pipeline_denial_streams_real_usage"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_post_call_pipeline_denial_returns_real_usage": [
+      "other.observability.guardrails.responses_post_call_pipeline_denial_returns_real_usage"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_denial_requires_authentication": [
+      "other.observability.guardrails.responses_denial_requires_authentication"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_stream_does_not_reach_upstream": [
+      "other.observability.guardrails.responses_pre_call_denial_stream_does_not_reach_upstream"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_unguarded_stream_reaches_upstream": [
+      "other.observability.guardrails.responses_unguarded_stream_reaches_upstream"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_chat_pre_call_denial_streams_content_filter": [
+      "other.observability.guardrails.chat_pre_call_denial_streams_content_filter"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_chat_pre_call_denial_returns_content_filter": [
+      "other.observability.guardrails.chat_pre_call_denial_returns_content_filter"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_messages_pre_call_denial_returns_message": [
+      "other.observability.guardrails.messages_pre_call_denial_returns_message"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_messages_pre_call_denial_streams_message": [
+      "other.observability.guardrails.messages_pre_call_denial_streams_message"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_writes_zero_spend_row": [
+      "other.observability.guardrails.responses_pre_call_denial_writes_zero_spend_row"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_stream_survives_worker_burst": [
+      "other.observability.guardrails.responses_pre_call_denial_stream_survives_worker_burst"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_responses_pre_call_denial_stream_survives_worker_kill": [
+      "other.observability.guardrails.responses_pre_call_denial_stream_survives_worker_kill"
     ]
   },
   "browser": {
