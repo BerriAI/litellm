@@ -2019,6 +2019,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/spend/test_user_budget_on_team_keys.py::test_team_key_is_denied_before_provider_once_owner_personal_budget_is_exhausted_when_opted_in": [
+      "spend.user_budget.opted_in_team_key_is_denied_once_owner_budget_is_exhausted"
     ]
   },
   "browser": {
