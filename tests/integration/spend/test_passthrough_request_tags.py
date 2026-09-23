@@ -4,7 +4,6 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
-import pytest
 from integration._support.client import Gateway, JsonValue, Scenario, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
@@ -71,7 +70,6 @@ def _tagged_key(scenario: Scenario, marker: str, **fields: JsonValue) -> tuple[s
     return key, sha256(key.encode()).hexdigest()
 
 
-@pytest.mark.covers("quota_management.spend_tracking.configured_passthrough_row_carries_key_team_project_tags")
 def test_configured_passthrough_spend_row_matches_native_route_tags_and_spend_logs_metadata(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
 
@@ -112,7 +110,6 @@ def test_configured_passthrough_spend_row_matches_native_route_tags_and_spend_lo
         assert _spend_logs_metadata(passthrough_row) == {"cost_center": marker, "team_field": marker}, passthrough_row
 
 
-@pytest.mark.covers("quota_management.spend_tracking.provider_passthrough_row_carries_key_team_project_tags")
 def test_anthropic_passthrough_spend_row_carries_key_team_project_tags_and_spend_logs_metadata(
     gateway: Gateway, tmp_path: Path
 ) -> None:
