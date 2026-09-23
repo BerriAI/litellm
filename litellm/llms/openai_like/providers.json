@@ -200,5 +200,10 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "pareto": {
+    "base_url": "https://api.paretoinference.com/v1",
+    "api_key_env": "PARETO_API_KEY",
+    "api_base_env": "PARETO_API_BASE"
   }
 }
