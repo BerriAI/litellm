@@ -3320,7 +3320,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return updated_messages
 
     @staticmethod
-    def _mask_leaf(item: object, masked_texts: list[str], masking_index: int) -> tuple[object, int]:
+    def _mask_leaf(item: object, masked_texts: Sequence[str], masking_index: int) -> tuple[object, int]:
         if isinstance(item, str):
             if masking_index < len(masked_texts):
                 return masked_texts[masking_index], masking_index + 1
@@ -3336,7 +3336,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return item, masking_index
 
     @staticmethod
-    def _mask_tool_result(item: dict, masked_texts: list[str], masking_index: int) -> tuple[dict, int]:
+    def _mask_tool_result(
+        item: Mapping[str, object], masked_texts: Sequence[str], masking_index: int
+    ) -> tuple[Mapping[str, object], int]:
         inner: Final = item.get("content")
         if isinstance(inner, str):
             masked, masking_index = BedrockGuardrail._mask_leaf(
