@@ -449,9 +449,79 @@ def test_key_grant_added_by_key_update_is_visible_to_mcp_tool_listing_before_the
         seen: Final = eventually(
             lambda: _granted_view(gateway, key), lambda view: view.tools != (), seconds=15, return_last_on_timeout=True
         )
-        if seen.tools == ():
-            pytest.skip(
-                "BUG: a server granted through POST /key/update is missing from /mcp tools/list until the 60s "
-                "key cache TTL expires; no invalidation is published"
-            )
         assert set(seen.tools) == {f"{alias}-add", f"{alias}-multiply", f"{alias}-fail"}, seen.raw
+
+
+def _update_tool_permissions(
+    gateway: Gateway, key: str, identity: str, permissions: dict[str, list[str]] | None
+) -> None:
+    updated: Final = gateway.request(
+        "POST",
+        "/key/update",
+        {"key": key, "object_permission": {"mcp_servers": [identity], "mcp_tool_permissions": permissions}},
+    )
+    assert updated.status_code == 200, updated.text
+
+
+def _listing_on_both(
+    gateway: Gateway, peer: Gateway, key: str, expected: set[str]
+) -> None:
+    for worker in (gateway, peer):
+        listing: Final = eventually(
+            functools.partial(_granted_view, worker, key),
+            functools.partial(_matches_grants, expected),
+            seconds=15,
+            return_last_on_timeout=True,
+        )
+        assert set(listing.tools) == expected, (worker.client.base_url, listing.raw)
+
+
+def _multiply_outcome_on_both(gateway: Gateway, peer: Gateway, key: str, alias: str) -> tuple[Outcome, Outcome]:
+    return (
+        McpCaller(gateway, key, "mcp").call(f"{alias}-multiply", {"a": 2, "b": 3}),
+        McpCaller(peer, key, "mcp").call(f"{alias}-multiply", {"a": 2, "b": 3}),
+    )
+
+
+def test_key_update_tool_permission_widen_narrow_and_clear_apply_on_both_workers(
+    gateway: Gateway, peer: Gateway
+) -> None:
+    with mcp_peer() as upstream, gateway.scenario() as scenario:
+        alias: Final = "perm" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, upstream, alias)
+        key: Final = scenario.key(
+            object_permission={"mcp_servers": [identity], "mcp_tool_permissions": {identity: ["add"]}}
+        )
+        add_only: Final = {f"{alias}-add"}
+        all_tools: Final = {f"{alias}-add", f"{alias}-multiply", f"{alias}-fail"}
+        upstream.drain()
+
+        _listing_on_both(gateway, peer, key, add_only)
+        denied: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
+        assert all(call.error is not None and call.text != "6" for call in denied), [call.raw for call in denied]
+        assert tool_calls(upstream.drain()) == (), "a denied call reached the peer"
+
+        _update_tool_permissions(gateway, key, identity, {identity: ["add", "multiply"]})
+        _listing_on_both(gateway, peer, key, {f"{alias}-add", f"{alias}-multiply"})
+        widened: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
+        assert [call.text for call in widened] == ["6", "6"], [call.raw for call in widened]
+
+        _update_tool_permissions(gateway, key, identity, {identity: ["add"]})
+        _listing_on_both(gateway, peer, key, add_only)
+        upstream.drain()
+        narrowed: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
+        assert all(call.error is not None and call.text != "6" for call in narrowed), [call.raw for call in narrowed]
+        assert tool_calls(upstream.drain()) == (), "a revoked call reached the peer"
+
+        _update_tool_permissions(gateway, key, identity, {})
+        _listing_on_both(gateway, peer, key, all_tools)
+        cleared: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
+        assert [call.text for call in cleared] == ["6", "6"], [call.raw for call in cleared]
+
+        _update_tool_permissions(gateway, key, identity, {identity: ["add"]})
+        _listing_on_both(gateway, peer, key, add_only)
+
+        _update_tool_permissions(gateway, key, identity, None)
+        _listing_on_both(gateway, peer, key, all_tools)
+        nulled: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
+        assert [call.text for call in nulled] == ["6", "6"], [call.raw for call in nulled]
