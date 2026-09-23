@@ -123,6 +123,23 @@ class TestBuildTransaction:
     def test_requests_without_a_routing_decision_are_skipped(self, metadata: dict):
         assert _build(metadata=metadata) is None
 
+    def test_a_semantic_decision_builds_a_semantic_session_turn(self):
+        transaction = _build(
+            metadata=_metadata(
+                routing_decision={
+                    "router_model_name": "semantic-auto",
+                    "router_type": "semantic",
+                    "routed_model": "haiku",
+                    "tier": "code-route",
+                }
+            )
+        )
+        assert (transaction.router_name, transaction.router_type, transaction.tier) == (
+            "semantic-auto",
+            "semantic",
+            "code-route",
+        )
+
     def test_the_tier_the_decision_recorded_is_carried_onto_the_transaction(self):
         transaction = _build(metadata=_metadata(routing_decision={**ROUTING_DECISION, "tier": "reasoning"}))
         assert transaction is not None and transaction.tier == "reasoning"
@@ -334,6 +351,16 @@ class TestFlush:
             0.0,
             "canonical-user",
         )
+
+    def test_a_semantic_turn_marshals_its_router_type_into_the_upsert(self) -> None:
+        import dataclasses
+
+        client: Final = _FakeClient()
+        asyncio.run(
+            flush_autorouter_turn_transactions(client, [dataclasses.replace(_transaction(), router_type="semantic")])
+        )
+        _, params = client.db.calls[0]
+        assert params[3] == "semantic"
 
     def test_a_keys_turns_stay_chronological_when_its_canonical_user_changes(self) -> None:
         client: Final = _FakeClient()

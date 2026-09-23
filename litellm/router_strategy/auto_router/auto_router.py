@@ -16,7 +16,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     forwarded_internal_call_metadata,
     parent_session_kwargs,
 )
-from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN, StandardLoggingRoutingDecision
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -80,6 +80,7 @@ class AutoRouter(CustomLogger):
         self._routelayer_build_task: asyncio.Task[SemanticRouter] | None = None
         self.default_model = default_model
         self.embedding_model: str = embedding_model
+        self.model_name: str = model_name
         self.max_input_chars: int = max_input_chars
         self.litellm_router_instance: Router = litellm_router_instance
         self.encoder: LiteLLMRouterEncoder = LiteLLMRouterEncoder(
@@ -209,10 +210,20 @@ class AutoRouter(CustomLogger):
         message_content: Final = self._extract_text_from_messages(resolved_messages)
         route_name: Final = await self._matched_route_name(routelayer, message_content, request_kwargs)
 
-        return PreRoutingHookResponse(
-            model=route_name or self.default_model,
-            messages=messages,
+        routed_model: Final = route_name or self.default_model
+        routing_decision: Final[StandardLoggingRoutingDecision] = (
+            StandardLoggingRoutingDecision(
+                router_model_name=self.model_name, router_type="semantic", routed_model=routed_model, tier=route_name
+            )
+            if route_name is not None
+            else StandardLoggingRoutingDecision(
+                router_model_name=self.model_name,
+                router_type="semantic",
+                routed_model=routed_model,
+                cause="default_fallback",
+            )
         )
+        return PreRoutingHookResponse(model=routed_model, messages=messages, routing_decision=routing_decision)
 
     async def _matched_route_name(
         self, routelayer: "SemanticRouter", text: str, request_kwargs: Mapping[str, object]

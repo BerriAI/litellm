@@ -972,21 +972,40 @@ class TestAutoRouterBenchmarks:
             assert idle.classifier_cost == 0.0
 
     @pytest.mark.asyncio
+    async def test_a_configured_semantic_router_is_listed_as_an_idle_group(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A semantic router records decisions like any other kind, so before traffic it waits
+        at zero rather than being absent from the picker."""
+        response = await self._benchmarks(
+            monkeypatch,
+            rows=[],
+            model_list=[_deployment("semantic-auto", "auto_router/my-semantic-router", db_model=True)],
+        )
+
+        assert len(response.groups) == 1
+        group = response.groups[0]
+        assert group.router_name == "semantic-auto"
+        assert group.router_type == "semantic"
+        assert (group.sessions, group.turns, group.spend) == (0, 0, 0.0)
+        assert group.tier_turns == {}
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "model, listed_as",
         [
             ("auto_router/complexity_router", "complexity"),
             ("auto_router/adaptive_router", "adaptive"),
             ("auto_router/quality_router", "quality"),
-            ("auto_router/my-semantic-router", None),
+            ("auto_router/my-semantic-router", "semantic"),
             ("openai/gpt-5", None),
         ],
     )
     async def test_only_kinds_whose_routing_the_rollup_records_are_listed(
         self, model: str, listed_as: str | None, monkeypatch: pytest.MonkeyPatch
     ):
-        """A semantic auto-router records no routing decision, so it can never own a session
-        row; listing it would show $0 forever even while it serves traffic."""
+        """A semantic auto-router records a routing decision like the other kinds, so it is
+        listed like them; only a deployment that is no strategy router is absent."""
         response = await self._benchmarks(
             monkeypatch, rows=[], model_list=[_deployment("candidate", model, db_model=True)]
         )
@@ -1028,15 +1047,15 @@ class TestAutoRouterBenchmarks:
         assert [group.router_name for group in response.groups] == ["tagged"]
 
     def test_the_listed_kinds_match_the_router_types_traffic_can_record(self):
-        """The one reason semantic is excluded, pinned against both declarations: a kind the
-        rollup can record must be listable, and a kind it cannot must not be."""
+        """Pinned against both declarations: a kind the rollup can record must be listable,
+        and a kind it cannot must not be."""
         from typing import get_args, get_type_hints
 
         from litellm.router_utils.auto_router_model_naming import StrategyRouterKind
         from litellm.types.utils import StandardLoggingRoutingDecision
 
         recorded = set(get_args(get_type_hints(StandardLoggingRoutingDecision)["router_type"]))
-        assert set(get_args(StrategyRouterKind)) - {"semantic"} == recorded
+        assert set(get_args(StrategyRouterKind)) == recorded
 
 
 # ---------------------------------------------------------------------------

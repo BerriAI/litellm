@@ -24211,7 +24211,7 @@ export interface components {
             router_name: string;
             /**
              * Router Type
-             * @description complexity, adaptive or quality
+             * @description complexity, adaptive, quality or semantic
              */
             router_type: string;
             /**
@@ -24325,7 +24325,7 @@ export interface components {
             end_date: string;
             /**
              * Groups
-             * @description One entry per auto-router, listed from the model registry rather than from the rollup, so a router appears as soon as it is configured and reads zero until it serves traffic. Semantic auto-routers are absent: they record no routing decision, so no session can ever be attributed to them
+             * @description One entry per auto-router, listed from the model registry rather than from the rollup, so a router appears as soon as it is configured and reads zero until it serves traffic
              */
             groups: components["schemas"]["AutoRouterBenchmarkGroup"][];
             /**
@@ -24604,7 +24604,7 @@ export interface components {
             router_name: string;
             /**
              * Router Type
-             * @description complexity, adaptive or quality
+             * @description complexity, adaptive, quality or semantic
              */
             router_type: string;
             /**
@@ -38594,7 +38594,7 @@ export interface components {
              * Router Type
              * @enum {string}
              */
-            router_type?: "complexity" | "adaptive" | "quality";
+            router_type?: "complexity" | "adaptive" | "quality" | "semantic";
             /** Savings Baseline Deployment Id */
             savings_baseline_deployment_id?: string;
             /** Savings Baseline Model */

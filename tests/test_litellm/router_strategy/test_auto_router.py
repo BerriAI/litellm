@@ -469,6 +469,66 @@ class TestAutoRouterAlwaysResolvesARoutableModel:
         assert router.seen_text == "fix this stack trace"
 
 
+class TestAutoRouterRecordsItsRoutingDecision:
+    """Every decision the hook makes lands on the response as the rollup-readable routing_decision."""
+
+    @pytest.mark.asyncio
+    async def test_should_record_the_matched_route_as_the_decisions_tier(self):
+        from semantic_router.schema import RouteChoice
+
+        auto_router: Final = _auto_router(FixedRouteLayer(RouteChoice(name="code-model")))
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "fix this stack trace"}],
+        )
+
+        assert result is not None
+        assert result.routing_decision == {
+            "router_model_name": "my-auto-router",
+            "router_type": "semantic",
+            "routed_model": "code-model",
+            "tier": "code-model",
+        }
+
+    @pytest.mark.asyncio
+    async def test_should_record_a_default_fallback_decision_when_no_route_matches(self):
+        auto_router: Final = _auto_router(FixedRouteLayer(None))
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "nothing like any route"}],
+        )
+
+        assert result is not None
+        assert result.routing_decision == {
+            "router_model_name": "my-auto-router",
+            "router_type": "semantic",
+            "routed_model": "fallback-model",
+            "cause": "default_fallback",
+        }
+
+    @pytest.mark.asyncio
+    async def test_should_record_a_default_fallback_decision_when_the_embedding_call_fails(self):
+        auto_router: Final = _auto_router(FixedRouteLayer(None), litellm_router_instance=FailingEmbeddingRouter())
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "a" * 100_000}],
+        )
+
+        assert result is not None
+        assert result.routing_decision == {
+            "router_model_name": "my-auto-router",
+            "router_type": "semantic",
+            "routed_model": "fallback-model",
+            "cause": "default_fallback",
+        }
+
+
 class TestAutoRouterEmbeddingInputCap:
     """The cap configured on the deployment is what the encoder enforces."""
 

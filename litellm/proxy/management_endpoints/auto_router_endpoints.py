@@ -784,9 +784,7 @@ def _strategy_router_key(deployment: object) -> tuple[str, str] | None:
 
     Kinds come from ``classify_strategy_router_model``, the same rule the Router registers a
     deployment by, so this arm cannot disagree with the arm that stamped ``router_type`` onto
-    the session rows. Semantic auto-routers return None: they record no routing decision, so
-    they can never own a session row, and ``AutoRouterBenchmarkGroup.router_type`` has no
-    value for them. A permanent zero would read as "no traffic" rather than "not instrumented".
+    the session rows.
     """
     if not isinstance(deployment, Mapping):
         return None
@@ -798,7 +796,7 @@ def _strategy_router_key(deployment: object) -> tuple[str, str] | None:
     if not isinstance(model, str):
         return None
     kind: Final = classify_strategy_router_model(model)
-    return None if kind is None or kind == "semantic" else (router_name, kind)
+    return None if kind is None else (router_name, kind)
 
 
 def _idle_router_groups(

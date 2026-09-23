@@ -2027,6 +2027,9 @@
       "mgmt.key.reset_spend.returns_promptly_with_wedged_coordination_redis",
       "mgmt.auth_cache_invalidation.publish_parked_by_short_redis_wedge_lands_after_recovery",
       "mgmt.auth_cache_invalidation.burst_with_worker_kill_keeps_serving_while_redis_wedged"
+    ],
+    "tests/integration/routing/test_semantic_auto_router_benchmarks.py::test_semantic_auto_router_traffic_is_counted_by_the_benchmarks_endpoint": [
+      "other.routing.auto_router.semantic_traffic_lands_in_session_rollup_and_benchmarks"
     ]
   },
   "browser": {

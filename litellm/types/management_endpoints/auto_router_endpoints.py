@@ -244,7 +244,7 @@ class AutoRouterBenchmarkGroup(AutoRouterBenchmarkTotals):
     """One auto-router's slice of the benchmarks."""
 
     router_name: str = Field(description="The auto-router alias requests were sent to")
-    router_type: str = Field(description="complexity, adaptive or quality")
+    router_type: str = Field(description="complexity, adaptive, quality or semantic")
     tier_turns: Mapping[str, int] = Field(
         default_factory=dict,
         description="Turns per tier, keyed by the tier name the routing decision recorded at "
@@ -263,7 +263,7 @@ class AutoRouterSessionResponse(BaseModel):
 
     session_id: str
     router_name: str = Field(description="The auto-router alias the session's requests were sent to")
-    router_type: str = Field(description="complexity, adaptive or quality")
+    router_type: str = Field(description="complexity, adaptive, quality or semantic")
     turns: int = Field(description="Auto-routed turns the rollup has recorded for this session so far")
     last_model: str = Field(description="The deployment model the most recent turn was routed to")
     spend: float = Field(description="What the session's routed traffic actually cost, classifier calls included")
@@ -306,8 +306,7 @@ class AutoRouterBenchmarksResponse(BaseModel):
     groups: tuple[AutoRouterBenchmarkGroup, ...] = Field(
         description="One entry per auto-router, listed from the model registry rather than from "
         "the rollup, so a router appears as soon as it is configured and reads zero until it "
-        "serves traffic. Semantic auto-routers are absent: they record no routing decision, so no "
-        "session can ever be attributed to them"
+        "serves traffic"
     )
 
 
