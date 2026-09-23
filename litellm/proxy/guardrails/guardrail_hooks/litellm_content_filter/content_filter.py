@@ -104,9 +104,17 @@ def _whole_word_regex(term: str) -> Pattern[str]:
     A plain \\b on both ends never matches a term that starts or ends with
     punctuation ("--", "@@version", "<script>"): there's no word boundary
     between a space and a symbol. So only anchor the ends that are word chars.
+
+    A term ending in a digit ("OR 1") only refuses a following digit, so
+    "or 15" stays clean but "OR 1e0" (scientific notation for 1) still matches.
     """
     start: Final = r"\b" if re.match(r"\w", term[:1]) else ""
-    end: Final = r"\b" if re.match(r"\w", term[-1:]) else ""
+    if term[-1:].isdigit():
+        end = r"(?!\d)"
+    elif re.match(r"\w", term[-1:]):
+        end = r"\b"
+    else:
+        end = ""
     return re.compile(start + re.escape(term) + end)
 
 
