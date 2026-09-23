@@ -774,7 +774,11 @@ class TestLangfuseOtelResponsesAPI:
                         Summary(
                             text="Let me analyze this problem step by step...",
                             type="summary_text",
-                        )
+                        ),
+                        Summary(
+                            text="Now checking the forecast data.",
+                            type="summary_text",
+                        ),
                     ],
                 ),
                 ResponseOutputMessage(
@@ -816,17 +820,26 @@ class TestLangfuseOtelResponsesAPI:
             output_json = output_calls[0].args[2]
             output_data = json.loads(output_json)
 
-            # Verify output contains reasoning and message
+            # Verify output contains both reasoning summaries and the message
             assert isinstance(output_data, list)
-            assert len(output_data) == 2
+            assert len(output_data) == 3
 
-            # Verify reasoning summary
             assert output_data[0]["role"] == "reasoning_summary"
             assert output_data[0]["content"] == "Let me analyze this problem step by step..."
+            assert output_data[1]["role"] == "reasoning_summary"
+            assert output_data[1]["content"] == "Now checking the forecast data."
 
             # Verify message
-            assert output_data[1]["role"] == "assistant"
-            assert output_data[1]["content"] == "The weather in San Francisco is sunny, 20°C."
+            assert output_data[2]["role"] == "assistant"
+            assert output_data[2]["content"] == "The weather in San Francisco is sunny, 20°C."
+
+            trace_output_calls = [
+                call
+                for call in mock_safe_set_attribute.call_args_list
+                if call.args[1] == LangfuseSpanAttributes.TRACE_OUTPUT.value
+            ]
+            assert len(trace_output_calls) > 0, "trace.output should be set"
+            assert trace_output_calls[0].args[2] == output_json
 
     def test_responses_api_with_function_calls(self):
         """Test Langfuse OTEL logger with Responses API function_call output."""
@@ -1066,6 +1079,15 @@ class TestDerivedTraceFields:
             "cache_hit:True",
             "user_api_key_alias:k1",
         ]
+
+    def test_caller_tags_string_is_a_single_tag(self):
+        attributes = _emitted(
+            {
+                "call_type": "acompletion",
+                "litellm_params": {"metadata": {"tags": "single"}},
+            }
+        )
+        assert json.loads(attributes["langfuse.trace.tags"]) == ["single"]
 
     def test_no_tags_anywhere_leaves_trace_tags_unset(self):
         attributes = _emitted(

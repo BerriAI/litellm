@@ -155,7 +155,13 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         expanded: Final = tuple(_default_tag(key) for key in default_tags) if isinstance(default_tags, list) else ()
         candidates: Final = (
-            (tuple(tag for tag in caller_tags if isinstance(tag, str)) if isinstance(caller_tags, list) else ())
+            (
+                (caller_tags,)
+                if isinstance(caller_tags, str)
+                else tuple(tag for tag in caller_tags if isinstance(tag, str))
+                if isinstance(caller_tags, list)
+                else ()
+            )
             + (tuple(tag for tag in request_tags if isinstance(tag, str)) if isinstance(request_tags, list) else ())
             + tuple(tag for tag in expanded if tag is not None)
         )
@@ -447,35 +453,35 @@ def _extract_output_items(response_obj) -> str | None:
     output: Final = response_obj.get("output", [])
     if not output:
         return None
-    output_items: Final = tuple(_output_item(item) for item in output)
-    rendered: Final = tuple(item for item in output_items if item is not None)
+    rendered: Final = tuple(entry for item in output for entry in _output_items(item))
     return safe_dumps(list(rendered)) if rendered else None
 
 
-def _output_item(item) -> dict | None:
+def _output_items(item) -> tuple[dict, ...]:
     if not hasattr(item, "type"):
-        return None
+        return ()
     if item.type == "reasoning" and hasattr(item, "summary"):
-        return next(
-            (
-                {"role": "reasoning_summary", "content": summary.text}
-                for summary in item.summary
-                if hasattr(summary, "text")
-            ),
-            None,
+        return tuple(
+            {"role": "reasoning_summary", "content": summary.text}
+            for summary in item.summary
+            if hasattr(summary, "text")
         )
     if item.type == "message":
-        return {
-            "role": getattr(item, "role", "assistant"),
-            "content": getattr(getattr(item, "content", [{}])[0], "text", ""),
-        }
+        return (
+            {
+                "role": getattr(item, "role", "assistant"),
+                "content": getattr(getattr(item, "content", [{}])[0], "text", ""),
+            },
+        )
     if item.type == "function_call":
         arguments: Final = getattr(item, "arguments", "{}")
-        return {
-            "id": getattr(item, "id", ""),
-            "name": getattr(item, "name", ""),
-            "call_id": getattr(item, "call_id", ""),
-            "type": "function_call",
-            "arguments": safe_json_loads(arguments, default={}) if isinstance(arguments, str) else arguments,
-        }
-    return None
+        return (
+            {
+                "id": getattr(item, "id", ""),
+                "name": getattr(item, "name", ""),
+                "call_id": getattr(item, "call_id", ""),
+                "type": "function_call",
+                "arguments": safe_json_loads(arguments, default={}) if isinstance(arguments, str) else arguments,
+            },
+        )
+    return ()
