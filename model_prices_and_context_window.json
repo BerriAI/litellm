@@ -26821,6 +26821,9 @@
         "mode": "chat",
         "output_cost_per_audio_token": 2e-05,
         "output_cost_per_token": 2e-05,
+        "provider_specific_entry": {
+            "gemini_tts": 1
+        },
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_modalities": [
             "text"
@@ -28625,6 +28628,9 @@
         "mode": "chat",
         "output_cost_per_audio_token": 2e-05,
         "output_cost_per_token": 2e-05,
+        "provider_specific_entry": {
+            "gemini_tts": 1
+        },
         "rpm": 10000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_modalities": [

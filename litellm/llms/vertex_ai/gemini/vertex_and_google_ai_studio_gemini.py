@@ -194,7 +194,14 @@ def normalize_gemini_speech_config(
     value: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
     nested_config: Final = value.get("speechConfig", value.get("speech_config"))
-    config: Final = nested_config if isinstance(nested_config, Mapping) else value
+    config: Final = (
+        {
+            **{key: item for key, item in value.items() if key not in ("speechConfig", "speech_config", "format")},
+            **nested_config,
+        }
+        if isinstance(nested_config, Mapping)
+        else value
+    )
     normalized_value: Final = _normalize_gemini_speech_config_item(config)
     if not isinstance(normalized_value, dict):
         return {}  # mutable-ok: provider request serialization requires a concrete empty dict
@@ -205,7 +212,9 @@ def normalize_gemini_speech_config(
         (normalized[key] for key in ("name", "voiceName", "voice") if isinstance(normalized.get(key), str)),
         None,
     )
-    if voice_name is None or "voiceConfig" in normalized or "multiSpeakerVoiceConfig" in normalized:
+    if "voiceConfig" in normalized or "multiSpeakerVoiceConfig" in normalized:
+        return {key: item for key, item in normalized.items() if key not in ("name", "voiceName", "voice")}
+    if voice_name is None:
         return normalized
     return {  # mutable-ok: provider request serialization requires a concrete dict
         **{key: item for key, item in normalized.items() if key not in ("name", "voiceName", "voice", "modelName")},
@@ -1131,13 +1140,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
         language_code: Final = value.get("language_code", value.get("languageCode"))
         if isinstance(speech_config_value, Mapping):
-            speech_config: Final = normalize_gemini_speech_config(speech_config_value)
-            if language_code is not None and "languageCode" not in speech_config:
-                return {  # mutable-ok: provider request serialization requires a concrete dict
-                    **speech_config,
-                    "languageCode": language_code,
-                }
-            return speech_config
+            return normalize_gemini_speech_config(value)
 
         speech_config_without_language: Final[  # mutable-ok: provider request serialization requires a concrete dict
             dict[str, object]  # mutable-ok: provider request serialization requires a concrete dict

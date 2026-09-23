@@ -170,7 +170,7 @@ class SpeechToCompletionBridgeTransformationHandler:
         return self._convert_pcm16_to_wav(decoded_audio), "audio/wav"
 
     def transform_response(
-        self, model_response: "ModelResponse", response_format: str | None
+        self, model_response: "ModelResponse", model: str, response_format: str | None
     ) -> "HttpxBinaryResponseContent":
         import base64
 
@@ -184,7 +184,6 @@ class SpeechToCompletionBridgeTransformationHandler:
             raise ValueError("No audio part found in the response")
         decoded_audio: Final = base64.b64decode(audio_part.data)
 
-        model: Final = getattr(model_response, "model", "")
         content, content_type = (
             self._gemini_tts_response_body(decoded_audio, response_format)
             if self._is_gemini_tts_model(model)

@@ -148,6 +148,16 @@ class TestGeminiTTSTransformation:
         assert result["languageCode"] == "de-DE"
         assert result["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
+    def test_map_audio_params_keeps_voice_beside_nested_speech_config(self):
+        config = GoogleAIStudioGeminiConfig()
+
+        result = config._map_audio_params(
+            {"speech_config": {"language_code": "fr-FR"}, "voice": "Kore", "format": "pcm16"}
+        )
+
+        assert result["languageCode"] == "fr-FR"
+        assert result["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
     def test_map_audio_params_no_language_code(self):
         config = GoogleAIStudioGeminiConfig()
 
