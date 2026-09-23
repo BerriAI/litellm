@@ -340,7 +340,7 @@ class VectorStoreRegistry:
 
             # Verify vector store still exists in database (if we have DB access)
             # This ensures deleted vector stores are removed from cache
-            if vector_store is not None and prisma_client is not None:
+            if vector_store is not None and prisma_client is not None and not vector_store.get("is_config", False):
                 try:
                     # Check if it still exists in database
                     db_vector_store = await ManagedVectorStoresRepository(prisma_client).table.find_unique(
@@ -426,6 +426,7 @@ class VectorStoreRegistry:
                 vector_store_metadata=vector_store_litellm_params.get("vector_store_metadata"),
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc),
+                is_config=True,
             )
             self.vector_stores.append(litellm_managed_vector_store)
 
@@ -452,6 +453,10 @@ class VectorStoreRegistry:
 
         return response
 
+    def is_config_vector_store(self, vector_store_id: str) -> bool:
+        vector_store: Final = self.get_litellm_managed_vector_store_from_registry(vector_store_id=vector_store_id)
+        return vector_store is not None and vector_store.get("is_config", False)
+
     def add_vector_store_to_registry(self, vector_store: LiteLLM_ManagedVectorStore):
         """
         Add a vector store to the registry
@@ -475,10 +480,11 @@ class VectorStoreRegistry:
         ]
 
     def update_vector_store_in_registry(self, vector_store_id: str, updated_data: LiteLLM_ManagedVectorStore):
-        """Update or add a vector store in the registry"""
+        """Update or add a vector store in the registry. Config-defined stores are left untouched"""
         for i, vector_store in enumerate(self.vector_stores):
             if vector_store.get("vector_store_id") == vector_store_id:
-                self.vector_stores[i] = updated_data
+                if not vector_store.get("is_config", False):
+                    self.vector_stores[i] = updated_data
                 return
         self.vector_stores.append(updated_data)
 
