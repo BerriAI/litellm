@@ -1198,7 +1198,9 @@ class TestTeamModelUpdate:
             patch(
                 "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
             ) as mock_team_model_add,
-            patch("litellm.proxy.management_endpoints.model_management_endpoints.update_team") as mock_update_team,
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.update_team"
+            ) as mock_update_team,  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
         ):
             result = await _update_team_model_in_db(
                 db_model=db_model,
@@ -1252,8 +1254,12 @@ class TestTeamModelUpdate:
         )
 
         with (
-            patch("litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete") as mock_delete,
-            patch("litellm.proxy.management_endpoints.model_management_endpoints.team_model_add") as mock_add,
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+            ) as mock_delete,  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+            ) as mock_add,  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
         ):
             await _update_existing_team_model_assignment(
                 team_id="team_123",
@@ -1294,8 +1300,12 @@ class TestTeamModelUpdate:
         )
 
         with (
-            patch("litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete") as mock_delete,
-            patch("litellm.proxy.management_endpoints.model_management_endpoints.team_model_add") as mock_add,
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+            ) as mock_delete,  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+            ) as mock_add,  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
         ):
             await _update_existing_team_model_assignment(
                 team_id="team_123",
@@ -1375,8 +1385,12 @@ class TestTeamModelUpdate:
         )
 
         with (
-            patch("litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete") as mock_delete,
-            patch("litellm.proxy.management_endpoints.model_management_endpoints.team_model_add") as mock_add,
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+            ) as mock_delete,  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+            ) as mock_add,  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
         ):
             await _update_existing_team_model_assignment(
                 team_id="team_123",
@@ -3175,16 +3189,16 @@ class TestPatchModelRowDeletedBeforeWrite:
         mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=None)
 
         with (
-            patch(
+            patch(  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
                 "litellm.proxy.proxy_server.prisma_client", mock_prisma
             ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
-            patch(
+            patch(  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
                 "litellm.proxy.proxy_server.llm_router", MagicMock(**{"get_model_ids.return_value": ["m1"]})
             ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
-            patch(
+            patch(  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
                 "litellm.proxy.proxy_server.store_model_in_db", True
             ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
-            patch(
+            patch(  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
                 "litellm.proxy.proxy_server.premium_user", True
             ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
             patch(  # test-quality-ok: stubs the auth gate so the test exercises the not-found branch under test
@@ -4311,25 +4325,25 @@ class TestTeamMemberAutoRouterWrites:
     @contextlib.contextmanager
     def _environment(self, database: MagicMock, row: LiteLLM_ProxyModelTable) -> Iterator[None]:
         with (
-            patch(
+            patch(  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
                 "litellm.proxy.proxy_server.prisma_client", database
             ),  # test-quality-ok: [TQ008] endpoint storage singleton injection
-            patch(
+            patch(  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
                 "litellm.proxy.proxy_server.llm_router", self._catalog()
             ),  # test-quality-ok: [TQ008] inject real destination model catalog
-            patch(
+            patch(  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
                 "litellm.proxy.proxy_server.store_model_in_db", True
             ),  # test-quality-ok: [TQ008] endpoint storage mode singleton
-            patch(
+            patch(  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
                 "litellm.proxy.proxy_server.premium_user", True
             ),  # test-quality-ok: [TQ008] inject licensed process state
-            patch(
+            patch(  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
                 "litellm.proxy.management_endpoints.model_management_endpoints.publish_config_change", new=AsyncMock()
             ),  # test-quality-ok: [TQ008] pubsub I/O boundary
-            patch(
+            patch(  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
                 "litellm.proxy.management_endpoints.model_management_endpoints.create_object_audit_log", new=AsyncMock()
             ),  # test-quality-ok: [TQ008] audit database I/O boundary
-            patch(
+            patch(  # test-quality-ok: [TQ008] the endpoint reads this collaborator from its import site, so patching internals is the only injection point
                 "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
                 new=AsyncMock(
                     return_value=ReconcileOutcome(  # test-quality-ok: [TQ008] model reload I/O boundary

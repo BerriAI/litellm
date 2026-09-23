@@ -474,7 +474,7 @@ async def mistral_proxy_route(
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route metadata requires a list
     tags=["TypeSafe AI Pass-through", "pass-through"],  # mutable-ok: FastAPI route metadata requires a list
 )
-async def typesafe_proxy_route(
+async def typesafe_proxy_route(  # noqa: ANN201  # FastAPI route returns the endpoint_func response object
     endpoint: str,
     request: Request,
     fastapi_response: Response,
@@ -510,7 +510,7 @@ async def typesafe_proxy_route(
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route metadata requires a list
     tags=["OpenRouter Pass-through", "pass-through"],  # mutable-ok: FastAPI route metadata requires a list
 )
-async def openrouter_proxy_route(
+async def openrouter_proxy_route(  # noqa: ANN201  # FastAPI route returns the endpoint_func response object
     endpoint: str,
     request: Request,
     fastapi_response: Response,

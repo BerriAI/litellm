@@ -5116,7 +5116,9 @@ async def _check_team_member_model_access(
     ):
         return  # no per-member restriction — inherit team-level check
 
-    member_allowed_models: Final[list[str]] = loaded_membership.litellm_budget_table.allowed_models
+    member_allowed_models: Final[list[str]] = (  # mutable-ok: allowed_models is a prisma model list consumed read-only
+        loaded_membership.litellm_budget_table.allowed_models
+    )
     try:
         _can_object_call_model(
             model=model,

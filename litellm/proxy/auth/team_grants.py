@@ -59,7 +59,7 @@ class TeamGrants(TypedDict, total=False):
     team_tpd_limit: ReadOnly[int | None]
     team_max_budget: ReadOnly[float | None]
     team_soft_budget: ReadOnly[float | None]
-    team_model_max_budget: ReadOnly[dict[str, object] | None]
+    team_model_max_budget: ReadOnly[dict[str, object] | None]  # mutable-ok: prisma table field typed loosely
     team_spend: ReadOnly[float | None]
     team_models: ReadOnly[Sequence[str]]
     team_blocked: ReadOnly[bool]

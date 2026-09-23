@@ -165,6 +165,6 @@ def parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mappin
 
 
 def effective_turn_off_message_logging(request_kwargs: Mapping[str, object] | None) -> bool | None:
-    return initialize_standard_callback_dynamic_params(dict(request_kwargs) if request_kwargs else None).get(
-        "turn_off_message_logging"
-    )
+    return initialize_standard_callback_dynamic_params(
+        dict(request_kwargs) if request_kwargs else None  # mutable-ok: callback params take a mutable dict copy
+    ).get("turn_off_message_logging")
