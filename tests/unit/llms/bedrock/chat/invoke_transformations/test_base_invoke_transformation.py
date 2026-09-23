@@ -6,6 +6,9 @@ import httpx
 import pytest
 
 import litellm
+from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    AmazonAnthropicClaudeConfig,
+)
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
