@@ -2034,6 +2034,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/database/test_migration_entrypoint.py::test_migration_entrypoint_upgrades_an_older_schema_so_the_proxy_serves_mcp_tools": [
+      "other.database.migrations.entrypoint_deploys_pending_migrations_before_startup"
     ]
   },
   "browser": {
