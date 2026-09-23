@@ -1981,6 +1981,9 @@
     "tests/integration/providers/test_websearch_interception_wire.py::test_streamed_web_search_turn_capped_by_max_agentic_loops_ends_turn_with_snippets_and_ordered_blocks": [
       "other.provider_wire.bedrock.websearch_interception_streamed_capped_turn_ends_with_native_results"
     ],
+    "tests/integration/providers/test_websearch_interception_wire.py::test_database_created_search_tool_backend_receives_the_intercepted_query_over_a_same_named_config_tool": [
+      "other.provider_wire.anthropic.websearch_interception_uses_database_search_tool_backend"
+    ],
     "tests/integration/providers/test_xai_web_search_wire.py::test_xai_chat_web_search_is_sent_to_responses_with_instructions_and_nested_filters": [
       "other.provider_wire.xai.chat_web_search_reaches_responses_with_instructions_and_filters"
     ],
