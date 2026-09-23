@@ -791,6 +791,9 @@ _CUSTOM_PRICING_FIELDS: Final = CUSTOM_PRICING_FIELDS
 # written on every PTU deployment rather than only where a table is already stored.
 _PTU_ZEROED_TABLE_FIELDS: Final = PTU_ZEROED_TABLE_FIELDS
 _SEARCH_CONTEXT_SIZES: Final = SEARCH_CONTEXT_SIZES
+_MIRRORED_PRICING_FIELDS: Final = frozenset(SPECIAL_MODEL_INFO_PARAMS).union(
+    _CUSTOM_PRICING_FIELDS, _PTU_ZEROED_PRICING_FIELDS, _PTU_EMPTIED_PRICING_FIELDS, _PTU_ZEROED_TABLE_FIELDS
+)
 
 
 def _is_nonzero_rate(value: object) -> bool:
@@ -2680,22 +2683,13 @@ async def update_model(
                 and deployment.model_info.team_id is None
                 else None
             )
-            base_update: Final[PrismaCompatibleUpdateDBModel] = {
-                "litellm_params": json.dumps(merged_dictionary),
-                "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
-            }
-            renamed_update: Final[PrismaCompatibleUpdateDBModel] = (
-                {**base_update, "model_name": renamed_to}  # mutable-ok: Prisma serializes only concrete update dicts
-                if renamed_to is not None
-                else base_update
-            )
             incoming_info: Final = ModelInfo(id=_model_id) if member_write is not None else _model_info
             if incoming_info.team_id not in (None, deployment.model_info.team_id):
                 raise HTTPException(
                     status_code=400,
                     detail={"error": "Can't change a model's team here. Use PATCH `/model/{model_id}/update`."},
                 )
-            merged_info: Final = update_db_model(
+            shared_update: Final = update_db_model(
                 db_model=deployment,
                 updated_patch=updateDeployment(
                     litellm_params=model_params.litellm_params,
@@ -2705,10 +2699,24 @@ async def update_model(
                         else incoming_info
                     ),
                 ),
-            )["model_info"]
+            )
+            shared_params: Final = TypeAdapter(dict[str, object]).validate_json(shared_update["litellm_params"])
+            synced_dictionary: Final = {
+                **{key: value for key, value in merged_dictionary.items() if key not in _MIRRORED_PRICING_FIELDS},
+                **{key: value for key, value in shared_params.items() if key in _MIRRORED_PRICING_FIELDS},
+            }
+            base_update: Final[PrismaCompatibleUpdateDBModel] = {
+                "litellm_params": json.dumps(synced_dictionary),
+                "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+            }
+            renamed_update: Final[PrismaCompatibleUpdateDBModel] = (
+                {**base_update, "model_name": renamed_to}  # mutable-ok: Prisma serializes only concrete update dicts
+                if renamed_to is not None
+                else base_update
+            )
             _data: Final[PrismaCompatibleUpdateDBModel] = {  # mutable-ok: Prisma serializes only concrete update dicts
                 **renamed_update,
-                "model_info": merged_info,
+                "model_info": shared_update["model_info"],
             }
             async with _auto_router_capability_slot(
                 prisma_client,

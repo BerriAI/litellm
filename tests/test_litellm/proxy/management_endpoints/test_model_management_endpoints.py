@@ -1473,10 +1473,12 @@ class TestUpdateModel:
         assert persisted["litellm_credential_name"] == "shared-credential"
 
     @staticmethod
-    def _prisma_with_stored_model_info(model_id: str, model_info: dict[str, object]) -> MagicMock:
+    def _prisma_with_stored_model_info(
+        model_id: str, model_info: dict[str, object], litellm_params: LiteLLM_Params | None = None
+    ) -> MagicMock:
         existing = Deployment(
             model_name="legacy-model",
-            litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini"),
+            litellm_params=litellm_params or LiteLLM_Params(model="openai/gpt-4o-mini"),
             model_info=model_info,
         )
         existing_row = MagicMock()
@@ -1561,6 +1563,38 @@ class TestUpdateModel:
 
         assert exc_info.value.code == "400"
         mock_prisma.db.litellm_proxymodeltable.update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_model_moving_a_priced_model_to_ptu_zeroes_both_pricing_copies(self, monkeypatch):
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_model
+
+        monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "true")
+        model_id = "legacy-ptu-model"
+        mock_prisma = self._prisma_with_stored_model_info(
+            model_id,
+            {"id": model_id, "team_id": "team-a"},
+            LiteLLM_Params(model="openai/gpt-4o-mini", input_cost_per_token=0.001, output_cost_per_token=0.002),
+        )
+
+        with self._legacy_update_env(mock_prisma, model_id):
+            await update_model(
+                model_params=updateDeployment(
+                    litellm_params=updateLiteLLMParams(model="openai/gpt-4o-mini"),
+                    model_info=ModelInfo(
+                        id=model_id, ptu_count=2, cost_per_ptu_per_hour=1.5, ptu_effective_from="2026-01-01T00:00:00Z"
+                    ),
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+        data = mock_prisma.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        written_params = json.loads(data["litellm_params"])
+        written_info = json.loads(data["model_info"])
+        assert (written_params["input_cost_per_token"], written_params["output_cost_per_token"]) == (0, 0)
+        assert (written_info["ptu_count"], written_info["cost_per_ptu_per_hour"]) == (2, 1.5)
+        mirrored = {key: value for key, value in written_params.items() if key in written_info}
+        assert {"input_cost_per_token", "output_cost_per_token"} <= mirrored.keys()
+        assert mirrored == {key: written_info[key] for key in mirrored}, (written_params, written_info)
 
 
 class TestUpdatePublicModelGroups:
