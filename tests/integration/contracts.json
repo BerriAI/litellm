@@ -2082,6 +2082,9 @@
         ],
         "tests/integration/spend/test_team_member_spend.py::test_member_over_budget_is_blocked_when_redis_counter_reads_stale_low": [
             "spend.team_member.stale_low_redis_counter_still_blocks_member_over_budget"
+        ],
+        "tests/integration/management/test_guardrail_usage_config_guardrail.py::test_config_yaml_guardrail_is_served_by_usage_detail_and_overview": [
+            "mgmt.guardrails.usage.config_yaml_guardrail_has_detail_and_overview_row"
         ]
     },
     "browser": {
