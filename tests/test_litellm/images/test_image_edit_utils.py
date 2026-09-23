@@ -2,7 +2,7 @@ import io
 import struct
 import zlib
 from pathlib import Path
-from typing import Any, Dict, Final, List, Optional
+from typing import Any, Dict, Final, List, Optional, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -79,7 +79,10 @@ def _webp_chunk(fourcc: bytes, body: bytes) -> bytes:
 
 
 JPEG_APP0: Final = 0xE0
+JPEG_APP2_MARKER: Final = 0xE2
 JPEG_DHT: Final = 0xC4
+JPEG_JPG_MARKER: Final = 0xC8
+JPEG_DAC_MARKER: Final = 0xCC
 JPEG_SOF0_MARKER: Final = 0xC0
 JPEG_SOF2_MARKER: Final = 0xC2
 
@@ -91,6 +94,16 @@ SEGMENTS_63_JPEG: Final = (
 )
 SEGMENTS_65_JPEG: Final = (
     JPEG_SOI + _jpeg_segment(JPEG_APP0, bytes(4)) * 65 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
+)
+SEGMENTS_300_JPEG: Final = (
+    JPEG_SOI + _jpeg_segment(JPEG_APP2_MARKER, bytes(4)) * 300 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
+)
+SEGMENTS_1030_JPEG: Final = (
+    JPEG_SOI + _jpeg_segment(JPEG_APP0, bytes(4)) * 1030 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
+)
+FILL_BYTES_JPEG: Final = JPEG_SOI + b"\xff" * 1100 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
+OVERSIZED_HEADER_JPEG: Final = (
+    JPEG_SOI + _jpeg_segment(JPEG_APP0, bytes(65533)) * 260 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
 )
 PROGRESSIVE_JPEG: Final = JPEG_SOI + _jpeg_sof_segment(JPEG_SOF2_MARKER, 111, 55)
 DHT_JPEG: Final = JPEG_SOI + _jpeg_segment(JPEG_DHT, bytes(8)) + _jpeg_sof_segment(JPEG_SOF0_MARKER, 400, 300)
@@ -116,7 +129,11 @@ def _bmp(width: int, height: int) -> bytes:
         pytest.param(SHORT_LENGTH_JPEG, None, id="jpeg-segment-length-below-2"),
         pytest.param(TRUNCATED_SOF_JPEG, None, id="jpeg-truncated-sof-payload"),
         pytest.param(SEGMENTS_63_JPEG, (320, 200), id="jpeg-sof-at-segment-64-boundary"),
-        pytest.param(SEGMENTS_65_JPEG, None, id="jpeg-more-than-64-segments"),
+        pytest.param(SEGMENTS_65_JPEG, (320, 200), id="jpeg-65-segments-within-budget"),
+        pytest.param(SEGMENTS_300_JPEG, (320, 200), id="jpeg-300-app2-segments"),
+        pytest.param(SEGMENTS_1030_JPEG, None, id="jpeg-more-than-1024-segments"),
+        pytest.param(FILL_BYTES_JPEG, (320, 200), id="jpeg-1100-fill-bytes-before-sof"),
+        pytest.param(OVERSIZED_HEADER_JPEG, None, id="jpeg-sof-beyond-16mib"),
         pytest.param(PROGRESSIVE_JPEG, (111, 55), id="jpeg-sof2-progressive"),
         pytest.param(DHT_JPEG, (400, 300), id="jpeg-dht-skipped-before-sof0"),
         pytest.param(_webp_chunk(b"VP8 ", VP8_BODY), (500, 250), id="webp-vp8-lossy"),
@@ -130,6 +147,8 @@ def _bmp(width: int, height: int) -> bytes:
         pytest.param(b"GIF89a" + bytes(2), None, id="gif-shorter-than-10-bytes"),
         pytest.param(_bmp(1024, 768), (1024, 768), id="bmp-positive-height"),
         pytest.param(_bmp(1024, -768), (1024, 768), id="bmp-negative-height"),
+        pytest.param(_bmp(-1024, 768), None, id="bmp-negative-width"),
+        pytest.param(_bmp(0, 768), None, id="bmp-zero-width"),
         pytest.param(b"BM" + bytes(18), None, id="bmp-shorter-than-26-bytes"),
         pytest.param(
             b"BM" + bytes(12) + struct.pack("<I", 12) + struct.pack("<HH", 640, 480) + bytes(4),
@@ -139,7 +158,7 @@ def _bmp(width: int, height: int) -> bytes:
         pytest.param(b"II*\x00" + bytes(28), None, id="unknown-format"),
     ),
 )
-def test_measure_reference_image_parses_hand_built_headers(header: bytes, expected):
+def test_measure_reference_image_parses_hand_built_headers(header: bytes, expected: tuple[int, int] | None):
     assert measure_reference_image(header) == expected
 
 
@@ -205,6 +224,38 @@ def test_measure_reference_image_returns_none_for_unreadable_bytes_paths_tuples_
     assert non_seekable.tell() == 0
     assert measure_reference_image(("ref.png", png)) == (64, 64)
     assert measure_reference_image(("ref.png", io.BytesIO(png), "image/png")) == (64, 64)
+
+
+@pytest.mark.parametrize("sof_marker", (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF))
+def test_measure_reference_image_reads_every_jpeg_sof_marker(sof_marker: int):
+    assert measure_reference_image(JPEG_SOI + _jpeg_sof_segment(sof_marker, 320, 200)) == (320, 200)
+
+
+@pytest.mark.parametrize("skipped_marker", (JPEG_JPG_MARKER, JPEG_DAC_MARKER))
+def test_measure_reference_image_skips_non_sof_c_range_markers(skipped_marker: int):
+    jpeg: Final = JPEG_SOI + _jpeg_segment(skipped_marker, bytes(8)) + _jpeg_sof_segment(JPEG_SOF0_MARKER, 400, 300)
+
+    assert measure_reference_image(jpeg) == (400, 300)
+
+
+class _ReadOnlyObject:
+    def read(self, size: int = -1) -> bytes:
+        return b""
+
+
+def test_measure_reference_pixels_returns_none_for_closed_and_read_only_streams():
+    closed: Final = io.BytesIO(_png(64, 64))
+    closed.close()
+
+    assert measure_reference_pixels([closed]) is None
+    assert measure_reference_pixels([cast(Any, _ReadOnlyObject())]) is None
+
+
+def test_measure_reference_pixels_returns_none_when_a_reference_has_invalid_dimensions():
+    negative_width_bmp: Final = _bmp(-1024, 768)
+
+    assert measure_reference_image(negative_width_bmp) is None
+    assert measure_reference_pixels([negative_width_bmp, _png(1024, 1024)]) is None
 
 
 def test_measure_reference_pixels_returns_none_when_any_reference_is_unmeasurable():

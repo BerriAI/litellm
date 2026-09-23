@@ -18,7 +18,7 @@ from litellm.llms.azure_ai.image_edit.flux2_transformation import (
 from litellm.llms.azure_ai.image_edit.transformation import (
     AzureFoundryFluxImageEditConfig,
 )
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 CAT_JPEG: Final = Path(__file__).parents[4] / "e2e" / "llm_translation" / "fixtures" / "cat.jpg"
 CAT_JPEG_WIDTH: Final = 512
@@ -46,6 +46,16 @@ def _flux2_edit_client(bodies: list[dict[str, object]]) -> HTTPHandler:
         return httpx.Response(200, json={"data": [{"b64_json": "aW1n"}, {"b64_json": "aW1n"}]})
 
     return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+
+
+def _flux2_edit_async_client(bodies: list[dict[str, object]]) -> AsyncHTTPHandler:
+    def respond(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": "aW1n"}]})
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    return client
 
 
 def test_azure_ai_validate_environment():
@@ -175,7 +185,9 @@ def test_flux2_image_edit_rejects_too_many_references(model: str, reference_imag
         )
 
 
-@pytest.mark.parametrize("dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}, {"width": "2048", "height": "1024"}))
+@pytest.mark.parametrize(
+    "dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}, {"width": "2048", "height": "1024"})
+)
 @pytest.mark.usefixtures("local_model_cost_map")
 def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[str, int | str]):
     png: Final = _png(1024, 1024)
@@ -209,7 +221,8 @@ def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[
     assert stream.tell() == len(png)
     assert response._hidden_params["reference_pixels"] == 1024 * 1024
     assert response._hidden_params["response_cost"] == pytest.approx(
-        litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 2048 * 1024 * 2 + litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 1024 * 1024
+        litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 2048 * 1024 * 2
+        + litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_reference_pixel"] * 1024 * 1024
     )
 
 
@@ -231,7 +244,10 @@ def test_flux2_image_edit_bills_jpeg_reference_and_sends_whole_file():
     assert [body["input_image"] for body in bodies] == [base64.b64encode(jpeg).decode()]
     assert response._hidden_params["reference_pixels"] == CAT_JPEG_WIDTH * CAT_JPEG_HEIGHT
     assert response._hidden_params["response_cost"] == pytest.approx(
-        litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 2048 * 1024 * 2 + litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * CAT_JPEG_WIDTH * CAT_JPEG_HEIGHT
+        litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 2048 * 1024 * 2
+        + litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_reference_pixel"]
+        * CAT_JPEG_WIDTH
+        * CAT_JPEG_HEIGHT
     )
 
 
@@ -252,8 +268,28 @@ def test_flux2_image_edit_sums_ten_references():
     assert [body["input_image_10"] for body in bodies] == [base64.b64encode(pngs[-1]).decode()]
     assert response._hidden_params["reference_pixels"] == 10 * 64 * 64
     assert response._hidden_params["response_cost"] == pytest.approx(
-        litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 1024 * 1024 * 2 + litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 10 * 64 * 64
+        litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 1024 * 1024 * 2
+        + litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_reference_pixel"] * 10 * 64 * 64
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_aimage_edit_measures_reference_pixels():
+    png: Final = _png(64, 64)
+    bodies: Final[list[dict[str, object]]] = []
+    response: Final = await litellm.aimage_edit(
+        model="azure_ai/FLUX.2-flex",
+        image=[io.BytesIO(png), io.BytesIO(png)],
+        prompt="Blend every reference",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=_flux2_edit_async_client(bodies),
+        size="1024x1024",
+    )
+
+    assert [body["input_image_2"] for body in bodies] == [base64.b64encode(png).decode()]
+    assert response._hidden_params["reference_pixels"] == 2 * 64 * 64
 
 
 def test_flux2_image_edit_accepts_and_drops_openai_only_parameters():

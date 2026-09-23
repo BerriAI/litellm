@@ -13,7 +13,8 @@ from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.openai import FileTypes
 
 _JPEG_SOF_MARKERS: Final = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
-_MAX_JPEG_SEGMENTS: Final = 64
+_MAX_JPEG_SEGMENTS: Final = 1024
+_MAX_JPEG_HEADER_OFFSET: Final = 16 * 1024 * 1024
 _JPEG_FIRST_SEGMENT_OFFSET: Final = 2
 _JPEG_SOF_PAYLOAD_SIZE: Final = 5
 _HEADER_READ_SIZE: Final = 32
@@ -77,12 +78,14 @@ def _webp_dimensions(head: bytes) -> tuple[int, int] | None:
 def _jpeg_sof_dimensions(stream: IO[bytes], start: int, offset: int, segments_left: int) -> tuple[int, int] | None:
     segment_offset = offset  # rebind-ok: advanced one JPEG segment per hop
     for _ in range(segments_left):
+        if segment_offset > _MAX_JPEG_HEADER_OFFSET:
+            return None
         stream.seek(start + segment_offset)
         marker = stream.read(4)
         if len(marker) < 4 or marker[0] != 0xFF:
             return None
         if marker[1] == 0xFF:
-            segment_offset += 1
+            segment_offset += 1 + int(marker[2] == 0xFF) + int(marker[3] == 0xFF)
             continue
         if marker[1] in _JPEG_SOF_MARKERS:
             sof = stream.read(_JPEG_SOF_PAYLOAD_SIZE)
@@ -114,17 +117,25 @@ def _header_dimensions(stream: IO[bytes], position: int) -> tuple[int, int] | No
     return None
 
 
-def measure_reference_image(image: FileTypes) -> tuple[int, int] | None:
-    stream: Final = _content_stream(image)
-    if stream is None:
-        return None
+def _measure_stream(stream: IO[bytes]) -> tuple[int, int] | None:
     position: Final = stream.tell()
     try:
-        return _header_dimensions(stream, position)
-    except (OSError, ValueError, struct.error):
-        return None
+        dimensions: Final = _header_dimensions(stream, position)
     finally:
         stream.seek(position)
+    if dimensions is None or dimensions[0] <= 0 or dimensions[1] <= 0:
+        return None
+    return dimensions
+
+
+def measure_reference_image(image: FileTypes) -> tuple[int, int] | None:
+    try:
+        stream: Final = _content_stream(image)
+        if stream is None:
+            return None
+        return _measure_stream(stream)
+    except (OSError, ValueError, AttributeError, struct.error):
+        return None
 
 
 def measure_reference_pixels(images: Sequence[FileTypes]) -> int | None:
@@ -132,7 +143,8 @@ def measure_reference_pixels(images: Sequence[FileTypes]) -> int | None:
     dimensions: Final = tuple(size for size in measured if size is not None)
     if len(dimensions) != len(measured):
         verbose_logger.debug(
-            "Reference image %d has no readable PNG, JPEG, WebP, GIF or BMP header; billing generated pixels only",
+            "Reference image %d could not be measured (path, non-seekable stream, or no readable PNG, JPEG, WebP, "
+            "GIF or BMP header); billing generated pixels only",
             measured.index(None),
         )
         return None
