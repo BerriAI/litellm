@@ -46,6 +46,7 @@ SINK_GARBAGE_MARK: Final = "SYNTHETIC-SINK-GARBAGE"
 LOG_BLOCK_MARK: Final = "SYNTHETIC-LOG-ONLY-BLOCK"
 OPEN_500_MARK: Final = "SYNTHETIC-OPEN-500"
 V1_500_MARK: Final = "SYNTHETIC-V1-500"
+V1_BLOCK_MARK: Final = "SYNTHETIC-V1-BLOCK"
 AUDIT_AGENT: Final = "audit-agent"
 POST_AGENT: Final = "post-agent"
 LOG_AGENT: Final = "log-agent"
@@ -138,7 +139,7 @@ def _verdict(seen: Seen, text: str) -> tuple[int, bytes]:
     if SINK_GARBAGE_MARK in text:
         return 200, b"<html>not json</html>"
     if seen.target == V1_PATH:
-        if BLOCK_MARK in text:
+        if BLOCK_MARK in text or V1_BLOCK_MARK in text:
             return 200, json.dumps({"action": "BLOCKED", "blocked_reason": BLOCK_MESSAGE}).encode()
         return 200, json.dumps({"action": "NONE"}).encode()
     assert seen.target == V3_PATH, seen.target
@@ -759,9 +760,10 @@ def test_v1_key_keeps_webhook_envelope_and_format_header(rig: Rig) -> None:
 # U2: v1 block verdict still blocks
 def test_v1_block_verdict_still_blocks(rig: Rig) -> None:
     marker: Final = rig.marker()
-    response: Final = _chat(rig, f"{BLOCK_MARK} {marker}", guardrails=["straiker-v1"])
+    response: Final = _chat(rig, f"{V1_BLOCK_MARK} {marker}", guardrails=["straiker-v1"])
     assert response.status_code == 400, response.text
     assert response.json()["error"]["message"] == BLOCK_MESSAGE
+    assert len(_v1_calls(rig, marker, V1_KEY)) == 1, rig.sink_calls(marker)
     assert rig.provider_calls(marker, rig.provider_drain()) == ()
 
 
@@ -1000,7 +1002,7 @@ def test_burst_with_platform_outage_recovers_without_duplicate_spend(rig: Rig) -
     assert failed, "the outage must be visible to at least one caller"
     assert all("Straiker detection unavailable" in text for index, status, text in results if status == 400), results
     for index, status, text in results:
-        if status != 200 or index % 2 == 1:
+        if status != 200 or (index % 3 != 0 and index % 2 == 1):
             continue
         marker = markers[index]
         expected: Final = ("msg_" if index % 3 == 0 else "chatcmpl-") + marker + "%"
