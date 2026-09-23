@@ -499,13 +499,32 @@ def _check_shards() -> int:
     return 0
 
 
+def _integration_groups(runner: pathlib.Path) -> dict[str, tuple[str, ...]]:
+    module: Final = ast.parse(runner.read_text())
+    literal: Final = next(
+        node.value
+        for node in module.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "GROUPS"
+    )
+    mapping: Final = literal.args[0] if isinstance(literal, ast.Call) else literal
+    return {group: tuple(folders) for group, folders in ast.literal_eval(mapping).items()}
+
+
 def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozenset[str], tuple[Finding, ...]]:
-    manifest: Final = repo_root / "tests/integration/contracts.json"
-    if not manifest.exists():
+    runner: Final = repo_root / "tests/integration/run.py"
+    if not runner.exists():
         return frozenset(), ()
-    entries: Final = json.loads(manifest.read_text())
-    paths: Final = frozenset(node.split("::", 1)[0] for node in entries["tests"])
-    browser_paths: Final = frozenset(node.split("::", 1)[0] for node in entries.get("browser", {}))
+    groups: Final = _integration_groups(runner)
+    integration_root: Final = repo_root / "tests/integration"
+    paths: Final = frozenset(
+        str(path.relative_to(repo_root))
+        for folders in groups.values()
+        for folder in folders
+        for path in (integration_root / folder).glob("test_*.py")
+    )
+    browser_manifest: Final = repo_root / "tests/e2e/ui/tests/integrationCritical/expected.json"
+    browser_nodes: Final = json.loads(browser_manifest.read_text()) if browser_manifest.exists() else ()
+    browser_paths: Final = frozenset(node.split("::", 1)[0] for node in browser_nodes)
     circle_path: Final = repo_root / ".circleci/config.yml"
     circle: Final = yaml.safe_load(circle_path.read_text()) if circle_path.exists() else {}
     steps: Final = circle.get("jobs", {}).get("integration_contracts", {}).get("steps", ())
@@ -526,16 +545,13 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
     )
     required: Final = (frozenset({"browser"}) if browser_paths else frozenset()) | frozenset(
         group
-        for group, folders in entries["groups"].items()
+        for group, folders in groups.items()
         if any(any(path.startswith(f"tests/integration/{folder}/") for folder in folders) for path in paths)
     )
     ungrouped: Final = frozenset(
         path
         for path in paths
-        if sum(
-            any(path.startswith(f"tests/integration/{folder}/") for folder in folders)
-            for folders in entries["groups"].values()
-        )
+        if sum(any(path.startswith(f"tests/integration/{folder}/") for folder in folders) for folders in groups.values())
         != 1
     )
     gha_tokens: Final = _invoked_test_tokens(
@@ -547,10 +563,6 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
         Finding(path, "integration contract is also selected by GitHub Actions")
         for path in paths
         if any(_token_covers(token, path) for token in gha_tokens)
-    ) + tuple(
-        Finding(path, "canonical integration test file is missing")
-        for path in paths
-        if not (repo_root / path).is_file()
     )
     browser_commands: Final = tuple(
         scalar.value
@@ -592,7 +604,7 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
     ) + tuple(Finding(path, "canonical node must have exactly one integration group") for path in sorted(ungrouped))
     if not paths or not invoked or not scheduled:
         return frozenset(), findings + (
-            Finding(str(manifest.relative_to(repo_root)), "dedicated CircleCI runner is missing"),
+            Finding(str(runner.relative_to(repo_root)), "dedicated CircleCI runner is missing"),
         )
     return paths | browser_paths, findings + group_findings + browser_findings + exclusion_findings
 

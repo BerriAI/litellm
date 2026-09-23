@@ -9,7 +9,6 @@ the question neither covers: whether the job that globs a file then deselects it
 """
 
 import importlib.util
-import json
 import sys
 from pathlib import Path
 from typing import Final
@@ -24,13 +23,14 @@ sys.modules[_spec.name] = coverage  # @dataclass(slots=True) rebuilds via sys.mo
 _spec.loader.exec_module(coverage)
 
 
-def test_integration_manifest_requires_exclusive_scheduled_circleci_owner(tmp_path: Path) -> None:
+def test_integration_groups_require_exclusive_scheduled_circleci_owner(tmp_path: Path) -> None:
     test_path: Final = "tests/integration/management/test_contract.py"
     test_file: Final = tmp_path / test_path
     test_file.parent.mkdir(parents=True)
     test_file.write_text("def test_contract(): pass\n")
-    (tmp_path / "tests/integration/contracts.json").write_text(
-        json.dumps({"groups": {"management": ["management"]}, "tests": {f"{test_path}::test_contract": ["mgmt.test"]}})
+    (tmp_path / "tests/integration/run.py").write_text(
+        "from types import MappingProxyType\nfrom typing import Final\n"
+        'GROUPS: Final = MappingProxyType({"management": ("management",)})\n'
     )
     paths, findings = coverage._integration_ownership(tmp_path)
     assert not paths

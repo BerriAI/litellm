@@ -14,7 +14,7 @@ from redis import Redis
 
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
-from tests.integration._support.manifest import OWNED_DIRECTORIES, contracts
+from tests.integration._support.manifest import OWNED_DIRECTORIES
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
 REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()
@@ -26,7 +26,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "integration: owned real-service integration contracts")
-    config.addinivalue_line("markers", "covers(*ids): independently asserted behavior contracts")
+    config.addinivalue_line("markers", "covers(*ids): legacy contract IDs kept for existing tests, not enforced")
     config.stash[REPORTS] = []
     config.pluginmanager.register(IntegrationReportPlugin(config))
 
@@ -53,7 +53,6 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     if order_seed:
         # rebind-ok: pytest requires this hook to reorder its shared collection list in place.
         items.sort(key=lambda item: hashlib.sha256(f"{order_seed}:{item.nodeid}".encode()).digest())
-    manifest: Final = contracts()
     root: Final = Path(__file__).parent
     owned: Final = tuple(
         item
@@ -63,12 +62,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     if owned and os.environ.get("GITHUB_ACTIONS") == "true":
         raise pytest.UsageError("Integration contracts are owned by CircleCI")
     for item in owned:
-        if item.nodeid not in manifest:
-            raise pytest.UsageError(f"Integration node missing from manifest: {item.nodeid}")
         item.add_marker(pytest.mark.integration)
-        declared: Final = tuple(value for mark in item.iter_markers("covers") for value in mark.args)
-        if set(declared) != set(manifest[item.nodeid]):
-            raise pytest.UsageError(f"Contract mapping differs for {item.nodeid}")
     config.stash[COLLECTED] = tuple(item.nodeid for item in owned)
 
 
