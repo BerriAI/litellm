@@ -334,6 +334,7 @@ def _strategy_router_dependency_error(
         (
             failure
             for dependency in strategy_router_dependencies(params)
+            if dependency.role != "evaluation"
             if (failure := _dependency_failure(dependency, router, unhealthy_ids))
         ),
         None,
@@ -376,6 +377,7 @@ def _dependency_deployments_to_probe(
             for deployment in frontier
             if isinstance(params := deployment.get("litellm_params"), Mapping)
             for dependency in strategy_router_dependencies(params)
+            if dependency.role != "evaluation"
         )
         fresh_ids = (
             frozenset(ident for name in names for ident in (_resolved_deployment_ids(router, name) or ())) - reached

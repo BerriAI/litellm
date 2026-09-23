@@ -7,7 +7,8 @@ Tests the rule-based complexity scoring and tier assignment logic.
 import asyncio
 import logging
 import sys
-from typing import Dict, List
+from collections.abc import Mapping
+from typing import Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,6 +28,7 @@ from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY, SESSION_ID_GEN
 from litellm.router_strategy.complexity_router.complexity_router import (
     _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
     _CLASSIFICATION_WITH_CONVERSATION,
+    _CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
     TIER_SEVERITY_ORDER_LABELED,
     ComplexityRouter,
     DimensionScore,
@@ -47,6 +49,12 @@ from litellm.router_strategy.complexity_router.config import (
     ClassifierLLMConfig,
     ComplexityRouterConfig,
     ComplexityTier,
+)
+from litellm.router_strategy.complexity_router.jev_classifier import (
+    JevChoiceAnswer,
+    JevSystemOneRequest,
+    JevSystemOneResponse,
+    JevUsage,
 )
 from litellm.router_strategy.complexity_router.tier_predictor import (
     TierGlobalStatistic,
@@ -107,6 +115,34 @@ def complexity_router(mock_router_instance, basic_config):
         litellm_router_instance=mock_router_instance,
         complexity_router_config=basic_config,
     )
+
+
+class _StaticJevClient:
+    def __init__(self, response: JevSystemOneResponse | BaseException) -> None:
+        self.response = response
+        self.calls = 0
+        self.last_request: JevSystemOneRequest | None = None
+
+    async def evaluate(
+        self, request: JevSystemOneRequest, timeout_s: float, request_kwargs: Mapping[str, object] | None = None
+    ) -> JevSystemOneResponse:
+        self.calls += 1
+        self.last_request = request
+        if isinstance(self.response, BaseException):
+            raise self.response
+        return self.response
+
+
+class _TimeoutJevClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def evaluate(
+        self, request: JevSystemOneRequest, timeout_s: float, request_kwargs: Mapping[str, object] | None = None
+    ) -> JevSystemOneResponse:
+        self.calls += 1
+        await asyncio.sleep(timeout_s * 2)
+        raise AssertionError("timeout should cancel the Jev call")
 
 
 class TestDimensionScore:
@@ -230,6 +266,222 @@ class TestComplexityRouterInit:
         assert result is not None
         metadata = request_kwargs.get("metadata", {})
         assert metadata.get(RETURN_RAW_MODEL_NAME_METADATA_KEY, False) is return_raw_model_name
+
+    @pytest.mark.asyncio
+    async def test_jev_choice_maps_to_tier_and_exposes_provenance(self, mock_router_instance):
+        client = _StaticJevClient(
+            JevSystemOneResponse(
+                model="jev-1.13.0",
+                answers={
+                    "tier": JevChoiceAnswer(
+                        type="choice",
+                        choice="MEDIUM",
+                        probabilities={"SIMPLE": 0.1, "MEDIUM": 0.9},
+                        confidence=0.8,
+                    )
+                },
+                usage=JevUsage(input_tokens=10, output_tokens=2),
+            )
+        )
+        router = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test", "timeout_ms": 100},
+                "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+            },
+            derive_savings_baseline=False,
+            jev_client=client,
+        )
+
+        outcome = await router.aclassify("Explain this")
+
+        assert outcome.tier == ComplexityTier.MEDIUM
+        assert outcome.cause == "jev_classifier"
+        assert outcome.jev_verdict is not None
+        assert outcome.jev_verdict.model == "jev-1.13.0"
+        assert outcome.signals == (
+            "jev-classifier:MEDIUM",
+            "jev-confidence=0.800000",
+            "tier-probability:SIMPLE=0.100000",
+            "tier-probability:MEDIUM=0.900000",
+        )
+
+    @pytest.mark.asyncio
+    async def test_jev_pre_routing_hook_exposes_routing_decision_provenance(
+        self, mock_router_instance, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "typesafe/jev-1.13.0",
+            {"input_cost_per_token": 0.0001, "output_cost_per_token": 0.0002},
+        )
+        client = _StaticJevClient(
+            JevSystemOneResponse(
+                model="jev-1.13.0",
+                answers={
+                    "tier": JevChoiceAnswer(
+                        type="choice",
+                        choice="SIMPLE",
+                        probabilities={"SIMPLE": 1.0},
+                        confidence=0.99,
+                    )
+                },
+                usage=JevUsage(input_tokens=3, output_tokens=4),
+            )
+        )
+        router = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test", "timeout_ms": 100},
+                "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+            },
+            derive_savings_baseline=False,
+            jev_client=client,
+        )
+
+        result = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+        assert result is not None
+        assert result.routing_decision is not None
+        assert result.routing_decision["classifier_model"] == "typesafe/jev-1.13.0"
+        assert result.routing_decision["classifier_cost"] == pytest.approx(0.0011)
+        assert result.routing_decision["classifier_probabilities"] == {"SIMPLE": 1.0}
+        assert result.routing_decision["classifier_confidence"] == 0.99
+
+    @pytest.mark.asyncio
+    async def test_jev_custom_tier_criteria_are_sent_to_classifier(self, mock_router_instance):
+        client = _StaticJevClient(
+            JevSystemOneResponse(
+                answers={
+                    "tier": JevChoiceAnswer(
+                        type="choice",
+                        choice="Budget",
+                        probabilities={"Budget": 1.0},
+                        confidence=1.0,
+                    )
+                }
+            )
+        )
+        router = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test"},
+                "tier_definitions": [
+                    {"name": "Budget", "description": "Short known answers"},
+                    {"name": "Premium", "description": "Deep technical work"},
+                ],
+                "fallback_tier": "Budget",
+                "tiers": {"Budget": "cheap", "Premium": "strong"},
+            },
+            derive_savings_baseline=False,
+            jev_client=client,
+        )
+
+        await router.aclassify("What is this?")
+
+        assert client.last_request is not None
+        assert client.last_request.questions["tier"].criteria == {
+            "Budget": "Short known answers",
+            "Premium": "Deep technical work",
+        }
+
+    @pytest.mark.asyncio
+    async def test_jev_builtin_criteria_follow_configured_labels(self, mock_router_instance):
+        client = _StaticJevClient(
+            JevSystemOneResponse(
+                answers={
+                    "tier": JevChoiceAnswer(
+                        type="choice",
+                        choice="Cheap",
+                        probabilities={"Cheap": 1.0},
+                        confidence=1.0,
+                    )
+                }
+            )
+        )
+        router = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test"},
+                "tier_labels": {"SIMPLE": "Cheap", "MEDIUM": "Standard"},
+                "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+            },
+            derive_savings_baseline=False,
+            jev_client=client,
+        )
+
+        await router.aclassify("What is this?")
+
+        assert client.last_request is not None
+        assert set(client.last_request.questions["tier"].criteria) == {"Cheap", "Standard", "COMPLEX", "REASONING"}
+
+    @pytest.mark.asyncio
+    async def test_jev_timeout_opens_breaker_and_skips_next_call(self, mock_router_instance):
+        client = _TimeoutJevClient()
+        router = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test", "timeout_ms": 1},
+                "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+            },
+            derive_savings_baseline=False,
+            jev_client=client,
+        )
+
+        first = await router.aclassify("Explain this")
+        second = await router.aclassify("Explain this")
+
+        assert first.cause != "jev_classifier"
+        assert second.cause != "jev_classifier"
+        assert client.calls == 1
+        assert _CLASSIFIER_CIRCUIT_OPEN_SIGNAL in second.signals
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "response",
+        [
+            RuntimeError("upstream failed"),
+            JevSystemOneResponse(
+                answers={
+                    "tier": JevChoiceAnswer(
+                        type="choice", choice="UNKNOWN", probabilities={"UNKNOWN": 1.0}, confidence=1.0
+                    )
+                }
+            ),
+            JevSystemOneResponse(answers={}),
+        ],
+    )
+    async def test_jev_failures_fall_back(self, mock_router_instance, response):
+        client = _StaticJevClient(response)
+        router = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test"},
+                "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+            },
+            derive_savings_baseline=False,
+            jev_client=client,
+        )
+
+        outcome = await router.aclassify("Explain this")
+
+        assert outcome.cause != "jev_classifier"
 
 
 class TestTokenScoring:
@@ -1307,9 +1559,37 @@ class TestRouterComplexityDeploymentMethods:
                 auto_router_capability_limit=lambda: 1,
             )
 
+    @pytest.mark.parametrize("instructions", [None, "Pick the lowest suitable tier"])
+    @pytest.mark.parametrize("limit", [1, None])
+    def test_jev_instructions_share_the_existing_custom_tier_quota(
+        self, instructions: str | None, limit: int | None
+    ) -> None:
+        rows: Final = [
+            self._POOL,
+            self._custom_tier_row("tiers-a", "id-a"),
+            {
+                "model_name": "jev-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "classifier_type": "jev",
+                        "jev_classifier_config": {"api_key": "test", "instructions": instructions},
+                        "tiers": {"SIMPLE": "gpt-4o-mini"},
+                    },
+                },
+            },
+        ]
+        if instructions is not None and limit is not None:
+            with pytest.raises(ValueError, match="operator-written classifier prompt"):
+                Router(model_list=rows, auto_router_capability_limit=lambda: limit)
+            return
+        router: Final = Router(model_list=rows, auto_router_capability_limit=lambda: limit)
+        assert set(router.complexity_routers) == {"tiers-a", "jev-router"}
+
     def test_the_shipped_rubric_and_default_prompt_stay_free(self) -> None:
         """Only an operator-written prompt is gated: picking a shipped rubric preset, or writing no
         prompt at all, leaves a router unmetered, so several of them register under a ceiling of one."""
+
         def rubric(model_name: str, model_id: str, preset: str | None) -> dict[str, object]:
             llm_config: dict[str, object] = {"model": "gpt-4o-mini"}
             if preset is not None:
@@ -1446,6 +1726,7 @@ class TestRouterComplexityDeploymentMethods:
     def test_renaming_built_in_tiers_is_not_a_custom_tier_set(self) -> None:
         """tier_labels renames the built-in ladder without defining one, so it stays ungated: two such
         routers register under a ceiling of one."""
+
         def labeled(model_name: str, model_id: str) -> dict[str, object]:
             row = self._router_row(model_name, model_id, "heuristic")
             row["litellm_params"]["complexity_router_config"]["tier_labels"] = {"SIMPLE": "Cheap", "MEDIUM": "Standard"}
@@ -2215,9 +2496,7 @@ class TestLLMClassifier:
         assert outcome.classifier_cost == pytest.approx(1.35e-05)
 
     @pytest.mark.asyncio
-    async def test_aclassify_timeout_does_not_inherit_router_retries_or_fallbacks(
-        self, llm_classifier_config
-    ):
+    async def test_aclassify_timeout_does_not_inherit_router_retries_or_fallbacks(self, llm_classifier_config):
         real_router = Router(
             model_list=[
                 {
@@ -2260,9 +2539,7 @@ class TestLLMClassifier:
         assert real_router.total_calls["openai/mock-backup-classifier"] == 0
 
     @pytest.mark.asyncio
-    async def test_aclassify_enforces_total_classifier_deadline(
-        self, mock_router_instance, llm_classifier_config
-    ):
+    async def test_aclassify_enforces_total_classifier_deadline(self, mock_router_instance, llm_classifier_config):
         cancelled = asyncio.Event()
 
         async def slow_classifier(**_kwargs: object) -> None:
@@ -12109,9 +12386,7 @@ class TestTierHealthFailover:
                     llm_provider="",
                 )
             filtered = (*cooling, *blocked, *excluded)
-            healthy = [
-                {"model_name": model, "model_info": {"id": i}} for i in ids_by_model[model] if i not in filtered
-            ]
+            healthy = [{"model_name": model, "model_info": {"id": i}} for i in ids_by_model[model] if i not in filtered]
             if not healthy:
                 raise RouterRateLimitError(
                     model=model, cooldown_time=60.0, enable_pre_call_checks=False, cooldown_list=[]
@@ -12540,9 +12815,7 @@ class TestTierHealthFailover:
         assert all(probed is not request_kwargs for probed in router.litellm_router_instance.probed_kwargs)
 
     @pytest.mark.asyncio
-    async def test_a_peer_whose_every_deployment_is_over_its_rpm_is_not_a_failover_target(
-        self, mock_router_instance
-    ):
+    async def test_a_peer_whose_every_deployment_is_over_its_rpm_is_not_a_failover_target(self, mock_router_instance):
         """RPM exhaustion is its own verdict from the owner (RouterRateLimitErrorBasic). A peer
         in that state would be rejected downstream, so it cannot be the substitute."""
         from litellm.types.router import RouterRateLimitErrorBasic
@@ -12575,9 +12848,7 @@ class TestTierHealthFailover:
         assert {r.model for r in results} == {"live-c"}
 
     @pytest.mark.asyncio
-    async def test_the_probe_forwards_input_so_window_checks_run_on_input_only_surfaces(
-        self, mock_router_instance
-    ):
+    async def test_the_probe_forwards_input_so_window_checks_run_on_input_only_surfaces(self, mock_router_instance):
         """The Responses API carries its prompt as `input`, never as messages. The owner only
         runs its context-window pre-call check when one of them is present, so dropping `input`
         would silently skip window filtering on that whole surface."""
@@ -12603,9 +12874,7 @@ class TestTierHealthFailover:
         ), "the eligibility probe must forward `input` to the owner"
 
     @pytest.mark.asyncio
-    async def test_a_group_the_router_has_no_deployment_for_is_not_a_failover_target(
-        self, mock_router_instance
-    ):
+    async def test_a_group_the_router_has_no_deployment_for_is_not_a_failover_target(self, mock_router_instance):
         """The owner answers an unconfigured group with BadRequestError. Reading that as live
         would both skip failover off it and let it be chosen as a substitute."""
         router = self._router(
@@ -12794,9 +13063,7 @@ class TestClassifierVision:
         routed as default_fallback on text the request never contained.
         """
         router = self._router(mock_router_instance, vision={"enabled": True})
-        response = await router.async_pre_routing_hook(
-            model="m", request_kwargs={}, messages=self._turn(IMG_PART)
-        )
+        response = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self._turn(IMG_PART))
         assert response.routing_decision["cause"] == "llm_classifier"
         assert response.model == "t-complex"
         assert [block["type"] for block in self._classifier_user_content(mock_router_instance)] == [
@@ -12807,9 +13074,7 @@ class TestClassifierVision:
     @pytest.mark.asyncio
     async def test_image_only_turn_still_falls_back_when_vision_is_off(self, mock_router_instance):
         router = self._router(mock_router_instance, vision={"enabled": False})
-        response = await router.async_pre_routing_hook(
-            model="m", request_kwargs={}, messages=self._turn(IMG_PART)
-        )
+        response = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self._turn(IMG_PART))
         assert response.routing_decision["cause"] == "default_fallback"
         mock_router_instance.acompletion.assert_not_awaited()
 
@@ -12879,9 +13144,7 @@ class TestClassifierVision:
         makes the image the only variable; a margin loose enough to leave the score undecided
         would pass whether or not the guard exists.
         """
-        router = self._router(
-            mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra
-        )
+        router = self._router(mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra)
         response = await router.async_pre_routing_hook(
             model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, IMG_PART)
         )
@@ -12895,9 +13158,7 @@ class TestClassifierVision:
         self, mock_router_instance, classifier_type, extra, short_circuit_cause
     ):
         """The negative class: same router, same text, no image, and the scorer still decides."""
-        router = self._router(
-            mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra
-        )
+        router = self._router(mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra)
         response = await router.async_pre_routing_hook(
             model="m", request_kwargs={}, messages=[{"role": "user", "content": "what is this"}]
         )

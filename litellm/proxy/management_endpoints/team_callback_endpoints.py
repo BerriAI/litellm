@@ -356,7 +356,8 @@ async def add_team_callbacks(
             decrypted_logging: Final = decrypt_callback_vars(team_metadata).get("logging")
             stored_entries: Final = decrypted_logging if isinstance(decrypted_logging, list) else ()
             stored_entry_vars: Final = [  # mutable-ok: read-only input to the check, never stored
-                entry.get("callback_vars") or {} for entry in stored_entries
+                entry.get("callback_vars") or {}
+                for entry in stored_entries  # mutable-ok: callback settings dict is assembled from the request body
             ]
             family_error: Final = cross_entry_family_error(data.callback_vars, stored_entry_vars)
             if family_error is not None:

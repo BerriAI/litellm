@@ -67,6 +67,13 @@ _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
+_CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
+
+
+def is_claude_code_user_agent(user_agent: str) -> bool:
+    """Claude Code sends its API calls through the Anthropic SDK as `claude-cli/<version>` and its own
+    fetches, such as gateway model discovery, as `claude-code/<version>`"""
+    return user_agent.startswith(_CLAUDE_CODE_USER_AGENT_PREFIXES)
 
 
 def _strip_bedrock_id_suffixes(model: str) -> str:

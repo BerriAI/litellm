@@ -1,3 +1,5 @@
+import { usesClassifierContext } from "../add_model/classifier_types";
+import { defaultJevClassifierConfig, jevClassifierConfigSchema } from "../add_model/jev_classifier_config";
 import React, { useEffect, useMemo, useState } from "react";
 import { z } from "zod/v4";
 import { toast } from "@/lib/toast";
@@ -14,7 +16,7 @@ import ModelChoiceCombobox, { type ModelChoice } from "../add_model/ModelChoiceC
 import { modelAvailableCall, modelPatchUpdateCall, validateAutoRouterConfig } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
-import { hydrateTierModelParams, normalizeTierModels } from "../add_model/complexity_router_tiers";
+import { hydrateTierModelParams } from "../add_model/complexity_router_tiers";
 import {
   type ActiveTierSet,
   CUSTOM_TIER_OMITTED_KEYS,
@@ -34,6 +36,7 @@ import {
   getSemanticConfigError,
   getPlanModeTierError,
   getTierLabelsError,
+  hydrateBuiltInTiers,
   hydrateCustomTierSet,
   hydratePlanModeMinTier,
   hydrateTierLabels,
@@ -61,6 +64,7 @@ import ComplexityRouterConfig, {
   ClassifierType,
   ComplexityRouterConfigValue,
   ComplexityTiers,
+  effectiveClassifierType,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
@@ -91,6 +95,7 @@ interface EditAutoRouterModalProps {
  * hydrators validate themselves stay `unknown`; the ones assigned straight through carry their type. */
 export interface StoredComplexityRouterConfig {
   tiers?: Partial<Record<keyof ComplexityTiers, unknown>>;
+  enable_non_reasoning_tier?: boolean;
   tier_model_configs?: unknown;
   default_model?: string | null;
   plan_mode_min_tier?: unknown;
@@ -101,8 +106,10 @@ export interface StoredComplexityRouterConfig {
   tier_labels?: unknown;
   classifier_type?: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  jev_classifier_config?: unknown;
   classifier_context_window_size?: unknown;
   classifier_context_budget_chars?: unknown;
+  classifier_context_per_turn_chars?: unknown;
   classifier_context_include_assistant_turns?: unknown;
   classifier_fallback?: unknown;
   classification_mode?: unknown;
@@ -131,22 +138,22 @@ export interface StoredComplexityRouterConfig {
  * The stored complexity_router_config as form state. Every key in MANAGED_COMPLEXITY_ROUTER_KEYS is
  * rewritten from this state on save, so a key missing here is silently dropped from the saved config.
  */
+const asNumber = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
+const asBoolean = (v: unknown): boolean | undefined => (typeof v === "boolean" ? v : undefined);
+const asNonEmptyString = (v: unknown): string | undefined => (typeof v === "string" && v.trim() !== "" ? v : undefined);
+
 export const hydrateComplexityRouterConfig = (
   parsedConfig: StoredComplexityRouterConfig,
   complexityRouterDefaultModel: string | null | undefined,
 ): ComplexityRouterConfigValue => {
-  const hydratedTiers: ComplexityTiers = {
-    SIMPLE: normalizeTierModels(parsedConfig.tiers?.SIMPLE),
-    MEDIUM: normalizeTierModels(parsedConfig.tiers?.MEDIUM),
-    COMPLEX: normalizeTierModels(parsedConfig.tiers?.COMPLEX),
-    REASONING: normalizeTierModels(parsedConfig.tiers?.REASONING),
-  };
-
+  const builtIn = hydrateBuiltInTiers(parsedConfig.tiers, parsedConfig.enable_non_reasoning_tier);
+  const { tiers: hydratedTiers, enable_non_reasoning_tier } = builtIn;
   const custom_tier_set = hydrateCustomTierSet(parsedConfig);
-  const activeTiers = { tiers: hydratedTiers, custom_tier_set };
+  const activeTiers = { ...builtIn, custom_tier_set };
 
   return {
     tiers: hydratedTiers,
+    enable_non_reasoning_tier,
     custom_tier_set,
     tier_model_params: tierParamsByRowId(
       hydrateTierModelParams(parsedConfig.tiers, parsedConfig.tier_model_configs),
@@ -156,35 +163,23 @@ export const hydrateComplexityRouterConfig = (
     plan_mode_min_tier: hydratePlanModeMinTier(parsedConfig.plan_mode_min_tier, custom_tier_set),
     tier_labels: hydrateTierLabels(parsedConfig.tier_labels),
     classifier_type: parsedConfig.classifier_type || "heuristic",
-    classifier_llm_config: parsedConfig.classifier_llm_config,
-    classifier_context_window_size:
-      typeof parsedConfig.classifier_context_window_size === "number"
-        ? parsedConfig.classifier_context_window_size
+    classifier_llm_config: parsedConfig.classifier_type === "jev" ? undefined : parsedConfig.classifier_llm_config,
+    jev_classifier_config:
+      parsedConfig.classifier_type === "jev"
+        ? jevClassifierConfigSchema.safeParse(parsedConfig.jev_classifier_config ?? {}).data ??
+          defaultJevClassifierConfig()
         : undefined,
-    classifier_context_budget_chars:
-      typeof parsedConfig.classifier_context_budget_chars === "number"
-        ? parsedConfig.classifier_context_budget_chars
-        : undefined,
-    classifier_context_include_assistant_turns:
-      typeof parsedConfig.classifier_context_include_assistant_turns === "boolean"
-        ? parsedConfig.classifier_context_include_assistant_turns
-        : undefined,
+    classifier_context_window_size: asNumber(parsedConfig.classifier_context_window_size),
+    classifier_context_budget_chars: asNumber(parsedConfig.classifier_context_budget_chars),
+    classifier_context_per_turn_chars: asNumber(parsedConfig.classifier_context_per_turn_chars),
+    classifier_context_include_assistant_turns: asBoolean(parsedConfig.classifier_context_include_assistant_turns),
     classifier_fallback:
       parsedConfig.classifier_fallback === "default_model" || parsedConfig.classifier_fallback === "heuristic"
         ? parsedConfig.classifier_fallback
         : undefined,
-    classification_prompt:
-      typeof parsedConfig.classification_prompt === "string" && parsedConfig.classification_prompt.trim() !== ""
-        ? parsedConfig.classification_prompt
-        : undefined,
-    classification_examples:
-      typeof parsedConfig.classification_examples === "string" && parsedConfig.classification_examples.trim() !== ""
-        ? parsedConfig.classification_examples
-        : undefined,
-    heuristic_first_max_tier:
-      typeof parsedConfig.heuristic_first_max_tier === "string" && parsedConfig.heuristic_first_max_tier.trim() !== ""
-        ? parsedConfig.heuristic_first_max_tier
-        : undefined,
+    classification_prompt: asNonEmptyString(parsedConfig.classification_prompt),
+    classification_examples: asNonEmptyString(parsedConfig.classification_examples),
+    heuristic_first_max_tier: asNonEmptyString(parsedConfig.heuristic_first_max_tier),
     hybrid_boundary_margin:
       typeof parsedConfig.hybrid_boundary_margin === "number" ? parsedConfig.hybrid_boundary_margin : undefined,
     classification_mode:
@@ -205,23 +200,14 @@ export const hydrateComplexityRouterConfig = (
     modality_routing: typeof parsedConfig.modality_routing === "boolean" ? parsedConfig.modality_routing : false,
     modality_pin_override:
       typeof parsedConfig.modality_pin_override === "boolean" ? parsedConfig.modality_pin_override : false,
-    deployment_affinity:
-      typeof parsedConfig.deployment_affinity === "boolean"
-        ? parsedConfig.deployment_affinity
-        : DEFAULT_DEPLOYMENT_AFFINITY,
+    deployment_affinity: asBoolean(parsedConfig.deployment_affinity) ?? DEFAULT_DEPLOYMENT_AFFINITY,
     adaptive: parsedConfig.adaptive || false,
     adaptive_weights: parsedConfig.adaptive_weights,
     tier_distance_penalty: parsedConfig.tier_distance_penalty,
     adaptive_eligible: parsedConfig.adaptive_eligible || "all",
     return_raw_model_name: parsedConfig.return_raw_model_name || false,
-    enable_context_window_escalation:
-      typeof parsedConfig.enable_context_window_escalation === "boolean"
-        ? parsedConfig.enable_context_window_escalation
-        : undefined,
-    context_window_escalation_buffer:
-      typeof parsedConfig.context_window_escalation_buffer === "number"
-        ? parsedConfig.context_window_escalation_buffer
-        : undefined,
+    enable_context_window_escalation: asBoolean(parsedConfig.enable_context_window_escalation),
+    context_window_escalation_buffer: asNumber(parsedConfig.context_window_escalation_buffer),
     stall_escalation_enabled: parsedConfig.stall_escalation_enabled === true || undefined,
     stall_escalation_window:
       typeof parsedConfig.stall_escalation_window === "number" ? parsedConfig.stall_escalation_window : undefined,
@@ -242,6 +228,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tier_labels",
   "classifier_type",
   "classifier_llm_config",
+  "jev_classifier_config",
   "classifier_context_window_size",
   "classifier_context_budget_chars",
   "classifier_context_include_assistant_turns",
@@ -328,6 +315,8 @@ export const buildUpdatedComplexityRouterConfig = (
   keywordMatching?: KeywordMatchingState,
 ): Record<string, unknown> => {
   const isManaged = (key: string): boolean => {
+    if (key === "classifier_context_per_turn_chars")
+      return !usesClassifierContext(effectiveClassifierType(value)) || Object.prototype.hasOwnProperty.call(value, key);
     if (MANAGED_COMPLEXITY_ROUTER_KEYS.has(key)) return true;
     if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;
     return customTechnicalKeywords !== undefined && key === "custom_technical_keywords";
@@ -349,9 +338,12 @@ export const buildUpdatedComplexityRouterConfig = (
     classificationMode: value.classification_mode,
     tierLabels: value.tier_labels,
     classifierType: value.classifier_type,
+    enableNonReasoningTier: value.enable_non_reasoning_tier,
+    jevClassifierConfig: value.jev_classifier_config,
     classifierLlmConfig: value.classifier_llm_config,
     classifierContextWindowSize: value.classifier_context_window_size,
     classifierContextBudgetChars: value.classifier_context_budget_chars,
+    classifierContextPerTurnChars: value.classifier_context_per_turn_chars,
     classifierContextIncludeAssistantTurns: value.classifier_context_include_assistant_turns,
     classifierFallback: value.classifier_fallback,
     sessionAffinity: value.session_affinity ?? DEFAULT_SESSION_AFFINITY,
