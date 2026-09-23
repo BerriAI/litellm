@@ -154,7 +154,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_METADATA.value, safe_dumps(observation_metadata))
         trace_prefix: Final = LangfuseSpanAttributes.TRACE_METADATA.value
         for field in _TRACE_IDENTITY_FIELDS:
-            if (value := observation_metadata.get(field)) is not None:
+            if value := observation_metadata.get(field):
                 safe_set_attribute(span, f"{trace_prefix}.{field}", value)
 
     @staticmethod
