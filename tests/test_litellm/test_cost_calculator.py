@@ -4515,7 +4515,6 @@ GPT_REALTIME_2_FAMILY: Final = (
 
 
 def test_gpt_realtime_2_family_prices_audio_cache_writes_and_reads_alike(_local_model_cost_map: None) -> None:
-    """Azure publishes one cached-audio meter per gpt-realtime-2 deployment, so the write rate equals the read."""
     audio_cache_rates: Final = {
         model: (
             litellm.model_cost[model].get("cache_read_input_audio_token_cost"),
@@ -4524,6 +4523,8 @@ def test_gpt_realtime_2_family_prices_audio_cache_writes_and_reads_alike(_local_
         for model in GPT_REALTIME_2_FAMILY
     }
 
+    # Azure publishes one cached-audio meter per gpt-realtime-2 deployment,
+    # https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/, checked 2026-09-23
     assert all(read is not None and write == read for read, write in audio_cache_rates.values()), audio_cache_rates
     assert len(audio_cache_rates) == len(GPT_REALTIME_2_FAMILY)
 
@@ -4539,7 +4540,8 @@ GEMINI_LIVE_NATIVE_AUDIO_CASES: Final = (
 def test_gemini_live_native_audio_carries_no_cached_input_rate(
     _local_model_cost_map: None, model: str, provider: str
 ) -> None:
-    """Google prints N/A in both cached columns for every Live API row, so no cached-input rate can be charged."""
+    # the Vertex pricing table prints N/A for cached input on every Live row,
+    # https://cloud.google.com/vertex-ai/generative-ai/pricing, checked 2026-09-23
     assert litellm.get_model_info(model, custom_llm_provider=provider)["cache_read_input_token_cost"] is None
 
     prompt_usd, _ = cost_per_token(
@@ -4553,17 +4555,26 @@ def test_gemini_live_native_audio_carries_no_cached_input_rate(
             prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100_000),
         ),
     )
+    fresh_usd, _ = cost_per_token(
+        model=model,
+        prompt_tokens=101_000,
+        completion_tokens=0,
+        custom_llm_provider=provider,
+        usage_object=Usage(prompt_tokens=101_000, completion_tokens=0),
+    )
 
-    assert prompt_usd == pytest.approx(101_000 * 5e-07), (
+    assert prompt_usd == pytest.approx(fresh_usd), (
         "with no cached rate the cached tokens bill at the input rate, so a phantom discount cannot appear"
     )
+    assert prompt_usd > 0
 
 
 @pytest.mark.parametrize(("model", "provider"), GEMINI_LIVE_NATIVE_AUDIO_CASES)
 def test_gemini_live_native_audio_declares_prompt_caching_unsupported(
     _local_model_cost_map: None, model: str, provider: str
 ) -> None:
-    """The vendor's documented no has to be recorded as False, since an absent key reads back as None."""
+    # the Vertex context-caching supported-model lists contain no Live model while 2.5 Flash is listed,
+    # https://cloud.google.com/vertex-ai/generative-ai/docs/context-cache/context-cache-overview, checked 2026-09-23
     assert litellm.get_model_info(model, custom_llm_provider=provider)["supports_prompt_caching"] is False
     assert supports_prompt_caching(model=model, custom_llm_provider=provider) is False
     assert supports_prompt_caching(model="gemini-2.5-flash", custom_llm_provider="vertex_ai") is True, (
@@ -4578,9 +4589,10 @@ def test_gemini_live_native_audio_declares_prompt_caching_unsupported(
 def test_gemini_live_native_audio_limits_and_capabilities_match_vendor_model_card(
     _local_model_cost_map: None, model: str
 ) -> None:
-    """Google's card for model ID gemini-live-2.5-flash-native-audio is the source for these limits and flags."""
     info = litellm.get_model_info(model)
 
+    # the Vertex model card for gemini-live-2.5-flash-native-audio publishes these limits and flags,
+    # https://cloud.google.com/vertex-ai/generative-ai/docs/models, checked 2026-09-23
     assert info["max_input_tokens"] == 131072
     assert info["max_output_tokens"] == 65536
     assert info["max_tokens"] == 65536
