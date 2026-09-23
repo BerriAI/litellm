@@ -700,19 +700,28 @@ impl ModelInfoCatalog {
             None if is_azure_model_router(request.model) => (0.0, 0.0),
             None => return Err(CatalogError::ModelNotFound),
         };
-        let Some(fee_name) = router_fee_name(request.model, request_model) else {
-            return Ok((prompt, completion));
+        let fee = self
+            .azure_ai_router_fee(request.model, request_model, request.usage.prompt_tokens)?
+            .unwrap_or(0.0);
+        Ok((prompt + fee, completion))
+    }
+
+    pub fn azure_ai_router_fee(
+        &self,
+        model: &str,
+        request_model: Option<&str>,
+        prompt_tokens: u64,
+    ) -> Result<Option<f64>, CatalogError> {
+        let Some(fee_name) = router_fee_name(model, request_model) else {
+            return Ok(None);
         };
         let fee_entry = router_fee_entry_name(fee_name);
         let fee_key = self
             .select_model_key(fee_entry, Some("azure_ai"), None)
             .ok_or(CatalogError::ModelNotFound)?;
-        let fee = calculate_azure_model_router_flat_cost(
-            fee_name,
-            request.usage.prompt_tokens,
-            &self.entries[fee_key],
-        );
-        Ok((prompt + fee, completion))
+        let fee =
+            calculate_azure_model_router_flat_cost(fee_name, prompt_tokens, &self.entries[fee_key]);
+        Ok((fee > 0.0).then_some(fee))
     }
 
     pub fn speech_cost(

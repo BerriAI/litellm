@@ -265,6 +265,79 @@ fn azure_ai_response_cost_bills_router_fee_once_from_request_or_hidden_model(
     .unwrap();
     let expected = 100.0 * 0.002 + 20.0 * 0.003 + if has_router_fee { 100.0 * 0.001 } else { 0.0 };
     assert!((result.cost.total - expected).abs() < 1e-12);
+    assert!((result.cost.input - 100.0 * 0.002).abs() < 1e-12);
+    assert!((result.cost.output - 20.0 * 0.003).abs() < 1e-12);
+    assert_eq!(
+        result.cost.additional,
+        if has_router_fee { 0.1 } else { 0.0 }
+    );
+    assert_eq!(
+        result
+            .named_additional_costs
+            .get("Azure Model Router Flat Cost"),
+        has_router_fee.then_some(&0.1),
+    );
+}
+
+#[rstest]
+#[case(true, 0.1)]
+#[case(false, 0.0)]
+fn azure_ai_custom_token_pricing_keeps_router_fee_as_additional_cost(
+    #[case] has_router_price: bool,
+    #[case] expected_fee: f64,
+) {
+    let catalog = ModelInfoCatalog::new(
+        [(
+            "azure_ai/served".to_owned(),
+            json!({"input_cost_per_token": 0.002}),
+        )]
+        .into_iter()
+        .chain(has_router_price.then_some((
+            "azure_ai/model_router".to_owned(),
+            json!({"input_cost_per_token": 0.001}),
+        )))
+        .collect(),
+    );
+    let response = json!({
+        "model": "azure_ai/served",
+        "usage": {"prompt_tokens": 100, "completion_tokens": 20}
+    });
+    let empty = json!({});
+    let base = request(
+        Some(&response),
+        Some("served"),
+        Some("azure_ai"),
+        &empty,
+        &empty,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            request_model: Some("model_router/deployment"),
+            custom_cost: CustomPricing {
+                token: Some(CustomTokenRates {
+                    input: 0.004,
+                    output: 0.005,
+                    cache_read: None,
+                    cache_creation: None,
+                }),
+                per_second: None,
+            },
+            ..base
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.cost.input, 0.4);
+    assert_eq!(result.cost.output, 0.1);
+    assert_eq!(result.cost.additional, expected_fee);
+    assert!((result.cost.total - (0.5 + expected_fee)).abs() < 1e-12);
+    assert_eq!(
+        result
+            .named_additional_costs
+            .get("Azure Model Router Flat Cost"),
+        (expected_fee > 0.0).then_some(&expected_fee),
+    );
 }
 
 #[rstest]

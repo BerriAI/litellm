@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use jiff::Timestamp;
 use litellm_token_counter::{CountableRequest, TokenCounter};
 use serde_json::Value;
@@ -79,6 +81,7 @@ pub struct PricedCompletionResponse {
     pub prepared: PreparedCompletionInput,
     pub cost: CompletionCost,
     pub token_breakdown: Option<TokenTypeCostBreakdown>,
+    pub named_additional_costs: BTreeMap<String, f64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -164,6 +167,7 @@ fn flat_priced(
         prepared,
         cost: completion_cost(total, 0.0, 0.0, &[], None, &Value::Null, &Value::Null),
         token_breakdown: None,
+        named_additional_costs: BTreeMap::new(),
     }
 }
 
@@ -632,6 +636,7 @@ fn price_responses_websocket(
         prepared,
         cost,
         token_breakdown: None,
+        named_additional_costs: BTreeMap::new(),
     })
 }
 
@@ -796,7 +801,18 @@ pub fn completion_cost_from_response(
             request.response_time_ms,
         ),
         |model| {
-            let call = cost_call(&prepared.call_type, request, request_model, &empty_params)?;
+            let token_request_model =
+                if provider == Some("azure_ai") && !is_azure_model_router(model) {
+                    None
+                } else {
+                    request_model
+                };
+            let call = cost_call(
+                &prepared.call_type,
+                request,
+                token_request_model,
+                &empty_params,
+            )?;
             let cost_request = ModelCostRequest {
                 model,
                 provider,
@@ -816,11 +832,21 @@ pub fn completion_cost_from_response(
                 .map_err(CompletionResponseCostError::Cost)
         },
     )?;
+    let router_fee = (provider == Some("azure_ai") && !is_azure_model_router(&model))
+        .then(|| catalog.azure_ai_router_fee(&model, request_model, usage.prompt_tokens))
+        .and_then(Result::ok)
+        .flatten();
+    let additional_costs = request
+        .additional_costs
+        .iter()
+        .copied()
+        .chain(router_fee)
+        .collect::<Vec<_>>();
     let cost = completion_cost(
         prompt,
         output,
         built_in_tool_cost(catalog, request, &model, provider, region, Some(usage)),
-        request.additional_costs,
+        &additional_costs,
         provider,
         request.discount_config,
         request.margin_config,
@@ -846,6 +872,9 @@ pub fn completion_cost_from_response(
         prepared,
         cost,
         token_breakdown,
+        named_additional_costs: router_fee
+            .map(|fee| BTreeMap::from([("Azure Model Router Flat Cost".to_owned(), fee)]))
+            .unwrap_or_default(),
     })
 }
 
