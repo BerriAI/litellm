@@ -293,7 +293,7 @@ class A2AGuardrailHandler(BaseTranslation):
             result = obj.get("result", {})
             if not isinstance(result, dict):
                 continue
-            scanned: Final = self._extract_texts_from_result(result=result)
+            scanned = self._extract_texts_from_result(result=result)
             if not scanned:
                 continue
             if orig_i == first_chunk_with_text:
