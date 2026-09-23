@@ -29,9 +29,7 @@ def _credentials_cleared(value) -> bool:
 def _mock_prisma():
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_mcpservertable = AsyncMock()
-    row = models.LiteLLM_MCPServerTable.model_construct(
-        server_id="test-server", transport="http", env={}, env_vars=[]
-    )
+    row = models.LiteLLM_MCPServerTable.model_construct(server_id="test-server", transport="http", env={}, env_vars=[])
     mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=row)
     mock_prisma.db.litellm_mcpservertable.create = AsyncMock(return_value=row)
     mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=None)
@@ -1047,6 +1045,29 @@ async def test_clearing_alias_conflicts_on_the_fallback_server_name():
     result = await update_mcp_server(
         mock_prisma,
         UpdateMCPServerRequest(server_id="my-test-server", alias=None),
+        "test-user",
+        fields_set={"server_id", "alias"},
+    )
+
+    assert isinstance(result, McpIdentifierConflict)
+    assert result.field == "server_name"
+
+
+@pytest.mark.asyncio
+async def test_clearing_alias_to_empty_string_conflicts_on_the_fallback_server_name():
+    """alias: "" publishes the stored server_name as the tool prefix, just like
+    alias: null, so the fallback name must go through the conflict check too."""
+    from litellm.proxy._experimental.mcp_server.db import McpIdentifierConflict
+
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.server_name = "taken"
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=_conflict_row())
+
+    result = await update_mcp_server(
+        mock_prisma,
+        UpdateMCPServerRequest(server_id="my-test-server", alias=""),
         "test-user",
         fields_set={"server_id", "alias"},
     )
