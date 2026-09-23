@@ -22,6 +22,9 @@ use litellm_cost::generic_cost::{
 use litellm_cost::generic_input::{InputBaseRates, calculate_input_cost};
 use litellm_cost::generic_usage::parse_prompt_tokens_details;
 use litellm_cost::guardrail_cost::bedrock_guardrail_cost;
+use litellm_cost::image_cost_router::{
+    ImageCostRouteRequest, route_image_generation_cost_calculator,
+};
 use litellm_cost::non_token::{
     ImageRates, ImageUsage, OcrBatchRates, OcrRates, OcrUsage, VideoRates, calculate_image,
     calculate_ocr, calculate_ocr_batch, calculate_video,
@@ -545,6 +548,10 @@ fn main() {
             json!({"input_cost_per_pixel": 0.0002}),
         ),
         (
+            "recraft/flat-sample".to_owned(),
+            json!({"output_cost_per_image": 0.25}),
+        ),
+        (
             "anthropic/fast".to_owned(),
             json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003, "provider_specific_entry": {"fast": 2.0, "us": 1.1}, "search_context_cost_per_query": {"search_context_size_medium": 0.005}}),
         ),
@@ -1006,4 +1013,20 @@ fn main() {
         })
         .unwrap();
     println!("azure_image_generation={azure_image:.3}");
+    let routed_image = route_image_generation_cost_calculator(
+        &model_info_catalog,
+        ImageCostRouteRequest {
+            model: "flat-sample",
+            provider: Some("recraft"),
+            image_response: &json!({"data": [{}, {}]}),
+            call_type: Some("image_generation"),
+            size: None,
+            n: None,
+            optional_params: &json!({}),
+            supplied_model_info: Some(&json!({"output_cost_per_image": "0.40"})),
+            at,
+        },
+    )
+    .unwrap();
+    println!("routed_image_generation={routed_image:.3}");
 }

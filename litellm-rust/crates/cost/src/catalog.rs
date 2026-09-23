@@ -28,8 +28,9 @@ use crate::fireworks_cost::{
 };
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::image_response_cost::{
-    calculate_image_response_cost_from_usage, gemini_image_edit_cost, gemini_image_generation_cost,
-    resolve_image_model_info, vertex_image_edit_cost, vertex_image_generation_cost,
+    calculate_image_response_cost_from_usage, flat_image_cost, gemini_image_edit_cost,
+    gemini_image_generation_cost, resolve_image_model_info, vertex_image_edit_cost,
+    vertex_image_generation_cost,
 };
 use crate::non_token::Error as NonTokenError;
 use crate::per_second::per_second_pricing_cost;
@@ -801,6 +802,21 @@ impl ModelInfoCatalog {
             optional_params: request.optional_params,
             at: request.at,
         })?)
+    }
+
+    pub fn flat_image_generation_cost(
+        &self,
+        model: &str,
+        provider: &str,
+        image_response: &Value,
+        supplied_model_info: Option<&Value>,
+    ) -> Result<f64, CatalogError> {
+        let shared = self
+            .select_model_key(model, Some(provider), None)
+            .and_then(|key| self.entries.get(key));
+        let model_info = resolve_image_model_info(shared, supplied_model_info)
+            .ok_or(CatalogError::ModelNotFound)?;
+        Ok(flat_image_cost(image_response, &model_info))
     }
 
     pub fn rerank_cost(
