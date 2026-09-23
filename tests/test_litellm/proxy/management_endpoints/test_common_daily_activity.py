@@ -347,6 +347,18 @@ async def test_get_user_api_key_filter_scopes_to_active_and_deleted_user_keys():
 
 
 @pytest.mark.asyncio
+async def test_get_user_api_key_filter_handles_deleted_lookup_failure_and_owned_key():
+    mock_prisma = MagicMock()
+    active_key = SimpleNamespace(token="active-key", user_id="target-user")
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[active_key])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
+        side_effect=RuntimeError("deleted-key table unavailable")
+    )
+
+    assert await get_user_api_key_filter(mock_prisma, "target-user", "active-key") == ["active-key"]
+
+
+@pytest.mark.asyncio
 async def test_get_api_key_metadata_falls_back_to_deleted_keys():
     """Test that get_api_key_metadata should fall back to deleted keys table for missing keys."""
     mock_prisma = MagicMock()
