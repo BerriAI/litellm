@@ -11,8 +11,10 @@ litellm-regression-tests/tests/test_inference_endpoints.py.
 from __future__ import annotations
 
 import time
+from types import MappingProxyType
 from typing import Final
 
+import anthropic
 import pytest
 from anthropic import Anthropic
 from anthropic.types import (
@@ -30,12 +32,21 @@ from anthropic.types import (
     ToolParam,
     ToolUseBlock,
 )
-from e2e_config import STREAM_MIN_LEAD_SECONDS, provider_edge_base, provider_paces_stream, unique_marker
+from e2e_config import (
+    PROVIDER_EDGE_ADVERTISE_HOST,
+    PROVIDER_EDGE_BIND_HOST,
+    STREAM_MIN_LEAD_SECONDS,
+    provider_edge_base,
+    provider_paces_stream,
+    unique_marker,
+)
 from e2e_http import assert_client_error
 from lifecycle import ResourceManager
-from models import ChatMessage, LiteLLMParamsBody, SpendLogRow
+from models import AnthropicErrorEvent, AnthropicMessagesBody, ChatMessage, LiteLLMParamsBody, SpendLogRow
+from provider_edge import LiveEdge, RunningEdge, start_provider_edge
+from provider_edge_bedrock import bedrock_signer
 from proxy_client import ProxyClient
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from sdk_clients import NO_PROXY_CACHE, SdkClients, response_header
 
 pytestmark = [pytest.mark.e2e, pytest.mark.replayable]
@@ -385,3 +396,114 @@ class TestOpenAIMessagesToolContinuation:
         )
         assert _text(continuation).strip() == receipt, "continuation did not consume the correlated tool result"
         assert all(not isinstance(block, ToolUseBlock) for block in continuation.content)
+
+
+BEDROCK_BACKEND: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+BEDROCK_EDGE_REGION: Final = "us-east-1"
+_STREAM_FAILURE_PROMPT: Final = "Count from 1 to 100, one number per line."
+_FRAME_PAYLOAD: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+def _truncated_bedrock_edge(truncate_after: int) -> RunningEdge:
+    return start_provider_edge(
+        LiveEdge(truncate_after=truncate_after, sign=bedrock_signer(BEDROCK_EDGE_REGION)),
+        mounts=MappingProxyType(
+            {f"bedrock/{BEDROCK_EDGE_REGION}": f"https://bedrock-runtime.{BEDROCK_EDGE_REGION}.amazonaws.com"}
+        ),
+        bind_host=PROVIDER_EDGE_BIND_HOST,
+        advertise_host=PROVIDER_EDGE_ADVERTISE_HOST,
+    )
+
+
+def _register_truncated_bedrock(
+    proxy: ProxyClient, resources: ResourceManager, truncate_after: int
+) -> tuple[str, str]:
+    edge: Final = _truncated_bedrock_edge(truncate_after)
+    resources.defer(edge.shutdown)
+    return _register(
+        proxy,
+        resources,
+        LiteLLMParamsBody(
+            model=BEDROCK_BACKEND,
+            api_base=edge.edge.api_base(f"bedrock/{BEDROCK_EDGE_REGION}"),
+            aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+            aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+            aws_region_name=BEDROCK_EDGE_REGION,
+        ),
+        prefix="e2e-messages-truncated",
+    )
+
+
+def _bare_error_frame(frame: str) -> bool:
+    payload: Final = _FRAME_PAYLOAD.validate_json(frame)
+    return isinstance(payload, dict) and "error" in payload and payload.get("type") != "error"
+
+
+@pytest.mark.provider_edge_host
+@pytest.mark.provider_live
+class TestMessagesUpstreamStreamFailure:
+    @pytest.mark.covers("llm.messages.anthropic.upstream_stream_failure.stream.error_event")
+    def test_interrupted_upstream_stream_raises_in_the_anthropic_sdk(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model, key = _register_truncated_bedrock(proxy, resources, truncate_after=2)
+        client: Final = sdk.anthropic(key)
+
+        stream: Final = client.messages.create(
+            model=model,
+            max_tokens=300,
+            stream=True,
+            messages=[_user_turn(_STREAM_FAILURE_PROMPT)],
+            extra_body=NO_PROXY_CACHE,
+        )
+        first: Final = next(stream)
+        assert first.type == "message_start", (
+            f"the stream produced a first event that is not message_start, so this run proves a "
+            f"startup failure, not an interrupted stream: {first!r}"
+        )
+        with pytest.raises(anthropic.APIError, match=".+") as raised:
+            for _ in stream:
+                pass
+        assert str(raised.value), (
+            f"the SDK raised an APIError carrying no message, which a client cannot act on: {raised.value!r}"
+        )
+
+    @pytest.mark.covers("llm.messages.anthropic.upstream_stream_failure.stream.error_event")
+    def test_interrupted_upstream_stream_is_an_anthropic_error_event(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
+        model, key = _register_truncated_bedrock(proxy, resources, truncate_after=2)
+
+        outcome: Final = proxy.messages_stream(
+            key,
+            AnthropicMessagesBody(
+                model=model,
+                max_tokens=300,
+                stream=True,
+                messages=[ChatMessage(role="user", content=_STREAM_FAILURE_PROMPT)],
+            ),
+        )
+        frames: Final = outcome.stream_events
+        assert outcome.is_streaming, (
+            f"/v1/messages did not answer with an SSE stream: status={outcome.status_code} body={outcome.body}"
+        )
+        assert frames, (
+            f"the proxy sent no SSE data frames although the upstream hung up; "
+            f"stream_error={outcome.stream_error!r}"
+        )
+        assert outcome.stream_error == "event: error", (
+            f"the interrupted stream was not announced by an 'event: error' line Anthropic clients read; "
+            f"stream_error={outcome.stream_error!r} frames={frames}"
+        )
+        try:
+            AnthropicErrorEvent.model_validate_json(frames[-1])
+        except ValidationError:
+            pytest.fail(
+                f"the last SSE frame was not an Anthropic {{\"type\": \"error\", \"error\": ...}} envelope; "
+                f"frames={frames}"
+            )
+        bare: Final = tuple(frame for frame in frames if _bare_error_frame(frame))
+        assert not bare, (
+            f"the proxy emitted error frames without the Anthropic envelope, which Anthropic clients drop: "
+            f"{bare}; all frames={frames}"
+        )

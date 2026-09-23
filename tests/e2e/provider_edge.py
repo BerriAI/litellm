@@ -790,11 +790,6 @@ def _handle_record(
 def _truncated_steps(
     steps: Generator[StreamStep, None, None], truncate_after: int
 ) -> Generator[StreamStep, None, None]:
-    """A live edge's mid-stream hang-up: relay the first ``truncate_after``
-    upstream chunks, then end with a truncation step instead of whatever the
-    upstream had left, closing the upstream generator so its socket closes too.
-    An upstream that dies on its own before the count is reached just passes
-    its truncation through."""
     with closing(steps) as source:
         for relayed, step in enumerate(source):
             if isinstance(step, StreamTruncation) or relayed < truncate_after:
