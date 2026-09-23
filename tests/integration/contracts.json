@@ -2043,6 +2043,9 @@
         ],
         "tests/integration/observability/test_guardrail_effects.py::test_anthropic_messages_with_caller_metadata_keeps_guardrail_information_in_spend_log": [
             "other.observability.guardrails.anthropic_messages_caller_metadata_keeps_guardrail_spend_log"
+        ],
+        "tests/integration/spend/test_cache_and_quota.py::test_scheduled_budget_reset_reconnects_after_db_transport_failure_and_unblocks_key": [
+            "quota_management.budget.key.scheduled_reset_survives_transient_db_outage"
         ]
     },
     "browser": {
