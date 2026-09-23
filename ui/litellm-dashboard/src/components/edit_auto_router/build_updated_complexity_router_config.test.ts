@@ -1115,3 +1115,105 @@ describe("LLM V2 configuration preservation", () => {
     expect(saved).not.toHaveProperty("classifier_llm_config");
   });
 });
+
+describe("untouched save round trip", () => {
+  const STORED_PRE_MANAGED_BOOLEANS: Record<string, unknown> = {
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o"], COMPLEX: ["opus"], REASONING: ["o1"] },
+    tier_model_configs: { REASONING: [{ model_name: "o1", litellm_params: { reasoning_effort: "high" } }] },
+    default_model: "gpt-4o",
+    plan_mode_min_tier: "COMPLEX",
+    tier_labels: { SIMPLE: "Cheap" },
+    classifier_type: "heuristic_first",
+    heuristic_v2_success_threshold: 0.89,
+    heuristic_first_max_tier: "SIMPLE",
+    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
+    classifier_context_window_size: 5,
+    classifier_context_budget_chars: 4000,
+    classifier_context_include_assistant_turns: true,
+    classifier_fallback: "default_model",
+    classification_prompt: "Route for a payments team.",
+    classification_examples: "- refund status -> SIMPLE",
+    classification_mode: "user_turn",
+    session_affinity: true,
+    session_affinity_ttl_seconds: 300,
+    modality_routing: true,
+    modality_pin_override: true,
+    deployment_affinity: false,
+    adaptive: true,
+    adaptive_weights: { quality: 0.4, cost: 0.6 },
+    tier_distance_penalty: 0.25,
+    adaptive_eligible: "all",
+    return_raw_model_name: true,
+    tier_boundaries: { simple_medium: 0.2, medium_complex: 0.4, complex_reasoning: 0.7 },
+    token_thresholds: { simple: 20, complex: 500 },
+    dimension_weights: { tokenCount: 0.1 },
+    custom_dimensions: [{ name: "domain", weight: 0.9, keywords: ["orbitmesh"] }],
+    reasoning_override_min_score: 0.3,
+    enable_context_window_escalation: false,
+    context_window_escalation_buffer: 0.9,
+    code_keywords: ["async", "await"],
+    reasoning_keywords: ["prove"],
+    technical_keywords: ["api"],
+    simple_keywords: ["hello"],
+    plan_mode_patterns: ["plan now"],
+    route_housekeeping_to_cheapest_tier: true,
+    housekeeping_patterns: ["conversation title"],
+    reminder_markers: [{ open: "<System-Reminder>", close: "</System-Reminder>" }],
+    max_tokens_from_tier_model: true,
+  };
+
+  it("returns the stored config unchanged when nothing was edited", () => {
+    const hydrated = hydrateComplexityRouterConfig(STORED_PRE_MANAGED_BOOLEANS, undefined);
+    expect(buildUpdatedComplexityRouterConfig(STORED_PRE_MANAGED_BOOLEANS, hydrated)).toEqual(
+      STORED_PRE_MANAGED_BOOLEANS,
+    );
+  });
+
+  it("keeps both housekeeping and max-token booleans stored as true", () => {
+    const hydrated = hydrateComplexityRouterConfig(STORED_PRE_MANAGED_BOOLEANS, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(STORED_PRE_MANAGED_BOOLEANS, hydrated);
+    expect(saved.route_housekeeping_to_cheapest_tier).toBe(true);
+    expect(saved.max_tokens_from_tier_model).toBe(true);
+  });
+
+  it("keeps the stored reminder marker casing", () => {
+    const hydrated = hydrateComplexityRouterConfig(STORED_PRE_MANAGED_BOOLEANS, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(STORED_PRE_MANAGED_BOOLEANS, hydrated);
+    expect(saved.reminder_markers).toEqual(STORED_PRE_MANAGED_BOOLEANS.reminder_markers);
+  });
+
+  it("lets an edited toggle win over the stored value", () => {
+    const hydrated = hydrateComplexityRouterConfig(STORED_PRE_MANAGED_BOOLEANS, undefined);
+    const edited = {
+      ...hydrated,
+      route_housekeeping_to_cheapest_tier: false,
+      max_tokens_from_tier_model: false,
+    };
+    const saved = buildUpdatedComplexityRouterConfig(STORED_PRE_MANAGED_BOOLEANS, edited);
+    expect(saved.route_housekeeping_to_cheapest_tier).toBe(false);
+    expect(saved.max_tokens_from_tier_model).toBe(false);
+
+    const storedDisabled: Record<string, unknown> = {
+      ...STORED_PRE_MANAGED_BOOLEANS,
+      route_housekeeping_to_cheapest_tier: false,
+      max_tokens_from_tier_model: false,
+    };
+    const enabled = {
+      ...hydrateComplexityRouterConfig(storedDisabled, undefined),
+      route_housekeeping_to_cheapest_tier: true,
+      max_tokens_from_tier_model: true,
+    };
+    const resaved = buildUpdatedComplexityRouterConfig(storedDisabled, enabled);
+    expect(resaved).not.toHaveProperty("route_housekeeping_to_cheapest_tier");
+    expect(resaved).not.toHaveProperty("max_tokens_from_tier_model");
+  });
+
+  it("lowercases reminder markers the user edited", () => {
+    const hydrated = hydrateComplexityRouterConfig(STORED_PRE_MANAGED_BOOLEANS, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(STORED_PRE_MANAGED_BOOLEANS, {
+      ...hydrated,
+      reminder_markers: [{ open: "<Other>", close: "</Other>" }],
+    });
+    expect(saved.reminder_markers).toEqual([{ open: "<other>", close: "</other>" }]);
+  });
+});
