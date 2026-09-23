@@ -41,20 +41,23 @@ def interception_config(
     litellm_settings: Mapping[str, object],
     extra: Mapping[str, object] | None = None,
 ) -> Path:
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["search_tools"] = [
-        {
-            "search_tool_name": "integration-search",
-            "litellm_params": {
-                "search_provider": "tavily",
-                "api_key": "synthetic-tavily-key",
-                "api_base": wire_url + "/tavily",
-            },
-        }
-    ]
-    config["general_settings"]["proxy_config_reload_interval_seconds"] = 1
-    config["litellm_settings"].update(litellm_settings)
-    config.update(extra or {})
+    base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config: Final = {
+        **base,
+        "search_tools": [
+            {
+                "search_tool_name": "integration-search",
+                "litellm_params": {
+                    "search_provider": "tavily",
+                    "api_key": "synthetic-tavily-key",
+                    "api_base": wire_url + "/tavily",
+                },
+            }
+        ],
+        "general_settings": {**base["general_settings"], "proxy_config_reload_interval_seconds": 1},
+        "litellm_settings": {**base["litellm_settings"], **litellm_settings},
+        **(extra or {}),
+    }
     path: Final = tmp_path / "websearch.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
