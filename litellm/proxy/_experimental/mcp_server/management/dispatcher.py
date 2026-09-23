@@ -1,139 +1,125 @@
-"""Dispatch management MCP tool calls to the REST management handlers.
+"""Dispatch management MCP tool calls through the proxy's own route table.
 
-Each tool is wired to its handler by an explicit typed call site: no
-reflection, no generic kwargs. Authentication re-runs per tool against the
-synthetic request built for the concrete REST route, so per-key allowed_routes,
-custom auth hooks, and DISABLE_ADMIN_ENDPOINTS all see the real endpoint path.
+Each call is re-entered into a middleware-free ASGI view of the FastAPI app
+(the real routes, real dependencies, real auth), so a tool call is observably
+identical to the same REST request: same status, same JSON body, same error
+shape. Only a fixed allowlist of headers crosses from the caller's request;
+nothing tool-supplied can become a header or touch the URL host.
 """
 
 import asyncio
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final, TypeVar
+from typing import Final, cast
 from urllib.parse import urlencode
 
+import httpx
 import mcp.types as mcp_types
-from fastapi import HTTPException
-from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel, TypeAdapter, ValidationError
-from starlette.requests import Request
-from starlette.types import Message, Scope
+from fastapi import FastAPI
+from fastapi.middleware.asyncexitstack import AsyncExitStackMiddleware
+from pydantic import TypeAdapter
+from starlette.middleware.errors import ServerErrorMiddleware
+from starlette.middleware.exceptions import ExceptionMiddleware
+from starlette.routing import Router
+from starlette.types import ASGIApp, ExceptionHandler, Receive, Scope, Send
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.management.catalog import (
-    MANAGEMENT_TOOLS_BY_NAME,
-    AccessGroupIdArguments,
-    GetVirtualKeyArguments,
-    ListVirtualKeysArguments,
+    ManagementCatalog,
     ManagementTool,
-    UpdateAccessGroupArguments,
-    path_param_names,
 )
-from litellm.proxy._types import (
-    GenerateKeyRequest,
-    GenerateKeyResponse,
-    KeyListResponseObject,
-    KeyRequest,
-    LitellmUserRoles,
-    ProxyException,
-    UpdateKeyRequest,
-    UserAPIKeyAuth,
+from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+    _sanitize_path_parameter_value,  # pyright: ignore[reportPrivateUsage]  # the traversal guard the upstream OpenAPI tool caller already enforces
 )
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from litellm.proxy.list_api.common import ManagementProblem
-from litellm.proxy.utils import hash_token
-from litellm.types.access_group import (
-    AccessGroupCreateRequest,
-    AccessGroupResponse,
-)
+from litellm.proxy._lazy_features import LazyFeatureMiddleware
 
 _HANDLER_TIMEOUT_SECONDS: Final = 30.0
 _MAX_RESULT_BYTES: Final = 1024 * 1024
 _SK_PATTERN: Final = re.compile(r"sk-[A-Za-z0-9_-]+")
-_STRIPPED_REQUEST_HEADERS: Final = frozenset(
-    {"content-type", "content-length", "mcp-session-id", "mcp-protocol-version", "accept"}
-)
-_ECHOED_SECRET_FIELDS: Final = frozenset({"key", "keys", "deleted_keys"})
-
-
-class KeyInfoResult(TypedDict, total=False):
-    key: ReadOnly[str | None]
-    info: ReadOnly[dict[str, object]]
-
-
-class DeletedKeysResult(TypedDict, total=False):
-    deleted_keys: ReadOnly[list[str]]
+_ARGUMENT_SECTIONS: Final = frozenset({"path", "query", "body"})
+_INTERNAL_BASE_URL: Final = "http://litellm-management"
 
 
 class _WrappedResult(TypedDict):
     result: ReadOnly[object]
 
 
-class _ErrorPayload(TypedDict):
-    status: ReadOnly[int]
-    detail: ReadOnly[object]
-
-
-class _ValidationIssue(TypedDict):
-    loc: ReadOnly[tuple[object, ...]]
-    msg: ReadOnly[object]
-    type: ReadOnly[object]
-
-
-class _ValidationPayload(TypedDict):
-    detail: ReadOnly[tuple[_ValidationIssue, ...]]
-
-
-_KEY_INFO_ADAPTER: Final = TypeAdapter(KeyInfoResult)
-_DELETED_KEYS_ADAPTER: Final = TypeAdapter(DeletedKeysResult)
-_KEY_MUTATION_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
-_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
-_KEY_LIST_ADAPTER: Final = TypeAdapter(KeyListResponseObject)
-_ACCESS_GROUP_LIST_ADAPTER: Final = TypeAdapter(list[AccessGroupResponse])
-_PLAIN_OBJECT_ADAPTER: Final = TypeAdapter(object)
 
 
 @dataclass(frozen=True, slots=True)
 class ManagementRequestContext:
-    """The trusted slices of the outer HTTP request, captured at admission.
+    """The trusted slices of the admission request, captured before dispatch.
 
-    The dispatcher rebuilds a synthetic Starlette request per tool call from
-    these fields; nothing client-controlled in the tool arguments can reach
-    into the request the handler sees.
+    Only these fields can reach the internal REST request; tool arguments
+    never touch headers, host, scheme, or auth material.
     """
 
-    raw_headers: tuple[tuple[bytes, bytes], ...]
+    credential_header: str
+    credential_value: str
     client: tuple[str, int] | None
-    scheme: str
-    server: tuple[str, int | None] | None
     root_path: str
-    http_version: str
-    app: object
-    api_key: str
     litellm_changed_by: str | None
+    request_id: str | None
 
 
-_ArgsT = TypeVar("_ArgsT", bound=BaseModel)
+@dataclass(frozen=True, slots=True)
+class Dispatch:
+    catalog: ManagementCatalog
+    internal_app: ASGIApp
 
 
-def _coerce(expected: type[_ArgsT], arguments: BaseModel) -> _ArgsT:
-    if not isinstance(arguments, expected):
-        raise TypeError(f"arguments for tool dispatch are not a {expected.__name__}")
-    return arguments
+_active_dispatch: Dispatch | None = None
 
 
-def _as_object_dict(value: object) -> dict[str, object] | None:
-    if not isinstance(value, dict):
-        return None
-    return _OBJECT_DICT_ADAPTER.validate_python(value)
+def set_dispatch(dispatch: Dispatch | None) -> None:
+    global _active_dispatch
+    _active_dispatch = dispatch
+
+
+def build_management_asgi_app(app: FastAPI) -> ASGIApp:
+    """A middleware-free ASGI view over the real route table.
+
+    Replicates ``Starlette.build_middleware_stack`` with none of
+    ``app.user_middleware`` except ``LazyFeatureMiddleware``, which optional
+    feature routers (e.g. access groups) need to mount on first hit. The
+    exception handlers stay (ProxyException and ManagementProblem map to
+    their real JSON bodies), while auth-relevant state is what
+    ``user_api_key_auth`` writes itself, so nothing else is needed in
+    ``scope["state"]``. ``scope["app"]`` stays the real app.
+    """
+
+    # app.routes is aliased, not copied: optional feature routers mount lazily
+    # (e.g. access_groups on first hit) and must stay reachable through this view.
+    router: Final = Router()
+    router.routes = app.routes
+    handler_map: Final = cast(  # cast-ok: Starlette stores handlers under Any keys
+        Mapping[object, ExceptionHandler], app.exception_handlers
+    )
+    exception_handlers: Final = {  # mutable-ok: filtered handler map for ExceptionMiddleware
+        key: handler for key, handler in handler_map.items() if key not in (500, Exception)
+    }
+    error_handler: Final = app.exception_handlers.get(Exception) or app.exception_handlers.get(500)
+    core: Final = LazyFeatureMiddleware(
+        ServerErrorMiddleware(
+            AsyncExitStackMiddleware(ExceptionMiddleware(router, handlers=exception_handlers)),
+            handler=error_handler,
+        ),
+        app,
+    )
+
+    async def management_app(scope: Scope, receive: Receive, send: Send) -> None:
+        scope["app"] = app
+        await core(scope, receive, send)
+
+    return management_app
 
 
 def _tool_result(
-    payload_text: str, structured: dict[str, object] | _WrappedResult, is_error: bool
+    payload_text: str, structured: dict[str, object] | _WrappedResult | None, is_error: bool
 ) -> mcp_types.CallToolResult:
     return mcp_types.CallToolResult(
         content=[mcp_types.TextContent(type="text", text=payload_text)],  # mutable-ok: SDK content field is a list
@@ -142,300 +128,128 @@ def _tool_result(
     )
 
 
-def _text_result(payload: object, is_error: bool) -> mcp_types.CallToolResult:
-    encoded: Final[object] = _PLAIN_OBJECT_ADAPTER.validate_python(jsonable_encoder(payload))
-    wrapped: Final[_WrappedResult] = {"result": encoded}
-    encoded_dict: Final = _as_object_dict(encoded)
-    structured: Final = encoded_dict if encoded_dict is not None else wrapped
-    return _tool_result(json.dumps(encoded, default=str), structured, is_error)
-
-
 def error_result(status: int, detail: object) -> mcp_types.CallToolResult:
-    return _text_result(_ErrorPayload(status=status, detail=detail), is_error=True)
+    payload: Final = json.dumps({"status": status, "detail": detail}, default=str)  # mutable-ok: one-shot JSON payload
+    return _tool_result(
+        payload,
+        _OBJECT_DICT_ADAPTER.validate_python({"status": status, "detail": detail}),  # mutable-ok: one-shot JSON payload
+        is_error=True,
+    )
 
 
 def _redact_sk_substrings(text: str) -> str:
     return _SK_PATTERN.sub("sk-***", text)
 
 
-def _validation_error_result(tool: ManagementTool, exc: ValidationError) -> mcp_types.CallToolResult:
-    path_params: Final = path_param_names(tool)
-    default_location: Final = "query" if tool.http_method in ("GET", "DELETE") else "body"
-    detail: Final[tuple[_ValidationIssue, ...]] = tuple(
-        _ValidationIssue(
-            loc=(
-                "path" if error["loc"] and str(error["loc"][0]) in path_params else default_location,
-                *error["loc"],
-            ),
-            msg=error["msg"],
-            type=error["type"],
-        )
-        for error in exc.errors(include_url=False)
+def _validated_sections(
+    tool: ManagementTool, arguments: Mapping[str, object]
+) -> tuple[Mapping[str, object], Mapping[str, object], Mapping[str, object] | None] | mcp_types.CallToolResult:
+    unknown: Final = tuple(key for key in arguments if key not in _ARGUMENT_SECTIONS)
+    if unknown:
+        sections_list: Final = list(unknown)  # mutable-ok: error message rendering
+        return error_result(400, f"unexpected argument section(s) {sections_list} for tool '{tool.name}'")
+    path_args: Final[object] = arguments.get("path") or {}  # mutable-ok: default empty JSON section
+    query_args: Final[object] = arguments.get("query") or {}  # mutable-ok: default empty JSON section
+    body_args: Final[object] = arguments.get("body")
+    sections_to_check: Final[tuple[tuple[str, object], ...]] = (("path", path_args), ("query", query_args))
+    for label, section in sections_to_check:
+        if not isinstance(section, dict):
+            return error_result(400, f"'{label}' arguments for tool '{tool.name}' must be an object")
+    if body_args is not None and not isinstance(body_args, dict):
+        return error_result(400, f"'body' arguments for tool '{tool.name}' must be an object")
+    if body_args is not None and not tool.has_body:
+        return error_result(400, f"tool '{tool.name}' does not accept a request body")
+    return (
+        _OBJECT_DICT_ADAPTER.validate_python(path_args),
+        _OBJECT_DICT_ADAPTER.validate_python(query_args),
+        _OBJECT_DICT_ADAPTER.validate_python(body_args) if body_args is not None else None,
     )
-    return _text_result(_ValidationPayload(detail=detail), is_error=True)
 
 
-def _model_fields(arguments: BaseModel, *, drop_none: bool) -> dict[str, object]:
-    dumped: Final[dict[str, object]] = arguments.model_dump(exclude_unset=True, exclude_none=drop_none)
-    return dumped
-
-
-def _query_string(tool: ManagementTool, arguments: BaseModel) -> bytes:
-    path_params: Final = path_param_names(tool)
-    values: Final = _model_fields(arguments, drop_none=True)
-    pairs: Final[tuple[tuple[str, object], ...]] = tuple(
+def _target_url(tool: ManagementTool, path_args: Mapping[str, object], query_args: Mapping[str, object]) -> str:
+    path: Final = "/".join(
+        _sanitize_path_parameter_value(path_args.get(segment[1:-1]), segment[1:-1])
+        if segment.startswith("{") and segment.endswith("}")
+        else segment
+        for segment in tool.path_template.split("/")
+    )
+    pairs: Final = tuple(
         (key, item)
-        for key, value in values.items()
-        if key not in path_params
-        for item in (_OBJECT_LIST_ADAPTER.validate_python(value) if isinstance(value, (list, tuple)) else (value,))
-    )
-    return urlencode(pairs).encode()
-
-
-def _request_body(tool: ManagementTool, arguments: BaseModel) -> bytes:
-    if tool.http_method in ("GET", "DELETE"):
-        return b""
-    if tool.name == "update_access_group":
-        return _coerce(UpdateAccessGroupArguments, arguments).data.model_dump_json(exclude_unset=True).encode()
-    return arguments.model_dump_json(exclude_unset=True).encode()
-
-
-def _substituted_path(tool: ManagementTool, arguments: BaseModel) -> str:
-    path: Final[str] = tool.rest_path
-    values: Final = _model_fields(arguments, drop_none=False)
-    return "/".join(
-        str(values[segment[1:-1]]) if segment.startswith("{") and segment.endswith("}") else segment
-        for segment in path.split("/")
-    )
-
-
-def _build_request(tool: ManagementTool, arguments: BaseModel, ctx: ManagementRequestContext) -> Request:
-    path: Final = _substituted_path(tool, arguments)
-    body: Final = _request_body(tool, arguments)
-    forwarded: Final[tuple[tuple[bytes, bytes], ...]] = tuple(
-        (name, value)
-        for name, value in ctx.raw_headers
-        if name.decode("latin-1").lower() not in _STRIPPED_REQUEST_HEADERS
-    ) + (((b"content-type", b"application/json"),) if body else ())
-    arg_fields: Final = _model_fields(arguments, drop_none=False)
-    path_params: Final[dict[str, object]] = {  # mutable-ok: ASGI path_params must be a mutable dict
-        name: arg_fields[name] for name in path_param_names(tool) if arg_fields.get(name) is not None
-    }
-    scope: Final[Scope] = {
-        "type": "http",
-        "http_version": ctx.http_version,
-        "method": tool.http_method,
-        "scheme": ctx.scheme,
-        "server": ctx.server,
-        "client": ctx.client,
-        "root_path": ctx.root_path,
-        "path": path,
-        "raw_path": path.encode(),
-        "query_string": _query_string(tool, arguments),
-        "headers": list(forwarded),  # mutable-ok: ASGI headers must be a mutable list
-        "state": {},
-        "path_params": path_params,
-        "app": ctx.app,
-    }  # mutable-ok: ASGI scope must be a mutable mapping
-
-    async def _receive() -> Message:
-        return {"type": "http.request", "body": body, "more_body": False}  # mutable-ok: ASGI messages are dicts
-
-    return Request(scope, _receive)
-
-
-def _redact_secret_echoes(result: object) -> object:
-    """Hash any raw ``sk-`` token echoed back in the top-level key fields."""
-    fields: Final = _as_object_dict(result)
-    if fields is None:
-        return result
-
-    def _mask(value: object) -> object:
-        if isinstance(value, str) and value.startswith("sk-"):
-            return hash_token(value)
-        if isinstance(value, list):
-            items: Final = _OBJECT_LIST_ADAPTER.validate_python(value)
-            return tuple(
-                hash_token(item) if isinstance(item, str) and item.startswith("sk-") else item for item in items
-            )
-        return value
-
-    return {  # mutable-ok: rebuilt result dict goes straight to jsonable_encoder
-        k: (_mask(v) if k in _ECHOED_SECRET_FIELDS else v) for k, v in fields.items()
-    }
-
-
-async def _authenticate(request: Request, ctx: ManagementRequestContext) -> UserAPIKeyAuth:
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-
-    caller: Final = await user_api_key_auth(request=request, api_key=ctx.api_key)
-    if caller.user_role != LitellmUserRoles.PROXY_ADMIN.value:
-        raise ProxyException(
-            message=f"Management MCP tools require a proxy admin key. Your role={caller.user_role}",
-            type="auth_error",
-            param="None",
-            code=403,
+        for key, value in query_args.items()
+        if value is not None
+        for item in (
+            cast(Sequence[object], value)  # cast-ok: JSON array query values
+            if isinstance(value, (list, tuple))
+            else (value,)
         )
-    return caller
+    )
+    query: Final = urlencode(pairs)
+    return f"{path}?{query}" if query else path
 
 
-async def _call_handler(
-    tool: ManagementTool, arguments: BaseModel, request: Request, caller: UserAPIKeyAuth, changed_by: str | None
-) -> object:
-    """The typed dispatch table: one keyword-explicit call site per tool."""
-    from litellm.proxy.management_endpoints import access_group_endpoints as age
-    from litellm.proxy.management_endpoints import key_management_endpoints as kme
-
-    match tool.name:
-        case "list_virtual_keys":
-            args = _coerce(ListVirtualKeysArguments, arguments)
-            return await kme.list_keys(
-                request=request,
-                user_api_key_dict=caller,
-                page=args.page,
-                size=args.size,
-                user_id=args.user_id,
-                team_id=args.team_id,
-                organization_id=args.organization_id,
-                key_hash=args.key_hash,
-                key_alias=args.key_alias,
-                search=args.search,
-                return_full_object=args.return_full_object,
-                include_team_keys=args.include_team_keys,
-                include_created_by_keys=args.include_created_by_keys,
-                sort_by=args.sort_by,
-                sort_order=args.sort_order,
-                expand=args.expand,
-                status=args.status,
-                project_id=args.project_id,
-                access_group_id=args.access_group_id,
-                agent_id=args.agent_id,
-                substring_matching=args.substring_matching,
-                expires=args.expires,
-            )
-        case "get_virtual_key":
-            return _PLAIN_OBJECT_ADAPTER.validate_python(
-                await kme.info_key_fn(
-                    key=_coerce(GetVirtualKeyArguments, arguments).key,
-                    user_api_key_dict=caller,
-                )
-            )
-        case "create_virtual_key":
-            return await kme.generate_key_fn(
-                data=_coerce(GenerateKeyRequest, arguments),
-                user_api_key_dict=caller,
-                litellm_changed_by=changed_by,
-            )
-        case "update_virtual_key":
-            return _PLAIN_OBJECT_ADAPTER.validate_python(
-                await kme.update_key_fn(
-                    request=request,
-                    data=_coerce(UpdateKeyRequest, arguments),
-                    user_api_key_dict=caller,
-                    litellm_changed_by=changed_by,
-                )
-            )
-        case "delete_virtual_keys":
-            return await kme.delete_key_fn(
-                data=_coerce(KeyRequest, arguments),
-                user_api_key_dict=caller,
-                litellm_changed_by=changed_by,
-            )
-        case "list_access_groups":
-            return await age.list_access_groups(user_api_key_dict=caller)
-        case "get_access_group":
-            return await age.get_access_group(
-                access_group_id=_coerce(AccessGroupIdArguments, arguments).access_group_id,
-                user_api_key_dict=caller,
-            )
-        case "create_access_group":
-            return await age.create_access_group(
-                data=_coerce(AccessGroupCreateRequest, arguments),
-                user_api_key_dict=caller,
-            )
-        case "update_access_group":
-            update_args = _coerce(UpdateAccessGroupArguments, arguments)
-            return await age.update_access_group(
-                access_group_id=update_args.access_group_id,
-                data=update_args.data,
-                user_api_key_dict=caller,
-            )
-        case "delete_access_group":
-            return await age.delete_access_group(
-                access_group_id=_coerce(AccessGroupIdArguments, arguments).access_group_id,
-                user_api_key_dict=caller,
-            )
-        case _:  # pragma: no cover - catalog and dispatch stay in lockstep
-            raise ValueError(f"no handler wired for management MCP tool '{tool.name}'")
+def _forwarded_headers(ctx: ManagementRequestContext) -> dict[str, str]:
+    headers: Final = dict(
+        {  # mutable-ok: header map assembled for httpx
+            "content-type": "application/json",
+            ctx.credential_header: ctx.credential_value,
+        }
+    )
+    if ctx.litellm_changed_by is not None:
+        headers["litellm-changed-by"] = ctx.litellm_changed_by
+    if ctx.request_id is not None:
+        headers["x-request-id"] = ctx.request_id
+    return headers
 
 
-def _validate_result(tool: ManagementTool, result: object) -> object:
-    match tool.name:
-        case "create_virtual_key":
-            return GenerateKeyResponse.model_validate(result)
-        case "list_virtual_keys":
-            return _KEY_LIST_ADAPTER.validate_python(result)
-        case "get_virtual_key":
-            return _KEY_INFO_ADAPTER.validate_python(result)
-        case "update_virtual_key":
-            return _KEY_MUTATION_ADAPTER.validate_python(result)
-        case "delete_virtual_keys":
-            return _DELETED_KEYS_ADAPTER.validate_python(result)
-        case "list_access_groups":
-            return _ACCESS_GROUP_LIST_ADAPTER.validate_python(result)
-        case "get_access_group" | "create_access_group" | "update_access_group":
-            return AccessGroupResponse.model_validate(result)
-        case "delete_access_group":
-            empty: Final[dict[str, object]] = {}  # mutable-ok: empty result payload returned to the MCP client
-            return empty if result is None else _KEY_MUTATION_ADAPTER.validate_python(result)
-        case _:  # pragma: no cover - defensive default for future tools
-            return result
+async def _read_capped_body(response: httpx.Response) -> bytes:
+    chunks: Final[list[bytes]] = []  # mutable-ok: response body accumulator flushed into a single bytes join
+    total: int = 0
+    async for chunk in response.aiter_bytes():
+        total += len(chunk)
+        if total > _MAX_RESULT_BYTES:
+            raise _ResultTooLarge()
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
-def _to_error_result(tool: ManagementTool, exc: BaseException) -> mcp_types.CallToolResult:
-    if isinstance(exc, ManagementProblem):
-        return error_result(exc.problem.status, _redact_sk_substrings(exc.problem.detail or "error"))
-    if isinstance(exc, HTTPException):
-        return error_result(exc.status_code, _redact_sk_substrings(str(exc.detail)))
-    if isinstance(exc, ProxyException):
-        try:
-            status: Final = int(exc.code)
-        except (TypeError, ValueError):
-            return error_result(500, "internal error")
-        return error_result(status, _redact_sk_substrings(exc.message))
-    if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(exc):
-        return error_result(503, "database unavailable")
-    verbose_proxy_logger.exception("management MCP tool %s failed: %s", tool.name, exc)
-    return error_result(500, "internal error")
+class _ResultTooLarge(Exception):
+    pass
 
 
-async def call_tool(
-    name: str, arguments: Mapping[str, object], ctx: ManagementRequestContext
+async def _execute(
+    tool: ManagementTool,
+    url: str,
+    body: Mapping[str, object] | None,
+    ctx: ManagementRequestContext,
+    internal_app: ASGIApp,
 ) -> mcp_types.CallToolResult:
-    tool: Final = MANAGEMENT_TOOLS_BY_NAME.get(name)
-    if tool is None:
-        return error_result(404, f"unknown tool '{name}'")
+    is_mutation: Final = tool.method != "GET"
     try:
-        args_model: Final = tool.arguments_model.model_validate(arguments)
-    except ValidationError as exc:
-        return _validation_error_result(tool, exc)
-
-    request: Final = _build_request(tool, args_model, ctx)
-    is_mutation: Final = tool.http_method not in ("GET",)
-    try:
-        caller: Final = await _authenticate(request, ctx)
-    except (HTTPException, ProxyException) as exc:
-        return _to_error_result(tool, exc)
-    except Exception as exc:
-        return _to_error_result(tool, exc)
-
-    try:
-        result: Final = await asyncio.wait_for(
-            _call_handler(tool, args_model, request, caller, ctx.litellm_changed_by),
-            timeout=_HANDLER_TIMEOUT_SECONDS,
-        )
-    except asyncio.CancelledError:
-        raise
+        async with asyncio.timeout(_HANDLER_TIMEOUT_SECONDS):
+            transport: Final = httpx.ASGITransport(
+                app=internal_app,
+                client=ctx.client or ("127.0.0.1", 0),
+                root_path=ctx.root_path,
+            )
+            async with (
+                httpx.AsyncClient(transport=transport, base_url=_INTERNAL_BASE_URL) as client,
+                client.stream(
+                    tool.method,
+                    url,
+                    content=json.dumps(body).encode() if body is not None else None,
+                    headers=_forwarded_headers(ctx),
+                ) as response,
+            ):
+                status: Final = response.status_code
+                raw: Final = await _read_capped_body(response)
+    except _ResultTooLarge:
+        if is_mutation:
+            return error_result(
+                500,
+                f"{tool.name} completed but the result exceeded 1 MiB and could not be returned. "
+                "Inspect the current state rather than retrying blindly.",
+            )
+        return error_result(500, "result too large")
     except TimeoutError:
         if is_mutation:
             return error_result(
@@ -444,35 +258,41 @@ async def call_tool(
                 "completed. Inspect the current state before repeating this call.",
             )
         return error_result(504, f"{tool.name} timed out")
-    except (HTTPException, ProxyException, ManagementProblem) as exc:
-        return _to_error_result(tool, exc)
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
-        return _to_error_result(tool, exc)
-
-    try:
-        validated: Final = _validate_result(tool, result)
-    except ValidationError:
-        verbose_proxy_logger.exception("management MCP tool %s returned an unexpected shape", tool.name)
+        verbose_proxy_logger.exception("management MCP tool %s failed: %s", tool.name, _redact_sk_substrings(str(exc)))
         return error_result(500, "internal error")
 
-    redacted: Final[object] = (
-        _redact_secret_echoes(validated)
-        if tool.name in ("get_virtual_key", "delete_virtual_keys", "update_virtual_key")
-        else validated
+    if not raw:
+        return _tool_result("{}", {}, is_error=False)  # mutable-ok: empty structured result
+    if status >= 400:
+        return _tool_result(raw.decode("utf-8", errors="replace"), None, is_error=True)
+    try:
+        decoded: Final[object] = cast(object, json.loads(raw))  # cast-ok: JSON parse result is untyped
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return error_result(500, f"{tool.name} returned a non-JSON response")
+    structured: Final[dict[str, object] | None] = (
+        cast(dict[str, object], decoded) if isinstance(decoded, dict) else None  # cast-ok: JSON object
     )
+    return _tool_result(raw.decode(), structured, is_error=False)
 
-    encoded: Final[object] = _PLAIN_OBJECT_ADAPTER.validate_python(jsonable_encoder(redacted))
-    payload: Final = json.dumps(encoded, default=str)
-    if len(payload.encode()) > _MAX_RESULT_BYTES:
-        if is_mutation:
-            return error_result(
-                500,
-                f"{tool.name} completed but the result exceeded 1 MiB and could not be returned. "
-                "Inspect the current state rather than retrying blindly.",
-            )
-        return error_result(500, "result too large")
 
-    wrapped: Final[_WrappedResult] = {"result": encoded}
-    encoded_dict: Final = _as_object_dict(encoded)
-    structured: Final = encoded_dict if encoded_dict is not None else wrapped
-    return _tool_result(payload, structured, is_error=False)
+async def call_tool(
+    name: str, arguments: Mapping[str, object], ctx: ManagementRequestContext
+) -> mcp_types.CallToolResult:
+    dispatch: Final = _active_dispatch
+    if dispatch is None:
+        return error_result(500, "management MCP dispatch not initialized")
+    tool: Final = dispatch.catalog.tools.get(name)
+    if tool is None:
+        return error_result(404, f"unknown tool '{name}'")
+    sections: Final = _validated_sections(tool, arguments)
+    if isinstance(sections, mcp_types.CallToolResult):
+        return sections
+    path_args, query_args, body_args = sections
+    try:
+        url: Final = _target_url(tool, path_args, query_args)
+    except ValueError as exc:
+        return error_result(400, str(exc))
+    return await _execute(tool, url, body_args, ctx, dispatch.internal_app)

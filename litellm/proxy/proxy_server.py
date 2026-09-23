@@ -1522,7 +1522,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     management_general_settings: Final[Mapping[str, object]] = general_settings
-    await start_management_mcp_server(management_general_settings)
+    await start_management_mcp_server(management_general_settings, app)
 
     # End of startup event
     yield

@@ -71,6 +71,8 @@ IGNORE_FUNCTIONS = [
     "completion_cost",  # max depth 1: recursion only fires for mixed-tier Responses WS logging objects, and each split part carries a single service_tier so _split_responses_ws_logging_object_by_service_tier returns None.
     "_redact_credential_value",  # max depth set (_REDACT_CREDENTIAL_MAX_DEPTH); fails closed by returning "***" at the cap.
     "_redact_credential_field",  # max depth set (_REDACT_CREDENTIAL_MAX_DEPTH); fails closed by returning "***" at the cap.
+    "_walk_schema_refs",  # bounded by the nesting depth of a pydantic-validated OpenAPI spec fragment (a finite JSON tree, no cycles possible).
+    "_rewrite_schema_refs",  # bounded by the nesting depth of a pydantic-validated OpenAPI spec fragment (a finite JSON tree, no cycles possible).
     "_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).
     "_replace_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).
     "_sort_processed_sets",  # bounded by the nesting depth of the log-record extra it walks (a finite JSON tree, no cycles possible).

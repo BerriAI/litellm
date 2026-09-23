@@ -888,8 +888,9 @@ def management_endpoint_wrapper(func):
         except Exception as e:
             end_time = datetime.now()
 
-            user_api_key_dict: UserAPIKeyAuth = kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
-            parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
+            caller: Final = kwargs.get("user_api_key_dict")
+            caller_auth: Final[UserAPIKeyAuth] = caller if isinstance(caller, UserAPIKeyAuth) else UserAPIKeyAuth()
+            parent_otel_span = getattr(caller_auth, "parent_otel_span", None)
             if parent_otel_span is not None:
                 try:
                     await _emit_management_endpoint_otel_span(

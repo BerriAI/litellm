@@ -1,10 +1,11 @@
 """Lifecycle and HTTP admission for the built-in management MCP endpoint.
 
-The server is a stateless Streamable HTTP MCP server exposing the 10 tools in
-catalog.py. Admission runs LiteLLM ``user_api_key_auth`` once per HTTP request
-against an isolated request view, requires PROXY_ADMIN, and stashes the trusted
-request slices in a ContextVar that the dispatcher reads per tool call. Nothing
-is keyed by mcp-session-id: each request carries its own caller context.
+The server is a stateless Streamable HTTP MCP server exposing the management
+tools built from the proxy's own OpenAPI spec in catalog.py. Admission runs
+LiteLLM ``user_api_key_auth`` once per HTTP request against an isolated
+request view, requires PROXY_ADMIN, and stashes the trusted request slices in
+a ContextVar that the dispatcher reads per tool call. Nothing is keyed by
+mcp-session-id: each request carries its own caller context.
 """
 
 from collections.abc import Awaitable, Mapping
@@ -12,7 +13,7 @@ from contextvars import ContextVar
 from typing import Final, Protocol, cast
 
 import mcp.types as mcp_types
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.requests import Request
@@ -21,11 +22,17 @@ from starlette.types import Message, Receive, Scope, Send
 from typing_extensions import TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._experimental.mcp_server.management.catalog import mcp_tools
+from litellm.proxy._experimental.mcp_server.management.catalog import (
+    ManagementCatalog,
+    build_catalog,
+)
 from litellm.proxy._experimental.mcp_server.management.dispatcher import (
+    Dispatch,
     ManagementRequestContext,
+    build_management_asgi_app,
     call_tool,
     error_result,
+    set_dispatch,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
@@ -52,7 +59,12 @@ class _McpStreamBridge(Protocol):
 
 
 async def _on_list_tools(ctx: object, params: object) -> mcp_types.ListToolsResult:
-    tools: Final[list[mcp_types.Tool]] = list(mcp_tools())  # mutable-ok: SDK result field is a list
+    server: Final = _active_server
+    tools: Final[list[mcp_types.Tool]] = (
+        [tool.mcp_tool for tool in server.catalog.tools.values()]  # mutable-ok: SDK result field is a list
+        if server is not None
+        else []  # mutable-ok: SDK result field is a list
+    )
     return mcp_types.ListToolsResult(tools=tools)
 
 
@@ -65,7 +77,8 @@ async def _on_call_tool(ctx: object, params: mcp_types.CallToolRequestParams) ->
 
 
 class ManagementMCPServer:
-    def __init__(self) -> None:
+    def __init__(self, catalog: ManagementCatalog) -> None:
+        self.catalog: Final = catalog
         self.server: Final = Server(
             "litellm-management",
             on_list_tools=_on_list_tools,
@@ -95,20 +108,25 @@ def management_mcp_enabled() -> bool:
     return _active_server is not None
 
 
-async def start_management_mcp_server(general_settings: Mapping[str, object]) -> None:
+async def start_management_mcp_server(general_settings: Mapping[str, object], app: FastAPI) -> None:
     global _active_server
     if not general_settings.get("enable_management_mcp"):
         return
-    server: Final = ManagementMCPServer()
+    catalog: Final = build_catalog(app.openapi())
+    set_dispatch(Dispatch(catalog=catalog, internal_app=build_management_asgi_app(app)))
+    server: Final = ManagementMCPServer(catalog)
     await server.start()
     _active_server = server
-    verbose_proxy_logger.info("Management MCP endpoint enabled at %s", MANAGEMENT_MCP_PATH)
+    verbose_proxy_logger.info(
+        "Management MCP endpoint enabled at %s with %s tools", MANAGEMENT_MCP_PATH, len(catalog.tools)
+    )
 
 
 async def shutdown_management_mcp_server() -> None:
     global _active_server
     server: Final = _active_server
     _active_server = None
+    set_dispatch(None)
     if server is not None:
         await server.close()
 
@@ -156,16 +174,14 @@ async def handle_management_mcp_request(request: Request) -> Response:
 
     await _authenticate_admission(request)
 
+    credential_header: Final = "x-litellm-api-key" if request.headers.get("x-litellm-api-key") else "authorization"
     caller_ctx: Final = ManagementRequestContext(
-        raw_headers=tuple(request.scope.get("headers") or ()),
+        credential_header=credential_header,
+        credential_value=_caller_api_key(request),
         client=request.scope.get("client"),
-        scheme=str(request.scope.get("scheme") or "http"),
-        server=request.scope.get("server"),
         root_path=str(request.scope.get("root_path") or ""),
-        http_version=str(request.scope.get("http_version") or "1.1"),
-        app=request.scope.get("app"),
-        api_key=_caller_api_key(request),
         litellm_changed_by=request.headers.get("litellm-changed-by"),
+        request_id=request.headers.get("x-request-id"),
     )
     token: Final = _request_context.set(caller_ctx)
     try:

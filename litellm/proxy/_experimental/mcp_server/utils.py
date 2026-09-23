@@ -538,7 +538,10 @@ def validate_mcp_server_name(server_name: str, raise_http_exception: bool = Fals
         from fastapi import HTTPException
         from starlette import status
 
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": error_message})
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": error_message},  # mutable-ok: FastAPI error payload
+        )
     else:
         raise Exception(error_message)
 

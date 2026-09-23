@@ -1,241 +1,374 @@
-"""Static catalog of the built-in management MCP tools.
+"""OpenAPI-driven tool catalog for the built-in management MCP server.
 
-Each entry maps one MCP tool onto exactly one proxy management REST handler.
-The input schema is generated from a pydantic model so the wire contract and
-the dispatcher's argument validation can never drift apart.
+Every operation in the proxy's own ``app.openapi()`` spec becomes either a
+management tool or a recorded exclusion. Data-plane, pass-through, public and
+UI routes never become tools; mutations keep their real REST surface, so an
+agent calling a tool sees exactly what the equivalent REST call would do.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final, cast
 
 import mcp.types as mcp_types
-from pydantic import BaseModel, Field
+from pydantic import TypeAdapter
 
-from litellm.proxy._types import (
-    GenerateKeyRequest,
-    KeyRequest,
-    UpdateKeyRequest,
+from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+    resolve_operation_params,
 )
-from litellm.types.access_group import (
-    AccessGroupCreateRequest,
-    AccessGroupUpdateRequest,
+from litellm.proxy._types import LiteLLMRoutes
+
+if TYPE_CHECKING:
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _OpenAPIComponents,  # pyright: ignore[reportPrivateUsage]  # spec-node types shared with the resolver
+        _OpenAPIOperation,  # pyright: ignore[reportPrivateUsage]  # spec-node types shared with the resolver
+        _OpenAPIPathItem,  # pyright: ignore[reportPrivateUsage]  # spec-node types shared with the resolver
+    )
+
+_METHODS: Final = ("get", "post", "put", "patch", "delete")
+
+_EXCLUDED_ROUTE_GROUPS: Final = frozenset(LiteLLMRoutes.llm_api_routes.value).union(
+    LiteLLMRoutes.mcp_routes.value,
+    LiteLLMRoutes.public_routes.value,
+    LiteLLMRoutes.ui_routes.value,
 )
 
+_EXCLUDED_TAGS: Final = frozenset(
+    {
+        "llm_passthrough",
+        "responses",
+        "videos",
+        "containers",
+        "assistants",
+        "files",
+        "batch",
+        "fine-tuning",
+        "images",
+        "realtime",
+        "WebSocket",
+        "OpenAI Pass-through",
+        "pass-through",
+        "google genai endpoints",
+        "chat/completions",
+        "completions",
+        "embeddings",
+        "audio",
+        "rerank",
+        "moderations",
+        "ocr",
+        "vector_stores",
+        "search",
+        "a2a",
+        "gemini_agents",
+        "interactions",
+        "mcp_discoverable",
+        "mcp_byok_oauth",
+        "public",
+        "health",
+        "skills",
+        "memory",
+        "anthropic",
+        "messages",
+        "[beta] Anthropic",
+        "llm utils",
+        "generate content",
+        "conversations",
+        "Public Model Hub",
+        "Public Model Hub Routes",
+        "claude_code_marketplace",
+    }
+)
 
-class ListVirtualKeysArguments(BaseModel, frozen=True):
-    page: int = Field(1, ge=1, description="Page number")
-    size: int = Field(10, ge=1, le=100, description="Page size")
-    user_id: str | None = Field(
-        None,
-        description="Filter keys by user ID. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching.",
-    )
-    team_id: str | None = Field(None, description="Filter keys by team ID")
-    organization_id: str | None = Field(None, description="Filter keys by organization ID")
-    key_hash: str | None = Field(None, description="Filter keys by key hash")
-    key_alias: str | None = Field(
-        None,
-        description="Filter keys by key alias. Exact match by default; set substring_matching=true for case-insensitive substring matching.",
-    )
-    search: str | None = Field(
-        None,
-        description="Combined search: matches keys whose token (key hash) equals the value OR whose key_alias contains it (case-insensitive).",
-    )
-    return_full_object: bool = Field(False, description="Return full key object")
-    include_team_keys: bool = Field(False, description="Include all keys for teams that user is an admin of.")
-    include_created_by_keys: bool = Field(False, description="Include keys created by the user")
-    sort_by: str | None = Field(None, description="Column to sort by (e.g. 'user_id', 'created_at', 'spend')")
-    sort_order: str = Field("desc", description="Sort order ('asc' or 'desc')")
-    expand: list[str] | None = Field(None, description="Expand related objects (e.g. 'user')")
-    status: str | None = Field(
-        None,
-        description="Filter by status: 'active', 'expired', 'revoked' or 'deleted'. Omit to return live keys regardless of status.",
-    )
-    project_id: str | None = Field(None, description="Filter keys by project ID")
-    access_group_id: str | None = Field(None, description="Filter keys by access group ID")
-    agent_id: str | None = Field(None, description="Filter keys by agent ID")
-    substring_matching: bool = Field(
-        False,
-        description="If true, match key_alias (any caller) and user_id (proxy admins only) as case-insensitive substrings instead of exact values.",
-    )
-    expires: str | None = Field(
-        None,
-        description="Filter keys by expiration: 'expired' or 'active'. Omit to return keys regardless of expiration.",
-    )
+_EXCLUDED_PATH_PREFIXES: Final = (
+    "/sso",
+    "/login",
+    "/logout",
+    "/ui",
+    "/health",
+    "/.well-known",
+    "/mcp",
+    "/litellm-management",
+    "/openai_passthrough",
+    "/{provider}",
+    "/v1/messages",
+    "/messages",
+    "/chat",
+    "/v1/chat",
+    "/openai",
+    "/engines",
+    "/gemini",
+    "/vertex",
+    "/bedrock",
+    "/azure",
+    "/anthropic",
+    "/cohere",
+    "/vllm",
+    "/assemblyai",
+    "/mistral",
+    "/langfuse",
+    "/eu.",
+    "/oauth",
+    "/api/",
+    "/agents/",
+    "/v1/agents/",
+    "/a2a",
+)
+
+_JSON_MEDIA_TYPE: Final = "application/json"
+_SCHEMA_REF_PREFIX: Final = "#/components/schemas/"
 
 
-class GetVirtualKeyArguments(BaseModel, frozen=True):
-    key: str = Field(
-        description="Key to look up. Prefer the key's sha256 hash so the raw key stays out of URLs and logs."
-    )
+_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
-class AccessGroupIdArguments(BaseModel, frozen=True):
-    access_group_id: str = Field(description="The access group ID")
+def _json_object(value: object) -> dict[str, object]:
+    if isinstance(value, Mapping):
+        return dict(cast(Mapping[str, object], value))  # cast-ok: spec JSON node  # mutable-ok: JSON object copy
+    return {}  # mutable-ok: empty JSON object fallback
 
 
-class UpdateAccessGroupArguments(BaseModel, frozen=True):
-    access_group_id: str = Field(description="The access group ID")
-    data: AccessGroupUpdateRequest
-
-
-class NoArguments(BaseModel, frozen=True):
-    pass
+def _json_seq(value: object) -> tuple[object, ...]:
+    if isinstance(value, (list, tuple)):
+        return tuple(cast(Sequence[object], value))  # cast-ok: spec JSON array
+    return ()
 
 
 @dataclass(frozen=True, slots=True)
 class ManagementTool:
     name: str
-    title: str
-    description: str
-    http_method: str
-    rest_path: str
-    arguments_model: type[BaseModel]
-    read_only: bool
-    destructive: bool
-    idempotent: bool
+    method: str
+    path_template: str
+    path_param_names: tuple[str, ...]
+    query_param_names: tuple[str, ...]
+    has_body: bool
+    mcp_tool: mcp_types.Tool
 
 
-_ADMIN_NOTE: Final = " Requires a proxy-admin LiteLLM key."
-
-MANAGEMENT_TOOLS: Final[tuple[ManagementTool, ...]] = (
-    ManagementTool(
-        name="list_virtual_keys",
-        title="List virtual keys",
-        description="List virtual API keys with pagination and filters. Calls GET /key/list." + _ADMIN_NOTE,
-        http_method="GET",
-        rest_path="/key/list",
-        arguments_model=ListVirtualKeysArguments,
-        read_only=True,
-        destructive=False,
-        idempotent=True,
-    ),
-    ManagementTool(
-        name="get_virtual_key",
-        title="Get virtual key info",
-        description="Get details for one virtual key. Calls GET /key/info." + _ADMIN_NOTE,
-        http_method="GET",
-        rest_path="/key/info",
-        arguments_model=GetVirtualKeyArguments,
-        read_only=True,
-        destructive=False,
-        idempotent=True,
-    ),
-    ManagementTool(
-        name="create_virtual_key",
-        title="Create virtual key",
-        description="Generate a new virtual API key. Calls POST /key/generate." + _ADMIN_NOTE,
-        http_method="POST",
-        rest_path="/key/generate",
-        arguments_model=GenerateKeyRequest,
-        read_only=False,
-        destructive=False,
-        idempotent=False,
-    ),
-    ManagementTool(
-        name="update_virtual_key",
-        title="Update virtual key",
-        description="Update an existing virtual key (merge patch semantics). Calls POST /key/update." + _ADMIN_NOTE,
-        http_method="POST",
-        rest_path="/key/update",
-        arguments_model=UpdateKeyRequest,
-        read_only=False,
-        destructive=False,
-        idempotent=False,
-    ),
-    ManagementTool(
-        name="delete_virtual_keys",
-        title="Delete virtual keys",
-        description="Permanently delete virtual keys by token or alias. Calls POST /key/delete." + _ADMIN_NOTE,
-        http_method="POST",
-        rest_path="/key/delete",
-        arguments_model=KeyRequest,
-        read_only=False,
-        destructive=True,
-        idempotent=False,
-    ),
-    ManagementTool(
-        name="list_access_groups",
-        title="List access groups",
-        description="List all access groups. Calls GET /v1/access_group." + _ADMIN_NOTE,
-        http_method="GET",
-        rest_path="/v1/access_group",
-        arguments_model=NoArguments,
-        read_only=True,
-        destructive=False,
-        idempotent=True,
-    ),
-    ManagementTool(
-        name="get_access_group",
-        title="Get access group",
-        description="Get one access group by ID. Calls GET /v1/access_group/{access_group_id}." + _ADMIN_NOTE,
-        http_method="GET",
-        rest_path="/v1/access_group/{access_group_id}",
-        arguments_model=AccessGroupIdArguments,
-        read_only=True,
-        destructive=False,
-        idempotent=True,
-    ),
-    ManagementTool(
-        name="create_access_group",
-        title="Create access group",
-        description="Create a new access group. Calls POST /v1/access_group." + _ADMIN_NOTE,
-        http_method="POST",
-        rest_path="/v1/access_group",
-        arguments_model=AccessGroupCreateRequest,
-        read_only=False,
-        destructive=False,
-        idempotent=False,
-    ),
-    ManagementTool(
-        name="update_access_group",
-        title="Update access group",
-        description="Update an existing access group. Calls PUT /v1/access_group/{access_group_id}." + _ADMIN_NOTE,
-        http_method="PUT",
-        rest_path="/v1/access_group/{access_group_id}",
-        arguments_model=UpdateAccessGroupArguments,
-        read_only=False,
-        destructive=False,
-        idempotent=True,
-    ),
-    ManagementTool(
-        name="delete_access_group",
-        title="Delete access group",
-        description="Permanently delete an access group. Calls DELETE /v1/access_group/{access_group_id}."
-        + _ADMIN_NOTE,
-        http_method="DELETE",
-        rest_path="/v1/access_group/{access_group_id}",
-        arguments_model=AccessGroupIdArguments,
-        read_only=False,
-        destructive=True,
-        idempotent=True,
-    ),
-)
-
-MANAGEMENT_TOOLS_BY_NAME: Final[Mapping[str, ManagementTool]] = MappingProxyType(
-    {tool.name: tool for tool in MANAGEMENT_TOOLS}
-)
+@dataclass(frozen=True, slots=True)
+class ManagementCatalog:
+    tools: Mapping[str, ManagementTool]
+    exclusions: Mapping[str, str]
 
 
-def path_param_names(tool: ManagementTool) -> frozenset[str]:
-    return frozenset(
-        segment[1:-1] for segment in tool.rest_path.split("/") if segment.startswith("{") and segment.endswith("}")
+def _params_object(parameters: Sequence[Mapping[str, object]], where: str) -> dict[str, object] | None:
+    section: Final = tuple(p for p in parameters if p.get("in") == where and p.get("name"))
+    if not section:
+        return None
+    properties: Final = {  # mutable-ok: JSON schema assembled for the tool descriptor
+        str(p["name"]): _json_object(p.get("schema"))
+        | {"description": p.get("description", "")}  # mutable-ok: rebuilt schema fragment for the MCP input schema
+        for p in section
+    }
+    required: Final = tuple(str(p["name"]) for p in section if p.get("required"))
+    return {  # mutable-ok: JSON schema assembled for the tool descriptor
+        "type": "object",
+        "properties": properties,
+        "required": list(required),  # mutable-ok: JSON schema required is an array
+        "additionalProperties": False,
+    }
+
+
+def _exclusion_reason(path: str, method: str, operation: Mapping[str, object]) -> str | None:
+    if not operation.get("operationId"):
+        return "no operationId"
+    if path in _EXCLUDED_ROUTE_GROUPS:
+        return "data plane, public or ui route group"
+    for tag in _json_seq(operation.get("tags")):
+        if isinstance(tag, str) and tag in _EXCLUDED_TAGS:
+            return f"tag:{tag}"
+    if path.startswith(_EXCLUDED_PATH_PREFIXES):
+        return "excluded path prefix"
+    request_body: Final = operation.get("requestBody")
+    if isinstance(request_body, Mapping):
+        body_map: Final = cast(Mapping[str, object], request_body)  # cast-ok: spec JSON object
+        content: Final = _json_object(body_map.get("content"))
+        if _JSON_MEDIA_TYPE not in content:
+            return "non-JSON request body"
+    elif method in ("post", "put", "patch"):
+        return "undeclared request body"
+    responses: Final = operation.get("responses")
+    if isinstance(responses, Mapping):
+        for response in cast(Mapping[str, object], responses).values():  # cast-ok: spec JSON object
+            resp_map = _json_object(response)
+            content_map = _json_object(resp_map.get("content"))
+            for media_type in content_map:
+                if media_type != _JSON_MEDIA_TYPE:
+                    return "non-JSON response"
+    return None
+
+
+def _walk_schema_refs(node: object, found: list[str]) -> None:
+    if isinstance(node, Mapping):
+        node_map: Final = cast(Mapping[str, object], node)  # cast-ok: spec JSON object
+        ref: Final = node_map.get("$ref")
+        if isinstance(ref, str) and ref.startswith(_SCHEMA_REF_PREFIX):
+            name = ref[len(_SCHEMA_REF_PREFIX) :]
+            if name not in found:
+                found.append(name)
+        for value in node_map.values():
+            _walk_schema_refs(value, found)
+    elif isinstance(node, (list, tuple)):
+        for item in cast(Sequence[object], node):  # cast-ok: spec JSON array
+            _walk_schema_refs(item, found)
+
+
+def _rewrite_schema_refs(node: object) -> object:
+    if isinstance(node, Mapping):
+        return {  # mutable-ok: rebuilt schema fragment for the MCP input schema
+            key: (
+                f"#/$defs/{value[len(_SCHEMA_REF_PREFIX) :]}"
+                if key == "$ref" and isinstance(value, str) and value.startswith(_SCHEMA_REF_PREFIX)
+                else _rewrite_schema_refs(value)
+            )
+            for key, value in cast(Mapping[str, object], node).items()  # cast-ok: spec JSON object
+        }
+    if isinstance(node, (list, tuple)):
+        return [  # mutable-ok: rebuilt schema fragment for the MCP input schema
+            _rewrite_schema_refs(item)
+            for item in cast(Sequence[object], node)  # cast-ok: spec JSON array
+        ]
+    return node
+
+
+def _collect_defs(fragments: Sequence[object], component_schemas: Mapping[str, object]) -> dict[str, object]:
+    collected: Final[dict[str, object]] = {}  # mutable-ok: transitive $defs accumulator keyed by schema name
+    pending: Final[list[str]] = []  # mutable-ok: depth-first work list over schema names
+    for fragment in fragments:
+        _walk_schema_refs(fragment, pending)
+    while pending:
+        schema_name = pending.pop()
+        if schema_name in collected:
+            continue
+        definition = component_schemas.get(schema_name)
+        if not isinstance(definition, Mapping):
+            continue
+        collected[schema_name] = _rewrite_schema_refs(cast(object, definition))  # cast-ok: erased spec node
+        _walk_schema_refs(cast(object, definition), pending)  # cast-ok: erased spec node
+    return collected
+
+
+def _body_schema(request_body: Mapping[str, object]) -> dict[str, object]:
+    content: Final = _json_object(request_body.get("content"))
+    media: Final = _json_object(content.get(_JSON_MEDIA_TYPE))
+    schema: Final = _json_object(media.get("schema"))
+    return schema if schema else {"type": "object"}  # mutable-ok: JSON schema fragment for the tool descriptor
+
+
+def _build_tool(
+    name: str,
+    method: str,
+    path: str,
+    path_item: Mapping[str, object],
+    operation: Mapping[str, object],
+    components: Mapping[str, object],
+) -> ManagementTool:
+    resolved: Final = resolve_operation_params(
+        cast(
+            "_OpenAPIOperation", dict(operation)
+        ),  # cast-ok: spec JSON node  # mutable-ok: node copy for the typed resolver signature
+        cast(
+            "_OpenAPIPathItem", dict(path_item)
+        ),  # cast-ok: spec JSON node  # mutable-ok: node copy for the typed resolver signature
+        cast(
+            "_OpenAPIComponents", dict(components)
+        ),  # cast-ok: spec JSON node  # mutable-ok: node copy for the typed resolver signature
+    )
+    parameters: Final = tuple(resolved.get("parameters", ()))
+    path_section: Final = _params_object(parameters, "path")
+    query_section: Final = _params_object(parameters, "query")
+    request_body: Final = operation.get("requestBody")
+    has_body: Final = isinstance(request_body, Mapping)
+    body_section: Final = (
+        _body_schema(cast(Mapping[str, object], request_body))  # cast-ok: spec JSON object
+        if isinstance(request_body, Mapping)
+        else None
+    )
+
+    properties: Final[dict[str, object]] = {}  # mutable-ok: JSON schema assembled for the tool descriptor
+    required: Final[list[str]] = []  # mutable-ok: JSON schema required is an array
+    if path_section is not None:
+        properties["path"] = path_section
+        if path_section.get("required"):
+            required.append("path")
+    if query_section is not None:
+        properties["query"] = query_section
+    if body_section is not None:
+        properties["body"] = body_section
+        if isinstance(request_body, Mapping) and cast(
+            Mapping[str, object], request_body
+        ).get(  # cast-ok: spec JSON object
+            "required"
+        ):
+            required.append("body")
+
+    fragments: Final = tuple(properties.values())
+    component_schemas: Final = _json_object(components.get("schemas"))
+    defs: Final = _collect_defs(fragments, component_schemas)
+    schema: Final = {  # mutable-ok: JSON schema assembled for the tool descriptor
+        "type": "object",
+        "properties": {  # mutable-ok: JSON schema fragment for the tool descriptor
+            key: _rewrite_schema_refs(value) for key, value in properties.items()
+        },
+        "required": required,
+        "additionalProperties": False,
+    }
+    if defs:
+        schema["$defs"] = defs  # mutable-ok: JSON schema assembled for the tool descriptor
+
+    summary: Final = operation.get("summary")
+    description: Final = operation.get("description")
+    description_text: Final = ". ".join(str(part) for part in (summary, description) if part)
+    mcp_tool: Final = mcp_types.Tool(
+        name=name,
+        title=str(summary or name),
+        description=description_text or str(summary or name),
+        input_schema=_OBJECT_ADAPTER.validate_python(schema),
+        annotations=mcp_types.ToolAnnotations(
+            read_only_hint=method == "get",
+            destructive_hint=method == "delete",
+            idempotent_hint=method in ("get", "put", "delete"),
+        ),
+    )
+    return ManagementTool(
+        name=name,
+        method=method.upper(),
+        path_template=path,
+        path_param_names=tuple(str(p["name"]) for p in parameters if p.get("in") == "path" and p.get("name")),
+        query_param_names=tuple(str(p["name"]) for p in parameters if p.get("in") == "query" and p.get("name")),
+        has_body=has_body,
+        mcp_tool=mcp_tool,
     )
 
 
-def mcp_tools() -> tuple[mcp_types.Tool, ...]:
-    return tuple(
-        mcp_types.Tool(
-            name=tool.name,
-            title=tool.title,
-            description=tool.description,
-            input_schema=tool.arguments_model.model_json_schema(),
-            annotations=mcp_types.ToolAnnotations(
-                read_only_hint=tool.read_only,
-                destructive_hint=tool.destructive,
-                idempotent_hint=tool.idempotent,
-            ),
-        )
-        for tool in MANAGEMENT_TOOLS
-    )
+def build_catalog(spec: Mapping[str, object]) -> ManagementCatalog:
+    """Turn the proxy's OpenAPI spec into the management tool catalog.
+
+    Raises ValueError on a duplicate operationId: two REST operations behind
+    one tool name would make dispatch ambiguous.
+    """
+    paths: Final = _json_object(spec.get("paths"))
+    component_map: Final = _json_object(spec.get("components"))
+    tools: Final[dict[str, ManagementTool]] = {}  # mutable-ok: catalog accumulator keyed by operationId
+    exclusions: Final[dict[str, str]] = {}  # mutable-ok: exclusion accumulator keyed by "METHOD path"
+    for path in sorted(paths):
+        path_item = _json_object(paths[path])
+        if not path_item:
+            continue
+        for method in _METHODS:
+            raw_operation = path_item.get(method)
+            if not isinstance(raw_operation, Mapping):
+                continue
+            operation = cast(Mapping[str, object], raw_operation)  # cast-ok: spec JSON object
+            key = f"{method.upper()} {path}"
+            reason = _exclusion_reason(path, method, operation)
+            if reason is not None:
+                exclusions[key] = reason
+                continue
+            name = str(operation["operationId"])
+            if name in tools:
+                raise ValueError(
+                    f"duplicate OpenAPI operationId '{name}' at {key}; management MCP tool names must be unique"
+                )
+            tools[name] = _build_tool(name, method, path, path_item, operation, component_map)
+    return ManagementCatalog(tools=MappingProxyType(tools), exclusions=MappingProxyType(exclusions))
