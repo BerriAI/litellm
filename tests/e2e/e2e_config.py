@@ -34,7 +34,7 @@ CONTROL_PLANE_BASE_URL = os.environ.get(
 
 
 def parse_replica_urls(raw: str, fallback: str) -> tuple[str, ...]:
-    urls: Final = tuple(url.strip().rstrip("/") for url in raw.split(",") if url.strip())
+    urls: Final = tuple(dict.fromkeys(url.strip().rstrip("/") for url in raw.split(",") if url.strip()))
     return urls or (fallback,)
 
 
@@ -58,6 +58,7 @@ LINEAR_READONLY_TOOL: Final = "list_teams"  # as listed by tools/list on mcp.lin
 # service in docker-compose.yml maps it to host 16686). Trace-completeness tests
 # read exported spans back through it.
 OTEL_QUERY_URL = os.environ.get("E2E_OTEL_QUERY_URL", "http://localhost:16686").rstrip("/")
+OTEL_EXPORTER_ENDPOINT = os.environ.get("E2E_OTEL_EXPORTER_ENDPOINT", "")
 
 # Real-DataDog read-back (no local sink - destination fakes cannot be deployed
 # on the cluster): the proxy delivers with DD_API_KEY as in production, and the
@@ -147,6 +148,9 @@ REDIS_CHAOS_OPT_IN_ENV = "E2E_REDIS_CHAOS"
 CLI_DETERMINISM_OPT_IN_ENV = "E2E_CLI_DETERMINISM"
 MCP_OAUTH_LIVE_OPT_IN_ENV: Final = "E2E_MCP_OAUTH_LIVE"
 PROVIDER_EDGE_HOST_OPT_IN_ENV: Final = "E2E_PROVIDER_EDGE_HOST_REACHABLE"
+OTEL_V2_OPT_IN_ENV: Final = "E2E_OTEL_V2"
+OTEL_TLS_OPT_IN_ENV: Final = "E2E_OTEL_EXPORTER_ENDPOINT"
+SECRET_MANAGER_OPT_IN_ENV: Final = "E2E_SECRET_MANAGER"
 ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
 ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
 ANOMALY_TURN_ATTEMPTS = int(os.environ.get("E2E_ANOMALY_TURN_ATTEMPTS", "3"))
@@ -170,6 +174,7 @@ MEMORY_CONCURRENCY = int(os.environ.get("E2E_MEMORY_CONCURRENCY", "4"))
 MEMORY_RSS_SETTLE_SAMPLES = int(os.environ.get("E2E_MEMORY_RSS_SETTLE_SAMPLES", "15"))
 MEMORY_RSS_SAMPLE_INTERVAL_SECONDS = float(os.environ.get("E2E_MEMORY_RSS_SAMPLE_INTERVAL_SECONDS", "1"))
 MEMORY_RSS_BUDGET_MB = float(os.environ.get("E2E_MEMORY_RSS_BUDGET_MB", "48"))
+MEMORY_IDLE_RSS_BUDGET_MB = float(os.environ.get("E2E_MEMORY_IDLE_RSS_BUDGET_MB", "768"))
 MEMORY_STORED_REQUEST_BUDGET_KB = float(os.environ.get("E2E_MEMORY_STORED_REQUEST_BUDGET_KB", "64"))
 
 

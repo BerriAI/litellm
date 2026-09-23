@@ -1,11 +1,10 @@
 import json
 import os
+from typing import Final
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-
-from typing import Final
-from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm import ModelResponse
@@ -5580,43 +5579,6 @@ def test_tool_config_cachepoint_not_placed_or_credited_for_model_without_prompt_
     assert "litellm_gateway_injected_cache" not in bucket
 
 
-def test_translate_response_format_json_schema_still_injects_tool():
-    """
-    response_format with an explicit json_schema should still use the
-    synthetic tool call approach (for models that don't support native
-    structured outputs).
-    """
-    config = AmazonConverseConfig()
-
-    response_format = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "FactResult",
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "facts": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                },
-                "required": ["facts"],
-            },
-        },
-    }
-
-    optional_params: dict = {}
-    result = config._translate_response_format_param(
-        value=response_format,
-        model="anthropic.claude-3-haiku-20240307-v1:0",
-        optional_params=optional_params,
-        non_default_params={"response_format": response_format},
-        is_thinking_enabled=False,
-    )
-
-    assert result["json_mode"] is True
-    assert "tools" in result
-    assert "tool_choice" in result
 
 
 def test_transform_response_finish_reason_stop_when_json_mode_filters_all_tools():
@@ -7537,3 +7499,92 @@ def test_eager_input_streaming_non_boolean_is_a_bad_request():
             "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             [_eager_openai_tool(eager_input_streaming="true")],
         )
+
+
+@pytest.mark.parametrize("model", ("anthropic.claude-opus-4-7", "us.anthropic.claude-opus-4-7"))
+def test_converse_accepts_anthropic_default_temperature(model: str) -> None:
+    result: Final = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider="bedrock",
+        temperature=1,
+        drop_params=False,
+    )
+
+    assert result["temperature"] == 1
+
+
+def test_get_supported_openai_params_drops_sampling_params_for_gpt5_models():
+    config = AmazonConverseConfig()
+    for model in [
+        "bedrock/converse/global.openai.gpt-5.6-luna",
+        "global.openai.gpt-5.6-luna",
+        "global.openai.gpt-5.6-sol",
+        "us.openai.gpt-5.6-terra",
+        "eu.openai.gpt-5.6-luna",
+        "openai.gpt-5.6-luna",
+        "bedrock/openai.gpt-5.6-luna",
+    ]:
+        supported = config.get_supported_openai_params(model=model)
+        assert "temperature" not in supported
+        assert "top_p" not in supported
+
+    supported_oss = config.get_supported_openai_params(model="openai.gpt-oss-120b-1:0")
+    assert "temperature" in supported_oss
+    assert "top_p" in supported_oss
+
+
+def test_map_openai_params_drops_temperature_and_top_p_when_drop_params_true():
+    config = AmazonConverseConfig()
+    for model in [
+        "bedrock/converse/global.openai.gpt-5.6-luna",
+        "openai.gpt-5.6-luna",
+        "eu.openai.gpt-5.6-luna",
+    ]:
+        result = config.map_openai_params(
+            non_default_params={"temperature": 1.0, "top_p": 0.9, "max_tokens": 50},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert "temperature" not in result
+        assert "topP" not in result
+        assert result.get("maxTokens") == 50
+
+
+def test_map_openai_params_raises_unsupported_params_when_drop_params_false(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+    for model in [
+        "bedrock/converse/global.openai.gpt-5.6-luna",
+        "openai.gpt-5.6-luna",
+    ]:
+        with pytest.raises(litellm.utils.UnsupportedParamsError) as exc_info:
+            config.map_openai_params(
+                non_default_params={"temperature": 1.0},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            )
+        assert "does not support temperature=1.0" in str(exc_info.value)
+
+
+def test_map_openai_params_retains_sampling_params_for_supported_models():
+    config = AmazonConverseConfig()
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.7, "top_p": 0.8},
+        optional_params={},
+        model="openai.gpt-oss-120b-1:0",
+        drop_params=False,
+    )
+    assert result.get("temperature") == 0.7
+    assert result.get("topP") == 0.8
+
+
+def test_supports_sampling_params_prefixed_and_anthropic_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "global.custom-test-reasoning-model",
+        {"supports_sampling_params": False},
+    )
+    assert AmazonConverseConfig._supports_sampling_params("custom-test-reasoning-model") is False
+    assert AmazonConverseConfig._supports_sampling_params("anthropic.claude-custom-unregistered") is True

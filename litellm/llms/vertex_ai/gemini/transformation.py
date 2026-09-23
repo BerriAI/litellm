@@ -179,7 +179,7 @@ def _apply_gemini_metadata(
     part: PartType,
     model: str | None,
     media_resolution_enum: dict[str, str] | None,
-    video_metadata: dict[str, Any] | None,
+    video_metadata: Mapping[str, object] | None,
 ) -> PartType:
     """
     Apply media_resolution and video_metadata parameters to a Gemini part.
@@ -480,7 +480,7 @@ def _process_gemini_media(
     format: str | None = None,
     media_resolution_enum: dict[str, str] | None = None,
     model: str | None = None,
-    video_metadata: dict[str, Any] | None = None,
+    video_metadata: Mapping[str, object] | None = None,
     vertex_project: str | None = None,
     vertex_credentials: object = None,
 ) -> PartType:

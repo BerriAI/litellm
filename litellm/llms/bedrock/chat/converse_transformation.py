@@ -99,7 +99,7 @@ from ..common_utils import (
 )
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 # Computer use tool prefixes supported by Bedrock
 BEDROCK_COMPUTER_USE_TOOLS: Final = [
@@ -629,17 +629,34 @@ class AmazonConverseConfig(BaseConfig):
         """
         return self._is_deepseek_r1_model(model=model, base_model=base_model)
 
+    @classmethod
+    def _supports_sampling_params(cls, model: str) -> bool:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        base_model: Final = BedrockModelInfo.get_base_model(model)
+        if base_model.startswith("anthropic"):
+            return True
+        candidates: Final = (model, *(f"{prefix}{base_model}" for prefix in ("global.", "us.", "eu.")))
+        for candidate in candidates:
+            if (
+                flag := AnthropicModelInfo._get_model_capability(  # pyright: ignore[reportPrivateUsage]  # Shared API
+                    candidate, "supports_sampling_params"
+                )
+            ) is not None:
+                return flag
+        return True
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         from litellm.utils import supports_function_calling
 
+        supports_sampling: Final = self._supports_sampling_params(model)
         supported_params: Final = [
             "max_tokens",
             "max_completion_tokens",
             "stream",
             "stream_options",
             "stop",
-            "temperature",
-            "top_p",
+            *(("temperature", "top_p") if supports_sampling else ()),
             "extra_headers",
             "response_format",
             "requestMetadata",
@@ -1019,14 +1036,26 @@ class AmazonConverseConfig(BaseConfig):
                     value = [value]
                 optional_params["stopSequences"] = value
             if param == "temperature" or param == "top_p":
-                AnthropicConfig._apply_sampling_param(
-                    optional_params=optional_params,
-                    model=model,
-                    param=param,
-                    value=value,
-                    drop_params=drop_params,
-                    output_key="topP" if param == "top_p" else param,
-                )
+                if base_model.startswith("anthropic"):
+                    AnthropicConfig._apply_sampling_param(
+                        optional_params=optional_params,
+                        model=model,
+                        param=param,
+                        value=value,
+                        drop_params=drop_params,
+                        output_key="topP" if param == "top_p" else param,
+                    )
+                elif not self._supports_sampling_params(model):
+                    if not (litellm.drop_params or drop_params):
+                        raise litellm.utils.UnsupportedParamsError(
+                            message=(
+                                f"{model} does not support {param}={value}. "
+                                "To drop unsupported params, set `litellm.drop_params = True`."
+                            ),
+                            status_code=400,
+                        )
+                else:
+                    optional_params["topP" if param == "top_p" else param] = value
             if param == "tools" and isinstance(value, list):
                 self._apply_tool_call_transformation(
                     tools=cast(list[OpenAIChatCompletionToolParam], value),
@@ -1126,7 +1155,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return optional_params
 
-    def _map_request_metadata_param(self, value: Any, optional_params: dict) -> None:
+    def _map_request_metadata_param(self, value: object, optional_params: dict) -> None:
         if value is not None and isinstance(value, dict):
             self._validate_request_metadata(value)
             optional_params["requestMetadata"] = value
@@ -1920,7 +1949,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
