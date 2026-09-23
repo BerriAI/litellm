@@ -144,7 +144,9 @@ def test_flux2_image_edit_rejects_too_many_references(model: str, reference_imag
         )
 
 
-@pytest.mark.parametrize("dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}, {"width": "2048", "height": "1024"}))
+@pytest.mark.parametrize(
+    "dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}, {"width": "2048", "height": "1024"})
+)
 @pytest.mark.usefixtures("local_model_cost_map")
 def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[str, int | str]):
     def respond(request: httpx.Request) -> httpx.Response:
@@ -175,7 +177,9 @@ def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[
         **dimensions,
     )
 
-    assert response._hidden_params["response_cost"] == pytest.approx(5e-08 * 2048 * 1024 * 2)
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"] * 2048 * 1024 * 2
+    )
 
 
 def test_flux2_image_edit_accepts_and_drops_openai_only_parameters():
