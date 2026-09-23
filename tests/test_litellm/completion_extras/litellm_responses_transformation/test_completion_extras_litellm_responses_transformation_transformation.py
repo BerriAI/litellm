@@ -4521,7 +4521,7 @@ def test_chunk_parser_falls_back_to_static_translation_for_unsupported_chunks():
     )
 
     iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Chat provider: Invalid chunk type"):
         iterator.chunk_parser("not a structured chunk")
 # ------------------------------------------------------------------------
 # #41109/#41117: duplicate message-item suppression and text merging
