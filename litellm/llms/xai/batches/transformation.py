@@ -25,6 +25,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 from litellm.constants import XAI_API_BASE
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import CreateBatchRequest
 from litellm.types.utils import LiteLLMBatch
@@ -63,9 +64,11 @@ def get_xai_api_base(api_base: str | None) -> str:
 def get_xai_auth_headers(
     headers: Mapping[str, str] = _EMPTY_HEADERS, api_key: str | None = None
 ) -> dict[str, str]:  # mutable-ok: BaseConfig.validate_environment contract returns dict
-    resolved_key: Final = api_key or get_secret_str("XAI_API_KEY")
+    resolved_key: Final = XAIModelInfo.get_api_key(api_key)
     if resolved_key is None:
-        raise xai_batches_error("Missing xAI API Key. Set XAI_API_KEY or pass api_key", 401, _EMPTY_HEADERS)
+        raise xai_batches_error(
+            "Missing xAI API Key. Pass api_key, set litellm.xai_key or XAI_API_KEY", 401, _EMPTY_HEADERS
+        )
     return dict(headers, Authorization=f"Bearer {resolved_key}")  # mutable-ok: BaseConfig contract returns dict
 
 
@@ -219,8 +222,8 @@ def to_openai_batch_list(page: XAIBatchList) -> OpenAIBatchListResponse:
         data=data,
         first_id=data[0].id if data else None,
         last_id=data[-1].id if data else None,
-        has_more=page.pagination_token is not None,
-        next_page_token=page.pagination_token,
+        has_more=bool(page.pagination_token),
+        next_page_token=page.pagination_token or None,
     )
 
 

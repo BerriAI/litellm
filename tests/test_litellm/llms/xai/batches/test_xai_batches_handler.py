@@ -102,6 +102,44 @@ async def test_list_batches_forwards_cursor_and_returns_openai_list(sync_mode: b
     assert (listed.has_more, listed.next_page_token) == (True, "next")
 
 
+@respx.mock
+async def test_list_batches_treats_empty_pagination_token_as_last_page() -> None:
+    respx.get(f"{API_BASE}/v1/batches").respond(200, json={"batches": [_XAI_BATCH], "pagination_token": ""})
+
+    listed: Final = await litellm.alist_batches(custom_llm_provider="xai", api_key=KEY, api_base=API_BASE)
+
+    assert (listed.has_more, listed.next_page_token) == (False, None)
+
+
+@respx.mock
+async def test_file_content_stops_paging_on_empty_pagination_token() -> None:
+    route: Final = respx.get(f"{API_BASE}/v1/batches/batch_1/results").respond(
+        200,
+        json={
+            "results": [{"batch_request_id": "r1", "batch_result": {"error": {"code": 3, "message": "boom"}}}],
+            "pagination_token": "",
+        },
+    )
+
+    content: Final = await litellm.afile_content(
+        file_id="batch_1", custom_llm_provider="xai", api_key=KEY, api_base=API_BASE
+    )
+
+    assert route.call_count == 1
+    assert len(content.content.decode().splitlines()) == 1
+
+
+@respx.mock
+async def test_retrieve_batch_falls_back_to_litellm_xai_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "xai_key", "configured-xai-key")
+    route: Final = respx.get(f"{API_BASE}/v1/batches/batch_1").respond(200, json=_XAI_BATCH)
+
+    await litellm.aretrieve_batch(batch_id="batch_1", custom_llm_provider="xai", api_base=API_BASE)
+
+    assert route.calls.last.request.headers["authorization"] == "Bearer configured-xai-key"
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @respx.mock
 async def test_file_content_of_a_batch_id_walks_every_results_page(sync_mode: bool) -> None:

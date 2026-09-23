@@ -191,7 +191,7 @@ class XAIBatchesHandler:
                     return XAIBatchResultsPage.model_validate(_raise_for_status(response).json())
 
                 pages = [await _page(None)]  # mutable-ok: page walk terminates on the cursor, not on a fixed count
-                while pages[-1].pagination_token is not None and pages[-1].results:
+                while pages[-1].pagination_token and pages[-1].results:
                     pages.append(await _page(pages[-1].pagination_token))
                 return _jsonl_response(url, _flatten(pages))
 
@@ -203,6 +203,6 @@ class XAIBatchesHandler:
             return XAIBatchResultsPage.model_validate(_raise_for_status(response).json())
 
         pages = [_page(None)]  # mutable-ok: page walk terminates on the cursor, not on a fixed count
-        while pages[-1].pagination_token is not None and pages[-1].results:
+        while pages[-1].pagination_token and pages[-1].results:
             pages.append(_page(pages[-1].pagination_token))
         return _jsonl_response(url, _flatten(pages))
