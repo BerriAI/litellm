@@ -10,12 +10,16 @@ variant``. Both Amazon Bedrock endpoints reject them:
 They are *history* items, so they only appear from the second turn of a session
 onward -- a first-turn request succeeds and hides the problem entirely.
 
-The normalizer is a pure transform that reports which types it rewrote; callers do
-their own logging, so each provider keeps its own wording.
+Codex also sends a ``web_search`` tool on every turn. api.openai.com runs that tool
+itself; a backend with no server-side tools rejects the whole request over it, so
+the same providers drop the tool types their backend does not accept.
+
+Both helpers are pure transforms that report what they rewrote or dropped; callers
+do their own logging, so each provider keeps its own wording.
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from typing_extensions import ReadOnly, TypedDict
@@ -128,3 +132,23 @@ def normalize_codex_input_items(
     kept: Final = [i for i, _ in normalized if i is not None]  # mutable-ok: downstream narrows on isinstance(list)
     # Codex passthrough items sit outside the OpenAI input union.
     return kept, rewritten_types  # pyright: ignore[reportReturnType]  # see above
+
+
+def drop_unsupported_tools(
+    tools: "Sequence[object]", supported_types: "frozenset[str]"
+) -> "tuple[tuple[object, ...], tuple[str, ...]]":
+    """Keep the tools whose ``type`` the backend accepts; non-dict tools pass through.
+
+    Returns the kept tools and the sorted set of dropped types.
+    """
+    kept: Final = tuple(tool for tool in tools if not isinstance(tool, dict) or tool.get("type") in supported_types)
+    dropped_types: Final = tuple(
+        sorted(
+            frozenset(
+                str(tool.get("type"))
+                for tool in tools
+                if isinstance(tool, dict) and tool.get("type") not in supported_types
+            )
+        )
+    )
+    return kept, dropped_types

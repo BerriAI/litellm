@@ -4,15 +4,18 @@ AWS serves the OpenAI models on ``bedrock-runtime`` through an OpenAI-compatible
 surface at ``https://bedrock-runtime.{region}.{dns_suffix}/openai/v1/responses``,
 alongside Converse. Without this config the ``bedrock`` provider has no Responses
 config at all, so ``/v1/responses`` falls back to the Chat Completions bridge and
-the request is translated into Converse. A realistic Codex session does not
-survive that translation: its ``function_call`` / ``function_call_output`` history
-becomes Converse ``toolUse`` / ``toolResult`` blocks with no ``toolConfig``, and
-Converse rejects the request outright with "The toolConfig field must be defined
-when using toolUse and toolResult content blocks".
+the request is translated into Converse, which rejects Responses-only parameters
+such as ``prompt_cache_key`` with a 400 and never sees reasoning items.
 
 Payloads and SSE follow the OpenAI Responses spec, so this inherits
-OpenAIResponsesAPIConfig and overrides only the endpoint URL, authentication, and
-the Codex history-item normalization the endpoint requires.
+OpenAIResponsesAPIConfig and overrides only the endpoint URL, authentication, the
+Codex history-item normalization the endpoint requires, and the tool filter below.
+
+Tools: bedrock-runtime runs no server-side tools, so it rejects Codex's default
+``web_search`` tool with "web search is not supported for this request". The
+Converse bridge dropped that tool silently (Converse has no web search either),
+so this config drops every tool type the endpoint rejects the same way. The
+supported set is the one bedrock-runtime's own validation error names.
 
 Auth: Bearer token (litellm_params.api_key or the standard AWS_BEARER_TOKEN_BEDROCK)
 when present; otherwise AWS SigV4 (service "bedrock") over the standard credential
@@ -30,7 +33,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.responses.codex_compat import normalize_codex_input_items
+from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
@@ -38,11 +41,14 @@ from litellm.llms.bedrock.common_utils import (
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponseInputParam
+from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
 BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH: Final = "/openai/v1/responses"
+BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
+    {"function", "mcp", "custom", "apply_patch", "namespace", "tool_search", "computer"}
+)
 
 
 def resolve_bedrock_bearer_token(api_key: str | None) -> str | None:
@@ -135,6 +141,31 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
             stream=stream,
             fake_stream=fake_stream,
         )
+
+    def map_openai_params(
+        self,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+    ) -> dict:  # mutable-ok: signature fixed by the override contract
+        params: Final = super().map_openai_params(
+            response_api_optional_params=response_api_optional_params, model=model, drop_params=drop_params
+        )
+        tools: Final = params.get("tools")
+        if not isinstance(tools, list):
+            return params
+        kept, dropped_types = drop_unsupported_tools(tools, BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES)
+        if not dropped_types:
+            return params
+        verbose_logger.warning(
+            "Bedrock Runtime Responses API: dropping unsupported tool type(s) %s (supported: %s).",
+            list(dropped_types),
+            sorted(BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES),
+        )
+        without_tools: Final = {key: value for key, value in params.items() if key != "tools"}
+        if not kept:
+            return without_tools
+        return {**without_tools, "tools": list(kept)}
 
     def transform_responses_api_request(
         self,

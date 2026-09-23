@@ -23,7 +23,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.responses.codex_compat import normalize_codex_input_items
+from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock_mantle.common_utils import (
@@ -116,26 +116,14 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     @staticmethod
     def _filter_unsupported_tools(tools: "Sequence[object]") -> "list[object]":
         """Keep only tool types Mantle's Responses API accepts."""
-        kept: Final[list[object]] = []
-        dropped_types: Final[list[str]] = []
-        for tool in tools:
-            if not isinstance(tool, dict):
-                kept.append(tool)
-                continue
-            tool_type = tool.get("type")
-            if tool_type in _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES:
-                kept.append(tool)
-            else:
-                dropped_types.append(str(tool_type))
-
+        kept, dropped_types = drop_unsupported_tools(tools, _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES)
         if dropped_types:
             verbose_logger.warning(
                 "Bedrock Mantle Responses API: dropping unsupported tool type(s) %s (supported: %s).",
-                sorted(set(dropped_types)),
+                list(dropped_types),
                 sorted(_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES),
             )
-
-        return kept
+        return list(kept)
 
     @staticmethod
     def _handle_unsupported_service_tier(params: dict, drop_params: bool) -> dict:

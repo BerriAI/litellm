@@ -5,6 +5,7 @@ falls back to the Chat Completions bridge and rides Converse.
 """
 
 import json
+import logging
 from importlib.resources import files
 from unittest.mock import patch
 
@@ -192,6 +193,43 @@ class TestProviderResolution:
             for variant in variants:
                 model = f"{prefix}.openai.{family}-{variant}"
                 assert bedrock_supports_openai_responses(model, shipped) is True, model
+
+
+class TestUnsupportedToolDrop:
+    """Codex sends a web_search tool on every turn; bedrock-runtime 400s the whole request over it."""
+
+    _WEB_SEARCH_TOOL = {"type": "web_search", "external_web_access": False}
+    _SHELL_TOOL = {"type": "function", "name": "shell", "parameters": {"type": "object", "properties": {}}}
+    _NAMESPACE_TOOL = {"type": "namespace", "name": "multi_agent_v1", "tools": [{"type": "function", "name": "spawn_agent"}]}
+
+    def _outbound_tools(self, tools: list[dict]) -> object:
+        params = _cfg().map_openai_params(
+            response_api_optional_params={"tools": tools}, model=MODEL, drop_params=False
+        )
+        body = _cfg().transform_responses_api_request(
+            model=MODEL,
+            input="count the lines",
+            response_api_optional_request_params=params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        return body.get("tools")
+
+    def test_codex_default_tools_reach_the_endpoint_without_web_search(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            outbound = self._outbound_tools([self._SHELL_TOOL, self._WEB_SEARCH_TOOL, self._NAMESPACE_TOOL])
+        assert outbound == [self._SHELL_TOOL, self._NAMESPACE_TOOL]
+        dropped = [r.getMessage() for r in caplog.records if "dropping unsupported tool type" in r.getMessage()]
+        assert len(dropped) == 1 and "web_search" in dropped[0]
+
+    def test_only_unsupported_tools_means_no_tools_key(self):
+        assert self._outbound_tools([self._WEB_SEARCH_TOOL, {"type": "web_search_preview"}]) is None
+
+    def test_supported_tools_are_not_logged_as_dropped(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            outbound = self._outbound_tools([self._SHELL_TOOL, {"type": "custom", "name": "exec"}])
+        assert outbound == [self._SHELL_TOOL, {"type": "custom", "name": "exec"}]
+        assert not [r for r in caplog.records if "dropping unsupported tool type" in r.getMessage()]
 
 
 class TestCodexHistoryNormalization:
