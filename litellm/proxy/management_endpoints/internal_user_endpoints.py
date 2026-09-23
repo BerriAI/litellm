@@ -1583,6 +1583,23 @@ async def _update_single_user_helper(
             response = inserted_user_row  # pyright: ignore[reportAssignmentType]  # insert_data returns a prisma row
 
     if response is not None:
+        if "password" in non_default_values:
+            # An admin set this user's password, which implies the old one may be
+            # compromised; kill every existing UI session for the target. Revoke-all
+            # (no keep) — the caller is the admin, not the target, so the caller's
+            # own session is not among these.
+            from litellm.proxy.management_endpoints.session_endpoints import (
+                revoke_ui_session_keys,
+            )
+
+            target_user_id: Final = non_default_values.get("user_id")
+            if isinstance(target_user_id, str):
+                await revoke_ui_session_keys(
+                    user_id=target_user_id,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=litellm_changed_by,
+                )
+
         await _schedule_user_update_audit_log(
             response=response,
             existing_user_row=existing_user_row,
