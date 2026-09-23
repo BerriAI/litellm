@@ -219,7 +219,6 @@ class TestLangfuseOtelIntegration:
                 LangfuseSpanAttributes.TRACE_USER_ID.value: "user-123",
                 LangfuseSpanAttributes.SESSION_ID.value: "sess-456",
                 # Lists / dicts should be JSON strings
-                LangfuseSpanAttributes.TAGS.value: json.dumps(["tagA", "tagB"]),
                 LangfuseSpanAttributes.TRACE_NAME.value: "trace-name",
                 LangfuseSpanAttributes.TRACE_ID.value: "traceid",  # stripped dashes
                 LangfuseSpanAttributes.TRACE_METADATA.value: json.dumps({"k": "v"}),
@@ -1033,7 +1032,7 @@ class TestDerivedTraceFields:
                 "messages": [{"role": "user", "content": "hi"}],
                 "cache_hit": True,
                 "litellm_params": {
-                    "metadata": {"existing_trace_id": "abc123", "tags": ["mine"]},
+                    "metadata": {"existing_trace_id": "abc123", "tags": ["experiment"]},
                 },
                 "standard_logging_object": {"request_tags": ["injected"]},
             },
@@ -1043,9 +1042,9 @@ class TestDerivedTraceFields:
         assert attributes["langfuse.trace.existing_id"] == "abc123"
         assert "langfuse.trace.input" not in attributes
         assert "langfuse.trace.output" not in attributes
+        assert "langfuse.trace.tags" not in attributes
         assert "langfuse.observation.input" in attributes
         assert "langfuse.observation.output" in attributes
-        assert json.loads(attributes["langfuse.trace.tags"]) == ["mine"]
 
     def test_responses_api_output_mirrors_observation_output_items(self):
         from openai.types.responses import ResponseFunctionToolCall
