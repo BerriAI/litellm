@@ -7240,7 +7240,8 @@ export const exchangeLoginCode = async (code: string, workerBaseUrl?: string | n
 
   const data = await response.json();
   if (data.token) {
-    document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
+    // UI-path copy only; don't overwrite the server-set cookie at "/" (Secure on https) with a non-Secure one
+    storeLoginToken(data.token);
   }
   return data.token;
 };
