@@ -7,7 +7,6 @@ just a form that asks the user for their API key — not a full identity-provide
 
 Endpoints implemented here:
   GET  /.well-known/oauth-authorization-server      — OAuth authorization server metadata
-  GET  /.well-known/oauth-protected-resource         — OAuth protected resource metadata
   GET  /v1/mcp/oauth/authorize                       — Shows HTML form to collect the API key
   POST /v1/mcp/oauth/authorize                       — Stores temp auth code and redirects
   POST /v1/mcp/oauth/token                           — Exchanges code for a bearer JWT token
@@ -19,7 +18,7 @@ import html as _html_module
 import time
 import uuid
 from typing import Final, cast
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import jwt
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -27,14 +26,15 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.db import store_user_credential
-from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-    get_request_base_url,
-)
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    BYOK_RESOURCE_METADATA_PATH,
     TOKEN_NO_CACHE_HEADERS,
+    get_request_base_url,
     validate_loopback_redirect_uri,
+    well_known_root_suffix,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.middleware.per_request_root_path_middleware import get_server_root_paths
 
 # ---------------------------------------------------------------------------
 # In-memory store for pending authorization codes.
@@ -83,8 +83,14 @@ def _oauth_token_error(code: str, status: int = 400) -> JSONResponse:
 
 
 def _user_id_from_session_cookie(request: Request) -> str | None:
-    """Return user_id from the UI ``token`` cookie (HS256-signed with
-    ``master_key``), or None if missing/invalid.
+    """Return user_id from the UI ``token`` cookie, or None if missing/invalid."""
+    user_id, _ = _session_identity_from_cookie(request)
+    return user_id
+
+
+def _session_identity_from_cookie(request: Request) -> tuple[str | None, str | None]:
+    """Return ``(user_id, session_key)`` from the UI ``token`` cookie
+    (HS256-signed with ``master_key``), or ``(None, None)`` if missing/invalid.
 
     The /token endpoint in this file ALSO issues master-key-signed JWTs
     (type="byok_session") for MCP-client-side use. They must not be
@@ -98,10 +104,10 @@ def _user_id_from_session_cookie(request: Request) -> str | None:
     from litellm.proxy.proxy_server import master_key
 
     if not master_key:
-        return None
+        return None, None
     token: Final = request.cookies.get("token")
     if not token:
-        return None
+        return None, None
     try:
         payload: Final = jwt.decode(
             token,
@@ -113,20 +119,67 @@ def _user_id_from_session_cookie(request: Request) -> str | None:
             options={"require": ["exp"]},
         )
     except jwt.InvalidTokenError:
-        return None
+        return None, None
     if payload.get("type") == "byok_session":
-        return None
+        return None, None
     if payload.get("login_method") not in ("sso", "username_password"):
-        return None
+        return None, None
     user_id: Final = payload.get("user_id")
-    return user_id if isinstance(user_id, str) and user_id else None
+    if not isinstance(user_id, str) or not user_id:
+        return None, None
+    session_key: Final = payload.get("key")
+    return user_id, session_key if isinstance(session_key, str) and session_key else None
+
+
+async def _session_key_is_live(session_key: str | None) -> bool:
+    """Whether the session key embedded in the UI cookie still resolves.
+
+    The cookie JWT stays signature-valid until ``exp``; the DB-backed session
+    key inside it is what ``POST /session/logout`` and password-change
+    revocation actually kill. Trusting the signature alone would let a
+    logged-out cookie keep authorizing BYOK credential writes, so re-resolve
+    the key here.
+
+    EXPERIMENTAL_UI_LOGIN blob tokens (non-``sk-``) have no DB row and are
+    unrevocable by construction (scoped out of revocation); they pass through
+    on their bounded 10-minute lifetime, as before.
+    """
+    from litellm.proxy._types import hash_token
+    from litellm.proxy.auth.auth_checks import get_key_object
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if session_key is None:
+        # Older cookies predating the ``key`` claim: nothing to resolve.
+        return True
+    if not session_key.startswith("sk-"):
+        return True
+    if prisma_client is None:
+        return True
+    try:
+        await get_key_object(
+            hashed_token=hash_token(session_key),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception:
+        return False
+    return True
 
 
 async def _byok_session_auth(request: Request) -> UserAPIKeyAuth:
-    """Require the UI session cookie. Programmatic BYOK management uses
+    """Require the UI session cookie, with the embedded session key
+    re-resolved against the DB so a revoked (logged-out) session cannot
+    authorize BYOK writes. Programmatic BYOK management uses
     ``POST /v1/mcp/server/{id}/user-credential`` instead."""
-    user_id: Final = _user_id_from_session_cookie(request)
+    user_id, session_key = _session_identity_from_cookie(request)
     if not user_id:
+        raise HTTPException(status_code=401, detail="login_required")
+    if not await _session_key_is_live(session_key):
         raise HTTPException(status_code=401, detail="login_required")
     return UserAPIKeyAuth(api_key="byok_session_cookie", user_id=user_id)
 
@@ -596,13 +649,10 @@ def _build_authorize_html(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/.well-known/oauth-authorization-server", include_in_schema=False)
-async def oauth_authorization_server_metadata(request: Request) -> JSONResponse:
-    """RFC 8414 Authorization Server Metadata for the BYOK OAuth flow."""
-    base_url: Final = get_request_base_url(request)
+def _byok_authorization_server_response(base_url: str, issuer: str) -> JSONResponse:
     return JSONResponse(
         {
-            "issuer": base_url,
+            "issuer": issuer,
             "authorization_endpoint": f"{base_url}/v1/mcp/oauth/authorize",
             "token_endpoint": f"{base_url}/v1/mcp/oauth/token",
             "response_types_supported": ["code"],
@@ -612,14 +662,36 @@ async def oauth_authorization_server_metadata(request: Request) -> JSONResponse:
     )
 
 
-@router.get("/.well-known/oauth-protected-resource", include_in_schema=False)
-async def oauth_protected_resource_metadata(request: Request) -> JSONResponse:
-    """RFC 9728 Protected Resource Metadata pointing back at this server."""
+@router.get("/.well-known/oauth-authorization-server", include_in_schema=False)
+async def oauth_authorization_server_metadata(request: Request) -> JSONResponse:
     base_url: Final = get_request_base_url(request)
+    return _byok_authorization_server_response(base_url, base_url)
+
+
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/v1/mcp/oauth", include_in_schema=False)
+async def byok_authorization_server_metadata(request: Request) -> JSONResponse:
+    base_url: Final = get_request_base_url(request)
+    return _byok_authorization_server_response(base_url, f"{base_url}/v1/mcp/oauth")
+
+
+@router.get("/.well-known/oauth-authorization-server/{root_path:path}/v1/mcp/oauth", include_in_schema=False)
+async def byok_prefixed_authorization_server_metadata(request: Request, root_path: str) -> JSONResponse:
+    prefix: Final = f"/{root_path}"
+    if prefix not in get_server_root_paths():
+        raise HTTPException(status_code=404, detail="Unknown proxy root path")
+    parsed: Final = urlparse(get_request_base_url(request))
+    base_url: Final = f"{parsed.scheme}://{parsed.netloc}{prefix}"
+    return _byok_authorization_server_response(base_url, f"{base_url}/v1/mcp/oauth")
+
+
+@router.get(BYOK_RESOURCE_METADATA_PATH, include_in_schema=False)
+async def byok_protected_resource_metadata(request: Request) -> JSONResponse:
+    base_url: Final = get_request_base_url(request)
+    parsed: Final = urlparse(base_url)
     return JSONResponse(
         {
-            "resource": base_url,
-            "authorization_servers": [base_url],
+            "resource": f"{parsed.scheme}://{parsed.netloc}",
+            "authorization_servers": (f"{base_url}/v1/mcp/oauth",),
         }
     )
 
@@ -846,7 +918,7 @@ async def byok_token(
                 _invalidate_byok_cred_cache,
             )
 
-            _invalidate_byok_cred_cache(user_id, server_id)
+            await _invalidate_byok_cred_cache(user_id, server_id)
         except Exception as exc:
             verbose_proxy_logger.error(
                 "byok_token: failed to store user credential for user=%s server=%s: %s",

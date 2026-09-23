@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union,
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -37,6 +37,7 @@ from litellm.types.guardrails import (
     ApplyGuardrailResponse,
     BaseLitellmParams,
     BedrockGuardrailConfigModel,
+    BedrockGuardrailStreamingParams,
     Guardrail,
     GuardrailEventHooks,
     GuardrailInfoResponse,
@@ -1202,7 +1203,13 @@ async def patch_guardrail(
             litellm_params_dict: Final = litellm_params.model_dump(exclude_unset=True)
             litellm_params_dict.update(requested_litellm_params)
             merged_litellm_params: Final = _as_str_object_mapping(litellm_params_dict)
-            litellm_params = LitellmParams(**merged_litellm_params)
+            try:
+                litellm_params = LitellmParams(**merged_litellm_params)
+            except ValidationError as validation_error:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid guardrail configuration, update rejected: {validation_error}",
+                ) from validation_error
 
         # Update guardrail_info if provided
         guardrail_info: Final = (
@@ -1953,7 +1960,10 @@ async def get_provider_specific_params():
     ```
     """
     # Get fields from the models
-    bedrock_fields: Final = _get_fields_from_model(BedrockGuardrailConfigModel)
+    bedrock_fields: Final = {
+        **_get_fields_from_model(BedrockGuardrailConfigModel),
+        **_get_fields_from_model(BedrockGuardrailStreamingParams),
+    }
     presidio_fields: Final = _get_fields_from_model(PresidioPresidioConfigModelUserInterface)
     lakera_v2_fields: Final = _get_fields_from_model(LakeraV2GuardrailConfigModel)
     tool_permission_fields: Final = _get_fields_from_model(ToolPermissionGuardrailConfigModel)

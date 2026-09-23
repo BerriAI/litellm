@@ -4,6 +4,7 @@ Check if prompt caching is valid for a given deployment
 Route to previously cached model id, if valid
 """
 
+from collections.abc import Callable
 from typing import Final, cast
 
 from litellm import verbose_logger
@@ -14,6 +15,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
 )
 from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt
@@ -47,8 +49,10 @@ def _get_min_token_count_for_deployments(healthy_deployments: list[dict]) -> int
 
 
 class PromptCachingDeploymentCheck(CustomLogger):
-    def __init__(self, cache: DualCache):
+    def __init__(self, cache: DualCache, is_priority_group: Callable[[str], bool] | None = None):
+        super().__init__()
         self.cache = cache
+        self.is_priority_group = is_priority_group
 
     async def async_filter_deployments(
         self,
@@ -58,10 +62,12 @@ class PromptCachingDeploymentCheck(CustomLogger):
         request_kwargs: dict | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
+        if self.is_priority_group is not None and self.is_priority_group(model):
+            return healthy_deployments
         if request_kwargs is not None and request_kwargs.get("_target_order") is not None:
             return healthy_deployments
 
-        if messages is not None and is_prompt_caching_valid_prompt(
+        if messages is not None and await offload_token_count(is_prompt_caching_valid_prompt)(
             messages=messages,
             model=model,
             min_token_count=_get_min_token_count_for_deployments(healthy_deployments),
@@ -90,6 +96,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
                 enable_prompt_caching=(
                     request_kwargs.get("enable_prompt_caching") is True if request_kwargs is not None else None
                 ),
+                request_kwargs=request_kwargs,
             )
 
             model_id_dict: Final = await prompt_cache.async_get_model_id(
@@ -138,7 +145,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
             return
 
         ## PROMPT CACHING - cache model id, if prompt caching valid prompt + provider
-        if is_prompt_caching_valid_prompt(
+        if await offload_token_count(is_prompt_caching_valid_prompt)(
             model=model,
             messages=cast(list[AllMessageValues], messages),
         ):

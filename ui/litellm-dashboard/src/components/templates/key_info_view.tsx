@@ -1,6 +1,7 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -16,8 +17,15 @@ import { modelGroupHref, teamDetailHref } from "@/utils/entityLinks";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { KeyInfoHeader } from "./KeyInfoHeader";
 import KeySavingsTab from "./KeySavingsTab";
+import KeyAutoRouterUsageTab from "./KeyAutoRouterUsageTab";
+import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 import { useEffect, useState } from "react";
-import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
+import {
+  hasProxyWideSpendView,
+  isProxyAdminRole,
+  isUserTeamAdminForSingleTeam,
+  rolesWithWriteAccess,
+} from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -38,7 +46,7 @@ import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
-import { InheritedBudgetHint, inheritedBudgetGates } from "../shared/InheritedBudgetHint";
+import { InheritedBudgetHint, inheritedBudgetGates, keyOwnerBudgetSource } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
 
 interface KeyInfoViewProps {
@@ -81,12 +89,14 @@ export default function KeyInfoView({
   backButtonText = "Back to Keys",
 }: KeyInfoViewProps) {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const activityDateRange = useActivityDateRange();
   const queryClient = useQueryClient();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { teams: teamsData } = useTeams();
   const { data: organizations } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
+  const applyUserBudgetToTeamKeys = useApplyUserBudgetToTeamKeys();
   const { data: allMcpServers } = useMCPServers();
   const { data: allMcpToolsets } = useMCPToolsets();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
@@ -210,6 +220,23 @@ export default function KeyInfoView({
       // Handle max budget empty string
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
 
+      // soft_budget is a budget change server-side (admin-gated); only send it when it changed
+      // so a non-admin edit of unrelated fields isn't blocked by that gate.
+      const previousSoftBudget =
+        (currentKeyData.litellm_budget_table as { soft_budget?: number | null } | null | undefined)?.soft_budget ??
+        null;
+      const nextSoftBudget =
+        formValues.soft_budget === "" || formValues.soft_budget == null ? null : Number(formValues.soft_budget);
+      if (nextSoftBudget !== null && !Number.isFinite(nextSoftBudget)) {
+        toast.error("Soft Budget must be a finite number");
+        return;
+      }
+      if (nextSoftBudget === previousSoftBudget) {
+        delete formValues.soft_budget;
+      } else {
+        formValues.soft_budget = nextSoftBudget;
+      }
+
       // Handle object_permission updates
       if (formValues.vector_stores !== undefined) {
         formValues.object_permission = {
@@ -252,9 +279,18 @@ export default function KeyInfoView({
         delete formValues.agents_and_groups;
       }
 
+      if (formValues.skills !== undefined) {
+        formValues.object_permission = {
+          ...formValues.object_permission,
+          skills: formValues.skills || [],
+        };
+        delete formValues.skills;
+      }
+
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
       formValues.tpm_limit = mapEmptyStringToNull(formValues.tpm_limit);
       formValues.rpm_limit = mapEmptyStringToNull(formValues.rpm_limit);
+      formValues.tpd_limit = mapEmptyStringToNull(formValues.tpd_limit);
       formValues.max_parallel_requests = mapEmptyStringToNull(formValues.max_parallel_requests);
 
       // Convert metadata back to an object if it exists and is a string
@@ -473,7 +509,8 @@ export default function KeyInfoView({
 
   const hasOwnBudget = currentKeyData.max_budget !== null;
   const budgetDisplay = hasOwnBudget ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}` : "Unlimited";
-  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg);
+  const ownerUser = keyOwnerBudgetSource(currentKeyData, applyUserBudgetToTeamKeys);
+  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg, ownerUser);
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">
@@ -618,6 +655,11 @@ export default function KeyInfoView({
           <TabsTrigger value="savings" className="flex-none rounded-none px-4 py-2">
             Savings
           </TabsTrigger>
+          {hasProxyWideSpendView(userRole) && (
+            <TabsTrigger value="auto-router-usage" className="flex-none rounded-none px-4 py-2">
+              Auto-router usage
+            </TabsTrigger>
+          )}
           <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
             Settings
           </TabsTrigger>
@@ -638,6 +680,9 @@ export default function KeyInfoView({
                   {currentKeyData.budget_reset_at && (
                     <p className="text-sm">Resets {formatTimestamp(currentKeyData.budget_reset_at)}</p>
                   )}
+                  <p className="text-sm mt-2" data-testid="key-lifetime-spend">
+                    Lifetime spend: ${formatNumberWithCommas(currentKeyData.total_spend ?? 0, 4)}
+                  </p>
                 </div>
               </Card>
 
@@ -650,6 +695,7 @@ export default function KeyInfoView({
                   <p className="text-sm">
                     RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}
                   </p>
+                  <p className="text-sm">TPD (batch): {currentKeyData.tpd_limit ?? "Unlimited"}</p>
                   {Boolean(currentKeyData.metadata?.throttle_on_budget_exceeded) && (
                     <p className="text-sm">Throttle on budget exceeded: Yes</p>
                   )}
@@ -761,8 +807,19 @@ export default function KeyInfoView({
               keyToken={currentKeyData.token}
               userId={userID}
               userRole={userRole}
+              activity={activityDateRange}
             />
           </TabsContent>
+
+          {hasProxyWideSpendView(userRole) && (
+            <TabsContent value="auto-router-usage">
+              <KeyAutoRouterUsageTab
+                accessToken={accessToken}
+                keyToken={currentKeyData.token}
+                activity={activityDateRange}
+              />
+            </TabsContent>
+          )}
 
           {/* Settings Panel */}
           <TabsContent value="settings" keepMounted>
@@ -882,6 +939,11 @@ export default function KeyInfoView({
                   <div>
                     <p className="text-sm font-medium">Spend</p>
                     <p className="text-sm">${formatNumberWithCommas(currentKeyData.spend, 4)} USD</p>
+                  </div>
+
+                  <div>
+                    <p className="text-sm font-medium">Lifetime Spend</p>
+                    <p className="text-sm">${formatNumberWithCommas(currentKeyData.total_spend ?? 0, 4)} USD</p>
                   </div>
 
                   <div>
@@ -1015,6 +1077,7 @@ export default function KeyInfoView({
                     <p className="text-sm">
                       RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}
                     </p>
+                    <p className="text-sm">TPD (batch): {currentKeyData.tpd_limit ?? "Unlimited"}</p>
                     <p className="text-sm">
                       Max Parallel Requests:{" "}
                       {currentKeyData.max_parallel_requests !== null

@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -306,6 +307,40 @@ async def test_vector_store_file_list_resolves_credentials_from_model_query_para
 
 
 @pytest.mark.asyncio
+async def test_vector_store_file_list_registry_routed_model_skips_key_model_grant():
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.get_deployment_credentials_with_provider.return_value = {
+        "api_key": "sk-team-openai",
+        "api_base": "https://api.openai.com/v1",
+        "custom_llm_provider": "openai",
+        "model": "openai/gpt-4o-mini",
+    }
+
+    data = {"vector_store_id": "vs_123", "model": "team-openai"}
+    user_api_key_dict = UserAPIKeyAuth(
+        models=["restricted-deployment"],
+        team_models=["restricted-deployment"],
+    )
+
+    result = await _update_request_data_with_model_routing_hint(
+        data=data,
+        request=request,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert result["api_key"] == "sk-team-openai"
+    assert result["model"] == "openai/gpt-4o-mini"
+    llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
+        model_id="team-openai"
+    )
+
+
+@pytest.mark.asyncio
 async def test_vector_store_file_list_resolves_single_openai_team_deployment():
     request = MagicMock(spec=Request)
     request.query_params = {}
@@ -570,6 +605,44 @@ async def test_vector_store_file_list_authorizes_model_query_param_before_creden
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
         )
+
+    llm_router.get_deployment_credentials_with_provider.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_model_query_param_enforces_project_model_grant():
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.auth_checks import ProxyException
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
+
+    request = MagicMock(spec=Request)
+    request.query_params = {"model": "team-openai"}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.model_group_alias = {}
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="team_id:team-123",
+        value=LiteLLM_TeamTableCachedObj(team_id="team-123", models=["team-openai"]),
+    )
+    await cache.async_set_cache(
+        key=project_cache_key("proj-1"),
+        value=LiteLLM_ProjectTableCachedObj(project_id="proj-1", models=["other-deployment"]),
+    )
+    user_api_key_dict = UserAPIKeyAuth(team_id="team-123", team_models=["team-openai"], project_id="proj-1")
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: proxy_server global, no seam
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: proxy_server global, no seam
+    ):
+        with pytest.raises(ProxyException):
+            await _update_request_data_with_model_routing_hint(
+                data={"vector_store_id": "vs_123"},
+                request=request,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+            )
 
     llm_router.get_deployment_credentials_with_provider.assert_not_called()
 
@@ -2116,6 +2189,7 @@ async def test_new_vector_store_persists_embedding_reference_without_credentials
 
     mock_registry = MagicMock()
     mock_registry.add_vector_store_to_registry = MagicMock()
+    mock_registry.is_config_vector_store.return_value = False
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
@@ -2194,6 +2268,7 @@ async def test_new_vector_store_auto_resolves_from_router():
 
     mock_registry = MagicMock()
     mock_registry.add_vector_store_to_registry = MagicMock()
+    mock_registry.is_config_vector_store.return_value = False
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
@@ -2462,6 +2537,41 @@ class TestRedactSensitiveLitellmParams:
         out = _redact_sensitive_litellm_params(params)
         for k, v in params.items():
             assert out[k] == v, f"{k} should be preserved verbatim"
+
+    def test_redacts_wire_protocol_connection_strings(self):
+        """
+        A MongoDB vector store's whole credential is its connection string:
+        ``mongodb+srv://<user>:<password>@<cluster>`` embeds the database
+        password, and none of the default api_key/secret/token patterns match
+        the key name, so an unextended masker returns it verbatim to every
+        caller of /vector_store/list and /vector_store/info.
+        """
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        password = "hunter2-not-for-callers"
+        params = {
+            "mongodb_connection_string": f"mongodb+srv://dbuser:{password}@cluster0.mongodb.net",
+            "mongodb_database": "sample_mflix",
+            "mongodb_collection": "embedded_movies",
+            "mongodb_embedding_field": "plot_embedding",
+            "mongodb_text_field": "plot",
+            "litellm_embedding_model": "openai/text-embedding-ada-002",
+        }
+        out = _redact_sensitive_litellm_params(params)
+
+        assert out["mongodb_connection_string"] == REDACTED_BY_LITELM_STRING
+        assert password not in json.dumps(out)
+        for k in (
+            "mongodb_database",
+            "mongodb_collection",
+            "mongodb_embedding_field",
+            "mongodb_text_field",
+            "litellm_embedding_model",
+        ):
+            assert out[k] == params[k], f"{k} is not a credential and must survive redaction"
 
     def test_handles_none_and_empty(self):
         from litellm.proxy.vector_store_endpoints.management_endpoints import (
@@ -2953,3 +3063,196 @@ def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_k
 
     assert response.status_code == 400, response.json()
     assert blocked_key in str(response.json())
+
+
+class TestConfigOwnedVectorStores:
+    """Stores declared under ``vector_store_registry`` in config.yaml are owned by the config file"""
+
+    CONFIG_ID = "vs_from_config"
+    DB_ID = "vs_from_db"
+
+    def _registry(self):
+        from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+        registry = VectorStoreRegistry(vector_stores=[])
+        registry.load_vector_stores_from_config(
+            [
+                {
+                    "vector_store_name": "config-store",
+                    "litellm_params": {"vector_store_id": self.CONFIG_ID, "custom_llm_provider": "openai"},
+                }
+            ]
+        )
+        registry.add_vector_store_to_registry(self._db_row(self.DB_ID, "db-store"))
+        registry.add_vector_store_to_registry(self._db_row("vs_stale", "deleted-elsewhere"))
+        return registry
+
+    @staticmethod
+    def _db_row(vector_store_id: str, vector_store_name: str) -> dict:
+        return {
+            "vector_store_id": vector_store_id,
+            "custom_llm_provider": "openai",
+            "vector_store_name": vector_store_name,
+            "litellm_params": {},
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        }
+
+    @staticmethod
+    def _admin() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+
+    @pytest.mark.asyncio
+    async def test_list_keeps_config_store_that_has_no_db_row(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import list_vector_stores
+
+        registry = self._registry()
+        prisma = MagicMock()
+        prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[self._db_row(self.DB_ID, "db-store")])
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: proxy_server global, no seam
+            patch.object(litellm, "vector_store_registry", registry),
+        ):
+            first = await list_vector_stores(user_api_key_dict=self._admin())
+            second = await list_vector_stores(user_api_key_dict=self._admin())
+
+        assert [(vs["vector_store_id"], vs["is_config"]) for vs in first["data"]] == [(self.DB_ID, False), (self.CONFIG_ID, True)]
+        assert second["data"] == first["data"]
+        assert [vs["vector_store_id"] for vs in registry.vector_stores] == [self.CONFIG_ID, self.DB_ID]
+
+    @pytest.mark.asyncio
+    async def test_list_keeps_config_store_and_db_row_with_same_id_does_not_overwrite_it(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import list_vector_stores
+
+        registry = self._registry()
+        prisma = MagicMock()
+        prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(
+            return_value=[self._db_row(self.DB_ID, "db-store"), self._db_row(self.CONFIG_ID, "renamed-in-db")]
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: proxy_server global, no seam
+            patch.object(litellm, "vector_store_registry", registry),
+        ):
+            response = await list_vector_stores(user_api_key_dict=self._admin())
+
+        by_id = {vs["vector_store_id"]: vs for vs in response["data"]}
+        assert set(by_id) == {self.CONFIG_ID, self.DB_ID}, response
+        assert (by_id[self.CONFIG_ID]["vector_store_name"], by_id[self.CONFIG_ID]["is_config"]) == ("config-store", True)
+        assert (by_id[self.DB_ID]["vector_store_name"], by_id[self.DB_ID]["is_config"]) == ("db-store", False)
+        assert [vs["vector_store_id"] for vs in registry.vector_stores] == [self.CONFIG_ID, self.DB_ID]
+        assert registry.get_litellm_managed_vector_store_from_registry(self.CONFIG_ID)["vector_store_name"] == "config-store"
+
+    @pytest.mark.asyncio
+    async def test_info_reports_config_ownership(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import get_vector_store_info
+        from litellm.types.vector_stores import VectorStoreInfoRequest
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: proxy_server global, no seam
+            patch.object(litellm, "vector_store_registry", self._registry()),
+        ):
+            config_info = await get_vector_store_info(
+                data=VectorStoreInfoRequest(vector_store_id=self.CONFIG_ID), user_api_key_dict=self._admin()
+            )
+            db_info = await get_vector_store_info(
+                data=VectorStoreInfoRequest(vector_store_id=self.DB_ID), user_api_key_dict=self._admin()
+            )
+
+        assert config_info["vector_store"].is_config is True
+        assert db_info["vector_store"].is_config is False
+
+    @pytest.mark.asyncio
+    async def test_new_with_config_store_id_is_rejected_before_db_write(self):
+        prisma = MagicMock()
+        prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+        prisma.db.litellm_managedvectorstorestable.create = AsyncMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: proxy_server global, no seam
+            patch.object(litellm, "vector_store_registry", self._registry()),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await new_vector_store(
+                vector_store={"vector_store_id": self.CONFIG_ID, "custom_llm_provider": "openai"},
+                user_api_key_dict=self._admin(),
+            )
+
+        assert exc_info.value.status_code == 400, exc_info.value.detail
+        assert exc_info.value.detail["vector_store_id"] == self.CONFIG_ID
+        assert "config file" in exc_info.value.detail["error"]
+        prisma.db.litellm_managedvectorstorestable.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_of_config_store_is_rejected_before_db_write(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+        prisma = MagicMock()
+        prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+        prisma.db.litellm_managedvectorstorestable.update = AsyncMock()
+        registry = self._registry()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: proxy_server global, no seam
+            patch.object(litellm, "vector_store_registry", registry),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await update_vector_store(
+                data=VectorStoreUpdateRequest(vector_store_id=self.CONFIG_ID, vector_store_name="renamed"),
+                user_api_key_dict=self._admin(),
+            )
+
+        assert exc_info.value.status_code == 400, exc_info.value.detail
+        assert exc_info.value.detail["vector_store_id"] == self.CONFIG_ID
+        prisma.db.litellm_managedvectorstorestable.update.assert_not_called()
+        assert registry.get_litellm_managed_vector_store_from_registry(self.CONFIG_ID)["vector_store_name"] == "config-store"
+
+    @pytest.mark.asyncio
+    async def test_delete_of_config_store_is_rejected_and_store_stays_registered(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import delete_vector_store
+        from litellm.types.vector_stores import VectorStoreDeleteRequest
+
+        prisma = MagicMock()
+        prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+        prisma.db.litellm_managedvectorstorestable.delete = AsyncMock()
+        registry = self._registry()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: proxy_server global, no seam
+            patch.object(litellm, "vector_store_registry", registry),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await delete_vector_store(
+                data=VectorStoreDeleteRequest(vector_store_id=self.CONFIG_ID), user_api_key_dict=self._admin()
+            )
+
+        assert exc_info.value.status_code == 400, exc_info.value.detail
+        assert exc_info.value.detail["vector_store_id"] == self.CONFIG_ID
+        prisma.db.litellm_managedvectorstorestable.delete.assert_not_called()
+        assert registry.is_config_vector_store(self.CONFIG_ID) is True
+
+    @pytest.mark.asyncio
+    async def test_delete_of_db_store_still_works(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import delete_vector_store
+        from litellm.types.vector_stores import VectorStoreDeleteRequest
+
+        row = MagicMock()
+        row.model_dump = MagicMock(return_value=self._db_row(self.DB_ID, "db-store"))
+        prisma = MagicMock()
+        prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=row)
+        prisma.db.litellm_managedvectorstorestable.delete = AsyncMock()
+        registry = self._registry()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: proxy_server global, no seam
+            patch.object(litellm, "vector_store_registry", registry),
+        ):
+            response = await delete_vector_store(
+                data=VectorStoreDeleteRequest(vector_store_id=self.DB_ID), user_api_key_dict=self._admin()
+            )
+
+        assert response["status"] == "success", response
+        prisma.db.litellm_managedvectorstorestable.delete.assert_awaited_once_with(where={"vector_store_id": self.DB_ID})
+        assert registry.get_litellm_managed_vector_store_from_registry(self.DB_ID) is None

@@ -1,10 +1,15 @@
+import base64
+import io
 import json
+import sys
 from litellm._uuid import uuid
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
-
+import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.ollama.completion.transformation import (
     OllamaConfig,
     OllamaTextCompletionResponseIterator,
@@ -502,3 +507,114 @@ class TestOllamaTextCompletionResponseIterator:
         assert result["usage"]["prompt_tokens"] == 10
         assert result["usage"]["completion_tokens"] == 5
         assert result["usage"]["total_tokens"] == 15
+
+
+async def test_ollama_async_completion_inlines_remote_images_off_the_event_loop(async_only_image_fetch):
+    image_url = f"https://img.example/{uuid.uuid4()}.png"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "model": "llava",
+                "response": "Green",
+                "done": True,
+                "prompt_eval_count": 1,
+                "eval_count": 1,
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="ollama/llava",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colour is this?"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            }
+        ],
+        api_base="http://ollama.example:11434",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "Green"
+    assert async_only_image_fetch.fetched == [image_url]
+    assert captured["body"]["images"] == [async_only_image_fetch.base64_png]
+
+
+def _image_base64(image_format: str) -> str:
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (4, 4), "green").save(buffer, image_format)
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
+def _transform_image_request(image_base64: str, mime_subtype: str) -> dict:
+    return OllamaConfig().transform_request(
+        model="llava",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colour is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/{mime_subtype};base64,{image_base64}"},
+                    },
+                ],
+            }
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize("image_format", ["PNG", "JPEG"])
+def test_transform_request_sends_png_and_jpeg_images_without_pillow(
+    image_format: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image_base64 = _image_base64(image_format)
+    monkeypatch.setitem(sys.modules, "PIL", None)
+
+    data = _transform_image_request(image_base64, image_format.lower())
+
+    assert data["images"] == [image_base64]
+
+
+def test_transform_request_without_pillow_says_how_to_convert_other_image_formats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gif_base64 = _image_base64("GIF")
+    monkeypatch.setitem(sys.modules, "PIL", None)
+
+    with pytest.raises(Exception, match="pip install Pillow"):
+        _transform_image_request(gif_base64, "gif")
+
+
+def test_transform_request_reencodes_other_image_formats_as_jpeg() -> None:
+    from PIL import Image
+
+    data = _transform_image_request(_image_base64("GIF"), "gif")
+
+    (encoded,) = data["images"]
+    assert Image.open(io.BytesIO(base64.b64decode(encoded))).format == "JPEG"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [base64.b64encode(b"not an image").decode("utf-8"), "abc"],
+    ids=["decodable_but_not_an_image", "invalid_base64"],
+)
+def test_transform_request_leaves_unreadable_images_untouched(payload: str) -> None:
+    data = _transform_image_request(payload, "png")
+
+    assert data["images"] == [payload]

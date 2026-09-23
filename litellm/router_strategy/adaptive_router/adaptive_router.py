@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import OrderedDict
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, Final, cast
 
@@ -122,8 +123,13 @@ class AdaptiveRouter:
                 prefs = self.model_to_prefs.get(model) or _default_prefs()
                 self._cells[(rt, model)] = initial_cell(prefs, rt)
 
-    async def load_state_from_db(self, prisma_client: Any) -> None:
-        """Override cold-start cells with persisted state. Called once at startup."""
+    async def load_state_from_db(self, prisma_client: object) -> None:
+        """Add each row's persisted delta to a freshly computed cold-start prior.
+
+        A row holds an accumulated delta, not a full posterior, and can be one-sided
+        (e.g. beta=0) - assigning it straight into the cell would zero out a Beta shape
+        parameter and crash thompson_sample() on every later draw for that cell.
+        """
         if prisma_client is None:
             return
         try:
@@ -139,7 +145,12 @@ class AdaptiveRouter:
                     continue
                 if row.model_name not in self.config.available_models:
                     continue
-                self._cells[(rt, row.model_name)] = BanditCell(alpha=row.alpha, beta=row.beta)
+                prefs = self.model_to_prefs.get(row.model_name) or _default_prefs()
+                prior = initial_cell(prefs, rt)
+                self._cells[(rt, row.model_name)] = BanditCell(
+                    alpha=prior.alpha + row.alpha,
+                    beta=prior.beta + row.beta,
+                )
                 loaded += 1
             verbose_router_logger.info(
                 "AdaptiveRouter[%s]: loaded %d cells from DB",
@@ -227,7 +238,7 @@ class AdaptiveRouter:
             cost_weight=self.config.weights.cost,
         )
 
-    async def get_state_snapshot(self) -> dict[str, Any]:
+    async def get_state_snapshot(self) -> dict[str, object]:
         """In-memory snapshot for the introspection endpoint. Cheap; no DB hit."""
         cells: Final = []
         for (rt, model), cell in sorted(self._cells.items(), key=lambda kv: (kv[0][0].value, kv[0][1])):
@@ -268,7 +279,7 @@ class AdaptiveRouter:
 
     @staticmethod
     def _extract_min_quality_tier(
-        request_kwargs: dict[str, Any],
+        request_kwargs: Mapping[str, object],
     ) -> int | None:
         """Pull `min_quality_tier` from request headers or metadata.
 
@@ -451,6 +462,8 @@ class AdaptiveRouter:
                 if d_alpha == 0 and d_beta == 0:
                     continue
                 cell_key = (attribution_type, target_model)
+                if cell_key not in self._cells:
+                    continue
                 self._cells[cell_key] = apply_delta(
                     self._cells[cell_key],
                     d_alpha,
@@ -474,7 +487,7 @@ class AdaptiveRouter:
             return combined_delta
 
     @staticmethod
-    def _persistable_session_snapshot(state: SessionState) -> dict[str, Any]:
+    def _persistable_session_snapshot(state: SessionState) -> dict[str, object]:
         snapshot: Final = asdict(state)
         for sensitive in (
             "last_user_content",

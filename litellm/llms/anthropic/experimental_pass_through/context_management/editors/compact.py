@@ -20,6 +20,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.types.llms.anthropic import (
     AppliedEdit,
     CompactionBlock,
@@ -77,6 +78,7 @@ _PROPAGATED_METADATA_KEYS: Final = (
     "user_api_key_end_user_id",
     "user_api_end_user_max_budget",
     "user_api_key_model_max_budget",
+    "user_api_key_team_model_max_budget",
     "user_api_key_user_model_max_budget",
     "user_api_key_end_user_model_max_budget",
     "litellm_call_id",
@@ -206,9 +208,12 @@ async def _check_summary_model_access(
     (``ProxyException`` from ``_can_object_call_model`` / ``can_*_model``).
     Unexpected errors during an access check fail closed but are logged
     separately so operators can distinguish them from a real access-denied
-    response. DB-lookup failures (object missing from cache or DB) skip the
-    corresponding scope — matching ``common_checks``, which only enforces a
-    scope when its backing object can be loaded.
+    response. User and project lookup failures (object missing from cache or
+    DB) skip the corresponding scope — matching ``common_checks``, which only
+    enforces a scope when its backing object can be loaded. A failed team
+    membership read (a database outage) fails closed instead, since a member
+    whose limits cannot be read must not have the summary model invoked with
+    those limits dropped.
     """
     if user_api_key_auth is None:
         return True
@@ -344,13 +349,12 @@ async def _check_summary_model_access(
                 proxy_logging_obj=proxy_logging_obj,
             )
         except Exception as e:
-            verbose_logger.debug(
-                "compact_20260112: team membership lookup failed for "
-                "summary_model=%s access check; skipping member-level scope: %s",
+            verbose_logger.warning(
+                "compact_20260112: team membership lookup failed for summary_model=%s access check; denying access: %s",
                 summary_model,
                 e,
             )
-            team_membership = None
+            return False
         member_allowed_models: Final = (
             team_membership.litellm_budget_table.allowed_models
             if team_membership is not None and team_membership.litellm_budget_table is not None
@@ -394,9 +398,9 @@ async def _check_summary_model_budget(
     ``user_api_key_auth`` runs for the client-requested model. Returns True outside the proxy or when no
     per-model budget is configured.
 
-    All three scopes are checked because the summary's spend is charged to all
-    three: this file propagates the key, user and end-user budgets into the
-    subrequest's metadata, so enforcing only two of them would let compaction
+    Every scope is checked because the summary's spend is charged to every
+    scope: this file propagates the key, team, user and end-user budgets into the
+    subrequest's metadata, so skipping one of them would let compaction
     increment a counter it can never be refused by.
     """
     if user_api_key_auth is None:
@@ -438,6 +442,26 @@ async def _check_summary_model_budget(
         except Exception as e:  # noqa: BLE001  # a budget gate denies on any failure, as the key and end-user scopes do
             verbose_logger.warning(
                 "compact_20260112: unexpected error during user model-budget check for summary_model=%s; denying: %s",
+                summary_model,
+                e,
+            )
+            return False
+
+    team_model_max_budget: Final = user_api_key_auth.team_model_max_budget
+    team_id: Final = user_api_key_auth.team_id
+    if isinstance(team_model_max_budget, dict) and team_model_max_budget and team_id is not None:
+        try:
+            await model_max_budget_limiter.is_team_within_model_budget(
+                team_id=team_id,
+                team_model_max_budget=team_model_max_budget,
+                key_model_max_budget=model_max_budget if isinstance(model_max_budget, dict) else None,
+                model=summary_model,
+            )
+        except litellm.BudgetExceededError:
+            return False
+        except Exception as e:  # noqa: BLE001  # a budget gate denies on any failure, as the other scopes do
+            verbose_logger.warning(
+                "compact_20260112: unexpected error during team model-budget check for summary_model=%s; denying: %s",
                 summary_model,
                 e,
             )
@@ -743,7 +767,8 @@ def _count_effective_tokens(
             messages=cast(
                 "list[AllAnthropicPassThroughMessageValues]",
                 messages_without_compaction,
-            )
+            ),
+            preserve_midturn_system=True,
         )
     except Exception as e:
         verbose_logger.debug(
@@ -898,7 +923,8 @@ def _build_summary_messages(
             messages=cast(
                 "list[AllAnthropicPassThroughMessageValues]",
                 stripped,
-            )
+            ),
+            preserve_midturn_system=True,
         )
     except Exception as e:
         verbose_logger.warning(
@@ -1157,7 +1183,7 @@ async def apply_compact_20260112(
 
     # Phase B: threshold check.
     try:
-        current_tokens = _count_effective_tokens(
+        current_tokens = await asyncify(_count_effective_tokens)(
             model=model,
             effective_messages=effective_messages,
             # ``augmented_system`` already carries the prior compaction summary

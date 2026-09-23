@@ -4,6 +4,7 @@ Translating between OpenAI's `/chat/completion` format and Amazon's `/converse` 
 
 import copy
 import json
+import re
 import time
 import types
 from collections.abc import Mapping
@@ -47,11 +48,13 @@ from litellm.llms.bedrock.request_metadata import (
     merge_bedrock_invoke_headers,
     resolve_bedrock_request_metadata,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAnnotation,
     ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
@@ -96,7 +99,7 @@ from ..common_utils import (
 )
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 # Computer use tool prefixes supported by Bedrock
 BEDROCK_COMPUTER_USE_TOOLS: Final = [
@@ -105,6 +108,7 @@ BEDROCK_COMPUTER_USE_TOOLS: Final = [
     "bash_",
     "text_editor_",
 ]
+BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS: Final = 16
 
 # Beta header patterns that are not supported by Bedrock Converse API
 # These will be filtered out to prevent errors
@@ -204,6 +208,84 @@ class AmazonConverseConfig(BaseConfig):
 
         return messages_copy
 
+    @staticmethod
+    def _has_orphaned_tool_blocks(messages: list[AllMessageValues]) -> bool:
+        return any(
+            (m.get("role") == "assistant" and m.get("tool_calls")) or m.get("role") in ("tool", "function")
+            for m in messages
+        )
+
+    @staticmethod
+    def _neutralize_orphaned_tool_blocks(
+        messages: list[AllMessageValues], optional_params: dict
+    ) -> list[AllMessageValues]:
+        if optional_params.get("tools") or not AmazonConverseConfig._has_orphaned_tool_blocks(messages):
+            return messages
+
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            convert_content_list_to_str,
+        )
+
+        def _tool_call_text(tool_call: ChatCompletionAssistantToolCall) -> str:
+            function = tool_call.get("function") or {}
+            name = function.get("name") or "unknown_tool"
+            arguments = function.get("arguments") or ""
+            call_id = tool_call.get("id")
+            label = f"tool call {call_id}" if call_id else "tool call"
+            return f"[{label}: {name}({arguments})]"
+
+        def _result_text(message: AllMessageValues) -> str:
+            rendered = convert_content_list_to_str(message).strip()
+            return rendered or "<non-text tool result omitted>"
+
+        guardrail_active: Final = "guardrailConfig" in optional_params
+
+        def _rewrite(message: AllMessageValues) -> AllMessageValues:
+            role = message.get("role")
+            tool_calls = message.get("tool_calls")
+            if role == "assistant" and tool_calls:
+                base_text: Final = convert_content_list_to_str(message)
+                call_texts: Final = tuple(_tool_call_text(call) for call in tool_calls)
+                text: Final = "\n".join(part for part in (base_text, *call_texts) if part)
+                return ChatCompletionAssistantMessage(role="assistant", content=text)
+            if role in ("tool", "function"):
+                tool_call_id = message.get("tool_call_id")
+                name = message.get("name")
+                label = f"tool result for {tool_call_id or name or 'unknown'}"
+                result_text: Final = f"[{label}: {_result_text(message)}]"
+                # Tool results are externally controlled, so guard them wherever they
+                # land in history; _convert_consecutive_user_messages_to_guarded_text
+                # only covers the trailing user turn.
+                content: Final = [{"type": "guarded_text", "text": result_text}] if guardrail_active else result_text
+                return ChatCompletionUserMessage(role="user", content=content)
+            return message
+
+        verbose_logger.warning(
+            "litellm.bedrock: request has tool blocks in message history but no "
+            "`tools=` param; neutralizing orphaned tool blocks to text so Bedrock "
+            "accepts the request without a toolConfig. Non-text tool-result "
+            "payloads are dropped. Pass `tools=` to preserve structured tool calling."
+        )
+        return [_rewrite(message) for message in messages]
+
+    @staticmethod
+    def _handle_orphaned_tool_blocks(messages: list[AllMessageValues], optional_params: dict) -> list[AllMessageValues]:
+        if litellm.bedrock_neutralize_orphaned_tool_blocks:
+            return AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params)
+
+        if "tools" in optional_params or not has_tool_call_blocks(messages):
+            return messages
+
+        if litellm.modify_params:
+            optional_params["tools"] = add_dummy_tool(custom_llm_provider="bedrock_converse")
+            return messages
+
+        raise litellm.utils.UnsupportedParamsError(
+            message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
+            model="",
+            llm_provider="bedrock",
+        )
+
     @classmethod
     def get_config(cls):
         return {
@@ -292,6 +374,14 @@ class AmazonConverseConfig(BaseConfig):
                     model="bedrock",
                     llm_provider="bedrock",
                 )
+
+    @staticmethod
+    def _is_openai_gpt_reasoning_model(model: str) -> bool:
+        return re.search(r"openai\.gpt-\d", model) is not None
+
+    @staticmethod
+    def _requires_min_max_tokens(model: str) -> bool:
+        return re.search(r"openai\.gpt-\d|xai\.grok-", model) is not None
 
     def _is_nova_2_model(self, model: str) -> bool:
         """
@@ -422,15 +512,15 @@ class AmazonConverseConfig(BaseConfig):
         """
         Handle the reasoning_effort parameter based on the model type.
 
-        - GPT-OSS models: passed through unchanged via additionalModelRequestFields.
-        - OpenAI GPT-5.x models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
+        - GPT-OSS and DeepSeek V3 models: passed through unchanged via additionalModelRequestFields.
+        - OpenAI GPT-5.x and GPT-6 models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
         - Nova 2 models: transformed to reasoningConfig.
         - Anthropic models: mapped to ``thinking`` (and ``output_config.effort`` on
           adaptive Claude 4.6 / 4.7).
         """
-        if "gpt-oss" in model:
+        if "gpt-oss" in model or "deepseek" in model:
             optional_params["reasoning_effort"] = reasoning_effort
-        elif "openai.gpt-5" in model:
+        elif self._is_openai_gpt_reasoning_model(model):
             reasoning: Final[BedrockConverseGptReasoningEffortBlock] = {"effort": reasoning_effort}
             optional_params["reasoning"] = reasoning
         elif self._is_nova_2_model(model):
@@ -509,17 +599,64 @@ class AmazonConverseConfig(BaseConfig):
                 )
                 thinking["budget_tokens"] = BEDROCK_MIN_THINKING_BUDGET_TOKENS
 
+    def _is_deepseek_model(self, model: str, base_model: str) -> bool:
+        return "deepseek" in model or "deepseek" in base_model
+
+    def _is_deepseek_r1_model(self, model: str, base_model: str) -> bool:
+        return "deepseek.r1" in model or "deepseek.r1" in base_model
+
+    def _model_accepts_anthropic_thinking_param(self, model: str, base_model: str) -> bool:
+        """Whether the model accepts the Anthropic-shaped ``thinking`` request field.
+
+        Only Claude reasoning models accept it. DeepSeek advertises ``supports_reasoning`` but reasons
+        natively: R1 returns a 400 when the field is sent and V3 silently ignores it.
+        """
+        if self._is_deepseek_model(model=model, base_model=base_model):
+            return False
+        return (
+            "claude-3-7" in model
+            or "claude-sonnet-4" in model
+            or "claude-opus-4" in model
+            or supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)
+            or supports_reasoning(model=base_model, custom_llm_provider=self.custom_llm_provider)
+        )
+
+    def _model_rejects_reasoning_effort_param(self, model: str, base_model: str) -> bool:
+        """Whether the model returns a 400 for every ``reasoning_effort`` shape on Converse.
+
+        DeepSeek R1 always reasons and rejects any reasoning request field. DeepSeek V3 accepts a raw
+        ``reasoning_effort`` like gpt-oss does, and every other model maps it to a shape it accepts.
+        """
+        return self._is_deepseek_r1_model(model=model, base_model=base_model)
+
+    @classmethod
+    def _supports_sampling_params(cls, model: str) -> bool:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        base_model: Final = BedrockModelInfo.get_base_model(model)
+        if base_model.startswith("anthropic"):
+            return True
+        candidates: Final = (model, *(f"{prefix}{base_model}" for prefix in ("global.", "us.", "eu.")))
+        for candidate in candidates:
+            if (
+                flag := AnthropicModelInfo._get_model_capability(  # pyright: ignore[reportPrivateUsage]  # Shared API
+                    candidate, "supports_sampling_params"
+                )
+            ) is not None:
+                return flag
+        return True
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         from litellm.utils import supports_function_calling
 
+        supports_sampling: Final = self._supports_sampling_params(model)
         supported_params: Final = [
             "max_tokens",
             "max_completion_tokens",
             "stream",
             "stream_options",
             "stop",
-            "temperature",
-            "top_p",
+            *(("temperature", "top_p") if supports_sampling else ()),
             "extra_headers",
             "response_format",
             "requestMetadata",
@@ -564,23 +701,20 @@ class AmazonConverseConfig(BaseConfig):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
-        if "gpt-oss" in model or "openai.gpt-5" in model or "openai.gpt-5" in base_model:
+        if (
+            "gpt-oss" in model
+            or self._is_openai_gpt_reasoning_model(model)
+            or self._is_openai_gpt_reasoning_model(base_model)
+        ):
             supported_params.append("reasoning_effort")
+        elif self._is_deepseek_model(model=model, base_model=base_model):
+            if not self._is_deepseek_r1_model(model=model, base_model=base_model):
+                supported_params.append("reasoning_effort")
         elif self._is_nova_2_model(model):
             # Nova 2 models support reasoning_effort (transformed to reasoningConfig)
             # These models use a different reasoning structure than Anthropic's thinking parameter
             supported_params.append("reasoning_effort")
-        elif (
-            "claude-3-7" in model
-            or "claude-sonnet-4" in model
-            or "claude-opus-4" in model
-            or "deepseek.r1" in model
-            or supports_reasoning(
-                model=model,
-                custom_llm_provider=self.custom_llm_provider,
-            )
-            or supports_reasoning(model=base_model, custom_llm_provider=self.custom_llm_provider)
-        ):
+        elif self._model_accepts_anthropic_thinking_param(model=model, base_model=base_model):
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
             supported_params.append("output_config")
@@ -872,6 +1006,11 @@ class AmazonConverseConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:
         is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
+        base_model: Final = BedrockModelInfo.get_base_model(model)
+        drop_thinking_param: Final = self._is_deepseek_model(model=model, base_model=base_model)
+        drop_reasoning_effort_param: Final = self._model_rejects_reasoning_effort_param(
+            model=model, base_model=base_model
+        )
 
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
@@ -883,7 +1022,11 @@ class AmazonConverseConfig(BaseConfig):
                     is_thinking_enabled=is_thinking_enabled,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["maxTokens"] = value
+                optional_params["maxTokens"] = (
+                    max(value, BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS)
+                    if isinstance(value, int) and self._requires_min_max_tokens(model)
+                    else value
+                )
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":
@@ -893,14 +1036,26 @@ class AmazonConverseConfig(BaseConfig):
                     value = [value]
                 optional_params["stopSequences"] = value
             if param == "temperature" or param == "top_p":
-                AnthropicConfig._apply_sampling_param(
-                    optional_params=optional_params,
-                    model=model,
-                    param=param,
-                    value=value,
-                    drop_params=drop_params,
-                    output_key="topP" if param == "top_p" else param,
-                )
+                if base_model.startswith("anthropic"):
+                    AnthropicConfig._apply_sampling_param(
+                        optional_params=optional_params,
+                        model=model,
+                        param=param,
+                        value=value,
+                        drop_params=drop_params,
+                        output_key="topP" if param == "top_p" else param,
+                    )
+                elif not self._supports_sampling_params(model):
+                    if not (litellm.drop_params or drop_params):
+                        raise litellm.utils.UnsupportedParamsError(
+                            message=(
+                                f"{model} does not support {param}={value}. "
+                                "To drop unsupported params, set `litellm.drop_params = True`."
+                            ),
+                            status_code=400,
+                        )
+                else:
+                    optional_params["topP" if param == "top_p" else param] = value
             if param == "tools" and isinstance(value, list):
                 self._apply_tool_call_transformation(
                     tools=cast(list[OpenAIChatCompletionToolParam], value),
@@ -920,7 +1075,12 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params["_parallel_tool_use_config"] = {
                     "tool_choice": {"type": "auto", "disable_parallel_tool_use": not value}
                 }
-            if param == "thinking" and "openai.gpt-5" not in model:
+            if param == "thinking" and drop_thinking_param:
+                verbose_logger.debug(
+                    "Dropping unsupported `thinking` param for Bedrock model=%s; it reasons natively.",
+                    model,
+                )
+            elif param == "thinking" and not self._is_openai_gpt_reasoning_model(model):
                 if (
                     isinstance(value, dict)
                     and value.get("type") == "adaptive"
@@ -946,6 +1106,11 @@ class AmazonConverseConfig(BaseConfig):
                     AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
                         model=model, optional_params=optional_params, custom_llm_provider="bedrock"
                     )
+            elif param == "reasoning_effort" and isinstance(value, str) and drop_reasoning_effort_param:
+                verbose_logger.debug(
+                    "Dropping unsupported `reasoning_effort` param for Bedrock model=%s; it always reasons and rejects it.",
+                    model,
+                )
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params
@@ -990,7 +1155,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return optional_params
 
-    def _map_request_metadata_param(self, value: Any, optional_params: dict) -> None:
+    def _map_request_metadata_param(self, value: object, optional_params: dict) -> None:
         if value is not None and isinstance(value, dict):
             self._validate_request_metadata(value)
             optional_params["requestMetadata"] = value
@@ -1391,12 +1556,6 @@ class AmazonConverseConfig(BaseConfig):
         """Process tools and collect anthropic_beta values."""
         bedrock_tools: list[ToolBlock] = []
 
-        # Collect anthropic_beta values from user headers
-        anthropic_beta_list: Final = []
-        if headers:
-            user_betas: Final = get_anthropic_beta_from_headers(headers)
-            anthropic_beta_list.extend(user_betas)
-
         # Separate pre-formatted Bedrock tools (e.g. systemTool from web_search_options)
         # from OpenAI-format tools that need transformation via _bedrock_tools_pt
         filtered_tools: Final = []
@@ -1415,6 +1574,17 @@ class AmazonConverseConfig(BaseConfig):
                     # Tool search not supported in Converse API - skip it
                     continue
                 filtered_tools.append(tool)
+
+        base_model: Final = BedrockModelInfo.get_base_model(model)
+        client_beta_list: Final = get_anthropic_beta_from_headers(headers or {})
+        eager_beta: Final = (
+            (ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,)
+            if base_model.startswith("anthropic")
+            and AnthropicModelInfo().is_eager_input_streaming_used(filtered_tools)
+            and ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER not in client_beta_list
+            else ()
+        )
+        anthropic_beta_list: Final = [*client_beta_list, *eager_beta]
 
         # Only separate tools if computer use tools are actually present
         if filtered_tools and self.is_computer_use_tool_used(filtered_tools, model):
@@ -1493,7 +1663,6 @@ class AmazonConverseConfig(BaseConfig):
 
         # Opus 4.5 gates ``output_config.effort`` behind a beta header;
         # Claude 4.6/4.7 accept it without one.
-        base_model: Final = BedrockModelInfo.get_base_model(model)
         if base_model.startswith("anthropic"):
             output_config: Final = additional_request_params.get("output_config")
             if (
@@ -1562,20 +1731,6 @@ class AmazonConverseConfig(BaseConfig):
         drop_params: bool = False,
         litellm_params: Mapping[str, object] | None = None,
     ) -> CommonRequestObject:
-        ## VALIDATE REQUEST
-        """
-        Bedrock doesn't support tool calling without `tools=` param specified.
-        """
-        if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
-            if litellm.modify_params:
-                optional_params["tools"] = add_dummy_tool(custom_llm_provider="bedrock_converse")
-            else:
-                raise litellm.UnsupportedParamsError(
-                    message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
-                    model="",
-                    llm_provider="bedrock",
-                )
-
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
         # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
         #
@@ -1688,7 +1843,9 @@ class AmazonConverseConfig(BaseConfig):
         messages, system_content_blocks = self._transform_system_message(messages, model=model)
 
         # Convert last user message to guarded_text if guardrailConfig is present
-        messages = self._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+        messages = self._convert_consecutive_user_messages_to_guarded_text(
+            self._handle_orphaned_tool_blocks(messages, optional_params), optional_params
+        )
         ## TRANSFORMATION ##
 
         _data: Final[CommonRequestObject] = self._transform_request_helper(
@@ -1749,7 +1906,9 @@ class AmazonConverseConfig(BaseConfig):
         messages, system_content_blocks = self._transform_system_message(messages, model=model)
 
         # Convert last user message to guarded_text if guardrailConfig is present
-        messages = self._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+        messages = self._convert_consecutive_user_messages_to_guarded_text(
+            self._handle_orphaned_tool_blocks(messages, optional_params), optional_params
+        )
 
         _data: Final[CommonRequestObject] = self._transform_request_helper(
             model=model,
@@ -1790,7 +1949,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -1805,6 +1964,7 @@ class AmazonConverseConfig(BaseConfig):
             data=request_data,
             messages=messages,
             encoding=encoding,
+            json_mode=json_mode,
         )
 
     def _transform_reasoning_content(self, reasoning_content_blocks: list[BedrockConverseReasoningContentBlock]) -> str:
@@ -1854,7 +2014,7 @@ class AmazonConverseConfig(BaseConfig):
             return None
         tokens_5m: Final = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "5m")
         tokens_1h: Final = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "1h")
-        if tokens_5m + tokens_1h != usage.get("cacheWriteInputTokens", 0):
+        if tokens_5m + tokens_1h != AmazonConverseConfig._cache_write_count(usage):
             return None
         return CacheCreationTokenDetails(
             ephemeral_5m_input_tokens=tokens_5m,
@@ -1885,6 +2045,15 @@ class AmazonConverseConfig(BaseConfig):
                 return int(value)
         return 0
 
+    @staticmethod
+    def _cache_read_count(usage_object: Mapping[str, object]) -> int:
+        """Converse reports ``cacheReadInputTokens``; InvokeModel reports ``cacheReadInputTokenCount``."""
+        return AmazonConverseConfig._usage_count(usage_object, "cacheReadInputTokens", "cacheReadInputTokenCount")
+
+    @staticmethod
+    def _cache_write_count(usage_object: Mapping[str, object]) -> int:
+        return AmazonConverseConfig._usage_count(usage_object, "cacheWriteInputTokens", "cacheWriteInputTokenCount")
+
     def usage_from_batch_output(self, usage_object: Mapping[str, object]) -> Usage:
         """Read a Converse-shaped usage block out of a batch output line.
 
@@ -1894,8 +2063,8 @@ class AmazonConverseConfig(BaseConfig):
         """
         input_tokens: Final = self._usage_count(usage_object, "inputTokens")
         output_tokens: Final = self._usage_count(usage_object, "outputTokens")
-        cache_read: Final = self._usage_count(usage_object, "cacheReadInputTokens", "cacheReadInputTokenCount")
-        cache_write: Final = self._usage_count(usage_object, "cacheWriteInputTokens", "cacheWriteInputTokenCount")
+        cache_read: Final = self._cache_read_count(usage_object)
+        cache_write: Final = self._cache_write_count(usage_object)
         return self.transform_usage(
             ConverseTokenUsageBlock(
                 inputTokens=input_tokens,
@@ -1915,19 +2084,12 @@ class AmazonConverseConfig(BaseConfig):
         thinking_ran: bool = False,
         provider_reasoning_tokens: int | None = None,
     ) -> Usage:
-        input_tokens = usage["inputTokens"]
+        raw_input_tokens: Final = usage["inputTokens"]
         output_tokens: Final = usage["outputTokens"]
-        total_tokens: Final = usage["totalTokens"]
-        cache_creation_input_tokens: int = 0
-        cache_read_input_tokens: int = 0
-
-        raw_input_tokens: Final = input_tokens  # capture before inflation
-        if "cacheReadInputTokens" in usage:
-            cache_read_input_tokens = usage["cacheReadInputTokens"]
-            input_tokens += cache_read_input_tokens
-        if "cacheWriteInputTokens" in usage:
-            cache_creation_input_tokens = usage["cacheWriteInputTokens"]
-            input_tokens += cache_creation_input_tokens
+        cache_read_input_tokens: Final = self._cache_read_count(usage)
+        cache_creation_input_tokens: Final = self._cache_write_count(usage)
+        input_tokens: Final = raw_input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+        total_tokens: Final = usage.get("totalTokens", input_tokens + output_tokens)
 
         prompt_tokens_details: Final = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
@@ -2237,6 +2399,7 @@ class AmazonConverseConfig(BaseConfig):
         data: dict | str,
         messages: list,
         encoding,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         ## LOGGING
         if logging_obj is not None:
@@ -2247,7 +2410,9 @@ class AmazonConverseConfig(BaseConfig):
                 additional_args={"complete_input_dict": data},
             )
 
-        json_mode: Final[bool | None] = optional_params.get("json_mode", None)
+        resolved_json_mode: Final[bool | None] = (
+            json_mode if json_mode is not None else optional_params.get("json_mode", None)
+        )
         ## RESPONSE OBJECT
         try:
             completion_response: Final = ConverseResponseBlock(**response.json())
@@ -2255,6 +2420,7 @@ class AmazonConverseConfig(BaseConfig):
             raise BedrockError(
                 message=f"Error converting to valid response block={e}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues",
                 status_code=422,
+                headers=response.headers,
             )
 
         """
@@ -2338,7 +2504,7 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["thinking_blocks"] = self._transform_thinking_blocks(reasoningContentBlocks)
         chat_completion_message["content"] = content_str
         filtered_tools: Final = self._filter_json_mode_tools(
-            json_mode=json_mode,
+            json_mode=resolved_json_mode,
             tools=tools,
             chat_completion_message=chat_completion_message,
         )
@@ -2362,7 +2528,7 @@ class AmazonConverseConfig(BaseConfig):
         # When json_mode filtered out all synthetic tool calls the response
         # is plain content, not a pending tool invocation. Fix finish_reason
         # so callers (e.g. OpenAI SDK) don't misinterpret it.
-        if json_mode and not filtered_tools and tools:
+        if resolved_json_mode and not filtered_tools and tools:
             initial_finish_reason = "stop"
 
         (

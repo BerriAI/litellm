@@ -14,6 +14,17 @@ query-filters:
       id: py/clear-text-logging-sensitive-data  # CWE-312
   - exclude:
       id: py/polynomial-redos                   # CWE-730
+  # Import resolution confuses stdlib types with management_endpoints/types.py.
+  # The generic cycle query also reports intentional deferred imports.
+  - exclude:
+      id: py/cyclic-import
+  - exclude:
+      id: py/unsafe-cyclic-import
+  # Known false positives on live settings and Protocol placeholders.
+  - exclude:
+      id: py/unused-global-variable
+  - exclude:
+      id: py/ineffectual-statement
 
 paths-ignore:
   - tests

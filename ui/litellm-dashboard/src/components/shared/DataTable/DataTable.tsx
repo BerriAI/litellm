@@ -16,6 +16,7 @@ import {
   getSortedRowModel,
   type Header,
   type OnChangeFn,
+  type PaginationState,
   type Row,
   type RowData,
   type RowSelectionState,
@@ -26,7 +27,7 @@ import {
 } from "@tanstack/react-table";
 import { SearchX } from "lucide-react";
 import * as React from "react";
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -93,6 +94,13 @@ function derivePinning<TData, TValue>(columns: ColumnDef<TData, TValue>[]): Colu
       .map(columnDefId)
       .filter((id): id is string => id !== undefined);
   return { left: collect("left"), right: collect("right") };
+}
+
+function columnCanGlobalFilter<TData>(firstRow: TData | undefined, column: Column<TData, unknown>): boolean {
+  if (column.columnDef.enableGlobalFilter === true) return true;
+  if (firstRow === undefined || column.accessorFn === undefined) return false;
+  const firstValue: unknown = column.accessorFn(firstRow, 0);
+  return typeof firstValue === "string" || typeof firstValue === "number";
 }
 
 function buildRowModels<TData>(
@@ -417,6 +425,21 @@ function useControllable<T>(
   return { value: internal, onChange: setInternal };
 }
 
+function usePageClamp(
+  active: boolean,
+  rowCount: number | undefined,
+  pagination: { value: PaginationState; onChange: OnChangeFn<PaginationState> },
+): void {
+  const { pageIndex, pageSize } = pagination.value;
+  const { onChange } = pagination;
+  useEffect(() => {
+    if (!active || rowCount === undefined) return;
+    const lastPageIndex = Math.max(Math.ceil(rowCount / pageSize) - 1, 0);
+    if (pageIndex <= lastPageIndex) return;
+    onChange({ pageIndex: lastPageIndex, pageSize });
+  }, [active, rowCount, pageIndex, pageSize, onChange]);
+}
+
 function useDataTableInstance<TData extends RowData, TValue>(
   props: DataTableResolvedProps<TData, TValue>,
 ): Table<TData> {
@@ -433,6 +456,8 @@ function useDataTableInstance<TData extends RowData, TValue>(
     pagination,
     onPaginationChange,
     rowCount,
+    isLoading = false,
+    isError,
     pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS,
     filterMode = "none",
     columnFilters,
@@ -442,6 +467,8 @@ function useDataTableInstance<TData extends RowData, TValue>(
     onGlobalFilterChange,
     enableColumnResizing = false,
     columnResizeMode = "onEnd",
+    columnVisibility,
+    onColumnVisibilityChange,
     defaultColumnVisibility,
     getRowCanExpand,
     renderSubComponent,
@@ -465,7 +492,11 @@ function useDataTableInstance<TData extends RowData, TValue>(
   const globalFilterState = useControllable<string>(globalFilter, onGlobalFilterChange, "");
   const expandedState = useControllable<ExpandedState>(expanded, onExpandedChange, {});
   const rowSelectionState = useControllable<RowSelectionState>(rowSelection, onRowSelectionChange, {});
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(defaultColumnVisibility ?? {});
+  const columnVisibilityState = useControllable<VisibilityState>(
+    columnVisibility,
+    onColumnVisibilityChange,
+    defaultColumnVisibility ?? {},
+  );
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const columnPinning = React.useMemo(() => derivePinning(columns), [columns]);
   const expansionGuard = renderSubComponent !== undefined ? getRowCanExpand : undefined;
@@ -480,7 +511,7 @@ function useDataTableInstance<TData extends RowData, TValue>(
       globalFilter: globalFilterState.value,
       expanded: expandedState.value,
       rowSelection: rowSelectionState.value,
-      columnVisibility,
+      columnVisibility: columnVisibilityState.value,
       columnSizing,
     },
     initialState: { columnPinning },
@@ -496,16 +527,46 @@ function useDataTableInstance<TData extends RowData, TValue>(
     onGlobalFilterChange: globalFilterState.onChange,
     onExpandedChange: expandedState.onChange,
     onRowSelectionChange: rowSelectionState.onChange,
-    onColumnVisibilityChange: setColumnVisibility,
+    onColumnVisibilityChange: columnVisibilityState.onChange,
     onColumnSizingChange: setColumnSizing,
+    getColumnCanGlobalFilter: (column) => columnCanGlobalFilter(data[0], column),
     getCoreRowModel: getCoreRowModel(),
     ...buildRowModels(sortingMode, paginationMode, filterMode, expansionGuard),
     ...(getRowId !== undefined ? { getRowId } : {}),
     ...(enableRowSelection !== undefined ? { enableRowSelection } : {}),
     ...(paginationMode === "server" && rowCount !== undefined ? { rowCount } : {}),
+    autoResetPageIndex: pagination === undefined && paginationMode !== "server",
   };
 
-  return useReactTable(tableOptions);
+  const table = useReactTable(tableOptions);
+  const clampOptions: SettledPageClampOptions = {
+    paginationMode,
+    controlled: pagination !== undefined,
+    settled: !isLoading && !isError,
+    rowCount,
+    pagination: paginationState,
+  };
+  useSettledPageClamp(table, clampOptions);
+  return table;
+}
+
+type SettledPageClampOptions = {
+  paginationMode: PaginationMode;
+  controlled: boolean;
+  settled: boolean;
+  rowCount: number | undefined;
+  pagination: { value: PaginationState; onChange: OnChangeFn<PaginationState> };
+};
+
+function useSettledPageClamp<TData extends RowData>(table: Table<TData>, options: SettledPageClampOptions): void {
+  const { paginationMode, controlled, settled, rowCount, pagination } = options;
+  const clientRowCount = paginationMode === "client" ? table.getPrePaginationRowModel().rows.length : 0;
+  const clientPageIsClampable = paginationMode === "client" && controlled && clientRowCount > 0;
+  usePageClamp(
+    settled && (paginationMode === "server" || clientPageIsClampable),
+    paginationMode === "server" ? rowCount : clientRowCount,
+    pagination,
+  );
 }
 
 export function DataTable<TData extends RowData, TValue>(props: DataTableProps<TData, TValue>) {

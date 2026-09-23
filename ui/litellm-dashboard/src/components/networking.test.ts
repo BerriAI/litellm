@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import * as Networking from "./networking";
-import { migratedHref } from "@/utils/migratedPages";
+import { uiHref } from "@/utils/uiHref";
 
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
@@ -20,25 +20,39 @@ describe("networking - expired session handling", () => {
     global.fetch = originalFetch;
   });
 
-  it("should call clearTokenCookies on expired session", async () => {
-    const errorData = "Authentication Error - Expired Key";
-    const { toast } = await import("@/lib/toast");
+  const loadFreshHandleError = async () => {
+    vi.resetModules();
+    const fresh = await import("./networking");
+    return fresh.handleError;
+  };
 
-    if (errorData.includes("Authentication Error - Expired Key")) {
-      toast.info("UI Session Expired. Logging out.");
-      clearTokenCookies();
-    }
+  const stubLocation = (pathname: string, search: string, hash: string) => {
+    const location = { pathname, search, hash, href: "" };
+    vi.stubGlobal("window", { location });
+    return location;
+  };
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the query string and hash on the redirect after session expiry", async () => {
+    const handleError = await loadFreshHandleError();
+    const location = stubLocation("/ui/api-keys/", "?filter_team=t1&page=2", "#row-3");
+
+    await handleError("Authentication Error - Expired Key");
+
+    expect(location.href).toBe("/ui/api-keys/?filter_team=t1&page=2#row-3");
     expect(clearTokenCookies).toHaveBeenCalledOnce();
   });
 
-  it("should not clear cookies for non-authentication errors", () => {
-    const errorData = "Some other error";
+  it("does not navigate or clear cookies for other errors", async () => {
+    const handleError = await loadFreshHandleError();
+    const location = stubLocation("/ui/api-keys/", "?filter_team=t1&page=2", "");
 
-    if (errorData.includes("Authentication Error - Expired Key")) {
-      clearTokenCookies();
-    }
+    await handleError("Some other error");
 
+    expect(location.href).toBe("");
     expect(clearTokenCookies).not.toHaveBeenCalled();
   });
 
@@ -392,7 +406,7 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
 
     expect(Networking.serverRootPath).toBe("/litellm");
-    expect(migratedHref("api-reference")).toBe("/litellm/ui/api-reference");
+    expect(uiHref("api-reference")).toBe("/litellm/ui/api-reference");
   });
 });
 
@@ -897,5 +911,28 @@ describe("fetchMemoryList search serialization", () => {
     await Networking.fetchMemoryList("token", { key: "user:profile" });
     expect(lastParams(mockFetch).get("key")).toBe("user:profile");
     expect(lastParams(mockFetch).has("search")).toBe(false);
+  });
+});
+
+describe("userFilterUICall", () => {
+  let currentFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    currentFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = currentFetch;
+  });
+
+  it("forwards the search param to /user/filter/ui", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: async () => "[]" } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.userFilterUICall("sk-test", new URLSearchParams({ search: "svc" }));
+
+    const parsed = new URL(mockFetch.mock.calls[0][0] as string, "http://localhost");
+    expect(parsed.pathname).toContain("/user/filter/ui");
+    expect(parsed.searchParams.get("search")).toBe("svc");
   });
 });

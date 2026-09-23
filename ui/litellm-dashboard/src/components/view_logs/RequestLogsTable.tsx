@@ -4,12 +4,13 @@ import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } fr
 import { ScrollText } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 
+import { useUserEmailLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 import { DataTable, DataTableFilterDrawer, DataTableToolbar } from "@/components/shared/DataTable";
 
 import type { Team } from "../key_team_helpers/key_list";
 import type { LogEntry } from "./columns";
-import { LOGS_PAGE_SIZE_OPTIONS } from "./constants";
-import { LOG_FILTER_LABELS, type LogsWindow } from "./log_filter_logic";
+import { SPAN_TYPE_LABELS } from "./constants";
+import { LOG_FILTER_IDS, LOG_FILTER_LABELS, type LogsWindow } from "./log_filter_logic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
 
@@ -34,6 +35,13 @@ interface RequestLogsTableProps {
   logsWindow: LogsWindow;
   toolbarChildren?: ReactNode;
 }
+
+const formatFilterValue = (columnId: string, value: unknown): string => {
+  if (columnId === LOG_FILTER_IDS.SPAN_TYPE) {
+    return SPAN_TYPE_LABELS[String(value)] ?? String(value);
+  }
+  return Array.isArray(value) ? value.join(", ") : String(value);
+};
 
 function RequestLogsEmptyState({ filtered }: { filtered: boolean }) {
   return (
@@ -74,10 +82,13 @@ export function RequestLogsTable({
 }: RequestLogsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
 
+  const userIds = useMemo(() => data.flatMap((log) => (log.user ? [log.user] : [])), [data]);
+  const { data: emailByUserId } = useUserEmailLookup(userIds);
+
   const columns = useMemo(() => {
-    const deps = { onKeyHashClick, onSessionClick };
-    return getRequestLogsTableColumns(deps);
-  }, [onKeyHashClick, onSessionClick]);
+    const resolveUserEmail = (userId: string) => emailByUserId?.[userId];
+    return getRequestLogsTableColumns({ onKeyHashClick, onSessionClick, resolveUserEmail });
+  }, [onKeyHashClick, onSessionClick, emailByUserId]);
 
   const isFiltered = columnFilters.length > 0 || searchValue !== "";
 
@@ -93,7 +104,6 @@ export function RequestLogsTable({
       paginationMode="server"
       pagination={pagination}
       onPaginationChange={onPaginationChange}
-      pageSizeOptions={LOGS_PAGE_SIZE_OPTIONS}
       rowCount={rowCount}
       filterMode="server"
       columnFilters={columnFilters}
@@ -114,6 +124,7 @@ export function RequestLogsTable({
             isRefreshing={isRefreshing}
             onOpenFilters={() => setFiltersOpen(true)}
             filterLabels={LOG_FILTER_LABELS}
+            formatFilterValue={formatFilterValue}
             showViewOptions={false}
           >
             {toolbarChildren}

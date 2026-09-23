@@ -1,17 +1,16 @@
-
 import httpx
 import openai
 import pytest
 
 import litellm
-
-
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     _get_body_error_code,
+    _get_response_headers,
     exception_type,
     extract_and_raise_litellm_exception,
 )
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.utils import LlmProviders
 
@@ -176,9 +175,7 @@ class TestExceptionCheckers:
         ]
 
         for error_str in error_strings:
-            result = ExceptionCheckers.is_azure_content_policy_violation_error(
-                error_str
-            )
+            result = ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
             assert result is True, f"Should detect policy violation in: {error_str}"
 
     def test_is_azure_content_policy_violation_error_case_insensitive(self):
@@ -192,12 +189,8 @@ class TestExceptionCheckers:
         ]
 
         for error_str in error_strings:
-            result = ExceptionCheckers.is_azure_content_policy_violation_error(
-                error_str
-            )
-            assert (
-                result is True
-            ), f"Should detect policy violation in uppercase: {error_str}"
+            result = ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
+            assert result is True, f"Should detect policy violation in uppercase: {error_str}"
 
     def test_is_azure_content_policy_violation_error_with_non_policy_errors(self):
         """Test that non-policy violation errors are not detected as policy violations"""
@@ -214,12 +207,8 @@ class TestExceptionCheckers:
         ]
 
         for error_str in error_strings:
-            result = ExceptionCheckers.is_azure_content_policy_violation_error(
-                error_str
-            )
-            assert (
-                result is False
-            ), f"Should NOT detect policy violation in: {error_str}"
+            result = ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
+            assert result is False, f"Should NOT detect policy violation in: {error_str}"
 
     def test_is_azure_content_policy_violation_error_with_partial_matches(self):
         """Test that partial keyword matches work correctly"""
@@ -232,9 +221,7 @@ class TestExceptionCheckers:
         ]
 
         for error_str in positive_cases:
-            result = ExceptionCheckers.is_azure_content_policy_violation_error(
-                error_str
-            )
+            result = ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
             assert result is True, f"Should detect policy violation in: {error_str}"
 
         # These should not match even though they contain similar words
@@ -246,12 +233,8 @@ class TestExceptionCheckers:
         ]
 
         for error_str in negative_cases:
-            result = ExceptionCheckers.is_azure_content_policy_violation_error(
-                error_str
-            )
-            assert (
-                result is False
-            ), f"Should NOT detect policy violation in: {error_str}"
+            result = ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
+            assert result is False, f"Should NOT detect policy violation in: {error_str}"
 
 
 gemini_context_window_test_cases = [
@@ -269,12 +252,8 @@ gemini_context_window_test_cases = [
 ]
 
 
-@pytest.mark.parametrize(
-    "error_message, should_raise_context_window", gemini_context_window_test_cases
-)
-def test_gemini_context_window_error_mapping(
-    error_message, should_raise_context_window
-):
+@pytest.mark.parametrize("error_message, should_raise_context_window", gemini_context_window_test_cases)
+def test_gemini_context_window_error_mapping(error_message, should_raise_context_window):
     """
     Tests that the exception_type function correctly maps Gemini's
     context window exceeded errors to litellm.ContextWindowExceededError.
@@ -419,9 +398,7 @@ vertex_rate_limit_test_cases = [
 ]
 
 
-@pytest.mark.parametrize(
-    "error_message, should_raise_rate_limit", vertex_rate_limit_test_cases
-)
+@pytest.mark.parametrize("error_message, should_raise_rate_limit", vertex_rate_limit_test_cases)
 def test_vertex_ai_rate_limit_error_mapping(error_message, should_raise_rate_limit):
     """
     Tests that the exception_type function correctly maps Vertex AI's
@@ -456,10 +433,7 @@ class TestGetBodyErrorCode:
     """Unit tests for _get_body_error_code helper."""
 
     def test_parses_int_code(self):
-        body = (
-            '{"error":{"message":"high demand","type":"upstream_error",'
-            '"param":"","code":429}}'
-        )
+        body = '{"error":{"message":"high demand","type":"upstream_error","param":"","code":429}}'
         assert _get_body_error_code(body) == 429
 
     def test_parses_string_code(self):
@@ -496,8 +470,7 @@ gemini_body_code_429_test_cases = [
     ),
     (
         503,
-        '{"error":{"message":"upstream unavailable","type":"upstream_error",'
-        '"param":"","code":429}}',
+        '{"error":{"message":"upstream unavailable","type":"upstream_error","param":"","code":429}}',
         litellm.RateLimitError,
         "HTTP 503 envelope with body code:429 -> RateLimitError",
     ),
@@ -767,9 +740,7 @@ class _UpstreamHTTPError(Exception):
         self.message = "upstream failure"
         self.status_code = status_code
         self.request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
-        self.response = httpx.Response(
-            status_code=status_code, request=self.request, text="upstream failure"
-        )
+        self.response = httpx.Response(status_code=status_code, request=self.request, text="upstream failure")
 
 
 UPSTREAM_STATUS_CODES = (400, 401, 403, 404, 408, 422, 429, 500, 503)
@@ -890,15 +861,13 @@ PROVIDERS_WITHOUT_A_HANDLER = tuple(
 
 MINIMAX_401_BODY = (
     '{"type":"error","error":{"type":"authorized_error","message":"login fail: Please carry the API secret key '
-    "in the 'Authorization' field of the request header (1004)\",\"http_code\":\"401\"},"
+    'in the \'Authorization\' field of the request header (1004)","http_code":"401"},'
     '"request_id":"06ddc9ba97ee6340e38f10e09787f547"}'
 )
 
 
 def _expected_for(provider: str, status_code: int) -> tuple[type[Exception], int]:
-    return DEVIATIONS_FROM_THE_OPENAI_SHAPE.get(provider, {}).get(
-        status_code, OPENAI_SHAPED[status_code]
-    )
+    return DEVIATIONS_FROM_THE_OPENAI_SHAPE.get(provider, {}).get(status_code, OPENAI_SHAPED[status_code])
 
 
 @pytest.fixture
@@ -908,9 +877,7 @@ def quiet_exception_mapping(monkeypatch):
 
 @pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
 @pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
-def test_an_upstream_status_maps_to_one_exception_per_provider(
-    provider, status_code, quiet_exception_mapping
-):
+def test_an_upstream_status_maps_to_one_exception_per_provider(provider, status_code, quiet_exception_mapping):
     expected_class, expected_status = _expected_for(provider, status_code)
 
     with pytest.raises(openai.APIError) as raised:
@@ -926,9 +893,7 @@ def test_an_upstream_status_maps_to_one_exception_per_provider(
 
 @pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
 @pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
-def test_a_mapped_exception_keeps_the_provider_and_model_it_came_from(
-    provider, status_code, quiet_exception_mapping
-):
+def test_a_mapped_exception_keeps_the_provider_and_model_it_came_from(provider, status_code, quiet_exception_mapping):
     with pytest.raises(openai.APIError) as raised:
         exception_type(
             model="test-model",
@@ -941,12 +906,8 @@ def test_a_mapped_exception_keeps_the_provider_and_model_it_came_from(
 
 
 @pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
-def test_an_already_mapped_litellm_exception_passes_through_untouched(
-    provider, quiet_exception_mapping
-):
-    already_mapped = litellm.RateLimitError(
-        message="already mapped", llm_provider=provider, model="test-model"
-    )
+def test_an_already_mapped_litellm_exception_passes_through_untouched(provider, quiet_exception_mapping):
+    already_mapped = litellm.RateLimitError(message="already mapped", llm_provider=provider, model="test-model")
 
     returned = exception_type(
         model="test-model",
@@ -959,9 +920,7 @@ def test_an_already_mapped_litellm_exception_passes_through_untouched(
 
 @pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
 @pytest.mark.parametrize("provider", PROVIDERS_WITHOUT_A_HANDLER)
-def test_a_provider_without_a_handler_maps_by_the_upstream_status(
-    provider, status_code, quiet_exception_mapping
-):
+def test_a_provider_without_a_handler_maps_by_the_upstream_status(provider, status_code, quiet_exception_mapping):
     expected_class, expected_status = STATUS_KEYED[status_code]
 
     with pytest.raises(openai.APIError) as raised:
@@ -1013,9 +972,32 @@ def test_an_unmapped_exception_with_no_model_or_provider_is_a_connection_error(q
     assert "boom" in raised.value.message
 
 
-def _raise_and_map(
-    model: str | None, original_exception: Exception, custom_llm_provider: str | None
-) -> None:
+def test_unmapped_sdk_exception_includes_bug_report_link(quiet_exception_mapping):
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        exception_type(
+            model="my-model",
+            custom_llm_provider="minimax",
+            original_exception=ValueError("boom"),
+        )
+
+    assert "https://github.com/BerriAI/litellm/issues/new?" in str(raised.value)
+    assert "ValueError" in str(raised.value)
+
+
+def test_unmapped_sdk_exception_bug_report_link_can_be_disabled(quiet_exception_mapping, monkeypatch):
+    monkeypatch.setenv("LITELLM_DISABLE_BUG_REPORT_LINK", "true")
+
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        exception_type(
+            model="my-model",
+            custom_llm_provider="minimax",
+            original_exception=ValueError("boom"),
+        )
+
+    assert "https://github.com/BerriAI/litellm/issues/new?" not in str(raised.value)
+
+
+def _raise_and_map(model: str | None, original_exception: Exception, custom_llm_provider: str | None) -> None:
     """Calls exception_type() from inside the except block, as litellm/main.py does,
     so traceback.format_exc() has a real stack."""
     try:
@@ -1056,9 +1038,7 @@ def test_an_unmapped_exception_with_no_model_or_provider_message_keeps_traceback
 
 
 CONTEXT_WINDOW_MESSAGE = "This model's maximum context length is 4096 tokens."
-CONTENT_POLICY_MESSAGE = (
-    '{"error": {"type": "invalid_request_error", "code": "content_policy_violation"}}'
-)
+CONTENT_POLICY_MESSAGE = '{"error": {"type": "invalid_request_error", "code": "content_policy_violation"}}'
 TIMEOUT_MESSAGE = "Request timed out."
 
 PROVIDERS_THAT_RECOGNISE_A_FULL_CONTEXT_WINDOW = (
@@ -1101,15 +1081,11 @@ class _UpstreamErrorWithMessage(_UpstreamHTTPError):
         super().__init__(status_code=status_code)
         self.args = (message,)
         self.message = message
-        self.response = httpx.Response(
-            status_code=status_code, request=self.request, text=message
-        )
+        self.response = httpx.Response(status_code=status_code, request=self.request, text=message)
 
 
 @pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
-def test_a_full_context_window_reaches_the_caller_as_the_router_needs_it(
-    provider, quiet_exception_mapping
-):
+def test_a_full_context_window_reaches_the_caller_as_the_router_needs_it(provider, quiet_exception_mapping):
     if provider in PROVIDERS_THAT_RECOGNISE_A_FULL_CONTEXT_WINDOW:
         expected_class, expected_status = litellm.ContextWindowExceededError, 400
     else:
@@ -1127,9 +1103,7 @@ def test_a_full_context_window_reaches_the_caller_as_the_router_needs_it(
 
 
 @pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
-def test_a_content_policy_block_reaches_the_caller_as_the_router_needs_it(
-    provider, quiet_exception_mapping
-):
+def test_a_content_policy_block_reaches_the_caller_as_the_router_needs_it(provider, quiet_exception_mapping):
     if provider in PROVIDERS_THAT_RECOGNISE_A_CONTENT_POLICY_BLOCK:
         expected_class, expected_status = litellm.ContentPolicyViolationError, 400
     else:
@@ -1147,9 +1121,7 @@ def test_a_content_policy_block_reaches_the_caller_as_the_router_needs_it(
 
 
 @pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
-def test_a_timed_out_request_is_a_timeout_for_every_provider(
-    provider, quiet_exception_mapping
-):
+def test_a_timed_out_request_is_a_timeout_for_every_provider(provider, quiet_exception_mapping):
     with pytest.raises(litellm.Timeout) as raised:
         exception_type(
             model="test-model",
@@ -1254,3 +1226,277 @@ def test_handle_error_marks_only_a_status_code_it_never_received():
         raise handler._handle_error(e=upstream, provider_config=None)
     assert received.value.status_code == 500
     assert received.value.status_code_is_synthesized is False
+
+
+def test_bedrock_500_preserves_provider_response_headers():
+    """A Bedrock 5xx must keep x-amzn-RequestId so AWS support can trace it (LIT-5428)."""
+    provider_response = httpx.Response(
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-map-500"},
+        text='{"message":"Amazon Bedrock is unable to process your request."}',
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+    original_exception = BedrockError(
+        status_code=500,
+        message=provider_response.text,
+        headers=provider_response.headers,
+        response=provider_response,
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        exception_type(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-map-500"
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider, status_code, provider_message, expected_exception",
+    [
+        (
+            "bedrock_mantle",
+            400,
+            (
+                '{"error":{"code":"validation_error",'
+                '"message":"prompt tokens (1055489) exceed model maximum (1050000) for openai.gpt-5.6-sol",'
+                '"param":null,"type":"invalid_request_error"}}'
+            ),
+            litellm.ContextWindowExceededError,
+        ),
+        (
+            "bedrock",
+            400,
+            '{"message":"Input is too long for requested model."}',
+            litellm.ContextWindowExceededError,
+        ),
+        (
+            "bedrock",
+            400,
+            '{"message":"Could not process image"}',
+            litellm.InternalServerError,
+        ),
+    ],
+)
+def test_bedrock_classified_errors_preserve_provider_response_headers(
+    custom_llm_provider, status_code, provider_message, expected_exception
+):
+    """Branches that classify a Bedrock error by its text must keep x-amzn-RequestId (LIT-5428)."""
+    provider_response = httpx.Response(
+        status_code=status_code,
+        headers={"x-amzn-RequestId": "req-classified"},
+        text=provider_message,
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+    original_exception = BedrockError(
+        status_code=status_code,
+        message=provider_message,
+        headers=provider_response.headers,
+        response=provider_response,
+    )
+
+    with pytest.raises(expected_exception) as exc_info:
+        exception_type(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=original_exception,
+            custom_llm_provider=custom_llm_provider,
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-classified"
+
+
+@pytest.mark.parametrize(
+    "status_code, provider_message",
+    [
+        (504, '{"message":"Gateway timeout"}'),
+        (408, '{"message":"Bedrock did not answer in time"}'),
+        (408, '{"message":"Connect timeout on endpoint URL"}'),
+    ],
+)
+def test_bedrock_timeout_mapping_preserves_provider_headers(status_code, provider_message):
+    """A mapped bedrock timeout keeps the upstream response, like every other mapped bedrock error.
+
+    The proxy prefixes those headers on the way out, while retry and cooldown
+    logic still reads the raw retry-after off the response.
+    """
+    provider_response = httpx.Response(
+        status_code=status_code,
+        headers={"x-amzn-RequestId": "req-timeout", "set-cookie": "session=attacker"},
+        text=provider_message,
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+    original_exception = BedrockError(
+        status_code=status_code,
+        message=provider_message,
+        headers=provider_response.headers,
+        response=provider_response,
+    )
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        exception_type(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-timeout"
+    assert exc_info.value.headers is None
+
+
+@pytest.mark.parametrize("status_code", [504, 408])
+def test_bedrock_timeout_mapping_keeps_retry_after_readable(status_code):
+    """Cooldown and retry timing read retry-after through _get_response_headers."""
+    provider_response = httpx.Response(
+        status_code=status_code,
+        headers={"x-amzn-RequestId": "req-retry-after", "retry-after": "7"},
+        text='{"message":"Bedrock did not answer in time"}',
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+    original_exception = BedrockError(
+        status_code=status_code,
+        message='{"message":"Bedrock did not answer in time"}',
+        headers=provider_response.headers,
+        response=provider_response,
+    )
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        exception_type(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    exception_headers = _get_response_headers(original_exception=exc_info.value)
+    assert exception_headers is not None
+    assert litellm.utils._get_retry_after_from_exception_header(response_headers=exception_headers) == 7
+
+
+_GUARDRAIL_BLOCK_ERROR = {
+    "message": "Content blocked: secret_project_codename pattern detected",
+    "param": "None",
+    "code": "400",
+    "provider_specific_fields": {
+        "error": "Content blocked: secret_project_codename pattern detected",
+        "pattern": "secret_project_codename",
+        "guardrail_name": "block-secret-project",
+        "guardrail_mode": "pre_call",
+    },
+}
+
+
+def _openai_handler_error(
+    error_type: str,
+    headers: dict[str, str] | list[tuple[str, str]],
+    status_code: int = 400,
+    message: str = _GUARDRAIL_BLOCK_ERROR["message"],
+) -> OpenAIError:
+    wire_error = {**_GUARDRAIL_BLOCK_ERROR, "type": error_type, "code": str(status_code), "message": message}
+    return OpenAIError(
+        status_code=status_code,
+        message=f"Error code: {status_code} - {{'error': {wire_error}}}",
+        headers=httpx.Headers(headers),
+        body=wire_error,
+    )
+
+
+_PROXY_HEADERS = {"x-litellm-call-id": "call-guardrail", "x-litellm-applied-guardrails": "block-secret-project"}
+
+
+@pytest.mark.parametrize(("error_type", "status_code"), [("None", 400), ("invalid_request_error", 400), ("None", 422)])
+def test_litellm_proxy_guardrail_block_keeps_body_and_headers(error_type: str, status_code: int):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        exception_type(
+            model="claude-haiku-4-5",
+            original_exception=_openai_handler_error(error_type, _PROXY_HEADERS, status_code=status_code),
+            custom_llm_provider="litellm_proxy",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.body["provider_specific_fields"]["guardrail_name"] == "block-secret-project"
+    assert exc_info.value.body["type"] == error_type
+    assert dict(exc_info.value.response.headers) == _PROXY_HEADERS
+
+
+@pytest.mark.parametrize("relayed_class", [litellm.BadRequestError, litellm.ContentPolicyViolationError])
+def test_litellm_proxy_relayed_litellm_error_keeps_body_and_headers(relayed_class: type[litellm.BadRequestError]):
+    message = f"litellm.{relayed_class.__name__}: {_GUARDRAIL_BLOCK_ERROR['message']}"
+
+    with pytest.raises(relayed_class) as exc_info:
+        exception_type(
+            model="claude-haiku-4-5",
+            original_exception=_openai_handler_error("None", _PROXY_HEADERS, message=message),
+            custom_llm_provider="litellm_proxy",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert type(exc_info.value) is relayed_class
+    assert exc_info.value.body["provider_specific_fields"]["guardrail_name"] == "block-secret-project"
+    assert dict(exc_info.value.response.headers) == _PROXY_HEADERS
+
+
+def test_openai_compatible_vendor_400_keeps_body_but_not_headers():
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        exception_type(
+            model="gpt-5.4-mini",
+            original_exception=_openai_handler_error("vendor_specific_error", {"openai-organization": "org-1"}),
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.body["type"] == "vendor_specific_error"
+    assert not exc_info.value.response.headers
+
+
+@pytest.mark.parametrize(
+    ("status_code", "mapped_class", "reported_type"),
+    [(429, litellm.RateLimitError, "throttling_error"), (500, litellm.InternalServerError, "internal_server_error")],
+)
+def test_openai_429_and_500_keep_body_but_report_litellm_type(
+    status_code: int, mapped_class: type[openai.APIError], reported_type: str
+):
+    with pytest.raises(mapped_class) as exc_info:
+        exception_type(
+            model="gpt-5.4-mini",
+            original_exception=_openai_handler_error(
+                "server_error", {}, status_code=status_code, message="upstream cannot complete this response"
+            ),
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.body == {
+        **_GUARDRAIL_BLOCK_ERROR,
+        "type": "server_error",
+        "code": str(status_code),
+        "message": "upstream cannot complete this response",
+    }
+    assert exc_info.value.type == reported_type
+
+
+def test_litellm_proxy_repeated_response_header_keeps_each_value():
+    repeated = [("x-litellm-call-id", "call-guardrail"), ("set-cookie", "a=1"), ("set-cookie", "b=2")]
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        exception_type(
+            model="claude-haiku-4-5",
+            original_exception=_openai_handler_error("None", repeated),
+            custom_llm_provider="litellm_proxy",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.response.headers.multi_items() == repeated

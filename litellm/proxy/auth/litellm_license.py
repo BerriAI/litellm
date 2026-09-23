@@ -17,7 +17,8 @@ if TYPE_CHECKING:
 
 
 AUTO_ROUTER_LICENSE_FEATURE: Final = "auto_router"
-HEURISTIC_V2_LICENSE_REMEDY: Final = "A LiteLLM license with the 'auto_router' feature lifts the limit."
+LICENSE_ALL_FEATURES: Final = "*"
+AUTO_ROUTER_LICENSE_REMEDY: Final = "A LiteLLM license with the 'auto_router' feature lifts the limit."
 
 
 class LicenseCheck:
@@ -153,16 +154,21 @@ class LicenseCheck:
             return False
         return team_count > _max_teams_in_license
 
-    def heuristic_v2_router_limit(self) -> int | None:
-        """
-        How many heuristic_v2 auto-routers this proxy may hold: unlimited (None) only when the
-        signed license lists the auto_router feature, otherwise one. A license verified through
-        the API carries no feature list, so it does not lift the limit either.
-        """
+    def grants_feature(self, feature: str) -> bool:
         if self.airgapped_license_data is None:
-            return 1
+            return False
         allowed_features: Final = self.airgapped_license_data.get("allowed_features")
-        if isinstance(allowed_features, list) and AUTO_ROUTER_LICENSE_FEATURE in allowed_features:
+        granted: Final = allowed_features if isinstance(allowed_features, list) else (allowed_features,)
+        return feature in granted or LICENSE_ALL_FEATURES in granted
+
+    def auto_router_capability_limit(self) -> int | None:
+        """
+        How many auto-routers may claim each gated classifier or customization capability:
+        unlimited (None) only when the signed license lists the auto_router feature or the
+        "*" wildcard that grants every feature, otherwise one per capability. A license verified
+        through the API carries no feature list, so it does not lift the limit either.
+        """
+        if self.grants_feature(AUTO_ROUTER_LICENSE_FEATURE):
             return None
         return 1
 

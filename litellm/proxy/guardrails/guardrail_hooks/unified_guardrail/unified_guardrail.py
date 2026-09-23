@@ -19,7 +19,7 @@ from litellm.cost_calculator import _infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.llms import load_guardrail_translation_mappings
+from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -69,9 +69,43 @@ def _as_endpoint_translation(translation: _EndpointTranslation) -> _EndpointTran
     return translation
 
 
+def resolve_endpoint_translation(
+    user_api_key_dict: UserAPIKeyAuth, first_response_item: object | None
+) -> "tuple[str, BaseTranslation] | None":
+    """
+    Resolve the endpoint guardrail translation for a streamed response: the
+    request route wins, falling back to inferring the call type from the first
+    response chunk (the same resolution order the streaming iterator hook uses).
+    Returns None when the call type is unresolvable or has no translation.
+    """
+    route_call_types: Final = (
+        get_call_types_for_route(user_api_key_dict.request_route) if user_api_key_dict.request_route else None
+    )
+    call_type: Final = (
+        route_call_types[0].value
+        if route_call_types
+        else (
+            _infer_call_type(call_type=None, completion_response=first_response_item)
+            if first_response_item is not None
+            else None
+        )
+    )
+    if call_type is None:
+        return None
+    try:
+        handler_cls: Final = get_guardrail_translation_mapping(CallTypes(call_type))
+    except ValueError:
+        return None
+    return call_type, handler_cls()
+
+
 def _chunk_choices(item: object) -> Sequence[object]:
     choices: Final[Sequence[object]] = getattr(item, "choices", None) or []
     return choices
+
+
+def _held_choices(held_chars_per_choice: Mapping[int, int]) -> frozenset[int]:
+    return frozenset(idx for idx, held in held_chars_per_choice.items() if held > 0)
 
 
 def _is_redundant_scan(scan_key: "StreamingScanKey | None", last_scan_key: "StreamingScanKey | None") -> bool:
@@ -285,7 +319,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         if call_type is None:
             call_type = _infer_call_type(call_type=None, completion_response=response)
 
-        # Fallback: resolve call_type from logging_obj for pass-through endpoints
         if call_type is None:
             litellm_logging_obj: Final = data.get("litellm_logging_obj")
             logging_call_type: Final = (
@@ -294,6 +327,8 @@ class UnifiedLLMGuardrails(CustomLogger):
             if logging_call_type in (
                 CallTypes.pass_through.value,
                 CallTypes.allm_passthrough_route.value,
+                CallTypes.ocr.value,
+                CallTypes.aocr.value,
             ):
                 call_type = logging_call_type
 
@@ -343,7 +378,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         return response
 
-    async def _handle_streaming_block(
+    async def handle_streaming_block(
         self,
         exc: "ModifyResponseException",
         endpoint_translation: _EndpointTranslation,
@@ -399,7 +434,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             return None
         return call_type
 
-    async def _emit_streaming_http_error(
+    async def emit_streaming_http_error(
         self,
         exc: HTTPException,
         call_type: str | None,
@@ -441,6 +476,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         emitted_text_per_choice: dict[int, str],
         holdback_per_choice: dict[int, int],
         finish_reason_per_choice: dict[int, str | None],
+        held_chars_per_choice: dict[int, int],
         is_final: bool,
     ) -> ModelResponseStream | None:
         """Build the synthetic chunk carrying the newly-guardrailed deltas.
@@ -448,7 +484,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         For each choice, the new delta is the mutated accumulated text past what
         has already been emitted, minus a trailing holdback (forced to 0 on the
         final flush). ``emitted_text_per_choice`` holds the exact bytes already
-        sent per choice and is extended in place. Returns None when there is no
+        sent per choice and is extended in place; ``held_chars_per_choice`` is
+        updated in place with how many mutated chars per choice are still withheld
+        after this round. Returns None when there is no
         text to emit (e.g. a tool-call-only turn) or nothing new and this is not
         the final chunk.
 
@@ -505,6 +543,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             holdback = 0 if is_final else max(0, holdback_per_choice.get(choice_idx, 0))
             end = max(len(already), len(text) - holdback)
             deltas[choice_idx] = text[len(already) : end]
+            held_chars_per_choice[choice_idx] = len(text) - end
 
         # Iterate the mutated choices (not just those in reference_chunk) so a
         # choice with pending text is never dropped for n > 1. finish_reason is
@@ -559,6 +598,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         responses_yielded: list[object],
         emitted_text_per_choice: dict[int, str],
         finish_reason_per_choice: dict[int, str | None],
+        held_chars_per_choice: dict[int, int],
         is_final: bool,
     ) -> AsyncGenerator[object, None]:
         """Run one guardrail processing round and emit the resulting diff chunk.
@@ -587,12 +627,13 @@ class UnifiedLLMGuardrails(CustomLogger):
                 emitted_text_per_choice=emitted_text_per_choice,
                 holdback_per_choice=sink.holdback_per_choice,
                 finish_reason_per_choice=finish_reason_per_choice,
+                held_chars_per_choice=held_chars_per_choice,
                 is_final=is_final,
             )
         except ModifyResponseException as e:
             if e.original_response is None:
                 e.original_response = responses_so_far
-            async for block_chunk in self._handle_streaming_block(
+            async for block_chunk in self.handle_streaming_block(
                 e,
                 endpoint_translation,
                 stream_started=bool(responses_yielded),
@@ -601,7 +642,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 yield block_chunk
             raise _StreamTerminated()
         except HTTPException as e:
-            async for error_item in self._emit_streaming_http_error(
+            async for error_item in self.emit_streaming_http_error(
                 e,
                 call_type,
                 responses_so_far,
@@ -642,6 +683,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         responses_yielded: Final[list[object]] = []
         emitted_text_per_choice: Final[dict[int, str]] = {}
         finish_reason_per_choice: Final[dict[int, str | None]] = {}
+        held_chars_per_choice: Final[dict[int, int]] = {}
         chunk_counter = 0
         last_chunk: object | None = None
 
@@ -657,6 +699,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 responses_yielded=responses_yielded,
                 emitted_text_per_choice=emitted_text_per_choice,
                 finish_reason_per_choice=finish_reason_per_choice,
+                held_chars_per_choice=held_chars_per_choice,
                 is_final=is_final,
             )
 
@@ -693,10 +736,16 @@ class UnifiedLLMGuardrails(CustomLogger):
                     # finish_reason to the final text terminator (see the
                     # _tool_call_passthrough_chunk docstring).
                     tool_only = self._tool_call_passthrough_chunk(
-                        item, finish_reason_per_choice=finish_reason_per_choice
+                        item,
+                        finish_reason_per_choice=finish_reason_per_choice,
+                        held_choices=_held_choices(held_chars_per_choice),
                     )
                     responses_yielded.append(tool_only)
                     yield tool_only
+                    continue
+
+                if self._is_trailing_metadata_chunk(item):
+                    responses_so_far.append(item)
                     continue
 
                 chunk_counter += 1
@@ -742,11 +791,32 @@ class UnifiedLLMGuardrails(CustomLogger):
                 ):
                     yield out
 
-            if last_chunk is not None:
-                async for out in _round(last_chunk, is_final=True):
-                    yield out
+            async for out in self._emit_stream_tail(
+                last_chunk=last_chunk,
+                final_round=_round,
+                responses_so_far=responses_so_far,
+                responses_yielded=responses_yielded,
+            ):
+                yield out
         except _StreamTerminated:
             return
+
+    async def _emit_stream_tail(
+        self,
+        *,
+        last_chunk: object | None,
+        final_round: Callable[[object, bool], AsyncGenerator[object, None]],
+        responses_so_far: Sequence[object],
+        responses_yielded: list[object],
+    ) -> AsyncGenerator[object, None]:
+        """Flush the held text with holdback 0, then replay metadata-only chunks
+        (usage) so they land after the text and its finish_reason, as upstream sent them."""
+        if last_chunk is not None:
+            async for out in final_round(last_chunk, True):
+                yield out
+        for trailing in self._trailing_metadata_chunks(responses_so_far):
+            responses_yielded.append(trailing)
+            yield trailing
 
     async def _inspect_full_response_for_block(
         self,
@@ -781,7 +851,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         except ModifyResponseException as e:
             if e.original_response is None:
                 e.original_response = responses_so_far
-            async for block_chunk in self._handle_streaming_block(
+            async for block_chunk in self.handle_streaming_block(
                 e,
                 endpoint_translation,
                 stream_started=bool(responses_yielded),
@@ -798,6 +868,23 @@ class UnifiedLLMGuardrails(CustomLogger):
                 return True
         return False
 
+    @classmethod
+    def _is_trailing_metadata_chunk(cls, item: object) -> bool:
+        """True for a chunk that carries only stream metadata (no choices, or a
+        ``usage`` chunk whose deltas are empty); such chunks are replayed after
+        the final text flush instead of being folded into the transform."""
+        if not _chunk_choices(item):
+            return True
+        return (
+            getattr(item, "usage", None) is not None
+            and not cls._chunk_carries_text(item)
+            and not cls._chunk_has_finish_reason(item)
+        )
+
+    @classmethod
+    def _trailing_metadata_chunks(cls, items: Sequence[object]) -> tuple[object, ...]:
+        return tuple(item for item in items if cls._is_trailing_metadata_chunk(item))
+
     @staticmethod
     def _chunk_carries_text(item: object) -> bool:
         """True if any choice in this chunk has non-empty string ``delta.content``."""
@@ -812,6 +899,7 @@ class UnifiedLLMGuardrails(CustomLogger):
     def _tool_call_passthrough_chunk(
         item: object,
         finish_reason_per_choice: "dict[int, str | None] | None" = None,
+        held_choices: frozenset[int] = frozenset(),
     ) -> ModelResponseStream:
         """Copy of a chunk carrying tool calls with all text content stripped.
 
@@ -820,8 +908,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         transform instead). Applies per choice so an n>1 chunk mixing a text
         choice and a tool-call choice does not leak the text choice.
 
-        For a choice that carries BOTH text content AND tool_calls, ``finish_reason``
-        is suppressed on the passthrough and recorded on
+        For a choice that carries BOTH text content AND tool_calls, or whose earlier
+        text is still withheld (``held_choices``), ``finish_reason`` is suppressed on
+        the passthrough and recorded on
         ``finish_reason_per_choice`` (when provided) so the final synthetic text
         chunk delivers it. Emitting the passthrough's ``finish_reason`` before the
         text flush would let a spec-compliant SSE client stop reading at
@@ -834,7 +923,8 @@ class UnifiedLLMGuardrails(CustomLogger):
             idx = getattr(choice, "index", 0) or 0
             original_finish = getattr(choice, "finish_reason", None)
             has_text = isinstance(getattr(delta, "content", None), str) and getattr(delta, "content", "") != ""
-            if has_text and original_finish is not None and finish_reason_per_choice is not None:
+            text_pending = has_text or idx in held_choices
+            if text_pending and original_finish is not None and finish_reason_per_choice is not None:
                 finish_reason_per_choice[idx] = original_finish
                 passthrough_finish: str | None = None
             else:
@@ -869,10 +959,18 @@ class UnifiedLLMGuardrails(CustomLogger):
         choices: Final = _chunk_choices(item)
         return any(getattr(choice, "finish_reason", None) is not None for choice in choices)
 
+    def resolve_streaming_flag(self, guardrail_to_apply: CustomGuardrail | None, name: str, default: object) -> object:
+        """Streaming flag resolution order (later wins): default < guardrail
+        attribute < guardrail_config dict < this callback's optional_params."""
+        attribute_value: Final = default if guardrail_to_apply is None else getattr(guardrail_to_apply, name, default)
+        config: Final = None if guardrail_to_apply is None else getattr(guardrail_to_apply, "guardrail_config", None)
+        config_value: Final = config.get(name, attribute_value) if isinstance(config, dict) else attribute_value
+        return self.optional_params.get(name, config_value)
+
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
+        response: AsyncIterable[object],
         request_data: dict,
         guardrail_to_apply: CustomGuardrail | None = None,
         buffer_until_moderated_default: bool = False,
@@ -897,17 +995,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         if guardrail_to_apply is None:
             guardrail_to_apply = request_data.pop("guardrail_to_apply", None)
 
-        # Get streaming configuration. Resolution order (later wins): default
-        # < guardrail attribute < guardrail_config dict < this callback's
-        # optional_params.
         def _streaming_flag(name: str, default: object) -> Any:
-            value = default
-            if guardrail_to_apply is not None:
-                value = getattr(guardrail_to_apply, name, value)
-                config: Final[Mapping[str, object]] = getattr(guardrail_to_apply, "guardrail_config", {})
-                if isinstance(config, dict):
-                    value = config.get(name, value)
-            return self.optional_params.get(name, value)
+            return self.resolve_streaming_flag(guardrail_to_apply, name, default)
 
         sampling_rate: Final[int] = _streaming_flag("streaming_sampling_rate", 5)
         # Only apply the guardrail at end of stream (not per chunk).
@@ -926,6 +1015,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         buffer_until_moderated: bool = _streaming_flag(
             "streaming_buffer_until_moderated", buffer_until_moderated_default
         )
+        release_on_scan: Final[bool] = _streaming_flag("streaming_buffer_release_on_scan", False)
 
         if (
             buffer_until_moderated
@@ -940,9 +1030,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             buffer_until_moderated = False
 
-        # Buffering can only moderate the assembled response, so it always
-        # defers to end-of-stream.
-        if buffer_until_moderated:
+        if buffer_until_moderated and not release_on_scan:
             end_of_stream_only = True
 
         if guardrail_to_apply is None:
@@ -996,12 +1084,14 @@ class UnifiedLLMGuardrails(CustomLogger):
         chunk_counter = 0
         responses_so_far: Final[list[object]] = []
         responses_yielded: Final[list[object]] = []
+        withheld_items: Final[list[object]] = []  # mutable-ok: streaming window must be released incrementally
         pending_end_of_stream_items: Final[list[object]] = []
         # Whether any real response chunk has been forwarded to the client.
         # Drives how a block terminates the stream: continue the in-progress
         # message (True) vs emit a standalone block message (False, buffered).
         chunks_yielded = False
         last_scan_key: StreamingScanKey | None = None  # rebind-ok: replaced after every scan round
+        tool_calls_in_flight = False  # rebind-ok: tracks the latest scan key's unscanned tool calls
 
         async for item in response:
             chunk_counter += 1
@@ -1039,21 +1129,37 @@ class UnifiedLLMGuardrails(CustomLogger):
                         chunks_yielded = True
                         responses_yielded.append(item)
                         yield item
+                else:
+                    withheld_items.append(item)
                 continue
 
             # Process chunk based on sampling rate
+            if buffer_until_moderated:
+                withheld_items.append(item)
             if chunk_counter % sampling_rate == 0:
                 endpoint_translation = mappings[CallTypes(call_type)]()
                 scan_key = endpoint_translation.get_streaming_scan_key(responses_so_far)
+                if scan_key is not None:
+                    tool_calls_in_flight = scan_key.tool_calls_in_flight
+                hold_window = buffer_until_moderated and (scan_key is None or tool_calls_in_flight)
                 if _is_redundant_scan(scan_key, last_scan_key):
                     verbose_proxy_logger.debug(
                         "Skipping streaming chunk %s for guardrail %s: nothing new to scan since the last round",
                         chunk_counter,
                         guardrail_to_apply.guardrail_name,
                     )
-                    chunks_yielded = True
-                    responses_yielded.append(item)
-                    yield item
+                    if buffer_until_moderated:
+                        if hold_window:
+                            continue
+                        for withheld_item in withheld_items:
+                            chunks_yielded = True
+                            responses_yielded.append(withheld_item)
+                            yield withheld_item
+                        withheld_items.clear()
+                    else:
+                        chunks_yielded = True
+                        responses_yielded.append(item)
+                        yield item
                     continue
 
                 verbose_proxy_logger.debug(
@@ -1063,13 +1169,9 @@ class UnifiedLLMGuardrails(CustomLogger):
                     guardrail_to_apply.guardrail_name,
                 )
 
-                # Deep-copy the current chunk before guardrail processing.
-                # process_output_streaming_response modifies responses_so_far
-                # in-place: it puts the combined guardrailed text in the first
-                # chunk and clears all subsequent chunks to "". Without this
-                # copy, yielding processed_items[-1] would yield an empty
-                # string, permanently losing this chunk's content.
-                original_item = copy.deepcopy(item)
+                original_items = (
+                    tuple(copy.deepcopy(withheld_items)) if buffer_until_moderated else (copy.deepcopy(item),)
+                )
 
                 try:
                     await endpoint_translation.process_output_streaming_response(
@@ -1091,7 +1193,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                     # The current chunk was appended to responses_so_far but not
                     # yet yielded, so exclude it: the continuation must reflect
                     # only what the client has actually received.
-                    async for block_chunk in self._handle_streaming_block(
+                    async for block_chunk in self.handle_streaming_block(
                         e,
                         endpoint_translation,
                         stream_started=chunks_yielded,
@@ -1101,7 +1203,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                     return
                 except HTTPException as e:
                     # Response already started (we already yielded chunks); cannot send 400.
-                    async for error_item in self._emit_streaming_http_error(
+                    async for error_item in self.emit_streaming_http_error(
                         e,
                         call_type,
                         responses_so_far,
@@ -1114,13 +1216,24 @@ class UnifiedLLMGuardrails(CustomLogger):
                     return
                 if scan_key is not None:
                     last_scan_key = scan_key
-                chunks_yielded = True
-                responses_yielded.append(original_item)
-                yield original_item
+                if hold_window:
+                    verbose_proxy_logger.debug(
+                        "Holding %s buffered chunks for guardrail %s: this round could not scan the whole window",
+                        len(withheld_items),
+                        guardrail_to_apply.guardrail_name,
+                    )
+                    withheld_items[:] = original_items
+                    continue
+                for original_item in original_items:
+                    chunks_yielded = True
+                    responses_yielded.append(original_item)
+                    yield original_item
+                withheld_items.clear()
             else:
-                chunks_yielded = True
-                responses_yielded.append(item)
-                yield item
+                if not buffer_until_moderated:
+                    chunks_yielded = True
+                    responses_yielded.append(item)
+                    yield item
 
         # Stream has ended - do final processing with all collected chunks
         if call_type is not None and CallTypes(call_type) in mappings:
@@ -1132,14 +1245,13 @@ class UnifiedLLMGuardrails(CustomLogger):
 
             endpoint_translation = mappings[CallTypes(call_type)]()
 
-            # When buffering, snapshot the original chunks before moderation.
-            # A shallow copy suffices: end-of-stream
-            # process_output_streaming_response builds a separate assembled
-            # response (it does not mutate the individual chunks in place), and
-            # the chunks themselves are replayed verbatim -- so we only need to
-            # preserve the list, not clone every chunk (deepcopy would double
-            # peak memory for large responses).
-            buffered_items: Final = list(responses_so_far) if buffer_until_moderated else None
+            buffered_items: Final = (
+                tuple(copy.deepcopy(withheld_items))
+                if buffer_until_moderated and release_on_scan and not end_of_stream_only
+                else tuple(withheld_items)
+                if buffer_until_moderated
+                else None
+            )
             end_scan_key: Final = endpoint_translation.get_streaming_scan_key(responses_so_far)
             if _is_redundant_scan(end_scan_key, last_scan_key):
                 verbose_proxy_logger.debug(
@@ -1175,7 +1287,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 # terminating SSE sequence with the block message rather than
                 # propagating into a bare error blob that truncates the stream.
                 # The withheld original chunks are never released.
-                async for block_chunk in self._handle_streaming_block(
+                async for block_chunk in self.handle_streaming_block(
                     e,
                     endpoint_translation,
                     stream_started=bool(responses_yielded),
@@ -1184,7 +1296,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                     yield block_chunk
                 return
             except HTTPException as e:
-                async for error_item in self._emit_streaming_http_error(
+                async for error_item in self.emit_streaming_http_error(
                     e,
                     call_type,
                     responses_so_far,

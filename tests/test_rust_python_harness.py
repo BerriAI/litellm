@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib
-from pathlib import Path
 from typing import Final
 
 import pytest
@@ -9,15 +8,10 @@ import pytest
 models = importlib.import_module("tests.rust-python-harness.shared.reporting.models")
 strategy_module = importlib.import_module("tests.rust-python-harness.shared.reporting.strategy")
 ui = importlib.import_module("tests.rust-python-harness.shared.reporting.ui")
-mapping_validator = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.mapping_validator")
-mappings = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.mappings")
-ocr_mapping = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.cases.ocr")
+contracts = importlib.import_module("tests.rust-python-harness.shared.unit_runners.contracts")
 cli = importlib.import_module("tests.rust-python-harness.cli")
 
-audit_mapping = mapping_validator.audit_mapping
-UNIT_TEST_CONTRACTS = mappings.UNIT_TEST_CONTRACTS
-OCR_CONTRACT = ocr_mapping.OCR_CONTRACT
-REPO_ROOT = Path(__file__).resolve().parents[1]
+UNIT_TEST_CONTRACTS = contracts.UNIT_TEST_CONTRACTS
 CaseResult = models.CaseResult
 Coverage = models.Coverage
 HarnessCase = models.HarnessCase
@@ -47,7 +41,6 @@ def _case(module: str = "tests.example") -> HarnessCase:
         "tests.rust-python-harness.strategies.trace_parity.sdk.messages.case",
         "tests.rust-python-harness.strategies.trace_parity.sdk.chat_completions.case",
         "tests.rust-python-harness.strategies.trace_parity.sdk.transcription.case",
-        "tests.rust-python-harness.strategies.trace_parity.gateway.messages.case",
     ],
 )
 def test_implemented_namespace_case_modules_remain_importable(module: str) -> None:
@@ -115,30 +108,14 @@ def test_should_format_developer_facing_run_context() -> None:
     assert _format_duration(1.25) == "1.2s"
 
 
-def test_should_leave_functions_without_mapping_contracts_unimplemented() -> None:
+def test_should_leave_functions_without_unit_test_contracts_unimplemented() -> None:
     assert "messages" not in UNIT_TEST_CONTRACTS
 
 
-def test_should_derive_ocr_mapping_status_from_live_tests() -> None:
-    report = audit_mapping(OCR_CONTRACT, repo_root=REPO_ROOT)
-
-    assert report.is_valid, (
-        f"Missing Python tests: {list(report.missing_python_tests)}\n"
-        f"Missing Rust tests: {list(report.missing_rust_tests)}\n"
-        f"Duplicate Python mappings: {list(report.duplicate_python_mappings)}\n"
-        f"Invalid mapping exclusions: {list(report.invalid_mapping_exclusions)}\n"
-        f"Invalid parity exclusions: {list(report.invalid_unit_parity_exclusions)}"
-    )
-    assert report.mapped_count == len(OCR_CONTRACT.mapping.mappings)
-    assert report.total_count == (
-        report.mapped_count + len(report.excluded_python_tests) + len(report.unmapped_python_tests)
-    )
-
-
 def test_strategy_subcommand_accepts_function_filter(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code: Final = cli.main(["run", "unit_tests_mapping", "--function", "messages"])
+    exit_code: Final = cli.main(["run", "unit_tests_rust", "--function", "messages"])
 
     captured: Final = capsys.readouterr()
     assert exit_code == 0
     assert "- messages: not_implemented" in captured.out
-    assert "unit_tests_mapping:messages: not_implemented" not in captured.out
+    assert "unit_tests_rust:messages: not_implemented" not in captured.out

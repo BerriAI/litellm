@@ -15,14 +15,15 @@ import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
-import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
-import { normalizeTierModels } from "./add_model/complexity_router_tiers";
+import { buildSavedJevConnectionTestRequest } from "./add_model/build_auto_router_routing_test_request";
+import { AutoRouterTestTarget, buildComplexityRouterTestTargets } from "./add_model/build_auto_router_test_targets";
 import {
   hasAutoRouterEditor,
   isAutoRouterDeployment,
   isComplexityRouter as isComplexityRouterParams,
 } from "./add_model/auto_router_strategies";
-import { canModifyModel } from "@/utils/modelPermissions";
+import { canEditAutoRouter, canModifyModel } from "@/utils/modelPermissions";
+import { teamsUserCanAssign } from "@/utils/roles";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
@@ -41,6 +42,7 @@ import {
   testConnectionRequest,
 } from "./networking";
 import { Logo } from "@/components/molecules/logo/Logo";
+import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import ModelInfoEditForm, { type ModelEditFormValues, type TouchedPricingField } from "./ModelInfoEditForm";
 import { Tag } from "./tag_management/types";
@@ -57,60 +59,6 @@ interface ModelInfoViewProps {
   onModelUpdate?: (updatedModel: any) => void;
   modelAccessGroups: string[] | null;
 }
-
-interface ComplexityRouterTierConfig {
-  tiers?: {
-    SIMPLE?: unknown;
-    MEDIUM?: unknown;
-    COMPLEX?: unknown;
-    REASONING?: unknown;
-  };
-  semantic_keyword_matching?: boolean;
-  embedding_model?: string;
-  default_model?: string;
-}
-
-interface ComplexityRouterModelData {
-  litellm_params?: {
-    complexity_router_config?: ComplexityRouterTierConfig | string;
-    complexity_router_default_model?: string;
-  };
-}
-
-const buildComplexityRouterTestTargets = (
-  modelData: ComplexityRouterModelData | null | undefined,
-): AutoRouterTestTarget[] => {
-  const rawConfig = modelData?.litellm_params?.complexity_router_config;
-  let config: ComplexityRouterTierConfig = {};
-  if (typeof rawConfig === "string") {
-    try {
-      config = JSON.parse(rawConfig);
-    } catch {
-      config = {};
-    }
-  } else if (rawConfig) {
-    config = rawConfig;
-  }
-
-  const tiers: [string, string[]][] =
-    config.tiers && typeof config.tiers === "object"
-      ? Object.entries(config.tiers).map(([tier, models]) => [tier, normalizeTierModels(models)])
-      : [];
-
-  // Mirrors init_complexity_router_deployment (litellm/router.py): litellm_params wins, otherwise
-  // pure tier-derivation. complexity_router_config.default_model is a UI-only marker the backend
-  // never reads — folding it in here could point Test Connection at a model the router never
-  // calls (see PR #36615 discussion).
-  const effectiveDefaultModel = modelData?.litellm_params?.complexity_router_default_model || undefined;
-
-  const testTargetParams = {
-    tiers,
-    semanticMatchingEnabled: Boolean(config.semantic_keyword_matching),
-    embeddingModel: config.embedding_model,
-    defaultModel: effectiveDefaultModel,
-  };
-  return buildAutoRouterTestTargets(testTargetParams);
-};
 
 export default function ModelInfoView({
   modelId,
@@ -169,11 +117,25 @@ export default function ModelInfoView({
   // Keep modelData variable name for backwards compatibility
   const modelData = transformedModelData;
 
-  const canEditModel = canModifyModel({ userRole, userID, isViewOnly }, teams ?? null, {
+  const aliasForTeam = (teamId: string | null | undefined): string | null =>
+    teams?.find((team) => team.team_id === teamId)?.team_alias || null;
+  const teamAlias = aliasForTeam(modelData?.model_info?.team_id);
+  const rawModelInfoEntries = Object.entries(modelData?.model_info ?? {}).flatMap((entry) =>
+    entry[0] === "team_id" && teamAlias ? [entry, ["team_alias", teamAlias]] : [entry],
+  );
+  const rawModelData = modelData && { ...modelData, model_info: Object.fromEntries(rawModelInfoEntries) };
+
+  const isAdmin = userRole === "Admin";
+  const actor = { userRole, userID, isViewOnly };
+  const origin = {
     teamId: modelData?.model_info?.team_id,
     isDbModel: modelData?.model_info?.db_model === true,
-  });
-  const isAdmin = userRole === "Admin";
+    createdBy: modelData?.model_info?.created_by,
+    model: modelData?.litellm_params?.model,
+  };
+  const canEditModel = canModifyModel(actor, teams ?? null, origin);
+  const canEditRouter = canEditAutoRouter(actor, teams ?? null, origin);
+  const assignableTeams = useMemo(() => teamsUserCanAssign(teams ?? null, userRole, userID), [teams, userRole, userID]);
   // Editor-aware on purpose: an adaptive or quality router must not offer Edit Auto Router.
   const isAutoRouterModel = hasAutoRouterEditor(modelData?.litellm_params);
   // Broader than the editor check: adaptive and quality routers equally have no upstream
@@ -378,8 +340,10 @@ export default function ModelInfoView({
         }
       }
 
-      if (values.litellm_credential_name) {
-        updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
+      const storedCredentialName: string | null = localModelData?.litellm_params?.litellm_credential_name ?? null;
+      const selectedCredentialName: string | null = values.litellm_credential_name ?? null;
+      if (selectedCredentialName !== storedCredentialName) {
+        updatedLitellmParams.litellm_credential_name = selectedCredentialName;
       } else {
         delete updatedLitellmParams.litellm_credential_name;
       }
@@ -396,8 +360,11 @@ export default function ModelInfoView({
       }
 
       // Handle cache control settings
+      const hadInjectionPoints = Boolean(localModelData?.litellm_params?.cache_control_injection_points);
       if (values.cache_control && (values.cache_control_injection_points?.length ?? 0) > 0) {
         updatedLitellmParams.cache_control_injection_points = values.cache_control_injection_points;
+      } else if (hadInjectionPoints) {
+        updatedLitellmParams.cache_control_injection_points = null;
       } else {
         delete updatedLitellmParams.cache_control_injection_points;
       }
@@ -405,7 +372,7 @@ export default function ModelInfoView({
       // Parse the model_info from the form values
       let updatedModelInfo;
       try {
-        updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData.model_info;
+        updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData?.model_info;
         // Update access_groups from the form
         if (values.model_access_group) {
           updatedModelInfo = {
@@ -420,6 +387,7 @@ export default function ModelInfoView({
             health_check_model: values.health_check_model,
           };
         }
+        if (values.team_id) updatedModelInfo = { ...updatedModelInfo, team_id: values.team_id };
         updatedModelInfo = applyPtuModelInfo(updatedModelInfo, values, ptuCostAttributionEnabled);
       } catch (e) {
         toast.fromError("Invalid JSON in Model Info");
@@ -431,6 +399,7 @@ export default function ModelInfoView({
       // without this strip a masked value would be re-encrypted over the real secret.
       // Credential rotation has its own dedicated path (UpdateModelCredentialsModal).
       const safeLitellmParams = stripMaskedSecrets(updatedLitellmParams);
+      const { litellm_credential_name: _sentCredential, ...localLitellmParams } = safeLitellmParams;
 
       const updateData = {
         model_name: values.model_name,
@@ -444,7 +413,10 @@ export default function ModelInfoView({
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: safeLitellmParams,
+        litellm_params:
+          selectedCredentialName === null
+            ? localLitellmParams
+            : { ...localLitellmParams, litellm_credential_name: selectedCredentialName },
         model_info: updatedModelInfo,
       };
 
@@ -698,10 +670,7 @@ export default function ModelInfoView({
               </Card>
               <Card className="block p-6">
                 <p className="text-sm">Pricing</p>
-                <div className="mt-2">
-                  <p className="text-sm">Input: ${modelData.input_cost}/1M tokens</p>
-                  <p className="text-sm">Output: ${modelData.output_cost}/1M tokens</p>
-                </div>
+                <ModelPricingSummary model={modelData} />
               </Card>
             </div>
 
@@ -743,7 +712,7 @@ export default function ModelInfoView({
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Model Settings</h3>
                 <div className="flex gap-2">
-                  {isAutoRouterModel && canEditModel && !isEditing && (
+                  {isAutoRouterModel && canEditRouter && !isEditing && (
                     <Button onClick={() => setIsAutoRouterModalOpen(true)} className="flex items-center">
                       Edit Auto Router
                     </Button>
@@ -765,6 +734,7 @@ export default function ModelInfoView({
                 <ModelInfoEditForm
                   localModelData={localModelData}
                   modelData={modelData}
+                  teamAlias={aliasForTeam(localModelData.model_info?.team_id)}
                   accessToken={accessToken}
                   isEditing={isEditing}
                   isSaving={isSaving}
@@ -779,6 +749,7 @@ export default function ModelInfoView({
                   tagsList={tagsList}
                   credentialsList={credentialsList}
                   healthCheckModelOptions={healthCheckModelOptions}
+                  teams={assignableTeams}
                 />
               ) : (
                 <p className="text-sm">Loading...</p>
@@ -788,7 +759,9 @@ export default function ModelInfoView({
 
           <TabsContent value="raw" keepMounted>
             <Card className="block p-6">
-              <pre className="bg-muted p-4 rounded-sm text-xs overflow-auto">{JSON.stringify(modelData, null, 2)}</pre>
+              <pre className="bg-muted p-4 rounded-sm text-xs overflow-auto">
+                {JSON.stringify(rawModelData, null, 2)}
+              </pre>
             </Card>
           </TabsContent>
         </div>
@@ -867,6 +840,7 @@ export default function ModelInfoView({
         modelData={localModelData || modelData}
         accessToken={accessToken || ""}
         userRole={userRole || ""}
+        isMemberManaged={!canEditModel}
       />
 
       <Dialog open={isAutoRouterTestModalOpen} onOpenChange={(open) => !open && setIsAutoRouterTestModalOpen(false)}>
@@ -879,6 +853,11 @@ export default function ModelInfoView({
               key={autoRouterTestId}
               accessToken={accessToken}
               targets={autoRouterTestTargets}
+              jevRequest={buildSavedJevConnectionTestRequest(
+                (localModelData ?? modelData)?.litellm_params?.complexity_router_config,
+                (localModelData ?? modelData)?.model_info?.id,
+                (localModelData ?? modelData)?.model_info?.team_id,
+              )}
             />
           )}
           <DialogFooter>

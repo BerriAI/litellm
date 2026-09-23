@@ -1,11 +1,13 @@
-from collections.abc import AsyncGenerator, Mapping, Sequence
+import time
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
 
 import httpx
 from fastapi import HTTPException
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 import json
@@ -23,6 +25,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -47,10 +50,12 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
     Choices,
+    GenericGuardrailAPIInputs,
     GuardrailStatus,
     ModelResponse,
     ModelResponseStream,
@@ -117,7 +122,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     Supports:
     - Pre-call sanitization (sanitizeUserPrompt)
     - Post-call sanitization (sanitizeModelResponse)
+    - logging_only: scans the completed response after it reaches the client and
+      records the verdict in spend logs without blocking
     """
+
+    use_native_lifecycle_hooks: ClassVar[bool] = True
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -127,6 +136,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.pre_mcp_call,
             GuardrailEventHooks.during_mcp_call,
+            GuardrailEventHooks.logging_only,
         ]
 
     def __init__(
@@ -134,9 +144,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         template_id: str | None = None,
         project_id: str | None = None,
         location: str | None = None,
-        credentials: Any | None = None,
+        credentials: VERTEX_CREDENTIALS_TYPES | None = None,
         api_endpoint: str | None = None,
         sanitize_error_detail: "bool | None" = True,
+        async_handler: AsyncHTTPHandler | None = None,
+        access_token_provider: Callable[[], Awaitable[tuple[str, str]]] | None = None,
         **kwargs,
     ):
         # Set supported event hooks if not already provided
@@ -153,7 +165,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         VertexBase.__init__(self)
 
         # Then set our attributes (this ensures project_id is not overwritten)
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
+        self.access_token_provider = access_token_provider
         self.template_id = template_id
         self.project_id = project_id
         self.location = location or "us-central1"
@@ -184,7 +199,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         else:
             return {"modelResponseData": {"text": content}}
 
-    def _extract_content_from_response(self, response: Any | ModelResponse) -> str:
+    def _extract_content_from_response(self, response: object) -> str:
         """
         Extract text content from model response.
 
@@ -277,11 +292,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         If file_bytes and file_type are provided, file prompt sanitization is performed.
         """
         # Get access token using VertexBase auth
-        access_token, resolved_project_id = await self._ensure_access_token_async(
-            credentials=self.credentials,
-            project_id=self.project_id,
-            custom_llm_provider="vertex_ai",
-        )
+        if self.access_token_provider is not None:
+            access_token, resolved_project_id = await self.access_token_provider()
+        else:
+            access_token, resolved_project_id = await self._ensure_access_token_async(
+                credentials=self.credentials,
+                project_id=self.project_id,
+                custom_llm_provider="vertex_ai",
+            )
 
         # Use resolved project ID if not explicitly set
         if not self.project_id and resolved_project_id:
@@ -359,7 +377,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         else:
             return {"modelResponseData": {"byteItem": {"byteDataType": file_type, "byteData": base64_data}}}
 
-    def _should_block_content(self, armor_response: Mapping[str, Any], allow_sanitization: bool = False) -> bool:
+    def _should_block_content(self, armor_response: Mapping[str, object], allow_sanitization: bool = False) -> bool:
         """Check if Model Armor response indicates content should be blocked, including both inspectResult and deidentifyResult."""
         for filt in self._filter_result_items(armor_response):
             # Check RAI, PI/Jailbreak, Malicious URI, CSAM, Virus scan as before
@@ -428,7 +446,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return filter_results
         return []
 
-    def _has_deidentify_match(self, armor_response: Mapping[str, Any]) -> bool:
+    def _has_deidentify_match(self, armor_response: Mapping[str, object]) -> bool:
         """Whether an SDP de-identify filter matched, i.e. Model Armor owes this response a redaction."""
         for filter_entry in self._filter_result_items(armor_response):
             sdp = filter_entry.get("sdpFilterResult")
@@ -438,7 +456,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
     def _resolve_streaming_outcome(
         self,
-        armor_response: Mapping[str, Any],
+        armor_response: Mapping[str, object],
         assembled_response: object,
         content: str,
     ) -> tuple[bool, str | None]:
@@ -1095,10 +1113,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             add_guardrail_to_applied_guardrails_header,
         )
 
-        # Collect all chunks
-        all_chunks: Final[list[Any]] = []
-        async for chunk in response:
-            all_chunks.append(chunk)
+        if self.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is not True:
+            async for chunk in response:
+                yield chunk
+            return
+
+        all_chunks: Final[Sequence[object]] = tuple([chunk async for chunk in response])
 
         if not all_chunks or self._is_terminal_error_stream(all_chunks):
             for chunk in all_chunks:
@@ -1214,6 +1234,60 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         # Return original chunks if no sanitization needed
         for chunk in all_chunks:
             yield chunk
+
+    @log_guardrail_information
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> GenericGuardrailAPIInputs:
+        content: Final = "\n".join(text for text in inputs.get("texts") or () if text)
+        if not content:
+            return inputs
+
+        source: Final[Literal["user_prompt", "model_response"]] = (
+            "user_prompt" if input_type == "request" else "model_response"
+        )
+        start_time: Final = time.time()
+        try:
+            armor_response: Final = await self.make_model_armor_request(
+                content=content, source=source, request_data=request_data
+            )
+        except (ModelArmorAPIError, httpx.HTTPError) as e:
+            error_end_time: Final = time.time()
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=str(e),
+                request_data=request_data,
+                guardrail_status="guardrail_failed_to_respond",
+                guardrail_provider="model_armor",
+                start_time=start_time,
+                end_time=error_end_time,
+                duration=error_end_time - start_time,
+            )
+            return inputs
+
+        flagged: Final = self._should_block_content(armor_response, allow_sanitization=False)
+        end_time: Final = time.time()
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=self._build_logging_response(armor_response),
+            request_data=request_data,
+            guardrail_status="guardrail_flagged" if flagged else "success",
+            guardrail_provider="model_armor",
+            start_time=start_time,
+            end_time=end_time,
+            duration=end_time - start_time,
+        )
+        if flagged and not self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
+            raise HTTPException(
+                status_code=400,
+                detail=self._build_block_error_detail(
+                    "Response blocked by Model Armor" if input_type == "response" else "Content blocked by Model Armor",
+                    armor_response,
+                ),
+            )
+        return inputs
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:

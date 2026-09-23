@@ -1,6 +1,6 @@
 # litellm/proxy/guardrails/guardrail_hooks/pangea.py
 import os
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
 
@@ -35,14 +35,14 @@ class PangeaGuardrailMissingSecrets(Exception):
 
 
 class _TextCompletionRequest:
-    def __init__(self, body):
+    def __init__(self, body: dict[str, object]) -> None:
         self.body = body
 
     def get_messages(self) -> list[dict]:
         return [{"role": "user", "content": self.body["prompt"]}]
 
     # This mutates the original dict, but we'll still return it anyways
-    def update_original_body(self, prompt_messages: list[dict]) -> Any:
+    def update_original_body(self, prompt_messages: list[dict]) -> dict[str, object]:
         assert len(prompt_messages) == 1
         self.body["prompt"] = prompt_messages[0]["content"]
         return self.body
@@ -159,7 +159,7 @@ class PangeaHandler(CustomGuardrail):
         call_type: str,
     ):
         transformer = None
-        messages: Any = None
+        messages: object = None
         if call_type == "text_completion" or call_type == "atext_completion":
             transformer = _TextCompletionRequest(data)
             messages = transformer.get_messages()
@@ -230,7 +230,7 @@ class PangeaHandler(CustomGuardrail):
             messages: Final = data.get("messages")
             if messages is None:
                 return  # No messages to check
-            input_messages = cast(list[dict[Any, Any]], messages)
+            input_messages = messages
         else:
             return
 

@@ -1,11 +1,10 @@
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
+import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useMemo, useState } from "react";
 import { formatDate } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { GuardrailDetail } from "./GuardrailDetail";
 import { GuardrailsOverview } from "./GuardrailsOverview";
-
-type View = { type: "overview" } | { type: "detail"; guardrailId: string };
 
 interface GuardrailsMonitorViewProps {
   accessToken?: string | null;
@@ -16,7 +15,10 @@ const defaultStart = new Date();
 defaultStart.setDate(defaultStart.getDate() - 7);
 
 export default function GuardrailsMonitorView({ accessToken = null }: GuardrailsMonitorViewProps) {
-  const [view, setView] = useState<View>({ type: "overview" });
+  const [selectedGuardrailId, setSelectedGuardrailId] = useQueryState(
+    "guardrail",
+    parseAsString.withOptions({ history: "push" }),
+  );
 
   const initialFrom = useMemo(() => new Date(defaultStart), []);
   const initialTo = useMemo(() => new Date(defaultEnd), []);
@@ -34,11 +36,11 @@ export default function GuardrailsMonitorView({ accessToken = null }: Guardrails
   }, []);
 
   const handleSelectGuardrail = (id: string) => {
-    setView({ type: "detail", guardrailId: id });
+    void setSelectedGuardrailId(id);
   };
 
   const handleBack = () => {
-    setView({ type: "overview" });
+    void setSelectedGuardrailId(null, { history: "replace" });
   };
 
   const dateRangeControl = (
@@ -47,7 +49,7 @@ export default function GuardrailsMonitorView({ accessToken = null }: Guardrails
 
   return (
     <main className="w-full min-w-0 flex-1 p-8">
-      {view.type === "overview" ? (
+      {!selectedGuardrailId ? (
         <GuardrailsOverview
           accessToken={accessToken}
           startDate={startDate}
@@ -59,7 +61,7 @@ export default function GuardrailsMonitorView({ accessToken = null }: Guardrails
         <>
           <div className="mb-4 flex items-center justify-end">{dateRangeControl}</div>
           <GuardrailDetail
-            guardrailId={view.guardrailId}
+            guardrailId={selectedGuardrailId}
             onBack={handleBack}
             accessToken={accessToken}
             startDate={startDate}
