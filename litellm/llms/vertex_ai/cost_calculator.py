@@ -191,17 +191,13 @@ def _handle_128k_pricing(
     text_tokens: Final = max(usage.prompt_tokens - cache_read_tokens - cache_creation_tokens, 0)
     tier_tokens: Final = max(usage.prompt_tokens - cache_creation_tokens, 0)
     completion_tokens: Final = usage.completion_tokens
+    base_input_rate: Final = model_info["input_cost_per_token"] or 0.0
+    above_tier: Final = input_cost_per_token_above_128k_tokens is not None and _is_above_128k(tokens=tier_tokens)
 
-    input_rate: Final = (
-        input_cost_per_token_above_128k_tokens
-        if input_cost_per_token_above_128k_tokens is not None and _is_above_128k(tokens=tier_tokens)
-        else (model_info["input_cost_per_token"] or 0.0)
-    )
+    input_rate: Final = input_cost_per_token_above_128k_tokens if above_tier else base_input_rate
 
     cache_read_rate: Final = model_info.get("cache_read_input_token_cost") or input_rate
-    cache_creation_rate: Final = model_info.get("cache_creation_input_token_cost") or (
-        model_info["input_cost_per_token"] or 0.0
-    )
+    cache_creation_rate: Final = model_info.get("cache_creation_input_token_cost") or base_input_rate
 
     prompt_cost = (
         text_tokens * input_rate + cache_read_tokens * cache_read_rate + cache_creation_tokens * cache_creation_rate
