@@ -2019,6 +2019,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/routing/test_advisor_failure_cooldown.py::test_advisor_sub_call_401_leaves_the_executor_deployment_serving_the_next_request": [
+      "routing.cooldown.advisor_sub_call_failure_does_not_cool_down_the_executor_deployment"
     ]
   },
   "browser": {
