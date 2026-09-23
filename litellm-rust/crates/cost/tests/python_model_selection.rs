@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use litellm_cost::catalog::ModelInfoCatalog;
 use litellm_cost::model_selection::{
-    ModelSelectionRequest, get_hidden_str_for_cost_calc, get_response_model,
-    model_contains_known_llm_provider, strip_unregistered_leading_segments,
+    ModelSelectionRequest, get_hidden_str_for_cost_calc, get_provider_for_cost_calc,
+    get_response_model, model_contains_known_llm_provider, strip_unregistered_leading_segments,
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -171,5 +171,22 @@ fn model_selection_helpers_ignore_invalid_hidden_values_and_stop_at_provider_seg
     assert_eq!(
         strip_unregistered_leading_segments("vertex_ai/openai/claude", None, PROVIDERS, &catalog,),
         "vertex_ai/openai/claude"
+    );
+}
+
+#[rstest]
+#[case(Some("xai/model"), None, Some("xai"))]
+#[case(Some("custom"), None, Some("xai"))]
+#[case(Some("xai/model"), Some("anthropic"), Some("anthropic"))]
+#[case(Some("unknown"), None, None)]
+fn provider_inference_uses_explicit_prefix_or_catalog_metadata(
+    #[case] model: Option<&str>,
+    #[case] explicit: Option<&str>,
+    #[case] expected: Option<&str>,
+) {
+    let catalog = HashMap::from([("custom".to_owned(), json!({"litellm_provider": "xai"}))]);
+    assert_eq!(
+        get_provider_for_cost_calc(model, explicit, &["xai", "anthropic"], &catalog).as_deref(),
+        expected
     );
 }

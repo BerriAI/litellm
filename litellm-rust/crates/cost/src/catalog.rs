@@ -43,7 +43,9 @@ use crate::image_response_cost::{
     gemini_image_generation_cost, resolve_image_model_info, vertex_image_edit_cost,
     vertex_image_generation_cost,
 };
-use crate::model_selection::{ModelSelectionRequest, select_model_name_for_cost_calc};
+use crate::model_selection::{
+    ModelSelectionRequest, get_provider_for_cost_calc, select_model_name_for_cost_calc,
+};
 use crate::non_token::{Error as NonTokenError, ImageRates, ImageUsage, calculate_image};
 use crate::ocr_cost::{OcrCostError, ocr_cost};
 use crate::openai_cost::video_generation_cost as calculate_video_generation_cost;
@@ -406,6 +408,15 @@ impl ModelInfoCatalog {
 
     pub fn contains_exact_model(&self, model: &str) -> bool {
         self.entries.contains_key(model)
+    }
+
+    pub fn get_provider_for_cost_calc(
+        &self,
+        model: Option<&str>,
+        provider: Option<&str>,
+        known_providers: &[&str],
+    ) -> Option<String> {
+        get_provider_for_cost_calc(model, provider, known_providers, &self.entries)
     }
 
     pub fn select_model_name_for_cost_calc(

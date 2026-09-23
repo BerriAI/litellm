@@ -624,10 +624,24 @@ pub fn completion_cost_from_response(
         .prepare_completion_input(request.input)
         .map_err(CompletionResponseCostError::Usage)?;
     let hidden_params = request.input.model_selection.hidden_params;
-    let provider = hidden_params
+    let explicit_provider = hidden_params
         .and_then(|hidden| hidden.get("custom_llm_provider"))
         .and_then(Value::as_str)
         .or(request.provider);
+    let inferred_provider = explicit_provider.map(str::to_owned).or_else(|| {
+        prepared
+            .model_candidates
+            .iter()
+            .flatten()
+            .find_map(|model| {
+                catalog.get_provider_for_cost_calc(
+                    Some(model),
+                    None,
+                    request.input.model_selection.known_providers,
+                )
+            })
+    });
+    let provider = inferred_provider.as_deref();
     let deployment_info = request
         .input
         .model_selection

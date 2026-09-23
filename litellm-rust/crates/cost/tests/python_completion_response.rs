@@ -13,7 +13,14 @@ use litellm_token_counter::{Error as TokenCounterError, TokenCounter, Tokenizer}
 use rstest::rstest;
 use serde_json::{Value, json};
 
-const PROVIDERS: &[&str] = &["anthropic", "exa_ai", "openai", "recraft", "replicate"];
+const PROVIDERS: &[&str] = &[
+    "anthropic",
+    "exa_ai",
+    "openai",
+    "recraft",
+    "replicate",
+    "xai",
+];
 
 struct CharacterTokenizer;
 
@@ -73,6 +80,64 @@ fn request<'a>(
         margin_config: margin,
         logging_details: None,
     }
+}
+
+#[rstest]
+#[case("xai/served", json!({"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}))]
+#[case("served", json!({"litellm_provider": "xai", "input_cost_per_token": 0.01, "output_cost_per_token": 0.02}))]
+fn response_cost_infers_provider_for_specialized_pricing(#[case] model: &str, #[case] info: Value) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(model.to_owned(), info)]));
+    let response = json!({
+        "model": model,
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 10,
+            "total_tokens": 130,
+            "completion_tokens_details": {"reasoning_tokens": 20}
+        }
+    });
+    let empty = json!({});
+    let result = completion_cost_from_response(
+        &catalog,
+        request(Some(&response), Some(model), None, &empty, &empty),
+    )
+    .unwrap();
+    assert!((result.cost.total - (100.0 * 0.01 + 30.0 * 0.02)).abs() < 1e-12);
+}
+
+#[rstest]
+fn response_cost_infers_provider_from_priced_fallback_model() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "xai/served".to_owned(),
+        json!({"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}),
+    )]));
+    let response = json!({
+        "model": "xai/served",
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 10,
+            "total_tokens": 130,
+            "completion_tokens_details": {"reasoning_tokens": 20}
+        }
+    });
+    let empty = json!({});
+    let base = request(Some(&response), Some("missing"), None, &empty, &empty);
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                model_selection: ModelSelectionRequest {
+                    base_model: Some("missing"),
+                    ..base.input.model_selection
+                },
+                ..base.input
+            },
+            ..base
+        },
+    )
+    .unwrap();
+    assert_eq!(result.model, "xai/served");
+    assert!((result.cost.total - (100.0 * 0.01 + 30.0 * 0.02)).abs() < 1e-12);
 }
 
 #[rstest]

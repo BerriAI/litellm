@@ -74,7 +74,7 @@ fn has_explicit_pricing(entry: &Value) -> bool {
     .any(|key| entry.get(key).is_some_and(|value| !value.is_null()))
 }
 
-fn inferred_provider(
+pub fn get_provider_for_cost_calc(
     model: Option<&str>,
     explicit_provider: Option<&str>,
     known_providers: &[&str],
@@ -102,7 +102,7 @@ pub fn select_model_name_for_cost_calc(
     request: ModelSelectionRequest<'_>,
     cost_map: &HashMap<String, Value>,
 ) -> Option<String> {
-    let provider = inferred_provider(
+    let provider = get_provider_for_cost_calc(
         request.model,
         request.provider,
         request.known_providers,
