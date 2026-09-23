@@ -1458,6 +1458,7 @@ from .skills.main import (
 from .containers.main import *
 from .ocr.dispatch import *
 from .chat_completions.dispatch import *
+from .embeddings.dispatch import *
 from .rust_bridge import rust
 from .rag.main import *
 from .sandbox.main import *

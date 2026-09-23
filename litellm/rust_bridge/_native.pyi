@@ -6,9 +6,11 @@ import httpx
 from pydantic import JsonValue
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.rust_bridge.embeddings.entrypoints import LiteLLMEmbeddingRequest
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from litellm.types.utils import EmbeddingResponse
 
 class RustBridgeDeclined(Exception): ...
 class RustUpstreamError(Exception): ...
@@ -41,6 +43,16 @@ def aocr(
     args: tuple[object, ...],
     kwargs: dict[str, object],
 ) -> Coroutine[object, object, OCRResponse]: ...
+def embedding(
+    request: LiteLLMEmbeddingRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> EmbeddingResponse: ...
+def aembedding(
+    request: LiteLLMEmbeddingRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> Coroutine[object, object, EmbeddingResponse]: ...
 def transcription(
     model: str,
     audio: object,
