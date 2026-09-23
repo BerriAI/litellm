@@ -349,6 +349,19 @@ class CredentialLiteLLMParams(BaseModel):
     ## OBJECT STORAGE (files / batches) ##
     gcs_bucket_name: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def map_legacy_bucket_name(cls, data: object) -> object:
+        """
+        ``bucket_name`` is the legacy spelling of ``gcs_bucket_name``. Without this
+        mapping it is silently dropped by the strict dump in
+        ``get_deployment_credentials_with_provider``, so batch output retrieval
+        fails with a bucket mismatch even though the upload path accepted it.
+        """
+        if isinstance(data, dict) and not data.get("gcs_bucket_name") and isinstance(data.get("bucket_name"), str):
+            return {**data, "gcs_bucket_name": data["bucket_name"]}
+        return data
+
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None

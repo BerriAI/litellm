@@ -6308,6 +6308,55 @@ def test_get_deployment_credentials_with_provider_includes_bucket_name():
     assert credentials["custom_llm_provider"] == "vertex_ai"
 
 
+def test_get_deployment_credentials_with_provider_maps_legacy_bucket_name():
+    """
+    Regression: deployments configured with the legacy ``bucket_name`` key lost it
+    on the strict CredentialLiteLLMParams dump, so batch output retrieval resolved
+    the wrong bucket and failed with "file_id bucket does not match the configured
+    storage bucket". The legacy key must map to ``gcs_bucket_name``.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.5-flash",
+                    "vertex_project": "my-project",
+                    "vertex_location": "global",
+                    "bucket_name": "my-legacy-bucket",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(model_id="vertex-gemini")
+
+    assert credentials is not None
+    assert credentials["gcs_bucket_name"] == "my-legacy-bucket"
+
+
+def test_get_deployment_credentials_with_provider_prefers_gcs_bucket_name_over_legacy():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.5-flash",
+                    "vertex_project": "my-project",
+                    "vertex_location": "global",
+                    "gcs_bucket_name": "new-bucket",
+                    "bucket_name": "legacy-bucket",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(model_id="vertex-gemini")
+
+    assert credentials is not None
+    assert credentials["gcs_bucket_name"] == "new-bucket"
+
+
 def test_get_deployment_credentials_with_provider_resolves_credential_name():
     """
     Test that get_deployment_credentials_with_provider correctly resolves
