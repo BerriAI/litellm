@@ -923,16 +923,6 @@ async def _log_passthrough_upstream_failure(
     request_payload: dict,
     logging_obj: LiteLLMLoggingObj,
 ) -> httpx.Response:
-    """Fire LiteLLM-side failure hooks (spend tracking, alerting callbacks) for
-    an upstream 4xx/5xx passthrough response.
-
-    Passthrough must return the upstream status/body/headers to the client
-    unchanged, so this never raises; it mirrors the monitoring side effect
-    that ``post_call_failure_hook`` would have received had the error
-    originated inside LiteLLM, and returns the response the caller must
-    relay (a prefix-replay replacement when the error preview was pulled
-    off an unconsumed streaming body).
-    """
     if response.status_code < 400:
         return response
     from litellm.proxy.proxy_server import proxy_logging_obj
