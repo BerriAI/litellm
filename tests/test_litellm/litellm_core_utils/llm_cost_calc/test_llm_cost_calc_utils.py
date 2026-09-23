@@ -3761,3 +3761,31 @@ def test_get_batch_cost_rates_has_no_cache_write_rate_without_a_cache_write_batc
     )
 
     assert rates.cache_creation is None
+
+
+@pytest.mark.parametrize("model_base", ["gpt-6-sol", "gpt-6-luna"])
+def test_azure_gpt_6_foundry_price_sheet(_local_model_cost_map, model_base):
+    """Azure Foundry hosts gpt-6-sol and gpt-6-luna at OpenAI's Global rates, with the
+    US and EU data zones charging fixed uplifts on top of them."""
+    price_fields = (
+        "input_cost_per_token",
+        "cache_read_input_token_cost",
+        "cache_creation_input_token_cost",
+        "output_cost_per_token",
+        "input_cost_per_token_above_272k_tokens",
+        "cache_read_input_token_cost_above_272k_tokens",
+        "cache_creation_input_token_cost_above_272k_tokens",
+        "output_cost_per_token_above_272k_tokens",
+    )
+    openai_info = litellm.get_model_info(model=model_base, custom_llm_provider="openai")
+    azure_info = litellm.get_model_info(model=f"azure/{model_base}", custom_llm_provider="azure")
+    azure_us_info = litellm.get_model_info(model=f"azure/us/{model_base}", custom_llm_provider="azure")
+    azure_eu_info = litellm.get_model_info(model=f"azure/eu/{model_base}", custom_llm_provider="azure")
+    azure_ai_info = litellm.get_model_info(model=f"azure_ai/{model_base}", custom_llm_provider="azure_ai")
+
+    for field in price_fields:
+        base = openai_info[field]
+        assert azure_info[field] == base
+        assert azure_ai_info[field] == base
+        assert azure_us_info[field] == pytest.approx(1.1 * base)
+        assert azure_eu_info[field] == pytest.approx(1.2 * base)
