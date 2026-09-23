@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
 use litellm_cost::batch::{
     BatchCostRates, BatchPricing, BatchUsage, ModalityRates, batch_cost_calculator,
 };
+use litellm_cost::catalog::CostCatalog;
 use litellm_cost::custom_pricing::{
     CustomPricing, CustomTokenRates, RawUsage, cost_per_token_custom_pricing_helper,
     normalize_cache_usage,
@@ -161,5 +164,33 @@ fn main() {
     println!(
         "custom_input={} custom_output={}",
         custom.input, custom.output
+    );
+    let catalog = CostCatalog::new(HashMap::from([(
+        "bedrock_mantle/us-gov-west-1/model".to_owned(),
+        Rates {
+            input: Rate::Value(5e-6),
+            output: Rate::Value(6e-6),
+            ..Rates::EMPTY
+        },
+    )]));
+    let catalog_request = Request {
+        usage: Usage {
+            completion_tokens: 50,
+            ..request.usage
+        },
+        ..request
+    };
+    let catalog_cost = catalog
+        .cost_per_token(
+            "bedrock_mantle/model",
+            Some("bedrock_mantle"),
+            Some("us-gov-west-1"),
+            &catalog_request,
+        )
+        .unwrap();
+    println!(
+        "catalog_input={:.4} catalog_output={:.4}",
+        catalog_cost.input(),
+        catalog_cost.output()
     );
 }

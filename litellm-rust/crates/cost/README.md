@@ -10,6 +10,8 @@ Call `compile(&pricing)` once for an immutable plan, then `plan.calculate(&reque
 
 `custom_pricing::normalize_cache_usage` applies Python's cache field precedence and adjusts prompt tokens when cache counts use the Anthropic convention. `custom_pricing::cost_per_token_custom_pricing_helper` prices normalized usage with caller-supplied token or per-second rates. The module validates finite nonnegative quantities and rates before calculation
 
+`catalog::CostCatalog` accepts a caller-supplied map of model keys to token rates. Its `select_model_key` handles duplicate provider prefixes, optional region-specific keys, provider-prefixed keys, and bare-model fallback in the same order as Python's `cost_per_token`. Its `cost_per_token` method calculates generic token cost for the selected key. Catalog loading and provider-specific dispatch remain outside this method
+
 ## Python function map
 
 The Rust module tree does not mirror Python's overall cost module tree. The Python entry points also look up models, normalize responses, and choose providers, while this crate starts with caller-supplied prices and usage. These mappings cover the calculation portions of the functions:
@@ -25,6 +27,7 @@ The Rust module tree does not mirror Python's overall cost module tree. The Pyth
 | `litellm.cost_calculator.batch_cost_calculator` | `litellm_cost::batch::batch_cost_calculator` | `test_cost_calculator.py::test_batch_cost_calculator_*` | `python_cost_calculator.rs::batch_cost_calculator_*` |
 | `litellm.cost_calculator.cost_per_token` cache normalization | `litellm_cost::custom_pricing::normalize_cache_usage` | `test_cost_calculator.py::test_custom_pricing_*` | `python_custom_pricing.rs::normalize_cache_usage_*` |
 | `litellm.cost_calculator._cost_per_token_custom_pricing_helper` | `litellm_cost::custom_pricing::cost_per_token_custom_pricing_helper` | `test_cost_calculator.py::test_custom_pricing_*` | `python_custom_pricing.rs::cost_per_token_custom_pricing_helper_*` |
+| `litellm.cost_calculator.cost_per_token` model-key selection and generic token calculation | `litellm_cost::catalog::CostCatalog::select_model_key`, `CostCatalog::cost_per_token` | `test_cost_calculator.py::test_cost_per_token_duplicate_openai_prefix_matches_model_cost`, `test_cost_calculator.py::test_cost_per_token_region_name_applies_to_provider_prefixed_model` | `python_model_lookup.rs::cost_per_token_*` |
 
 `cost_per_token`, `completion_cost`, `response_cost_calculator`, provider calculators, and Python's model lookup and response normalization have no Rust counterpart yet. The ported Rust cases use `rstest` and synthetic prices; they cover the corresponding Python tests' price selection and arithmetic, not their integration with Python model registration
 

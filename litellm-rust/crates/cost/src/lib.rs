@@ -1,4 +1,5 @@
 pub mod batch;
+pub mod catalog;
 pub mod custom_pricing;
 pub mod non_token;
 
