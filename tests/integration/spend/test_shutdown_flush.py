@@ -130,6 +130,7 @@ def _proxy_with_one_seeded_row(gateway: Gateway, tmp_path: Path, pool_limit: int
             gateway,
             tmp_path,
             {
+                "DATABASE_URL": os.environ["DATABASE_URL"],
                 "LITELLM_LOG": "DEBUG",
                 "GRACEFUL_SHUTDOWN_TIMEOUT": "1",
                 "SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS": "1",
