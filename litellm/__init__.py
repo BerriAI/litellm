@@ -706,6 +706,7 @@ aws_polly_models: Set = set()
 transcribe_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
+pgsgrove_models: Set = set()  # mutable-ok: filled from the price map at import, like the sibling provider sets
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
 
@@ -991,6 +992,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             gigachat_models.add(key)
         elif value.get("litellm_provider") == "llamagate":
             llamagate_models.add(key)
+        elif value.get("litellm_provider") == "pgsgrove":
+            pgsgrove_models.add(key)
         elif value.get("litellm_provider") == "reducto":
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
@@ -1239,6 +1242,7 @@ def _build_models_by_provider() -> dict:
         "transcribe": transcribe_models,
         "gigachat": gigachat_models,
         "llamagate": llamagate_models,
+        "pgsgrove": pgsgrove_models,
         "reducto": reducto_models,
         "bedrock_mantle": bedrock_mantle_models,
     }
