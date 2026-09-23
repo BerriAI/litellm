@@ -1849,6 +1849,9 @@
     "tests/integration/spend/test_model_router_selected_model.py::test_model_router_alias_without_router_in_name_keeps_selected_model_in_response_and_spend_log": [
       "spend.model_router.selected_model_is_returned_and_persisted_for_plain_alias"
     ],
+    "tests/integration/spend/test_session_total_spend.py::test_logs_ui_session_total_spend_sums_every_round_of_a_multi_round_session": [
+      "spend.logs_ui.multi_round_session_total_spend_sums_every_round"
+    ],
     "tests/integration/spend/test_org_budget_cli_session_token.py::test_cli_session_token_without_org_id_charges_and_caps_the_team_organization": [
       "quota_management.organization_budget.cli_session_token_without_org_id_charges_team_organization"
     ],
