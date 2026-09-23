@@ -238,18 +238,6 @@ export const getSemanticConfigError = ({
 };
 
 
-// Ids are session-ephemeral, so a stored floor hydrates by name; unresolvable means off, the same
-// rule the editor and the wire apply.
-export const hydratePlanModeMinTier = (
-  stored: unknown,
-  customTierSet: CustomTierSet | undefined,
-): string | undefined => {
-  if (typeof stored !== "string" || !stored.trim()) return undefined;
-  if (!customTierSet) return stored;
-  return tierRowByName(customTierSet.tiers, stored)?.id;
-};
-
-
 export const buildComplexityRouterConfig = ({
   tiers,
   defaultModel,
