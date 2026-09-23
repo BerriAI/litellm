@@ -9,6 +9,7 @@ from opentelemetry import baggage
 from opentelemetry.context import Context, get_current
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import (
+    INVALID_SPAN,
     Link,
     NonRecordingSpan,
     Span,
@@ -223,6 +224,38 @@ def resolve_parent_context(threaded: Span | None = None) -> Context:
     if is_recordable_span(threaded) and not is_recordable_span(get_current_span(ctx)):
         ctx = context_from_span(threaded, context=ctx)
     return ctx
+
+
+def resolve_service_span_context(
+    threaded: Span | None = None, end_time_ns: int | None = None
+) -> "tuple[Context, tuple[Link, ...]]":
+    """Parent context + links for a service/DB span that ended at ``end_time_ns``.
+
+    Nests under :func:`resolve_parent_context` while that parent is still open,
+    or was still open when the call finished. A call that outlived its parent
+    (the spend-tracking, cache and spend-counter writes the proxy fires after the
+    response is on the wire) did not contribute to the request's latency, so
+    parenting it there would stretch the request trace past the request itself.
+    Following the ``FollowsFrom`` convention (OpenTracing) and the OTel link
+    guidance for asynchronous work (the default ``:link`` propagation style of
+    the Ruby ActiveJob / Sidekiq instrumentations), such a call starts its own
+    root trace carrying a span link back to the request span. Baggage stays on
+    the returned context, so identity attributes still reach the detached span.
+
+    Only an SDK span that has actually ended detaches: a sampled-out or remote
+    ``NonRecordingSpan`` never records but is still the correct parent.
+    """
+    ctx: Final = resolve_parent_context(threaded)
+    parent: Final = get_current_span(ctx)
+    if not _ended_before(parent, end_time_ns):
+        return ctx, ()
+    return set_span_in_context(INVALID_SPAN, ctx), (Link(parent.get_span_context()),)
+
+
+def _ended_before(span: Span, end_time_ns: int | None) -> bool:
+    if not isinstance(span, ReadableSpan) or span.end_time is None:
+        return False
+    return end_time_ns is None or end_time_ns > span.end_time
 
 
 def resolve_request_span_context() -> Context:
