@@ -48,6 +48,7 @@ CONVERTED_SYSTEM_NOTE: Final = (
 
 _USER_TYPE_ROLES: Final = frozenset({"user", "tool", "function"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
+_RENDERED_PART_TYPES: Final = frozenset({"text", "image_url", "document", "file"})
 
 _MessageKind: TypeAlias = Literal["system", "tool", "user", "other"]
 _TextPart: TypeAlias = tuple[str, ChatCompletionCachedContent | None]
@@ -242,12 +243,13 @@ def _renders(message: object) -> bool:
     """Whether ``anthropic_messages_pt`` puts a block on the wire for this user-type message.
 
     A tool message always becomes a ``tool_result`` and string content always becomes
-    a text block (empty text gets a placeholder); ``None`` or an empty list vanishes.
+    a text block (empty text gets a placeholder). A list renders only through parts of
+    a type the converter emits; ``None``, an empty list, and a list of other parts vanish.
     """
     if _field(message, "role") in _TOOL_ROLES:
         return True
     content: Final = _field(message, "content")
-    return isinstance(content, str) or bool(_as_items(content))
+    return isinstance(content, str) or any(_field(part, "type") in _RENDERED_PART_TYPES for part in _as_items(content))
 
 
 def _rendered_block(

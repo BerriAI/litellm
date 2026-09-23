@@ -23,6 +23,13 @@ def _texts(message: dict) -> list[str]:
     return [block["text"] for block in message["content"]]
 
 
+SENDS_NOTHING = pytest.mark.parametrize(
+    "empty_content",
+    [[], None, [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}]],
+    ids=["empty-list", "none", "unsupported-part-only"],
+)
+
+
 def test_split_leading_system_run_keeps_later_system_messages_in_the_conversation():
     messages = [
         {"role": "system", "content": "one"},
@@ -200,7 +207,7 @@ def test_flagged_placement_of_an_earlier_run_does_not_move_when_later_turns_are_
     assert _roles(placed_n_plus_one) == ["user", "assistant", "user", "assistant", "user"]
 
 
-@pytest.mark.parametrize("empty_content", [[], None])
+@SENDS_NOTHING
 def test_flagged_placement_converts_a_run_whose_preceding_user_turn_sends_nothing(empty_content):
     placed = place_mid_conversation_system(
         [
@@ -216,7 +223,7 @@ def test_flagged_placement_converts_a_run_whose_preceding_user_turn_sends_nothin
     assert _texts(placed[1]) == [CONVERTED_SYSTEM_NOTE, "reminder"]
 
 
-@pytest.mark.parametrize("empty_content", [[], None])
+@SENDS_NOTHING
 def test_flagged_placement_converts_a_run_whose_following_user_turn_sends_nothing(empty_content):
     placed = place_mid_conversation_system(
         [

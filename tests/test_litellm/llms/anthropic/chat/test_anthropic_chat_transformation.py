@@ -6639,7 +6639,11 @@ def test_chat_flagged_model_converts_system_with_no_following_user_turn(local_mo
     assert _texts(result["messages"][2]) == [CONVERTED_SYSTEM_NOTE, REMINDER_TEXT]
 
 
-@pytest.mark.parametrize("empty_content", [[], None])
+@pytest.mark.parametrize(
+    "empty_content",
+    [[], None, [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}]],
+    ids=["empty-list", "none", "unsupported-part-only"],
+)
 def test_chat_flagged_model_converts_a_system_behind_a_user_turn_that_sends_nothing(
     local_model_cost_map, empty_content
 ):
@@ -6655,6 +6659,33 @@ def test_chat_flagged_model_converts_a_system_behind_a_user_turn_that_sends_noth
 
     assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user"]
     assert _texts(result["messages"][0]) == [CONVERTED_SYSTEM_NOTE, REMINDER_TEXT]
+
+
+USER_PART_BY_TYPE = {
+    "text": {"type": "text", "text": "hello"},
+    "image_url": {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+    "document": {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "hello"}},
+    "file": {"type": "file", "file": {"file_data": "data:text/plain;base64,aGVsbG8=", "filename": "hello.txt"}},
+    "input_audio": {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
+    "video_url": {"type": "video_url", "video_url": {"url": "https://example.com/clip.mp4"}},
+}
+
+
+@pytest.mark.parametrize("part_type", sorted(USER_PART_BY_TYPE))
+def test_chat_flagged_model_anchors_a_system_on_a_user_turn_exactly_when_that_turn_reaches_the_wire(
+    local_model_cost_map, part_type
+):
+    part_only_turn = {"role": "user", "content": [USER_PART_BY_TYPE[part_type]]}
+    tail = [{"role": "assistant", "content": "First answer"}, {"role": "user", "content": "Second question"}]
+
+    without_reminder = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, [part_only_turn, *tail])
+    with_reminder = _chat_request(
+        AnthropicConfig(), FLAGGED_CLAUDE, [part_only_turn, {"role": "system", "content": REMINDER_TEXT}, *tail]
+    )
+
+    turn_reaches_wire = [m["role"] for m in without_reminder["messages"]] == ["user", "assistant", "user"]
+    expected_roles = ["user", "system", "assistant", "user"] if turn_reaches_wire else ["user", "assistant", "user"]
+    assert [m["role"] for m in with_reminder["messages"]] == expected_roles
 
 
 def test_chat_flagged_model_merges_adjacent_system_messages(local_model_cost_map):
