@@ -470,3 +470,56 @@ fn a_numeric_team_id_is_stringified_like_python() {
 
     assert_eq!(ptu_terms(&model_info).expect("terms").team_id, "7");
 }
+
+#[test]
+fn a_declared_512k_cache_read_rate_is_zeroed_too() {
+    let extra = "cache_read_input_token_cost_above_512k_tokens";
+    let declared = json!({extra: 1e-06});
+
+    let override_pricing = zeroed_with_flag(&valid_model_info(), &declared, true).expect("pricing");
+
+    assert_eq!(override_pricing.get(extra), Some(&json!(0.0)));
+}
+
+#[rstest]
+#[case(json!({"ptu_effective_to": Value::Null}))]
+#[case::missing(json!({}))]
+fn a_null_or_absent_effective_to_leaves_the_window_open(#[case] override_value: Value) {
+    let model_info = merge(&valid_model_info(), &override_value);
+
+    assert_eq!(ptu_terms(&model_info).expect("terms").effective_to, None);
+}
+
+#[test]
+fn a_blank_current_id_falls_back_to_the_model_info_route() {
+    let error = ptu_identity_error(None, false, Some(""), None).expect("error");
+
+    assert!(error.contains("shown by GET /model/info"));
+    assert!(!error.contains("uses, ,"));
+}
+
+#[test]
+fn a_null_spillover_source_is_absent_not_the_string_none() {
+    assert_eq!(
+        azure_spillover(
+            Some(&json!({
+                "x-ms-is-spilled-over": "true",
+                "x-ms-spillover-from-deployment": Value::Null,
+            })),
+            None,
+        ),
+        Some(litellm_cost::ptu_pricing::AzureSpillover {
+            from_deployment: None,
+        })
+    );
+}
+
+#[test]
+fn a_config_error_names_the_model_when_supplied() {
+    let model_info = merge(&valid_model_info(), &json!({"team_id": ""}));
+
+    let error = ptu_config_error(&model_info, Some("azure-ptu")).expect("error");
+    assert!(
+        error.starts_with("PTU configuration on model 'azure-ptu' is invalid: team_id is required")
+    );
+}

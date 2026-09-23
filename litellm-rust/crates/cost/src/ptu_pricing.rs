@@ -57,6 +57,7 @@ const CUSTOM_PRICING_FIELDS: &[&str] = &[
     "cache_read_input_token_cost",
     "cache_read_input_token_cost_above_200k_tokens",
     "cache_read_input_token_cost_above_200k_tokens_priority",
+    "cache_read_input_token_cost_above_512k_tokens",
     "cache_read_input_token_cost_above_272k_tokens",
     "cache_read_input_token_cost_above_272k_tokens_batches",
     "cache_read_input_token_cost_above_272k_tokens_flex",
@@ -292,7 +293,9 @@ pub fn ptu_identity_error(
     model_name: Option<&str>,
 ) -> Option<String> {
     if declared_id.is_none_or(str::is_empty) {
-        let current = current_id.unwrap_or("shown by GET /model/info");
+        let current = current_id
+            .filter(|current| !current.is_empty())
+            .unwrap_or("shown by GET /model/info");
         return Some(named(
             &format!(
                 "model_info.id is required when PTU fields are set. Without one the deployment is \
@@ -330,8 +333,12 @@ pub fn ptu_terms(model_info: &Value) -> Option<PtuTerms> {
     if !(0.0..=MAX_COST_PER_PTU_PER_HOUR).contains(&cost_per_hour) {
         return None;
     }
-    let raw_from = model_info.get("ptu_effective_from");
-    let raw_to = model_info.get("ptu_effective_to");
+    let raw_from = model_info
+        .get("ptu_effective_from")
+        .filter(|value| !value.is_null());
+    let raw_to = model_info
+        .get("ptu_effective_to")
+        .filter(|value| !value.is_null());
     let effective_from = raw_from.and_then(as_utc)?;
     let effective_to = raw_to.and_then(as_utc);
     if raw_to.is_some() && effective_to.is_none() {
@@ -417,6 +424,7 @@ pub fn azure_spillover(
         }
         let from_deployment = headers
             .get(&format!("{prefix}{AZURE_SPILLOVER_FROM_HEADER}"))
+            .filter(|value| !value.is_null())
             .map(py_str);
         return Some(AzureSpillover { from_deployment });
     }
