@@ -1348,6 +1348,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
         return (convert_model_response_to_streaming(assembled),)
 
+    async def _mask_raw_sse_stream(
+        self, first_chunk: bytes, stream: AsyncIterator[object], request_data: dict
+    ) -> tuple[object, ...] | None:
+        """Mask a raw SSE stream when its first frame is an Anthropic event; None means pass it through untouched."""
+        if not is_anthropic_sse_stream((first_chunk,)):
+            return None
+        return await self._mask_anthropic_sse_stream(first_chunk, stream, request_data)
+
     async def _stream_apply_output_masking(
         self,
         response: AsyncIterable[object],
@@ -1368,11 +1376,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     if passthrough_due_to_unknown_stream_shape or all_chunks:
                         yield chunk
                         continue
-                    if not is_anthropic_sse_stream((chunk,)):
+                    masked_sse: Final = await self._mask_raw_sse_stream(chunk, stream, request_data)
+                    if masked_sse is None:
                         passthrough_due_to_unknown_stream_shape = True
                         yield chunk
                         continue
-                    for masked_chunk in await self._mask_anthropic_sse_stream(chunk, stream, request_data):
+                    for masked_chunk in masked_sse:
                         yield masked_chunk
                     return
                 else:
