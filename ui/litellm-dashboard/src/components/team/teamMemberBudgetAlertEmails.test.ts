@@ -24,6 +24,13 @@ describe("teamMemberBudgetAlertRowsFromMetadata", () => {
     expect(teamMemberBudgetAlertRowsFromMetadata(metadata)).toEqual([{ threshold: 100, emails: "a@b.c" }]);
   });
 
+  it("drops API-stored thresholds outside 1 to 100 so they never block the form", () => {
+    const metadata = {
+      team_member_max_budget_alert_emails: { "0": ["a@b.c"], "50": [], "101": ["a@b.c"] },
+    };
+    expect(teamMemberBudgetAlertRowsFromMetadata(metadata)).toEqual([{ threshold: 50, emails: "" }]);
+  });
+
   it.each([undefined, null, "50", { team_member_max_budget_alert_emails: "50" }, { soft_budget_alerting_emails: [] }])(
     "returns no rows for unrelated or malformed metadata %j",
     (metadata) => {

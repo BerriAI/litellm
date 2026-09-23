@@ -3345,6 +3345,8 @@ async def test_virtual_key_max_budget_alert_check_without_user_obj():
         (0.049, {"team_member_max_budget_alert_emails": {"50": [], "100": ["finance@co.com"]}}, False),
         (0.0, {"team_member_max_budget_alert_emails": {"50": []}}, False),
         (0.10, {"team_member_max_budget_alert_emails": {"abc": []}}, False),
+        (0.05, {"team_member_max_budget_alert_emails": {"0": ["finance@co.com"], "100": []}}, False),
+        (0.10, {"team_member_max_budget_alert_emails": {"101": ["finance@co.com"]}}, False),
         (0.10, {"team_member_max_budget_alert_emails": "50"}, False),
         (0.10, {"soft_budget_alerting_emails": ["finance@co.com"]}, False),
         (0.10, None, False),
@@ -3384,6 +3386,30 @@ async def test_team_member_max_budget_alert_check_dispatches_only_at_configured_
     assert (call_info.team_id, call_info.team_alias, call_info.organization_id) == ("team-1", "platform", "org-1")
     assert call_info.max_budget_alert_emails == {"50": [], "100": ["finance@co.com"]}
     assert call_info.token is None
+
+
+@pytest.mark.asyncio
+async def test_team_member_max_budget_alert_check_drops_thresholds_outside_1_to_100():
+    captured: list[CallInfo] = []
+
+    class RecordingProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            captured.append(user_info)
+
+    _team_member_max_budget_alert_check(
+        team_id="team-1",
+        team_alias="platform",
+        team_metadata={"team_member_max_budget_alert_emails": {"0": ["a@co.com"], "50": [], "150": ["b@co.com"]}},
+        organization_id="org-1",
+        user_id="user-1",
+        user_email="member@co.com",
+        proxy_logging_obj=RecordingProxyLogging(),
+        spend=0.05,
+        max_budget=0.10,
+    )
+    await asyncio.sleep(0)
+
+    assert [call_info.max_budget_alert_emails for call_info in captured] == [{"50": []}], captured
 
 
 @pytest.mark.asyncio

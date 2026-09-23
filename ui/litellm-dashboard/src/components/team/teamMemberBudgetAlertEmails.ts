@@ -35,7 +35,9 @@ export const teamMemberBudgetAlertRowsFromMetadata = (metadata: unknown): readon
   return Object.entries(config as Record<string, unknown>)
     .flatMap(([key, emails]) => {
       const threshold = Number(key);
-      return /^\d+$/.test(key) && isEmailList(emails) ? [{ threshold, emails: emails.join(", ") }] : [];
+      return /^\d+$/.test(key) && isValidThreshold(threshold) && isEmailList(emails)
+        ? [{ threshold, emails: emails.join(", ") }]
+        : [];
     })
     .sort((a, b) => (a.threshold ?? 0) - (b.threshold ?? 0));
 };

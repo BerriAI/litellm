@@ -5539,14 +5539,17 @@ def _team_member_max_budget_alert_check(
     max_budget: float,
 ) -> None:
     raw_config: Final = (team_metadata or {}).get(TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY)
-    alert_email_config: Final = _merge_budget_alert_email_configs(
+    merged_config: Final = _merge_budget_alert_email_configs(
         global_cfg=None,
         per_key_cfg=raw_config if isinstance(raw_config, Mapping) else None,
     )
+    alert_email_config: Final = {
+        pct: emails for pct, emails in (merged_config or {}).items() if pct.isdigit() and 1 <= int(pct) <= 100
+    }
     if not alert_email_config or spend <= 0:
         return
-    min_pct: Final = min((int(k) for k in alert_email_config if k.isdigit()), default=None)
-    if min_pct is None or spend < max_budget * (min_pct / 100.0):
+    min_pct: Final = min(int(pct) for pct in alert_email_config)
+    if spend < max_budget * (min_pct / 100.0):
         return
     call_info: Final = CallInfo(
         spend=spend,
