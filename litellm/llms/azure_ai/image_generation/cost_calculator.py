@@ -57,7 +57,9 @@ def cost_calculator(
         from litellm.cost_calculator import default_image_cost_calculator
 
         num_images: Final = n if n is not None else len(image_response.data or ())
-        model_cost: Final = cast(Mapping[str, object], litellm.model_cost.get(_model_info.get("key") or model) or {})
+        model_cost: Final = cast(  # cast-ok: litellm.model_cost is an untyped shared dict
+            Mapping[str, object], litellm.model_cost.get(_model_info.get("key") or model) or {}
+        )
         output_cost_per_image: Final[float] = _model_info.get("output_cost_per_image") or 0.0
         input_cost_per_pixel: Final[float] = _input_cost_per_pixel(_model_info)
         width: Final = optional_params.get("width") if optional_params else None
