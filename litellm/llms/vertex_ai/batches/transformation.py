@@ -70,11 +70,11 @@ def _native_vertex_row_usage(
     response_body: Mapping[str, object],
     calculate_usage: Callable[[GenerateContentResponseBody], Usage],
 ) -> Usage | None:
-    if is_vertex_embedding_batch_output_response(response_body):
+    if "usageMetadata" not in response_body:
+        if not is_vertex_embedding_batch_output_response(response_body):
+            return None
         prompt_tokens: Final = vertex_embedding_prompt_token_count(response_body)
         return Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
-    if "usageMetadata" not in response_body:
-        return None
     try:
         completion_response: Final = _NATIVE_VERTEX_RESPONSE.validate_python(response_body)
     except ValidationError as e:
@@ -95,9 +95,10 @@ def native_vertex_batch_row_stats(
     Usage and cost of one native Vertex predictions.jsonl row, a
     `{"request": ..., "response": {"candidates": [...], "usageMetadata": {...}, "modelVersion": ...}}`
     generateContent object or a `{"request": ..., "response": {"embedding": {...}, "usageMetadata": {...}}}`
-    embedding object. `model_name` (the deployment model) prices the row, else its own `modelVersion` does;
-    a row without a response, a generateContent row without `response.usageMetadata`, and a row whose
-    response fails validation are None (failed).
+    embedding object (an embedding row without `usageMetadata` is billed from its documented `tokenCount`).
+    `model_name` (the deployment model) prices the row, else its own `modelVersion` does; a row without a
+    response, a generateContent row without `response.usageMetadata`, and a row whose response fails
+    validation are None (failed).
     """
     response_body: Final = row.get("response")
     if not isinstance(response_body, dict):

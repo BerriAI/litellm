@@ -735,7 +735,11 @@ def test_vertex_batch_usage_preserves_modality_token_details(monkeypatch):
     )
     responses = [
         {
+            "key": "id_1",
+            "status": "",
+            "request": {"content": {"parts": [{"text": "hello"}, {"fileData": {"mimeType": "audio/wav"}}]}},
             "response": {
+                "embedding": {"values": [0.1, 0.2]},
                 "usageMetadata": {
                     "promptTokenCount": 84,
                     "candidatesTokenCount": 0,
@@ -744,13 +748,14 @@ def test_vertex_batch_usage_preserves_modality_token_details(monkeypatch):
                         {"modality": "AUDIO", "tokenCount": 64},
                         {"modality": "TEXT", "tokenCount": 20},
                     ],
-                }
-            }
+                },
+            },
         }
     ]
 
     result = bu.calculate_vertex_ai_batch_cost_and_usage(responses, "gemini-embedding-2")
 
+    assert (result.successful_requests, result.usage.prompt_tokens) == (1, 84)
     assert result.prompt_cost == pytest.approx(64 * 3.25e-6 + 20 * 1e-7)
 
 
