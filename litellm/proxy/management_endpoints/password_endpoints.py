@@ -26,6 +26,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.login_utils import PASSWORD_SESSION_METADATA
 from litellm.proxy.auth.password_policy import validate_password_not_breached, validate_password_policy
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.session_endpoints import revoke_ui_session_keys
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import hash_password, verify_password
 from litellm.repositories.prisma_protocols import TableActions
@@ -140,6 +141,15 @@ async def change_password(
         "last_breach_check_at": None,
     }
     await _user_table(prisma_client).update(where=find_user, data=password_update)
+
+    # The old password may have been compromised; revoke every other UI session
+    # so a holder of a stolen session token is cut off. The caller's own session
+    # is kept — they just proved they hold the current password.
+    await revoke_ui_session_keys(
+        user_id=user_id,
+        user_api_key_dict=user_api_key_dict,
+        keep_hashed_token=user_api_key_dict.token,
+    )
 
     verbose_proxy_logger.info("Password changed via /user/password/change for user_id=%s", user_id)
     await create_object_audit_log(
