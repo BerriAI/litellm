@@ -1936,6 +1936,9 @@
     "tests/integration/providers/test_bedrock_passthrough_stream_wire.py::test_bedrock_passthrough_converse_stream_response_carries_event_stream_content_type": [
       "other.provider_wire.bedrock.passthrough_stream_keeps_event_stream_content_type"
     ],
+    "tests/integration/providers/test_bedrock_knowledge_base_user_context_wire.py::test_vector_store_search_user_context_reaches_bedrock_retrieve_body": [
+      "providers.bedrock_knowledge_base.search_forwards_user_context_to_retrieve"
+    ],
     "tests/integration/providers/test_bedrock_rerank_wire.py::test_forwarded_client_header_on_rerank_is_excluded_from_the_sigv4_signature": [
       "providers.bedrock_rerank.forwarded_client_headers_are_sent_unsigned"
     ],
