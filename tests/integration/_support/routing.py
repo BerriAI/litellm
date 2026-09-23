@@ -25,6 +25,7 @@ OBSERVED_FILE: Final = "routing-observed.json"
 RECORDED_FILE: Final = "routing-recorded.json"
 DIFF_FILE: Final = "routing-diff.txt"
 EXPECTED_DIRECTORY: Final = Path(__file__).resolve().parents[1] / "routing"
+EITHER_ROLE_FILE: Final = EXPECTED_DIRECTORY / "either_role.json"
 
 RoleSet = frozenset[str]
 RoutingMap = Mapping[str, frozenset[str]]
@@ -68,6 +69,7 @@ class Report:
     only_observed: tuple[str, ...]
     calls: Mapping[str, int]
     dealloc: int
+    either_role: tuple[str, ...] = ()
 
     def failures(self) -> tuple[str, ...]:
         mismatch_failures: Final = tuple(
@@ -86,7 +88,7 @@ def _sorted_map(value: RoutingMap) -> RoutingMap:
     return MappingProxyType(dict(sorted(value.items())))
 
 
-def compare(expected: Expectation, observed: Observation) -> Report:
+def compare(expected: Expectation, observed: Observation, either_role: frozenset[str] = frozenset()) -> Report:
     mismatches: Final = (
         *(
             Mismatch(
@@ -96,7 +98,7 @@ def compare(expected: Expectation, observed: Observation) -> Report:
                 tuple(sorted(observed.queries[query])),
             )
             for query, expected_roles in expected.queries.items()
-            if query in observed.queries and not observed.queries[query] <= expected_roles
+            if query in observed.queries and observed.queries[query] != expected_roles and query not in either_role
         ),
         *(
             Mismatch(
@@ -109,8 +111,24 @@ def compare(expected: Expectation, observed: Observation) -> Report:
             if test in observed.tests
             for query, expected_roles in queries.items()
             if query in observed.tests[test]
-            and not observed.tests[test][query] <= expected_roles | expected.queries.get(query, frozenset())
+            and observed.tests[test][query] != expected_roles
+            and query not in either_role
         ),
+    )
+    varying: Final = frozenset(
+        query
+        for query in either_role
+        if (
+            query in expected.queries
+            and query in observed.queries
+            and observed.queries[query] != expected.queries[query]
+        )
+        or any(
+            query in expected.tests[test]
+            and query in observed.tests[test]
+            and observed.tests[test][query] != expected.tests[test][query]
+            for test in frozenset(expected.tests) & frozenset(observed.tests)
+        )
     )
     return Report(
         mismatches,
@@ -118,6 +136,7 @@ def compare(expected: Expectation, observed: Observation) -> Report:
         tuple(sorted(query for query in observed.queries if query not in expected.queries)),
         observed.calls,
         observed.dealloc,
+        tuple(sorted(varying)),
     )
 
 
@@ -126,6 +145,9 @@ def render(report: Report) -> str:
     lines: Final = (
         "== failures ==",
         *(failures or ("none",)),
+        "",
+        "== either role ==",
+        *(report.either_role or ("none",)),
         "",
         "== queries only in expected ==",
         *(report.only_expected or ("none",)),
@@ -162,6 +184,13 @@ def load_observation(path: Path) -> Observation:
     calls: Final = TypeAdapter(dict[str, int]).validate_python(document.get("calls", {}))
     dealloc: Final = TypeAdapter(int).validate_python(document.get("dealloc", 0))
     return Observation(_roles(queries), _tests(tests), MappingProxyType(calls), dealloc)
+
+
+def load_either_role(path: Path) -> frozenset[str]:
+    if not path.exists():
+        return frozenset()
+    document: Final = TypeAdapter(dict[str, str]).validate_python(json.loads(path.read_text()))
+    return frozenset(document)
 
 
 def _serializable(queries: RoutingMap, tests: Mapping[str, RoutingMap]) -> dict[str, object]:
@@ -294,6 +323,7 @@ def main(argv: tuple[str, ...] | list[str]) -> int:
         subcommand.add_argument("results_dir", type=Path)
     check_command: Final = commands.choices["check"]
     check_command.add_argument("--expected", type=Path, default=None)
+    check_command.add_argument("--either-role", type=Path, default=EITHER_ROLE_FILE)
     options: Final = parser.parse_args(argv)
     observed_path: Final = options.results_dir / OBSERVED_FILE
     if options.command == "record":
@@ -306,7 +336,11 @@ def main(argv: tuple[str, ...] | list[str]) -> int:
     if not expected_path.exists():
         sys.stderr.write(f"expected routing file missing: {expected_path}\n")
         return 1
-    report: Final = compare(load_expectation(expected_path), load_observation(observed_path))
+    report: Final = compare(
+        load_expectation(expected_path),
+        load_observation(observed_path),
+        load_either_role(options.either_role),
+    )
     diff: Final = render(report)
     (options.results_dir / DIFF_FILE).write_text(diff)
     sys.stdout.write(diff)
