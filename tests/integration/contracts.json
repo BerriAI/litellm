@@ -2019,6 +2019,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/providers/test_responses_bridge_namespace_tools.py::test_codex_namespace_tool_is_flattened_for_chat_upstream_and_restored_in_responses_output": [
+      "other.provider_wire.responses_bridge.codex_namespace_tools_reach_chat_upstream_and_round_trip"
     ]
   },
   "browser": {
