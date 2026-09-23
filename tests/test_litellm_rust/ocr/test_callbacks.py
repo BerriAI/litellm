@@ -12,6 +12,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 import litellm
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
@@ -420,7 +421,7 @@ async def test_native_aocr_state_stashed_before_a_blocking_hook_raises_reaches_f
     class Blocked(Exception):
         pass
 
-    class Block(CustomLogger):
+    class Block(CustomGuardrail):
         async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
             request_data["litellm_logging_obj"].model_call_details["blocked-by"] = token
             raise Blocked("blocked after the provider answered")
@@ -434,7 +435,7 @@ async def test_native_aocr_state_stashed_before_a_blocking_hook_raises_reaches_f
         async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
             observed.append(("async", kwargs.get("blocked-by"), kwargs["exception"]))
 
-    litellm.callbacks.append(Block())
+    litellm.callbacks.append(Block(guardrail_name="ocr-block"))
 
     with pytest.raises(Blocked) as raised:
         await call_native_aocr(ocr_server)
