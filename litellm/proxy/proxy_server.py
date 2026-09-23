@@ -7586,11 +7586,8 @@ class ProxyConfig:
 
     async def _apply_batch_line_items_setting(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         key: Final = "store_batch_line_items_in_callbacks"
-        if key not in db_values and not self.settings.owned_by_config(key):
-            return
         value: Final = coerce_bool(self.settings.get(key))
-        if value is not None:
-            litellm.store_batch_line_items_in_callbacks = value if isinstance(value, bool) else bool(value)
+        litellm.store_batch_line_items_in_callbacks = bool(value) if value is not None else False
 
     async def _apply_cache_size_setting(
         self,

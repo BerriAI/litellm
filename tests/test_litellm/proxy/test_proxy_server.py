@@ -7890,6 +7890,12 @@ async def test_update_general_settings_store_batch_line_items_in_callbacks():
                 db_general_settings={"store_batch_line_items_in_callbacks": True}
             )
         assert litellm.store_batch_line_items_in_callbacks is False
+
+        proxy_config._yaml_general_settings_keys = set()
+        litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: seed the prior opt-in so its removal is observable
+        with patch("litellm.proxy.proxy_server.general_settings", {}):  # test-quality-ok: module-global seam
+            await proxy_config._update_general_settings(db_general_settings={})
+        assert litellm.store_batch_line_items_in_callbacks is False
     finally:
         litellm.store_batch_line_items_in_callbacks = saved_flag
 
