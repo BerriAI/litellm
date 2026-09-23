@@ -2503,6 +2503,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
 
             setattr(model_response, "usage", usage)
+            if isinstance(cached_content_creation, dict):
+                model_response._hidden_params[VERTEX_AI_CACHED_CONTENT_KEY] = cached_content_creation
 
             ## ADD METADATA TO RESPONSE ##
 
@@ -3264,6 +3266,9 @@ class ModelResponseIterator:
         )
 
         VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
+
+        if isinstance(cached_content_creation, dict):
+            model_response._hidden_params[VERTEX_AI_CACHED_CONTENT_KEY] = cached_content_creation
 
         traffic_type: Final = processed_chunk.get("usageMetadata", {}).get("trafficType")
         if traffic_type:

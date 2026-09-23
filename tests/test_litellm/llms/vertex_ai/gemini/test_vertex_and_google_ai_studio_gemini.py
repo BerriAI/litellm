@@ -6429,6 +6429,14 @@ def test_transform_response_applies_cache_creation_usage(include_creation):
     if include_creation:
         assert result.usage.prompt_tokens == 20010
         assert result.usage.cache_creation_input_tokens == 10000
+        assert result._hidden_params["vertex_ai_cached_content"] == {
+            "name": "cached-content",
+            "model": model,
+            "total_token_count": 10000,
+            "create_time": None,
+            "expire_time": None,
+        }
     else:
         assert result.usage.prompt_tokens == 10010
         assert not hasattr(result.usage, "cache_creation_input_tokens")
+        assert "vertex_ai_cached_content" not in result._hidden_params
