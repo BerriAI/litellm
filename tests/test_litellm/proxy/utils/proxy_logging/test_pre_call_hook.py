@@ -947,11 +947,6 @@ async def test_pre_call_block_keeps_request_declared_guardrail_in_applied_guardr
     assert data["metadata"]["applied_guardrails"] == ["blocker", "declared-post-call"]
 
 
-# ---------------------------------------------------------------------------
-# skip_guardrails: the REST MCP route runs guardrails elsewhere in its pipeline
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_skip_guardrails_still_runs_non_guardrail_callbacks(proxy_logging, make_user_api_key_auth, monkeypatch):
     """MCP REST runs guardrails inside execute_mcp_tool, so the generic walk must not
