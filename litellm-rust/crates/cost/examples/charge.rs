@@ -517,6 +517,10 @@ fn main() {
             json!({"mode": "responses", "input_cost_per_second": 0.5, "output_cost_per_second": 1.0}),
         ),
         (
+            "openai/asr".to_owned(),
+            json!({"input_cost_per_second": 0.02}),
+        ),
+        (
             "openai/cache_savings_model".to_owned(),
             json!({"input_cost_per_token": 2e-6, "output_cost_per_token": 4e-6, "cache_read_input_token_cost": 0.5e-6}),
         ),
@@ -769,4 +773,13 @@ fn main() {
         "search_cost={:.3} parallel_search_cost={:.3}",
         search_cost.0, parallel_search_cost.0
     );
+    let transcription_cost = model_info_catalog.handle_realtime_transcription_cost_calculation(
+        &[
+            json!({"type": "transcription_session.created", "session": {"audio": {"input": {"transcription": {"model": "asr"}}}}}),
+            json!({"type": "conversation.item.input_audio_transcription.completed", "usage": {"type": "duration", "seconds": 2.5}}),
+        ],
+        "openai",
+        "requested",
+    );
+    println!("realtime_transcription_cost={transcription_cost:.3}");
 }

@@ -24,6 +24,7 @@ use crate::prompt_caching_savings::{
     PromptCachingSavingsRequest, calculate_prompt_caching_savings,
 };
 use crate::provider_cache::apply_provider_cache_read_default;
+use crate::realtime_cost::{get_transcription_model_name_from_results, transcription_usage_cost};
 use crate::responses_usage::ChatUsage;
 use crate::retrieval_cost::{rerank_cost, vector_store_search_cost};
 use crate::search_cost::{
@@ -202,6 +203,26 @@ impl ModelInfoCatalog {
         region: Option<&str>,
     ) -> Option<&'a str> {
         select_model_key(&self.entries, model, provider, region)
+    }
+
+    pub fn handle_realtime_transcription_cost_calculation(
+        &self,
+        results: &[Value],
+        provider: &str,
+        requested_model: &str,
+    ) -> f64 {
+        let model = get_transcription_model_name_from_results(results).unwrap_or(requested_model);
+        let model_info = self
+            .select_model_key(model, Some(provider), None)
+            .and_then(|key| self.entries.get(key));
+        results
+            .iter()
+            .filter(|event| {
+                event.get("type").and_then(Value::as_str)
+                    == Some("conversation.item.input_audio_transcription.completed")
+            })
+            .map(|event| transcription_usage_cost(&event["usage"], model_info))
+            .sum()
     }
 
     pub fn cost_per_token(
