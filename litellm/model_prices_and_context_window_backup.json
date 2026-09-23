@@ -64358,6 +64358,23 @@
         "supports_prompt_caching": true,
         "supports_web_search": false
     },
+    "openrouter/qwen/qwen3.8-max-prime": {
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 1.2e-05,
+        "cache_read_input_token_cost": 5e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true
+    },
     "openrouter/deepseek/deepseek-v4-flash-0731": {
         "input_cost_per_token": 4e-08,
         "output_cost_per_token": 6.4e-07,
