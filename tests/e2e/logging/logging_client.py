@@ -522,7 +522,7 @@ class LoggingClient:
         )
 
     def config_callback_names(self) -> set[str]:
-        """Every name GET /get/config/callbacks lists as an active callback."""
+        """Names GET /get/config/callbacks lists as configured (runtime-only read_only rows excluded)."""
         return {
             entry.name
             for entry in unwrap(
@@ -533,6 +533,7 @@ class LoggingClient:
                     response_type=ConfigCallbacksResponse,
                 )
             ).callbacks
+            if not entry.read_only
         }
 
     def delete_config_callback(self, callback_name: str) -> Result[CallbackDeleteResponse]:

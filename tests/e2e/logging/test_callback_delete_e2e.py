@@ -1,14 +1,4 @@
-"""Live e2e: a callback the Admin UI lists must also be deletable.
-
-GET /get/config/callbacks enumerates litellm_settings.success_callback,
-failure_callback and callbacks, plus runtime-only loggers, but
-POST /config/callback/delete only looks inside success_callback. A callback
-configured under `callbacks` or `failure_callback` is listed as active on the
-Logging & Alerts -> Logging Callbacks page yet its delete answers 404 "Callback
-not found in active configuration". The success_callback case is the control:
-it proves the add/list/delete round trip works when the configured key is the
-one the delete route actually reads.
-"""
+"""A callback listed by GET /get/config/callbacks must be deletable with POST /config/callback/delete."""
 
 from collections.abc import Callable
 
@@ -20,7 +10,7 @@ from models import LitellmCallbackSettings
 
 pytestmark = pytest.mark.e2e
 
-CALLBACK_NAME = "datadog"
+CALLBACK_NAME = "langsmith"
 
 
 def _assert_listed_then_deleted(
