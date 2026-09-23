@@ -1472,6 +1472,96 @@ class TestUpdateModel:
         persisted = json.loads(mock_prisma.db.litellm_proxymodeltable.update.await_args.kwargs["data"]["litellm_params"])
         assert persisted["litellm_credential_name"] == "shared-credential"
 
+    @staticmethod
+    def _prisma_with_stored_model_info(model_id: str, model_info: dict[str, object]) -> MagicMock:
+        existing = Deployment(
+            model_name="legacy-model",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini"),
+            model_info=model_info,
+        )
+        existing_row = MagicMock()
+        existing_row.litellm_params = existing.litellm_params.model_dump(exclude_none=True)
+        existing_row.model_dump.return_value = existing.model_dump()
+        updated_row = MagicMock()
+        updated_row.model_dump_json.return_value = "{}"
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=updated_row)
+        return mock_prisma
+
+    @contextlib.contextmanager
+    def _legacy_update_env(self, mock_prisma: MagicMock, model_id: str):
+        mock_router = MagicMock()
+        mock_router.get_model_ids.return_value = [model_id]
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                side_effect=lambda value, **kwargs: value,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+            ),
+        ):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_update_model_persists_incoming_model_info_fields_for_db_models(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_model
+
+        model_id = "legacy-model-info"
+        mock_prisma = self._prisma_with_stored_model_info(model_id, {"id": model_id, "base_model": "gpt-4o-mini"})
+
+        with self._legacy_update_env(mock_prisma, model_id):
+            await update_model(
+                model_params=updateDeployment(
+                    litellm_params=updateLiteLLMParams(model="openai/gpt-4o-mini"),
+                    model_info=ModelInfo(
+                        id=model_id,
+                        litellm_routing_preferences={"prefer_fast_response": True},
+                        adaptive_router_preferences={"preference": "cost"},
+                    ),
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+        written = json.loads(mock_prisma.db.litellm_proxymodeltable.update.await_args.kwargs["data"]["model_info"])
+        assert written == {
+            "id": model_id,
+            "db_model": False,
+            "member_auto_router": False,
+            "base_model": "gpt-4o-mini",
+            "litellm_routing_preferences": {"prefer_fast_response": True},
+            "adaptive_router_preferences": {"preference": "cost"},
+        }
+
+    @pytest.mark.asyncio
+    async def test_update_model_refuses_to_move_a_model_to_another_team(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_model
+
+        model_id = "legacy-team-model"
+        mock_prisma = self._prisma_with_stored_model_info(model_id, {"id": model_id, "team_id": "team-a"})
+
+        with self._legacy_update_env(mock_prisma, model_id), pytest.raises(ProxyException) as exc_info:
+            await update_model(
+                model_params=updateDeployment(
+                    litellm_params=updateLiteLLMParams(model="openai/gpt-4o-mini"),
+                    model_info=ModelInfo(id=model_id, team_id="team-b"),
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+        assert exc_info.value.code == "400"
+        mock_prisma.db.litellm_proxymodeltable.update.assert_not_awaited()
+
 
 class TestUpdatePublicModelGroups:
     """Test that update_public_model_groups correctly sets litellm.public_model_groups

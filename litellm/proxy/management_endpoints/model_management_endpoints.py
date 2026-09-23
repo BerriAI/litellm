@@ -2689,16 +2689,27 @@ async def update_model(
                 if renamed_to is not None
                 else base_update
             )
-            _data: Final[PrismaCompatibleUpdateDBModel] = (
-                {  # mutable-ok: Prisma serializes only concrete update dicts
-                    **renamed_update,
-                    "model_info": deployment.model_info.model_copy(
-                        update=MappingProxyType({"member_auto_router": member_marker})
-                    ).model_dump_json(exclude_none=True),
-                }
-                if member_marker is not None
-                else renamed_update
-            )
+            incoming_info: Final = ModelInfo(id=_model_id) if member_write is not None else _model_info
+            if incoming_info.team_id not in (None, deployment.model_info.team_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": "Can't change a model's team here. Use PATCH `/model/{model_id}/update`."},
+                )
+            merged_info: Final = update_db_model(
+                db_model=deployment,
+                updated_patch=updateDeployment(
+                    litellm_params=model_params.litellm_params,
+                    model_info=(
+                        incoming_info.model_copy(update=MappingProxyType({"member_auto_router": member_marker}))
+                        if member_marker is not None
+                        else incoming_info
+                    ),
+                ),
+            )["model_info"]
+            _data: Final[PrismaCompatibleUpdateDBModel] = {  # mutable-ok: Prisma serializes only concrete update dicts
+                **renamed_update,
+                "model_info": merged_info,
+            }
             async with _auto_router_capability_slot(
                 prisma_client,
                 effective_params=effective_params,
