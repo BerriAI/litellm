@@ -36,6 +36,7 @@ from e2e_config import (
     PROVIDER_EDGE_HOST_OPT_IN_ENV,
     PROXY_BASE_URL,
     REDIS_CHAOS_OPT_IN_ENV,
+    SECRET_MANAGER_OPT_IN_ENV,
     WEEKLY_ANOMALY_OPT_IN_ENV,
     unique_marker,
 )
@@ -51,6 +52,7 @@ from models import TeamNewBody, UserNewBody, UserNewResponse
 from provider_cache_routing import LIVE_PROVIDER_REQUIRED
 from provider_edge import replay_leftover_error
 from proxy_client import ProxyClient, build_proxy_client
+from stack_lock import stack_lock
 
 _E2E_TEST_RAN = pytest.StashKey[bool]()
 _CALL_PASSED = pytest.StashKey[bool]()
@@ -69,6 +71,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "provider_edge_host": PROVIDER_EDGE_HOST_OPT_IN_ENV,
         "otel_v2": OTEL_V2_OPT_IN_ENV,
         "otel_tls": OTEL_TLS_OPT_IN_ENV,
+        "secret_manager": SECRET_MANAGER_OPT_IN_ENV,
     }
 )
 
@@ -150,6 +153,11 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
+        "quiet_stack: measures the proxy itself, so it runs while no other test on this host is hitting the stack; "
+        "every other test waits for it to finish",
+    )
+    config.addinivalue_line(
+        "markers",
         "mcp_oauth_live: real Linear OAuth consent via a captured browser session; deselected unless "
         "E2E_MCP_OAUTH_LIVE is set",
     )
@@ -166,15 +174,18 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "otel_tls: needs a stack whose gateway exports OTLP over TLS signed by the CA in SSL_CERT_FILE; deselected unless E2E_OTEL_EXPORTER_ENDPOINT is set",
     )
+    config.addinivalue_line(
+        "markers",
+        "secret_manager: needs a proxy booted from gateway/secret_manager_<system>_ci_config.yml against that live "
+        "secret manager; deselected unless E2E_SECRET_MANAGER names the backend (see secret_manager/secret_backends.py)",
+    )
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
     """Abort before collection when E2E_FIXTURE_MODE can never work: an unknown
     mode value, or replay against a missing, unreadable, or stale bundle (the
     stale message names the bundle's age). Live and record modes pass through."""
-    reason = fixture_mode_collection_error(
-        FIXTURE_MODE_RAW, FIXTURE_DIR, now=datetime.now(timezone.utc)
-    )
+    reason = fixture_mode_collection_error(FIXTURE_MODE_RAW, FIXTURE_DIR, now=datetime.now(timezone.utc))
     if reason is not None:
         raise pytest.UsageError(reason)
 
@@ -267,6 +278,12 @@ def _proxy_fail_reason() -> str | None:
     return None
 
 
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> Generator[None, object, object]:
+    with stack_lock(exclusive=item.get_closest_marker("quiet_stack") is not None):
+        return (yield)
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item: pytest.Item) -> None:
     """Hard-fail `e2e`-marked tests unless a proxy answers its liveness probe.
@@ -326,9 +343,7 @@ def pytest_runtest_teardown(item: pytest.Item) -> Generator[None, None, None]:
     LIVE_PROVIDER_REQUIRED.set(False)
     if not item.stash.get(_CALL_PASSED, False):
         return result
-    reason = replay_leftover_error(
-        mode_raw=FIXTURE_MODE_RAW, bundle_dir=FIXTURE_DIR, test_key=item.nodeid
-    )
+    reason = replay_leftover_error(mode_raw=FIXTURE_MODE_RAW, bundle_dir=FIXTURE_DIR, test_key=item.nodeid)
     if reason is not None:
         pytest.fail(reason)
     return result
