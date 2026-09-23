@@ -96,6 +96,15 @@ describe("MCPServerCard per-user credentials", () => {
     expect(onClick).not.toHaveBeenCalled();
   });
 
+  it("keeps Enter on the Update button away from the card's open handler", () => {
+    const { onClick } = renderUserFields({ missingUserFields: [], hasUserFields: true });
+    const update = screen.getByRole("button", { name: "Update" });
+    expect(fireEvent.keyDown(update, { key: "Enter" }), "default activation must survive").toBe(true);
+    expect(onClick).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getAllByRole("button")[0], { key: "Enter" });
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
   it("renders no credential row for a server without per-user fields", () => {
     renderUserFields({ missingUserFields: [], hasUserFields: false });
     expect(screen.queryByText("Per-user credentials")).not.toBeInTheDocument();
