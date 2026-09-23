@@ -18,7 +18,8 @@ import asyncio
 import datetime
 import inspect
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -77,7 +78,7 @@ class CachingHandlerResponse(BaseModel):
     cached_result: object | None = None
     final_embedding_cached_response: EmbeddingResponse | None = None
     embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
-    embedding_uncached_input: list[str | list[int]] | None = None
+    embedding_uncached_input: list[str | int | list[int]] | None = None
 
 
 in_memory_cache_obj: Final = InMemoryCache()
@@ -338,6 +339,12 @@ class LLMCachingHandler:
                     and litellm.cache is not None
                     and not isinstance(litellm.cache.cache, S3Cache)  # s3 doesn't support bulk writing. Exclude.
                 ):
+                    requested_inputs: Final = self.handle_kwargs_input_list_or_str(kwargs)
+                    remaining_embedding_inputs: Final = tuple(
+                        input_value
+                        for index, input_value in enumerate(requested_inputs)
+                        if cached_result[index] is None
+                    )
                     (
                         final_embedding_cached_response,
                         embedding_all_elements_cache_hit,
@@ -352,7 +359,7 @@ class LLMCachingHandler:
                     return CachingHandlerResponse(
                         final_embedding_cached_response=final_embedding_cached_response,
                         embedding_all_elements_cache_hit=embedding_all_elements_cache_hit,
-                        embedding_uncached_input=self.handle_kwargs_input_list_or_str(kwargs),
+                        embedding_uncached_input=list(remaining_embedding_inputs),
                     )
 
             verbose_logger.debug("CACHE RESULT: %s", cached_result)
@@ -459,7 +466,7 @@ class LLMCachingHandler:
         else:
             raise ValueError("input must be a string or a list")
 
-    def _extract_model_from_cached_results(self, non_null_list: list[tuple[int, CachedEmbedding]]) -> str | None:
+    def _extract_model_from_cached_results(self, non_null_list: Sequence[tuple[int, CachedEmbedding]]) -> str | None:
         """
         Helper method to extract the model name from cached results.
 
@@ -504,15 +511,13 @@ class LLMCachingHandler:
 
         """
         embedding_all_elements_cache_hit: bool = False
-        remaining_list: Final = []
-        non_null_list: Final = []
         kwargs_input_as_list: Final = self.handle_kwargs_input_list_or_str(kwargs)
-        for idx, cr in enumerate(cached_result):
-            if cr is None:
-                remaining_list.append(kwargs_input_as_list[idx])
-            else:
-                non_null_list.append((idx, cr))
-        kwargs["input"] = remaining_list
+        remaining_list: Final = tuple(
+            input_value for index, input_value in enumerate(kwargs_input_as_list) if cached_result[index] is None
+        )
+        non_null_list: Final = tuple(
+            (index, cache_item) for index, cache_item in enumerate(cached_result) if cache_item is not None
+        )
         if len(non_null_list) > 0:
             # Use the model from the first non-null cached result, fallback to kwargs if not present
             model_name = self._extract_model_from_cached_results(non_null_list)
@@ -1030,7 +1035,7 @@ class LLMCachingHandler:
         self,
         result: object,
         original_function: Callable,
-        kwargs: dict[str, Any],
+        kwargs: Mapping[str, Any],
         args: tuple[object, ...] | None = None,
     ):
         """
@@ -1055,15 +1060,10 @@ class LLMCachingHandler:
             return
         cache: Final = litellm.cache
 
-        new_kwargs: Final = kwargs.copy()
-        new_kwargs.update(
-            convert_args_to_kwargs(
-                original_function,
-                args,
-            )
-        )
-        parent_otel_span: Final = _get_parent_otel_span_from_kwargs(new_kwargs)
-        new_kwargs["parent_otel_span"] = parent_otel_span
+        args_kwargs: Final = convert_args_to_kwargs(original_function, args)
+        merged_kwargs: Final = MappingProxyType({**kwargs, **args_kwargs})
+        parent_otel_span: Final = _get_parent_otel_span_from_kwargs(merged_kwargs)
+        new_kwargs: Final = MappingProxyType({**merged_kwargs, "parent_otel_span": parent_otel_span})
         # [OPTIONAL] ADD TO CACHE
         if self._should_store_result_in_cache(original_function=original_function, kwargs=new_kwargs):
             if (
@@ -1119,7 +1119,7 @@ class LLMCachingHandler:
 
         return
 
-    def _should_store_result_in_cache(self, original_function: Callable, kwargs: dict[str, Any]) -> bool:
+    def _should_store_result_in_cache(self, original_function: Callable, kwargs: Mapping[str, Any]) -> bool:
         """
         Helper function to determine if the result should be stored in the cache.
 

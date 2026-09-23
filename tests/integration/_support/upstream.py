@@ -17,7 +17,8 @@ from typing import Final, cast
 
 import httpx
 import uvicorn
-from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
+from _fake_openai_endpoint_server import chat_completions, completions, health, moderations
+from _fake_openai_endpoint_server import embeddings as fake_embeddings
 from integration.cost_calculation.cost_tracking_case import (
     BinaryResponse,
     EventStreamEvent,
@@ -123,6 +124,11 @@ class Provider:
     observations: SimpleQueue[Observation] = field(default_factory=SimpleQueue)
     scripts: dict[str, deque[int]] = field(default_factory=dict)
     scenario_store: ScenarioStore = field(default_factory=ScenarioStore)
+
+    async def embeddings(self, request: Request) -> Response:
+        body: Final = JSON_OBJECT.validate_json(await request.body())
+        self.observations.put(Observation(request.url.path, request.headers.get("authorization", ""), body))
+        return await fake_embeddings(request)
 
     async def chat(self, request: Request) -> Response:
         body: Final = JSON_OBJECT.validate_json(await request.body())
@@ -336,7 +342,7 @@ class Provider:
                 Route("/_oauth/token", self.oauth_token, methods=["POST"]),
                 Route("/v1/chat/completions", self.chat, methods=["POST"]),
                 Route("/v1/completions", completions, methods=["POST"]),
-                Route("/v1/embeddings", embeddings, methods=["POST"]),
+                Route("/v1/embeddings", self.embeddings, methods=["POST"]),
                 Route("/v1/moderations", moderations, methods=["POST"]),
                 Route("/{path:path}", self.scripted, methods=["POST"]),
                 Route("/{path:path}", self.scripted, methods=["GET"]),
