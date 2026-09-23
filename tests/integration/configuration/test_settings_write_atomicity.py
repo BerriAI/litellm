@@ -15,6 +15,7 @@ import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric import rsa
 from psycopg import sql
+from pydantic import JsonValue
 
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.process import owned_proxy
@@ -72,9 +73,7 @@ def _write_owned_config(tmp_path: Path, general_settings: dict, litellm_settings
 
 @pytest.mark.covers("configuration.settings_write.refused_patch_leaves_serving_value")
 def test_refused_patch_leaves_serving_value(gateway: Gateway, tmp_path: Path) -> None:
-    config: Final = _write_owned_config(
-        tmp_path, {}, {"default_internal_user_params": {"max_budget": 999.0}}
-    )
+    config: Final = _write_owned_config(tmp_path, {}, {"default_internal_user_params": {"max_budget": 999.0}})
     with _owned_database(tmp_path) as database_url, owned_redis(tmp_path) as cache:
         with owned_proxy(
             gateway,
@@ -82,13 +81,9 @@ def test_refused_patch_leaves_serving_value(gateway: Gateway, tmp_path: Path) ->
             {"DATABASE_URL": database_url, "REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)},
             config=config,
         ) as candidate:
-            first_user: Final = candidate.post(
-                "/user/new", {"user_id": f"integration-{uuid.uuid4().hex}"}
-            )
+            first_user: Final = candidate.post("/user/new", {"user_id": f"integration-{uuid.uuid4().hex}"})
             assert first_user["max_budget"] == 999.0, json.dumps(first_user)
-            refused: Final = candidate.request(
-                "PATCH", "/update/internal_user_settings", {"max_budget": 777.0}
-            )
+            refused: Final = candidate.request("PATCH", "/update/internal_user_settings", {"max_budget": 777.0})
             assert refused.status_code == 400, refused.text
             detail: Final = refused.json()["detail"]
             assert (
@@ -97,9 +92,7 @@ def test_refused_patch_leaves_serving_value(gateway: Gateway, tmp_path: Path) ->
             ), refused.text
             assert detail["keys"] == ["default_internal_user_params"], refused.text
             assert detail["section"] == "litellm_settings", refused.text
-            second_user: Final = candidate.post(
-                "/user/new", {"user_id": f"integration-{uuid.uuid4().hex}"}
-            )
+            second_user: Final = candidate.post("/user/new", {"user_id": f"integration-{uuid.uuid4().hex}"})
             assert second_user["max_budget"] == 999.0, json.dumps(second_user)
             settings: Final = candidate.get("/get/internal_user_settings")
             assert object_value(settings["values"])["max_budget"] == 999.0, json.dumps(settings)
@@ -133,6 +126,7 @@ def test_db_general_settings_row_cannot_rebind_role_permissions(gateway: Gateway
         f"integration-passthrough-{uuid.uuid4().hex}",
         JsonResponse(content_type="application/json", body={"atomicity": "reconciled"}),
     )
+
     def mint_admin_token() -> str:
         return jwt.encode(
             {
@@ -200,9 +194,9 @@ def test_db_general_settings_row_cannot_rebind_role_permissions(gateway: Gateway
                     ),
                 )
 
-            def passthrough_body() -> dict | None:
+            def passthrough_body() -> dict[str, JsonValue] | None:
                 response: Final = candidate.request("GET", passthrough_path)
-                return response.json() if response.status_code == 200 else None
+                return object_value(response.json()) if response.status_code == 200 else None
 
             eventually(passthrough_body, lambda value: value == {"atomicity": "reconciled"}, seconds=30)
             second: Final = candidate.request("POST", "/v1/chat/completions", body, key=mint_admin_token())

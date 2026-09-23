@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -4845,22 +4845,25 @@ async def test_ProxyConfig__update_general_settings_ignores_keys_no_write_api_ca
 async def test_ProxyConfig__update_general_settings_logs_ignored_keys_once(monkeypatch):
     from litellm.proxy.proxy_server import _log_ignored_general_settings_keys
 
-    warnings: Final = []
+    warn = MagicMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.verbose_proxy_logger.warning",
-        lambda *args, **kwargs: warnings.append(args[0] % args[1:]),
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.verbose_proxy_logger.warning", warn)
     _log_ignored_general_settings_keys.cache_clear()
     pc = ProxyConfig()
     row: Final = {"role_permissions": [{"role": "proxy_admin", "models": ["x"]}]}
     await pc._update_general_settings(row)
     await pc._update_general_settings(row)
-    assert warnings == [
-        "Ignoring general_settings keys from the DB that no supported write path produces: role_permissions"
+    assert warn.call_args_list == [
+        call(
+            "Ignoring general_settings keys from the DB that no supported write path produces: %s",
+            "role_permissions",
+        )
     ]
 
     await pc._update_general_settings({"max_parallel_requests": 8})
-    assert warnings == [
-        "Ignoring general_settings keys from the DB that no supported write path produces: role_permissions"
+    assert warn.call_args_list == [
+        call(
+            "Ignoring general_settings keys from the DB that no supported write path produces: %s",
+            "role_permissions",
+        )
     ]
