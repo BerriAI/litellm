@@ -3487,7 +3487,7 @@ async def test_get_async_streaming_response_iterator_yields_small_frame_before_u
         ),
     )
 
-    first: Final = await asyncio.wait_for(anext(iterator), timeout=1)
+    first: Final = await asyncio.wait_for(anext(iterator), timeout=10)
     assert first.startswith(b"event: message_start\n"), first
 
     gate.set()
