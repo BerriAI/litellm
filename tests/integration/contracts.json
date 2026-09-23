@@ -229,6 +229,9 @@
     "tests/integration/providers/test_xiaomi_mimo_wire.py::test_xiaomi_mimo_tool_call_is_forwarded_and_returned": [
       "other.provider_wire.xiaomi_mimo.tool_call_survives_translation"
     ],
+    "tests/integration/providers/test_vertex_gemini_fragmented_stream_wire.py::test_vertex_gemini_stream_split_across_many_fragments_completes_without_stalling": [
+      "providers.vertex_gemini.fragmented_stream_json_is_parsed_once_and_stays_live"
+    ],
     "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_h3_video_create_uses_canonical_body_and_status_path": [
       "other.provider_wire.fal_ai.video_queue_create_status_and_content_download"
     ],
