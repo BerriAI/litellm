@@ -12,3 +12,8 @@ def read_rows(query: str, parameters: tuple[str, ...]) -> list[dict[str, JsonVal
     with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as connection:
         connection.execute("SET TRANSACTION READ ONLY")
         return ROWS.validate_python(connection.execute(query, parameters).fetchall())
+
+
+def execute(statement: str, parameters: tuple[str, ...]) -> None:
+    with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
+        connection.execute(statement, parameters)

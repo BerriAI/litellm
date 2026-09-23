@@ -76,6 +76,12 @@
     "tests/integration/configuration/test_effective_settings.py::test_credential_value_update_and_model_reload_reach_provider": [
       "mgmt.credential.update.saved_value_reaches_wire"
     ],
+    "tests/integration/configuration/test_websearch_interception_settings.py::test_readback_reports_interception_off_after_eviction_on_a_pod_that_served_traffic": [
+      "mgmt.websearch_interception.readback.agrees_with_observed_interception"
+    ],
+    "tests/integration/configuration/test_websearch_interception_settings.py::test_stored_row_does_not_evict_config_declared_interception": [
+      "mgmt.websearch_interception.reload.config_owned_params_survive_stored_row"
+    ],
     "tests/integration/management/test_partial_update_sequences.py::test_denied_key_update_preserves_saved_grants_and_serving": [
       "mgmt.key.update.denied_request_preserves_effective_state"
     ],

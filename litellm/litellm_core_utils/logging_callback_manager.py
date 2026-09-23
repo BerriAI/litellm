@@ -120,7 +120,8 @@ class LoggingCallbackManager:
 
     def remove_callbacks_by_type(self, callback_list, callback_type):
         """
-        Remove all callbacks of a specific type from a callback list.
+        Remove all callbacks of a specific type from the given list and from
+        every other callback list the manager tracks.
 
         Args:
             callback_list: The list to remove callbacks from (e.g., litellm.callbacks)
@@ -138,6 +139,7 @@ class LoggingCallbackManager:
 
         for c in remove_list:
             callback_list.remove(c)
+            self.remove_callback_from_all_lists(c)
 
     def _add_string_callback_to_list(self, callback: str, parent_list: list[CustomLogger | Callable | str]):
         """
