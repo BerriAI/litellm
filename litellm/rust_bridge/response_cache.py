@@ -155,7 +155,13 @@ def select_response_cache(cache: CacheFacade) -> ResponseCacheRuntime | None:
     factory: Final = _RUNTIME.load()
     if factory is None:
         return None
-    selected: Final = factory.from_selected(cache)
+    try:
+        selected: Final = factory.from_selected(cache)
+    except Exception as error:  # noqa: BLE001  # the decline class lives in the extension, not importable at module scope
+        declined: Final = native_exception_types()
+        if declined is None or not isinstance(error, declined[0]):
+            raise
+        return None
     return ResponseCacheRuntime(selected) if selected.kind == "native" else None
 
 
