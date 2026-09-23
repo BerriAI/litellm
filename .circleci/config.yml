@@ -3249,7 +3249,7 @@ workflows:
           name: integration-<< matrix.suite >>-replica
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, extensions, cost]
+              suite: [management, accounting, database, providers, extensions, mcp, cost]
               mode: [replica]
           filters:
             branches:
