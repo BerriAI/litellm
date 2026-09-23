@@ -19,11 +19,11 @@ def _persisted_reset_at(budget_id: str) -> datetime:
 @pytest.mark.covers("mgmt.budget.update.duration_change_recomputes_reset_at")
 def test_shortening_budget_duration_moves_reset_at_onto_the_new_schedule(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
-        budget_id: Final = scenario.budget(max_budget=10.0, budget_duration="30d")
-        monthly_reset_at: Final = _persisted_reset_at(budget_id)
+        budget_id: Final = scenario.budget(max_budget=10.0, budget_duration="10d")
+        ten_day_reset_at: Final = _persisted_reset_at(budget_id)
         before: Final = datetime.now(timezone.utc)
         response: Final = gateway.request("POST", "/budget/update", {"budget_id": budget_id, "budget_duration": "1d"})
         assert response.status_code == 200, response.text
         updated: Final = _persisted_reset_at(budget_id)
-        assert updated < monthly_reset_at, f"{updated} not before {monthly_reset_at}"
+        assert updated < ten_day_reset_at, f"{updated} not before {ten_day_reset_at}"
         assert before < updated <= before + timedelta(days=1, minutes=5), f"{updated} not within 1d of {before}"

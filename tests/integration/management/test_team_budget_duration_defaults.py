@@ -1,24 +1,14 @@
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
+from pathlib import Path
 from typing import Final
 
 import pytest
+import yaml
 from pydantic import JsonValue
 
 from tests.integration._support.client import Gateway, string_value
 from tests.integration._support.database import read_rows
-
-
-@contextmanager
-def _default_team_budget_duration(gateway: Gateway, duration: str) -> Iterator[None]:
-    configured: Final = gateway.request("PATCH", "/update/default_team_settings", {"budget_duration": duration})
-    assert configured.status_code == 200, configured.text
-    try:
-        yield
-    finally:
-        cleared: Final = gateway.request("PATCH", "/update/default_team_settings", {})
-        assert cleared.status_code == 200, cleared.text
+from tests.integration._support.process import owned_proxy
 
 
 def _budget_row(team_id: str) -> dict[str, JsonValue]:
@@ -31,9 +21,16 @@ def _budget_row(team_id: str) -> dict[str, JsonValue]:
 
 
 @pytest.mark.covers("mgmt.team.new.explicit_null_budget_duration_overrides_default")
-def test_team_new_explicit_null_budget_duration_is_not_replaced_by_default(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario, _default_team_budget_duration(gateway, "30d"):
-        never_resetting: Final = gateway.request(
+def test_team_new_explicit_null_budget_duration_is_not_replaced_by_default(gateway: Gateway, tmp_path: Path) -> None:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["litellm_settings"]["default_team_params"] = {"budget_duration": "30d"}
+    path: Final = tmp_path / "team-defaults.yaml"
+    path.write_text(yaml.safe_dump(config))
+    with (
+        owned_proxy(gateway, tmp_path, {"STORE_MODEL_IN_DB": "False"}, config=path) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        never_resetting: Final = candidate.request(
             "POST",
             "/team/new",
             {"team_alias": f"integration-{uuid.uuid4().hex}", "max_budget": 500, "budget_duration": None},
@@ -50,7 +47,7 @@ def test_team_new_explicit_null_budget_duration_is_not_replaced_by_default(gatew
             "budget_reset_at": None,
         }
 
-        inheriting: Final = gateway.request(
+        inheriting: Final = candidate.request(
             "POST", "/team/new", {"team_alias": f"integration-{uuid.uuid4().hex}", "max_budget": 500}
         )
         assert inheriting.status_code == 200, inheriting.text
