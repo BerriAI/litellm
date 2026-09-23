@@ -24,6 +24,7 @@ use litellm_cost::non_token::{
 };
 use litellm_cost::responses_usage::transform_response_api_usage_to_chat_usage;
 use litellm_cost::tiered_pricing::{select_tier_for_input, tier_rate};
+use litellm_cost::tool_call_cost_tracking::{DefaultToolRates, get_cost_for_file_search};
 use litellm_cost::usage_dispatch::get_usage_object;
 use litellm_cost::{
     Pricing, PromptConvention, Rate, Rates, Request, ServiceTier, ThresholdPolicy, Usage,
@@ -455,4 +456,20 @@ fn main() {
         at,
     );
     println!("off_peak_prompt={off_peak_prompt:.5} off_peak_output={off_peak_output:.5}");
+    let file_search_cost = get_cost_for_file_search(
+        Some(&json!({"type": "file_search"})),
+        Some("azure"),
+        Some(&json!({"file_search_cost_per_gb_per_day": 0.4})),
+        Some(1.5),
+        Some(10.0),
+        DefaultToolRates {
+            file_search_per_call: 0.25,
+            azure_file_search_per_gb_day: 0.1,
+            azure_vector_store_per_gb_day: 0.2,
+            azure_computer_input_per_1k_tokens: 3.0,
+            azure_computer_output_per_1k_tokens: 12.0,
+            code_interpreter_per_session: Some(0.03),
+        },
+    );
+    println!("file_search_cost={file_search_cost:.2}");
 }

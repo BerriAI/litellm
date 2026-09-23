@@ -14,6 +14,7 @@ pub mod non_token;
 pub mod off_peak;
 pub mod responses_usage;
 pub mod tiered_pricing;
+pub mod tool_call_cost_tracking;
 pub mod transcription_usage;
 pub mod usage_dispatch;
 
