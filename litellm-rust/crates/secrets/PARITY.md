@@ -14,6 +14,24 @@ The Python API audit found that earlier AWS fallback tests encoded the wrong exp
 
 Public AWS, Vault, CyberArk, and Google read methods now use catalog selection. AWS, Vault, and CyberArk keep their Python coroutine entrypoints, while Rust receives provider operation contexts. Full API replacement remains incomplete: AWS and Vault write/delete/rotation methods still need native bindings, and their Python cache updates do not invalidate retained native read caches. CyberArk mutations now use native dispatch and share the native read cache. SDK-client configuration capture also needs to preserve explicit credentials, endpoints, and regions. Timeout phase handling, AWS optional-parameter side effects, per-call region selection without a base region, and environment lookup timing need further parity work. The private binding returns a Future, while the public methods retain ordinary Python coroutines as verified by lazy execution and `asyncio.create_task` tests. This follows the separation described in the PyO3 [signature](https://pyo3.rs/v0.29.2/function/signature.html) and [async](https://pyo3.rs/v0.29.2/async-await.html) guides. The catalog remains Python-only while these gaps are open
 
+## Public API audit
+
+The rollout decision comes from [catalog.py](../../../litellm/rust_bridge/catalog.py). All secret-manager rules remain `PYTHON_ONLY`; `LITELLM_RUST` does not make these incomplete routes production-ready. Differential tests pass explicit rules into the dispatch boundary
+
+| Python entrypoint | Native bridge coverage | Remaining API work |
+| --- | --- | --- |
+| `litellm.get_secret`, `get_secret_str`, `get_secret_bool` | Existing Python entrypoints dispatch supported manager reads | SDK-client configuration, environment read timing and complete failure conversion |
+| AWS `sync_read_secret`, `async_read_secret`, primary-secret helpers | Public signatures and coroutines retained; credentials, absence and typed JSON tested | Option consumption, timeout phases and region resolution |
+| AWS `async_write_secret`, `async_delete_secret`, `async_rotate_secret`, `async_replicate_secret`, `async_put_secret_value` | Rust provider operations exist | Public native dispatch, original response fields and Python error contracts |
+| Vault `sync_read_secret`, `async_read_secret` | Public signatures, nested overrides, namespace and data-key cache isolation tested | Complete timeout and initialization error parity |
+| Vault `async_write_secret`, `async_delete_secret`, `async_rotate_secret` | Rust provider operations exist | Public native dispatch, complete response envelopes and Python error dictionaries |
+| CyberArk reads, writes, deletes and rotations | Public native dispatch, shared cache, coroutine behavior, status errors and request counts tested | Other transport failures and client initialization timing |
+| Google `get_secret_from_google_secret_manager` | Public native dispatch and distinct initial/cached missing results | Credential configuration and complete error parity |
+| Azure Key Vault, AWS KMS, Google KMS SDK clients | Global secret-handler dispatch supports recognized clients | Explicit SDK credentials, endpoints, regions and caller-supplied credentials |
+| Custom managers and subclasses | Preserve Python callbacks | Caller implementations must never be replaced by built-in native managers |
+
+`_SecretManagerRuntime` is a private implementation detail, not a replacement SDK class. Its async methods return Futures; public `async def` methods retain lazy coroutine creation and `asyncio.create_task` support. Passing the same names and arguments is insufficient to claim parity until the remaining return-value, error, cache and configuration differences above are closed
+
 ## [tests/test_litellm/secret_managers/test_aws_secret_manager_replication.py](../../../tests/test_litellm/secret_managers/test_aws_secret_manager_replication.py)
 
 | Python test | Rust coverage or boundary |
