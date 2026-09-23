@@ -2019,6 +2019,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_cache_usage_wire.py::test_nova_invoke_count_suffixed_cache_usage_fields_are_reported_and_charged": [
+      "providers.bedrock_invoke.count_suffixed_cache_usage_fields_are_reported_and_charged"
     ]
   },
   "browser": {
