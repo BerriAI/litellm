@@ -3,6 +3,7 @@ use litellm_token_counter::{CountableRequest, TokenCounter};
 use serde_json::Value;
 
 use crate::a2a_cost::{A2ACostError, calculate_a2a_cost};
+use crate::azure_ai_cost::is_azure_model_router;
 use crate::catalog::{
     CatalogCallError, CatalogError, CatalogImageError, CostCall, ModelCostRequest, ModelInfoCatalog,
 };
@@ -245,6 +246,7 @@ fn number_of_queries(optional_params: Option<&Value>) -> u64 {
 fn cost_call<'a>(
     call_type: &'a str,
     request: CompletionResponseCostRequest<'a>,
+    request_model: Option<&'a str>,
     empty_params: &'a Value,
 ) -> Result<CostCall<'a>, CompletionResponseCostError> {
     match call_type {
@@ -300,7 +302,7 @@ fn cost_call<'a>(
                 call_type,
                 prompt_characters: request.prompt_characters,
                 completion_characters: request.completion_characters,
-                request_model: request.request_model,
+                request_model,
             })
         }
         _ => Err(CompletionResponseCostError::UnsupportedCallType),
@@ -627,7 +629,8 @@ pub fn completion_cost_from_response(
     let explicit_provider = hidden_params
         .and_then(|hidden| hidden.get("custom_llm_provider"))
         .and_then(Value::as_str)
-        .or(request.provider);
+        .or(request.provider)
+        .or(request.input.model_selection.provider);
     let inferred_provider = explicit_provider.map(str::to_owned).or_else(|| {
         prepared
             .model_candidates
@@ -752,6 +755,20 @@ pub fn completion_cost_from_response(
     } else {
         request.custom_cost
     };
+    let hidden_model = hidden_params.and_then(|hidden| {
+        hidden
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|model| !model.is_empty())
+            .or_else(|| hidden.get("litellm_model_name").and_then(Value::as_str))
+    });
+    let request_model = if provider == Some("azure_ai") {
+        hidden_model
+            .filter(|model| is_azure_model_router(model))
+            .or(request.request_model)
+    } else {
+        request.request_model
+    };
     let empty_params = Value::Null;
     let (model, (prompt, output)) = price_with_custom(
         &prepared.model_candidates,
@@ -762,7 +779,7 @@ pub fn completion_cost_from_response(
             request.response_time_ms,
         ),
         |model| {
-            let call = cost_call(&prepared.call_type, request, &empty_params)?;
+            let call = cost_call(&prepared.call_type, request, request_model, &empty_params)?;
             let cost_request = ModelCostRequest {
                 model,
                 provider,

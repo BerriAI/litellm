@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 
 const PROVIDERS: &[&str] = &[
     "anthropic",
+    "azure_ai",
     "exa_ai",
     "openai",
     "recraft",
@@ -138,6 +139,56 @@ fn response_cost_infers_provider_from_priced_fallback_model() {
     .unwrap();
     assert_eq!(result.model, "xai/served");
     assert!((result.cost.total - (100.0 * 0.01 + 30.0 * 0.02)).abs() < 1e-12);
+}
+
+#[rstest]
+#[case(json!({"model": "model-router"}), None, true)]
+#[case(json!({"model": "", "litellm_model_name": "model-router"}), None, true)]
+#[case(json!({}), Some("model-router"), true)]
+#[case(json!({"model": "model-router"}), Some("regular"), true)]
+#[case(json!({}), Some("regular"), false)]
+fn azure_ai_response_cost_bills_router_fee_once_from_request_or_hidden_model(
+    #[case] hidden: Value,
+    #[case] request_model: Option<&str>,
+    #[case] has_router_fee: bool,
+) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        (
+            "azure_ai/served".to_owned(),
+            json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003}),
+        ),
+        (
+            "azure_ai/model_router".to_owned(),
+            json!({"input_cost_per_token": 0.001}),
+        ),
+        (
+            "azure_ai/model-router".to_owned(),
+            json!({"input_cost_per_token": 0.001}),
+        ),
+    ]));
+    let response = json!({
+        "model": "azure_ai/served",
+        "usage": {"prompt_tokens": 100, "completion_tokens": 20}
+    });
+    let empty = json!({});
+    let base = request(Some(&response), Some("served"), None, &empty, &empty);
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                model_selection: ModelSelectionRequest {
+                    hidden_params: Some(&hidden),
+                    ..base.input.model_selection
+                },
+                ..base.input
+            },
+            request_model,
+            ..base
+        },
+    )
+    .unwrap();
+    let expected = 100.0 * 0.002 + 20.0 * 0.003 + if has_router_fee { 100.0 * 0.001 } else { 0.0 };
+    assert!((result.cost.total - expected).abs() < 1e-12);
 }
 
 #[rstest]
