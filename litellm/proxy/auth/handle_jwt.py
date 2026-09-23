@@ -1742,11 +1742,11 @@ class JWTAuthManager:
             except Exception:
                 continue
 
-        if denied_auth_enforced_pass_through_route:
-            JWTAuthManager._raise_team_passthrough_route_denial(route=route)
-
         if db_outage is not None:
             raise db_outage
+
+        if denied_auth_enforced_pass_through_route:
+            JWTAuthManager._raise_team_passthrough_route_denial(route=route)
 
         if requested_model and (any_claim_team_resolved or not jwt_handler.litellm_jwtauth.team_claim_fallback):
             # Claim resolved but no model access, or fallback disabled — deny.

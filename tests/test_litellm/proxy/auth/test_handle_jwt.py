@@ -7836,3 +7836,50 @@ async def test_find_team_with_model_access_outage_wins_over_missing_team():
         )
 
     assert exc_info.value is outage
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_outage_outranks_passthrough_denial():
+    outage = httpx.ConnectError("db down")
+
+    def _find_unique(*args, **kwargs):
+        where = kwargs.get("where") or {}
+        if where.get("team_id") == "team-a":
+            raise outage
+        return None
+
+    prisma_client = _team_read_failing_client(_find_unique)
+    user_api_key_cache = DualCache()
+    await user_api_key_cache.async_set_cache(
+        "team_id:team-b",
+        LiteLLM_TeamTableCachedObj(team_id="team-b", models=["gpt-4o"], metadata={}),
+    )
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.allowed_routes_check",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.RouteChecks.is_auth_enforced_pass_through_route",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.RouteChecks.check_passthrough_route_access",
+            return_value=False,
+        ),
+        pytest.raises(httpx.ConnectError) as exc_info,
+    ):
+        await JWTAuthManager.find_team_with_model_access(
+            team_ids={"team-a", "team-b"},
+            requested_model="gpt-4o",
+            route="/my-pass-through",
+            request_method="POST",
+            jwt_handler=_jwt_handler(),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc_info.value is outage
