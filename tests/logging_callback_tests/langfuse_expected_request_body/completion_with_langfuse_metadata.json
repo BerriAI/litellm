@@ -14,7 +14,6 @@
             ]
         },
         "langfuse.observation.level": "DEFAULT",
-        "langfuse.observation.metadata.test_key": "test_value",
         "langfuse.observation.model.name": "gpt-3.5-turbo",
         "langfuse.observation.model.parameters": {
             "extra_body": "{}"
@@ -35,8 +34,23 @@
             "cache_read_input_tokens": 0
         },
         "langfuse.release": "test_trace_release",
+        "langfuse.trace.input": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Hello!"
+                }
+            ]
+        },
         "langfuse.trace.metadata.test_key": "test_value",
         "langfuse.trace.name": "test_trace_name",
+        "langfuse.trace.output": {
+            "content": "Hello! How can I assist you today?",
+            "role": "assistant",
+            "tool_calls": null,
+            "function_call": null,
+            "provider_specific_fields": null
+        },
         "langfuse.trace.tags": [
             "test_tag",
             "test_tag_2"

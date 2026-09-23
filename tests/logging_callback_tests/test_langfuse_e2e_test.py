@@ -24,7 +24,7 @@ os.environ["LANGFUSE_DEBUG"] = "True"
 import pytest
 import pytest_asyncio
 
-LANGFUSE_EXPORT_POST: Final = "requests.Session.post"
+LANGFUSE_EXPORT_POST: Final = "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
 LANGFUSE_EXPORT_PATH: Final = "/api/public/otel/v1/traces"
 
 _PER_RUN_ATTRIBUTES: Final = frozenset(
@@ -64,7 +64,8 @@ def _decode_attribute(value: AnyValue) -> object:
 def _exported_spans(mock_post: MagicMock) -> list[dict[str, object]]:
     spans: list[dict[str, object]] = []
     for call in mock_post.call_args_list:
-        assert call.kwargs["url"].endswith(LANGFUSE_EXPORT_PATH), call.kwargs["url"]
+        url: str = call.args[0] if call.args else call.kwargs["url"]
+        assert url.endswith(LANGFUSE_EXPORT_PATH), url
         request = ExportTraceServiceRequest.FromString(call.kwargs["data"])
         for resource_spans in request.resource_spans:
             for scope_spans in resource_spans.scope_spans:

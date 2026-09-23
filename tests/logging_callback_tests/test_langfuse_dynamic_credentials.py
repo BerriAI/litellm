@@ -69,7 +69,7 @@ def test_upstream_langfuse_env_only_warns_and_opens_no_second_channel(monkeypatc
         )
 
     assert any("UPSTREAM_LANGFUSE_* is no longer supported" in record.getMessage() for record in caplog.records)
-    assert list(langfuse_sdk._TRACING.values()) == [logger.tracing]
+    assert [lease.tracing for lease in langfuse_sdk._TRACING.values()] == [logger.tracing]
     assert all(key.public_key == "public" for key in langfuse_sdk._TRACING)
 
 
