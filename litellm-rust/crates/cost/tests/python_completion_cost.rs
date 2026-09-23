@@ -63,6 +63,8 @@ fn apply_cost_margin_uses_global_when_provider_has_no_entry() {
 
 #[rstest]
 #[case(json!({"additional_headers": {"llm_provider-x-litellm-response-cost": "1.25"}}), Ok(Some(1.25)))]
+#[case(json!({"additional_headers": {"llm_provider-x-litellm-response-cost": " 1.25 "}}), Ok(Some(1.25)))]
+#[case(json!({"additional_headers": {"llm_provider-x-litellm-response-cost": true}}), Ok(Some(1.0)))]
 #[case(json!({"additional_headers": {"llm_provider-x-litellm-response-cost": null}}), Ok(None))]
 #[case(json!({"additional_headers": {"other": "1.25"}}), Ok(None))]
 #[case(json!({"additional_headers": {"llm_provider-x-litellm-response-cost": "invalid"}}), Err(ResponseCostError::InvalidProviderCost))]

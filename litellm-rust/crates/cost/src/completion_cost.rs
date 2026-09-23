@@ -3,7 +3,8 @@ use serde_json::Value;
 fn number(value: &Value) -> Option<f64> {
     match value {
         Value::Number(value) => value.as_f64(),
-        Value::String(value) => value.parse().ok(),
+        Value::String(value) => value.trim().parse().ok(),
+        Value::Bool(value) => Some(f64::from(*value)),
         _ => None,
     }
 }

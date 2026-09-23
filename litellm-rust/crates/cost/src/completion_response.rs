@@ -8,7 +8,9 @@ use crate::billed_token_rates::TokenTypeCostBreakdown;
 use crate::catalog::{
     CatalogCallError, CatalogError, CatalogImageError, CostCall, ModelCostRequest, ModelInfoCatalog,
 };
-use crate::completion_cost::{CompletionCost, completion_cost};
+use crate::completion_cost::{
+    CompletionCost, ResponseCostError, completion_cost, get_response_cost_from_hidden_params,
+};
 use crate::completion_input::{CompletionInputRequest, PreparedCompletionInput, ResponseKind};
 use crate::custom_pricing::{CustomPricing, CustomPricingError, cost_from_chat_usage};
 use crate::image_cost_router::{
@@ -93,6 +95,7 @@ pub enum CompletionResponseCostError {
     A2A(A2ACostError),
     TokenCount,
     CustomPricing(CustomPricingError),
+    ProviderCost(ResponseCostError),
 }
 
 impl From<UsageError> for CompletionResponseCostError {
@@ -844,4 +847,22 @@ pub fn completion_cost_from_response(
         cost,
         token_breakdown,
     })
+}
+
+pub fn response_cost_calculator_from_response(
+    catalog: &ModelInfoCatalog,
+    request: CompletionResponseCostRequest<'_>,
+    cache_hit: bool,
+) -> Result<f64, CompletionResponseCostError> {
+    if cache_hit {
+        return Ok(0.0);
+    }
+    if request.input.model_selection.response.is_some()
+        && let Some(hidden) = request.input.model_selection.hidden_params
+        && let Some(cost) = get_response_cost_from_hidden_params(hidden)
+            .map_err(CompletionResponseCostError::ProviderCost)?
+    {
+        return Ok(cost);
+    }
+    completion_cost_from_response(catalog, request).map(|priced| priced.cost.total)
 }
