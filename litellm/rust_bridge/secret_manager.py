@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Final, Protocol, runtime_checkable
@@ -15,7 +16,7 @@ from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagem
 class NativeSecretManagerConfig:
     system: str
     environment: tuple[tuple[str, str], ...] = field(repr=False)
-    settings_json: str = field(repr=False)
+    settings: Mapping[str, object] = field(repr=False)
     enterprise_enabled: bool
     owner_type: type[object]
     environment_attributes: tuple[tuple[str, str], ...]
@@ -121,7 +122,7 @@ def _capture(client: object, adapter: _ClientAdapter) -> NativeSecretManagerConf
             for name, value in os.environ.items()
             if name.startswith(prefixes) or name == "SECRET_MANAGER_REFRESH_INTERVAL"
         ),
-        settings_json=KeyManagementSettings().model_dump_json(),
+        settings=KeyManagementSettings().model_dump(mode="json"),
         enterprise_enabled=adapter.enterprise_enabled,
         owner_type=type(client),
         environment_attributes=adapter.environment_attributes,
@@ -165,7 +166,7 @@ class NativeSecretManagerRuntime(Protocol):
     @property
     def system(self) -> str: ...
 
-    def read_secret(self, name: str, settings_json: str | None = None) -> str | None: ...
+    def read_secret(self, name: str, settings: Mapping[str, object] | None = None) -> str | None: ...
 
 
 @runtime_checkable

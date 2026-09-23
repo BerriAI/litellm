@@ -24,5 +24,5 @@ def get_secret_from_manager(
     if native is None:
         return python_get_secret_from_manager(client, key_manager, secret_name, key_management_settings)
     return native.read_secret(
-        secret_name, key_management_settings.model_dump_json() if key_management_settings is not None else None
+        secret_name, key_management_settings.model_dump(mode="json") if key_management_settings is not None else None
     )

@@ -59,17 +59,17 @@ impl NativeSecretManager {
 #[pymethods]
 impl NativeSecretManager {
     #[staticmethod]
-    #[pyo3(signature = (system, environment, settings_json=None, enterprise_enabled=false))]
+    #[pyo3(signature = (system, environment, settings=None, enterprise_enabled=false))]
     fn from_config(
         py: Python<'_>,
         system: &str,
         environment: BTreeMap<String, String>,
-        settings_json: Option<&str>,
+        settings: Option<&Bound<'_, PyAny>>,
         enterprise_enabled: bool,
     ) -> PyResult<Self> {
         let system = serde_json::from_value(serde_json::Value::String(system.to_owned()))
             .map_err(|_| PyValueError::new_err("unknown secret manager system"))?;
-        let settings = parse_settings(settings_json)?;
+        let settings = parse_settings(settings)?;
         Self::build(
             py,
             Configuration {
@@ -130,8 +130,8 @@ impl NativeSecretManager {
                 ))
             })
             .collect::<PyResult<Vec<_>>>()?;
-        let settings = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
-            &config.getattr("settings_json")?.extract::<String>()?,
+        let settings = from_py::<serde_json::Map<String, serde_json::Value>>(
+            &config.getattr("settings")?,
         )
         .map_err(|_| PyValueError::new_err("invalid secret manager settings"))?;
         let attributes = config
@@ -185,15 +185,15 @@ impl NativeSecretManager {
             .to_owned()
     }
 
-    #[pyo3(signature = (name, settings_json=None))]
+    #[pyo3(signature = (name, settings=None))]
     fn read_secret(
         &self,
         py: Python<'_>,
         name: String,
-        settings_json: Option<&str>,
+        settings: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Option<String>> {
         let backend = self.backend()?;
-        let settings = settings_json
+        let settings = settings
             .map(|value| parse_settings(Some(value)))
             .transpose()?
             .unwrap_or_else(|| self.configuration.settings.clone());
@@ -204,15 +204,15 @@ impl NativeSecretManager {
                 .map_err(|error| PyValueError::new_err(error.to_string()))
         })
     }
-    #[pyo3(signature = (name, settings_json=None))]
+    #[pyo3(signature = (name, settings=None))]
     fn async_read_secret<'py>(
         &self,
         py: Python<'py>,
         name: String,
-        settings_json: Option<&str>,
+        settings: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let backend = self.backend()?;
-        let settings = settings_json
+        let settings = settings
             .map(|value| parse_settings(Some(value)))
             .transpose()?
             .unwrap_or_else(|| self.configuration.settings.clone());
@@ -256,10 +256,10 @@ fn cached(
     Ok(same_configuration.then_some(native))
 }
 
-fn parse_settings(value: Option<&str>) -> PyResult<KeyManagementSettings> {
+fn parse_settings(value: Option<&Bound<'_, PyAny>>) -> PyResult<KeyManagementSettings> {
     value
         .map(|value| {
-            serde_json::from_str(value)
+            serde_json::from_value(from_py::<serde_json::Value>(value)?)
                 .map_err(|_| PyValueError::new_err("invalid secret manager settings"))
         })
         .transpose()
