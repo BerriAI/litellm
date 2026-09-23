@@ -883,16 +883,47 @@ class _PrefixReplayStream(httpx.AsyncByteStream):
         await self._upstream.aclose()
 
 
+async def _no_more_chunks() -> AsyncIterator[bytes]:
+    return
+    yield b""
+
+
+class _RecordingByteStream(httpx.AsyncByteStream):
+    def __init__(self, inner: httpx.AsyncByteStream, sink: list[bytes]) -> None:
+        self._inner: Final = inner
+        self._sink: Final = sink
+        self.recording: bool = True  # rebind-ok: set False once the preview read finishes so the relay does not keep a copy of the whole body
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self._inner:
+            if self.recording:
+                self._sink.append(chunk)
+            yield chunk
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
 async def _read_error_body_preview(
     stream: AsyncIterator[bytes],
+    received: Final[list[bytes]],
 ) -> tuple[bytes, AsyncIterator[bytes]]:
     collected: Final[list[bytes]] = []  # mutable-ok: accumulated until the preview byte budget, then joined once
     total = 0  # rebind-ok: running byte count against the preview budget
-    async for chunk in stream:
-        collected.append(chunk)
-        total += len(chunk)
-        if total > PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS:
-            break
+    try:
+        async for chunk in stream:
+            collected.append(chunk)
+            total += len(chunk)
+            if total > PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS:
+                break
+    except httpx.HTTPError as err:
+        partial: Final = b"".join(received)
+        verbose_proxy_logger.warning(
+            "pass_through_endpoint: upstream error body read failed after %d bytes: %s",
+            len(partial),
+            type(err).__name__,
+        )
+        return partial, _no_more_chunks()
     return b"".join(collected), stream
 
 
@@ -905,8 +936,14 @@ def _headers_without_body_framing(headers: httpx.Headers) -> httpx.Headers:
 async def _error_body_preview_and_relay(response: httpx.Response) -> tuple[str, httpx.Response]:
     if response.is_stream_consumed:
         return response.text, response
+    received: Final[
+        list[bytes]
+    ] = []  # mutable-ok: raw bytes the rechunker consumed, kept so a mid-read failure still relays them
+    recorder: Final = _RecordingByteStream(response.stream, received)
+    response.stream = recorder
     body_iter: Final = response.aiter_bytes(chunk_size=PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS)
-    prefix, rest = await _read_error_body_preview(body_iter)
+    prefix, rest = await _read_error_body_preview(body_iter, received)
+    recorder.recording = False
     preview_text: Final = prefix.decode(response.encoding or "utf-8", errors="replace")
     return preview_text, httpx.Response(
         status_code=response.status_code,

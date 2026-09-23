@@ -4568,6 +4568,82 @@ async def test_pass_through_request_streaming_upstream_error_single_large_chunk_
     )
 
 
+class _UpstreamErrorBodyStreamDropping(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b'{"error": "half'
+        raise httpx.ReadError("peer reset")
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_streaming_upstream_error_body_read_failure_keeps_status_and_partial_body():
+    """
+    Regression: a 502 whose upstream dies while the error preview is being read
+    must still reach the client with status 502 and the bytes already received;
+    the read failure must not escape as a ProxyException 500.
+    """
+    upstream_response: Final = httpx.Response(
+        status_code=502,
+        headers={"content-type": "application/json"},
+        stream=_UpstreamErrorBodyStreamDropping(),
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+
+    recorded_warnings: list[tuple] = []
+    real_warning: Final = verbose_proxy_logger.warning
+
+    def _recording_warning(*args, **kwargs):
+        if args and str(args[0]).startswith("pass_through_endpoint: upstream"):
+            recorded_warnings.append(args)
+        return real_warning(*args, **kwargs)
+
+    with patch.object(verbose_proxy_logger, "warning", side_effect=_recording_warning):
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+            ) as mock_get_client:
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+                ) as mock_success_handler:
+                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                    mock_success_handler.return_value = None
+
+                    async_client: Final = MagicMock()
+                    async_client.build_request = MagicMock(return_value=MagicMock())
+                    async_client.send = AsyncMock(return_value=upstream_response)
+                    mock_get_client.return_value = MagicMock(client=async_client)
+
+                    response: Final = await pass_through_request(
+                        request=_upstream_error_request(),
+                        target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                        custom_headers={},
+                        user_api_key_dict=MagicMock(),
+                        stream=True,
+                    )
+
+    assert isinstance(response, StreamingResponse)
+    assert response.status_code == 502
+    streamed_chunks: Final = [chunk async for chunk in response.body_iterator]
+    streamed_bytes: Final = b"".join(
+        chunk if isinstance(chunk, bytes) else chunk.encode("utf-8") for chunk in streamed_chunks
+    )
+    assert streamed_bytes == b'{"error": "half'
+
+    rendered: Final = [str(args[0]) for args in recorded_warnings]
+    formats: Final = [args[0] for args in recorded_warnings]
+    assert any(
+        fmt == "pass_through_endpoint: upstream %s %s returned %s: %s" and '{"error": "half' in str(args[4])
+        for args, fmt in zip(recorded_warnings, formats)
+    ), rendered
+    assert any(
+        fmt == "pass_through_endpoint: upstream error body read failed after %d bytes: %s"
+        and args[1] == 15
+        and args[2] == "ReadError"
+        for args, fmt in zip(recorded_warnings, formats)
+    ), rendered
+
+
 @pytest.mark.asyncio
 async def test_pass_through_request_streaming_upstream_error_gzip_body_decoded_for_log_and_client():
     upstream_content: Final = b'{"error": {"message": "gzipped upstream says the project was not found"}}'
