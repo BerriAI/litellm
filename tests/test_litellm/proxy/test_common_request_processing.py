@@ -9858,3 +9858,50 @@ class TestErrorLogCarriesCallId:
         record: Final = caplog.records[-1]
         assert record.litellm_call_id == call_id
         assert call_id in record.getMessage()
+
+
+def _anthropic_message_start_frame() -> bytes:
+    payload: Final = {
+        "type": "message_start",
+        "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-haiku-4-5", "content": []},
+    }
+    return f"event: message_start\ndata: {json.dumps(payload)}\n\n".encode()
+
+
+@pytest.mark.asyncio
+async def test_sse_generator_yields_anthropic_error_event_on_interrupted_stream():
+    frames_seen: list = []
+
+    async def _iterator_hook(**_kwargs):
+        yield _anthropic_message_start_frame()
+        raise Exception("upstream hung up")
+
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.async_post_call_streaming_iterator_hook = _iterator_hook
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    chunks = [
+        chunk
+        async for chunk in ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=MagicMock(),
+            user_api_key_dict=MagicMock(),
+            request_data={"model": "claude-haiku-4-5"},
+            proxy_logging_obj=proxy_logging_obj,
+            request=None,
+            restamp_model=None,
+        )
+    ]
+    frames_seen.extend(chunks)
+
+    assert frames_seen[0] == _anthropic_message_start_frame(), (
+        f"stream content before the failure was dropped: {frames_seen}"
+    )
+    last_frame: Final = frames_seen[-1].decode() if isinstance(frames_seen[-1], bytes) else frames_seen[-1]
+    assert last_frame.startswith("event: error\ndata: "), (
+        f"interrupted stream was not announced by an event: error frame: {frames_seen}"
+    )
+    payload: Final = json.loads(last_frame.removeprefix("event: error\ndata: "))
+    assert payload == {
+        "type": "error",
+        "error": {"type": "api_error", "message": "upstream hung up"},
+    }, f"error frame was not the Anthropic envelope: {payload}"

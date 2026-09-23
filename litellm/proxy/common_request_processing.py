@@ -32,6 +32,9 @@ from starlette.types import Receive, Scope, Send
 import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.anthropic_interface.exceptions.exception_mapping_utils import (
+    AnthropicExceptionMapping,
+)
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -3999,7 +4002,7 @@ class ProxyBaseLLMRequestProcessing:
         restamp_model: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
-        Anthropic /messages and Google /generateContent streaming data generator require SSE events.
+        Anthropic /v1/messages streaming data generator.
 
         Returns the underlying ``async_streaming_data_generator`` configured with
         SSE serializers directly (rather than re-wrapping it in another
@@ -4017,12 +4020,18 @@ class ProxyBaseLLMRequestProcessing:
             request_data=request_data,
             proxy_logging_obj=proxy_logging_obj,
             serialize_chunk=ProxyBaseLLMRequestProcessing._sse_chunk_serializer(restamper),
-            serialize_error=lambda proxy_exc: (
-                f"{STREAM_SSE_DATA_PREFIX}{json.dumps({'error': proxy_exc.to_dict()})}\n\n"
-            ),
+            serialize_error=ProxyBaseLLMRequestProcessing._anthropic_sse_error,
             request=request,
             flush_tail=None if restamper is None else restamper.flush,
         )
+
+    @staticmethod
+    def _anthropic_sse_error(proxy_exc: ProxyException) -> str:
+        error_response: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=int(proxy_exc.code),
+            raw_message=proxy_exc.message,
+        )
+        return f"event: error\n{STREAM_SSE_DATA_PREFIX}{json.dumps(error_response)}\n\n"
 
     @overload
     @staticmethod

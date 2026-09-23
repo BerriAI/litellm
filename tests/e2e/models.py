@@ -598,6 +598,20 @@ class CountTokensResponse(BaseModel):
     input_tokens: int
 
 
+class AnthropicErrorBody(BaseModel):
+    type: str
+    message: str
+
+
+class AnthropicErrorEvent(BaseModel):
+    """The `data:` payload of an `event: error` SSE frame on /v1/messages:
+    Anthropic's streamed-error envelope `{"type": "error", "error": {...}}`,
+    the only error shape Anthropic clients read mid-stream."""
+
+    type: Literal["error"]
+    error: AnthropicErrorBody
+
+
 # ---------- mcp servers ----------
 
 

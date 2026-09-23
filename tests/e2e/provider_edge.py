@@ -541,6 +541,7 @@ class ReplayEdge:
 class LiveEdge:
     observe_request: Callable[[str, Mapping[str, str], bytes | None], None] | None = None
     sign: RequestSigner | None = None
+    truncate_after: int | None = None
 
 
 type EdgeBackend = RecordEdge | ReplayEdge | LiveEdge | CacheEdge
@@ -786,11 +787,33 @@ def _handle_record(
             assert_never(head)
 
 
+def _truncated_steps(
+    steps: Generator[StreamStep, None, None], truncate_after: int
+) -> Generator[StreamStep, None, None]:
+    """A live edge's mid-stream hang-up: relay the first ``truncate_after``
+    upstream chunks, then end with a truncation step instead of whatever the
+    upstream had left, closing the upstream generator so its socket closes too.
+    An upstream that dies on its own before the count is reached just passes
+    its truncation through."""
+    relayed = 0
+    with closing(steps) as source:
+        for step in source:
+            if isinstance(step, StreamChunk) and relayed >= truncate_after:
+                yield StreamTruncation(
+                    reason=f"edge truncated the upstream stream after {truncate_after} chunks"
+                )
+                return
+            if isinstance(step, StreamChunk):
+                relayed += 1
+            yield step
+
+
 def _handle_live(
     method: str, url: str, headers: Mapping[str, str], body: bytes | None, timeout: float,
     cache: CacheEdge | None = None, mount: str = "", test_key: str | None = None,
     observe_request: Callable[[str, Mapping[str, str], bytes | None], None] | None = None,
     sign: RequestSigner | None = None,
+    truncate_after: int | None = None,
 ) -> EdgeOutcome:
     forwarded: Final = {
         name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS
@@ -805,6 +828,12 @@ def _handle_live(
     match head:
         case NetworkError(message=message):
             return _recorded_outcome(_network_error_response(message))
+        case StreamHead() if truncate_after is not None:
+            return EdgeStream(
+                head.status_code,
+                _filtered_response_headers(head.headers),
+                _truncated_steps(head.steps, truncate_after),
+            )
         case StreamHead() if _is_streamed(head.headers):
             return EdgeStream(head.status_code, _filtered_response_headers(head.headers), head.steps)
         case StreamHead():
@@ -875,10 +904,10 @@ def handle_edge_request(
                 method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
                 backend, mount, test_key,
             )
-        case LiveEdge(observe_request=observe_request, sign=sign):
+        case LiveEdge(observe_request=observe_request, sign=sign, truncate_after=truncate_after):
             return _handle_live(
                 method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
-                observe_request=observe_request, sign=sign,
+                observe_request=observe_request, sign=sign, truncate_after=truncate_after,
             )
         case RecordEdge():
             return _handle_record(
