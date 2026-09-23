@@ -1807,6 +1807,9 @@
     "tests/integration/observability/test_guardrail_effects.py::test_bedrock_passthrough_converse_guardrail_ignores_denied_term_in_tool_definition": [
       "other.observability.guardrails.bedrock_passthrough_converse_scans_only_caller_content"
     ],
+    "tests/integration/observability/test_guardrail_effects.py::test_bedrock_guardrail_streams_anthropic_messages_tool_use_instead_of_chunk_builder_500": [
+      "other.observability.guardrails.bedrock_post_call_scans_streamed_anthropic_messages_tool_use"
+    ],
     "tests/integration/pricing/test_configured_prices.py::test_cost_estimate_reports_configured_prices_for_model_absent_from_cost_map": [
       "quota_management.cost_estimate.configured_price.reported_for_model_absent_from_cost_map"
     ],
