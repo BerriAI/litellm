@@ -1961,8 +1961,19 @@ class CustomStreamWrapper:
 
     async def fetch_stream(self):
         if self.completion_stream is None and self.make_call is not None:
-            # Call make_call to get the completion stream
-            self.completion_stream = await self.make_call(client=litellm.module_level_aclient)
+            try:
+                # Call make_call to get the completion stream
+                self.completion_stream = await self.make_call(client=litellm.module_level_aclient)
+            except Exception as e:
+                # make_call() can raise before any chunk is ever pulled (e.g. the
+                # provider rejects the request when the stream is opened, such as
+                # a 429 on Gemini/Vertex). Router._acompletion calls fetch_stream()
+                # directly right after litellm.acompletion() returns - for
+                # providers whose stream opens lazily - which is outside the
+                # logging wrapper that normally fires failure callbacks. Without
+                # this, no failure_handler/async_failure_handler ever runs, so the
+                # deployment never cools down and gets retried immediately.
+                self._log_stream_failure_and_raise(e)
             self._stream_iter = self.completion_stream.__aiter__()
 
         return self.completion_stream
@@ -2197,13 +2208,21 @@ class CustomStreamWrapper:
             return processed_chunk
 
     def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
-        traceback_exception: Final = traceback.format_exc()
-        if self.logging_obj is not None:
+        # Guard against double-reporting: fetch_stream() may already have
+        # dispatched failure callbacks for this exact exception before it
+        # propagated up into __anext__'s except block, which also routes here.
+        already_logged: Final = getattr(e, "_litellm_stream_failure_logged", False)
+        if not already_logged and self.logging_obj is not None:
+            traceback_exception: Final = traceback.format_exc()
             self._record_partial_usage_for_failure()
             ## LOGGING
             asyncio.create_task(
                 self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
             )
+            try:
+                e._litellm_stream_failure_logged = True  # type: ignore[attr-defined]
+            except Exception:
+                pass
         self._handle_stream_fallback_error(e)
 
     def _record_partial_usage_for_failure(self) -> None:
