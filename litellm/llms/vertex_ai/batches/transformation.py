@@ -1,7 +1,11 @@
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import Any, Final, Protocol
 from urllib.parse import unquote
 
+from pydantic import TypeAdapter, ValidationError
+
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIError,
@@ -9,7 +13,10 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.types.llms.openai import BatchJobStatus, CreateBatchRequest
 from litellm.types.llms.vertex_ai import *
-from litellm.types.utils import LiteLLMBatch, PromptTokensDetailsWrapper
+from litellm.types.llms.vertex_ai import GenerateContentResponseBody
+from litellm.types.utils import LiteLLMBatch, ModelInfo, PromptTokensDetailsWrapper, Usage
+
+_NATIVE_VERTEX_RESPONSE: Final = TypeAdapter(GenerateContentResponseBody)
 
 
 def vertex_prompt_tokens_details(
@@ -38,6 +45,82 @@ def vertex_prompt_tokens_details(
         audio_tokens=sum(token_count for modality, token_count in normalized if modality == "AUDIO"),
         image_tokens=sum(token_count for modality, token_count in normalized if modality == "IMAGE"),
         video_tokens=sum(token_count for modality, token_count in normalized if modality == "VIDEO"),
+    )
+
+
+def is_native_vertex_batch_output_row(row: Mapping[str, object]) -> bool:
+    return isinstance(row.get("request"), dict)
+
+
+class NativeVertexBatchCostCalculator(Protocol):
+    def __call__(
+        self,
+        usage: Usage,
+        model: str,
+        custom_llm_provider: str | None = None,
+        model_info: ModelInfo | None = None,
+    ) -> tuple[float, float]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class NativeVertexBatchRowStats:
+    usage: Usage
+    total_tokens: int
+    model: str | None
+    prompt_cost: float
+    completion_cost: float
+
+
+def native_vertex_batch_row_stats(
+    row: Mapping[str, object],
+    model_name: str | None,
+    *,
+    model_info: ModelInfo | None,
+    calculate_usage: Callable[[GenerateContentResponseBody], Usage],
+    cost_calculator: NativeVertexBatchCostCalculator,
+) -> NativeVertexBatchRowStats | None:
+    """
+    Usage and cost of one native Vertex predictions.jsonl row, a
+    `{"request": ..., "response": {"candidates": [...], "usageMetadata": {...}, "modelVersion": ...}}`
+    object. `model_name` (the deployment model) prices the row, else its own `modelVersion` does;
+    a row without `response.usageMetadata`, or whose response fails validation, is None (failed).
+    """
+    response_body: Final = row.get("response")
+    if not isinstance(response_body, dict) or "usageMetadata" not in response_body:
+        return None
+    try:
+        completion_response: Final = _NATIVE_VERTEX_RESPONSE.validate_python(response_body)
+    except ValidationError as e:
+        verbose_logger.debug("vertex_ai batch row response is not a GenerateContentResponse: %s", str(e))
+        return None
+    usage: Final = calculate_usage(completion_response)
+    total_tokens: Final = usage.total_tokens or (usage.prompt_tokens + usage.completion_tokens)
+    model_version: Final = response_body.get("modelVersion")
+    model: Final = model_name or (model_version if isinstance(model_version, str) else None)
+    if model is None:
+        verbose_logger.warning(
+            "vertex_ai batch output row could not be costed, so it is billed at $0 and the rest of the batch "
+            "is still billed: the row has no modelVersion and the batch has no deployment model"
+        )
+        return NativeVertexBatchRowStats(
+            usage=usage, total_tokens=total_tokens, model=None, prompt_cost=0.0, completion_cost=0.0
+        )
+    try:
+        prompt_cost, completion_cost = cost_calculator(
+            usage=usage, model=model, custom_llm_provider="vertex_ai", model_info=model_info
+        )
+    except Exception as e:  # noqa: BLE001  # one unpriceable row must not abort the batch's cost accounting
+        verbose_logger.warning(
+            "vertex_ai batch output row could not be costed, so it is billed at $0 and the rest of the batch "
+            "is still billed. model=%s error=%s",
+            model,
+            str(e),
+        )
+        return NativeVertexBatchRowStats(
+            usage=usage, total_tokens=total_tokens, model=model, prompt_cost=0.0, completion_cost=0.0
+        )
+    return NativeVertexBatchRowStats(
+        usage=usage, total_tokens=total_tokens, model=model, prompt_cost=prompt_cost, completion_cost=completion_cost
     )
 
 

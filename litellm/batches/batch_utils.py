@@ -1,11 +1,9 @@
 import json
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from enum import Enum
-from typing import Any, Final, Literal, Protocol
-
-from pydantic import TypeAdapter, ValidationError
+from typing import Any, Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
@@ -13,12 +11,13 @@ from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.llms.bedrock.batches.transformation import titan_embedding_usage_from_batch_output
+from litellm.llms.vertex_ai.batches.transformation import (
+    is_native_vertex_batch_output_row,
+    native_vertex_batch_row_stats,
+)
 from litellm.types.llms.openai import Batch
-from litellm.types.llms.vertex_ai import GenerateContentResponseBody
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import token_counter
-
-_NATIVE_VERTEX_RESPONSE: Final = TypeAdapter(GenerateContentResponseBody)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,10 +36,6 @@ class BatchCostUsageResult:
 _COMPLETED_BATCH_STATUSES: Final = frozenset({"completed", "complete"})
 
 
-def _is_native_vertex_batch_output_row(row: Mapping[str, object]) -> bool:
-    return isinstance(row.get("request"), dict)
-
-
 def _uses_native_vertex_output(
     custom_llm_provider: str,
     model_name: str | None,
@@ -50,7 +45,7 @@ def _uses_native_vertex_output(
         return False
     if model_name and getattr(litellm, "disable_vertex_batch_output_transformation", False):
         return True
-    return first_row is not None and _is_native_vertex_batch_output_row(first_row)
+    return first_row is not None and is_native_vertex_batch_output_row(first_row)
 
 
 _TERMINAL_BATCH_STATUSES: Final = _COMPLETED_BATCH_STATUSES | frozenset({"failed", "cancelled", "expired"})
@@ -350,72 +345,6 @@ def _aggregate_batch_cost_usage_models(
     )
 
 
-class _BatchCostCalculator(Protocol):
-    def __call__(
-        self,
-        usage: Usage,
-        model: str,
-        custom_llm_provider: str | None = None,
-        model_info: ModelInfo | None = None,
-    ) -> tuple[float, float]: ...
-
-
-@dataclass(frozen=True, slots=True)
-class _NativeVertexRowStats:
-    usage: Usage
-    total_tokens: int
-    model: str | None
-    prompt_cost: float
-    completion_cost: float
-
-
-def _native_vertex_row_stats(
-    row: Mapping[str, object],
-    model_name: str | None,
-    *,
-    model_info: ModelInfo | None,
-    calculate_usage: Callable[[GenerateContentResponseBody], Usage],
-    cost_calculator: _BatchCostCalculator,
-) -> _NativeVertexRowStats | None:
-    response_body: Final = row.get("response")
-    if not isinstance(response_body, dict) or "usageMetadata" not in response_body:
-        return None
-    try:
-        completion_response: Final = _NATIVE_VERTEX_RESPONSE.validate_python(response_body)
-    except ValidationError as e:
-        verbose_logger.debug("vertex_ai batch row response is not a GenerateContentResponse: %s", str(e))
-        return None
-    usage: Final = calculate_usage(completion_response)
-    total_tokens: Final = usage.total_tokens or (usage.prompt_tokens + usage.completion_tokens)
-    model_version: Final = response_body.get("modelVersion")
-    model: Final = model_name or (model_version if isinstance(model_version, str) else None)
-    if model is None:
-        verbose_logger.warning(
-            "vertex_ai batch output row could not be costed, so it is billed at $0 and the rest of the batch "
-            "is still billed: the row has no modelVersion and the batch has no deployment model"
-        )
-        return _NativeVertexRowStats(
-            usage=usage, total_tokens=total_tokens, model=None, prompt_cost=0.0, completion_cost=0.0
-        )
-    try:
-        prompt_cost, completion_cost = cost_calculator(
-            usage=usage, model=model, custom_llm_provider="vertex_ai", model_info=model_info
-        )
-    except Exception as e:  # noqa: BLE001  # one unpriceable row must not abort the batch's cost accounting
-        verbose_logger.warning(
-            "vertex_ai batch output row could not be costed, so it is billed at $0 and the rest of the batch "
-            "is still billed. model=%s error=%s",
-            model,
-            str(e),
-        )
-        return _NativeVertexRowStats(
-            usage=usage, total_tokens=total_tokens, model=model, prompt_cost=0.0, completion_cost=0.0
-        )
-    return _NativeVertexRowStats(
-        usage=usage, total_tokens=total_tokens, model=model, prompt_cost=prompt_cost, completion_cost=completion_cost
-    )
-
-
 def calculate_vertex_ai_batch_cost_and_usage(
     vertex_ai_batch_responses: Iterable[dict],
     model_name: str | None = None,
@@ -431,7 +360,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
     row_stats: Final = tuple(
-        _native_vertex_row_stats(
+        native_vertex_batch_row_stats(
             row,
             model_name,
             model_info=model_info,
