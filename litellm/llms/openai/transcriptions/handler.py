@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.core_helpers import set_provider_response_header
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
+    sdk_compatible_transcription_request_data,
 )
 from litellm.types.utils import FileTypes
 from litellm.utils import (
@@ -24,23 +25,6 @@ from ..openai import OpenAIChatCompletion
 
 class OpenAIAudioTranscription(OpenAIChatCompletion):
     # Audio Transcriptions
-    @staticmethod
-    def _sdk_compatible_request_data(data: dict) -> dict:
-        """Route API fields that predate SDK support through ``extra_body``."""
-        extension_keys: Final = ("keywords", "languages")
-        extension_body: Final = {key: data[key] for key in extension_keys if key in data}
-        if not extension_body:
-            return data
-
-        existing_extra_body: Final = data.get("extra_body")
-        return {  # mutable-ok: OpenAI SDK requires a mutable request mapping
-            **{key: value for key, value in data.items() if key not in extension_keys},
-            "extra_body": {
-                **(existing_extra_body if isinstance(existing_extra_body, dict) else {}),
-                **extension_body,
-            },
-        }
-
     async def make_openai_audio_transcriptions_request(
         self,
         openai_aclient: AsyncOpenAI,
@@ -48,7 +32,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         timeout: float | httpx.Timeout,
     ):
         try:
-            sdk_data: Final = self._sdk_compatible_request_data(data)
+            sdk_data: Final = sdk_compatible_transcription_request_data(data)
             if data.get("stream") is True:
                 stream_response: Final = await openai_aclient.audio.transcriptions.create(**sdk_data, timeout=timeout)
                 return {}, stream_response  # mutable-ok: response headers use the existing mutable mapping contract
@@ -69,7 +53,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         timeout: float | httpx.Timeout,
     ):
         try:
-            sdk_data: Final = self._sdk_compatible_request_data(data)
+            sdk_data: Final = sdk_compatible_transcription_request_data(data)
             if data.get("stream") is True:
                 response = openai_client.audio.transcriptions.create(**sdk_data, timeout=timeout)
                 return None, response

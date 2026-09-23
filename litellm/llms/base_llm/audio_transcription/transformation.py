@@ -11,6 +11,23 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import FileTypes, ModelResponse, TranscriptionResponse
 
+
+def sdk_compatible_transcription_request_data(data: dict) -> dict:
+    extension_keys: Final = ("keywords", "languages")
+    extension_body: Final = {key: data[key] for key in extension_keys if key in data}
+    if not extension_body:
+        return data
+
+    existing_extra_body: Final = data.get("extra_body")
+    return {
+        **{key: value for key, value in data.items() if key not in extension_keys},
+        "extra_body": {
+            **(existing_extra_body if isinstance(existing_extra_body, dict) else {}),
+            **extension_body,
+        },
+    }
+
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer

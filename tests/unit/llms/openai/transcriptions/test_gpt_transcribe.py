@@ -1,12 +1,13 @@
 import io
 import json
 import wave
+from collections.abc import Iterator
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from openai import AsyncOpenAI, AsyncStream, AzureOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AsyncStream, AzureOpenAI
 
 import litellm
 from litellm.litellm_core_utils.audio_utils.transcription_streaming import wrap_transcription_stream
@@ -18,6 +19,14 @@ from litellm.llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from litellm.main import _validate_gpt_transcription_request
 from litellm.types.utils import TranscriptionResponse
 from litellm.utils import get_optional_params_transcription
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
 
 
 def test_gpt_transcribe_config_uses_native_parameters_and_json():
@@ -123,6 +132,37 @@ async def test_openai_handler_returns_native_typed_stream():
 
 
 @pytest.mark.asyncio
+async def test_closed_transcription_stream_without_usage_or_duration_does_not_log_success():
+    async def send_response(request: httpx.Request) -> httpx.Response:
+        events = (
+            {"type": "transcript.text.delta", "delta": "hello"},
+            {"type": "transcript.text.done", "text": "hello", "usage": {"type": "duration", "seconds": 1}},
+        )
+        content = "".join(f"data: {json.dumps(event)}\n\n" for event in events).encode()
+        return httpx.Response(200, content=content, headers={"content-type": "text/event-stream"})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(send_response))
+    client = AsyncOpenAI(api_key="sk-test", base_url="https://example.com/v1", http_client=http_client)
+    stream = await client.audio.transcriptions.create(
+        model="gpt-transcribe", file=("sample.webm", b"audio"), stream=True
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.async_failure_handler = AsyncMock()
+    wrapped_stream = wrap_transcription_stream(stream, logging_obj, datetime.now())
+
+    async for event in wrapped_stream:
+        assert event.type == "transcript.text.delta"
+        break
+    await wrapped_stream.close()
+    await client.close()
+
+    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_not_called()
+    logging_obj.async_success_handler.assert_not_awaited()
+    logging_obj.async_failure_handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_atranscription_stream_preserves_duration_for_callback_cost():
     async def send_response(request: httpx.Request) -> httpx.Response:
         events = (
@@ -188,19 +228,20 @@ def test_gpt_transcribe_rejects_conflicting_language_inputs():
         )
 
 
-def test_gpt_transcribe_rejects_whisper_response_formats():
+@pytest.mark.parametrize("model", ["gpt-transcribe", "azure/gpt-transcribe"])
+def test_gpt_transcribe_rejects_whisper_response_formats(local_model_cost_map: None, model: str) -> None:
     audio_file = io.BytesIO(b"audio")
     audio_file.name = "sample.wav"
     with pytest.raises(litellm.UnsupportedParamsError, match="only supports response_format='json'"):
         litellm.transcription(
-            model="gpt-transcribe",
+            model=model,
             file=audio_file,
             response_format="verbose_json",
             api_key="sk-test",
         )
 
 
-def test_gpt_live_transcribe_rejects_file_transcription():
+def test_gpt_live_transcribe_rejects_file_transcription(local_model_cost_map: None) -> None:
     audio_file = io.BytesIO(b"audio")
     audio_file.name = "sample.wav"
     with pytest.raises(litellm.UnsupportedParamsError, match="Realtime API"):
@@ -232,8 +273,8 @@ def test_azure_async_gpt_transcribe_forwards_v1_api_version():
     assert handler.async_audio_transcriptions.call_args.kwargs["api_version"] == "v1"
 
 
-@pytest.mark.parametrize("api_version", [None, "v1", "latest", "preview"])
-def test_azure_gpt_transcribe_uses_deployment_scoped_api_version(api_version: str | None):
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_gpt_transcribe_uses_deployment_scoped_api_version(local_model_cost_map: None, api_version: str) -> None:
     resolved_api_version = _validate_gpt_transcription_request(
         model="gpt-transcribe",
         custom_llm_provider="azure",
@@ -244,6 +285,20 @@ def test_azure_gpt_transcribe_uses_deployment_scoped_api_version(api_version: st
     )
 
     assert resolved_api_version == litellm.AZURE_DEFAULT_API_VERSION
+
+
+def test_azure_gpt_transcribe_keeps_unset_api_version_for_configured_default(local_model_cost_map: None) -> None:
+    assert (
+        _validate_gpt_transcription_request(
+            model="gpt-transcribe",
+            custom_llm_provider="azure",
+            language=None,
+            languages=None,
+            response_format="json",
+            api_version=None,
+        )
+        is None
+    )
 
 
 def test_azure_gpt_transcribe_uses_deployment_scoped_route():
@@ -287,7 +342,7 @@ def test_azure_gpt_transcribe_uses_deployment_scoped_route():
     client.close()
 
 
-def test_azure_gpt_transcribe_preserves_dated_api_version():
+def test_azure_gpt_transcribe_preserves_dated_api_version(local_model_cost_map: None) -> None:
     resolved_api_version = _validate_gpt_transcription_request(
         model="gpt-transcribe",
         custom_llm_provider="azure",
@@ -298,3 +353,40 @@ def test_azure_gpt_transcribe_preserves_dated_api_version():
     )
 
     assert resolved_api_version == "2025-04-01-preview"
+
+
+@pytest.mark.asyncio
+async def test_azure_gpt_transcribe_sends_language_hints_in_sdk_extra_body():
+    async def send_response(request: httpx.Request) -> httpx.Response:
+        body = await request.aread()
+        assert b'name="keywords[]"' in body
+        assert b'name="languages[]"' in body
+        return httpx.Response(200, json={"text": "hello"})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(send_response))
+    client = AsyncAzureOpenAI(
+        api_key="azure-test-key",
+        azure_endpoint="https://example.openai.azure.com",
+        api_version="2025-04-01-preview",
+        http_client=http_client,
+    )
+    audio_file = io.BytesIO(b"audio")
+    audio_file.name = "sample.wav"
+
+    response = await AzureAudioTranscription().audio_transcriptions(
+        model="gpt-transcribe",
+        audio_file=audio_file,
+        optional_params={"keywords": ["LiteLLM"], "languages": ["en"]},
+        logging_obj=MagicMock(),
+        model_response=TranscriptionResponse(),
+        timeout=10,
+        max_retries=0,
+        api_key="azure-test-key",
+        api_base="https://example.openai.azure.com",
+        api_version="2025-04-01-preview",
+        client=client,
+        atranscription=True,
+    )
+
+    assert response.text == "hello"
+    await client.close()
