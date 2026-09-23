@@ -3,6 +3,7 @@ import binascii
 import datetime
 import json
 import struct
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,6 +19,7 @@ from litellm.llms.bedrock.chat.invoke_handler import (
     make_sync_call,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.utils import ModelResponseStream
 
 
 def test_transform_thinking_blocks_with_redacted_content():
@@ -711,7 +713,7 @@ async def test_async_invoke_streaming_non_200_forwards_bedrock_response_headers(
     assert exc_info.value.response.headers["x-amzn-requestid"] == "req-non200-async"
 
 
-def _bedrock_event_stream_frame(chunk: dict) -> bytes:
+def _bedrock_event_stream_frame(chunk: Mapping[str, object]) -> bytes:
     def header(name: str, value: str) -> bytes:
         return bytes([len(name)]) + name.encode() + bytes([7]) + struct.pack(">H", len(value)) + value.encode()
 
@@ -724,7 +726,7 @@ def _bedrock_event_stream_frame(chunk: dict) -> bytes:
     return body + struct.pack(">I", binascii.crc32(body))
 
 
-def _openai_stream_chunk(delta: dict, finish_reason: str | None = None) -> dict:
+def _openai_stream_chunk(delta: Mapping[str, str], finish_reason: str | None = None) -> Mapping[str, object]:
     return {
         "id": "chatcmpl-1",
         "object": "chat.completion.chunk",
@@ -745,21 +747,23 @@ _MOONSHOT_RAW_STREAM: Final = b"".join(
 )
 
 
-def _assert_moonshot_stream_content(chunks: list) -> None:
+def _assert_moonshot_stream_content(chunks: Sequence[ModelResponseStream]) -> None:
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == '{"city": "San Francisco"}'
     assert "".join(getattr(chunk.choices[0].delta, "reasoning_content", None) or "" for chunk in chunks) == "thinking"
     assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["stop"]
 
 
 @pytest.fixture
-def _aws_test_credentials(monkeypatch):
+def _aws_test_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATEST")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
     monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
 
 
 @pytest.mark.parametrize("response_format", [None, {"type": "json_object"}])
-def test_moonshot_invoke_stream_yields_openai_shaped_chunks(_aws_test_credentials, response_format):
+def test_moonshot_invoke_stream_yields_openai_shaped_chunks(
+    _aws_test_credentials: None, response_format: Mapping[str, str] | None
+) -> None:
     raw_stream: Final = _MOONSHOT_RAW_STREAM
     response: Final = MagicMock(status_code=200, headers={})
     response.iter_bytes = lambda chunk_size=None: iter([raw_stream])
@@ -777,8 +781,8 @@ def test_moonshot_invoke_stream_yields_openai_shaped_chunks(_aws_test_credential
 
 
 @pytest.mark.asyncio
-async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_test_credentials):
-    async def _aiter_bytes(chunk_size=None):
+async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_test_credentials: None) -> None:
+    async def _aiter_bytes(chunk_size: int | None = None) -> AsyncIterator[bytes]:
         yield _MOONSHOT_RAW_STREAM
 
     response: Final = MagicMock(status_code=200, headers={})

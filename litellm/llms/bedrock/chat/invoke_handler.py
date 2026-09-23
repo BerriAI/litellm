@@ -821,7 +821,7 @@ class AmazonOpenAICompatibleStreamDecoder(AWSEventStreamDecoder):
             sync_stream=sync_stream,
         )
 
-    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
+    def _chunk_parser(self, chunk_data: dict[str, object]) -> ModelResponseStream:
         return self.openai_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 
