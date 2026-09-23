@@ -69,3 +69,7 @@ def loggable_owned_keys(flagged: tuple[str, ...]) -> tuple[str, ...]:
             }
         )
     )
+
+
+def log_safe(value: object) -> str:
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")

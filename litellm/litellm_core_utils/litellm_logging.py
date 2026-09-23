@@ -101,7 +101,7 @@ from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages_async,
 )
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
-from litellm.litellm_core_utils.owned_keys import loggable_owned_keys, owned_keys_in, parse_request_body
+from litellm.litellm_core_utils.owned_keys import log_safe, loggable_owned_keys, owned_keys_in, parse_request_body
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
@@ -1350,9 +1350,9 @@ class Logging(LiteLLMLoggingBaseClass):
         if not flagged:
             return
         verbose_logger.warning(
-            "LiteLLM-owned keys reached the provider request body. provider=%r model=%r keys=%s",
-            self.model_call_details.get("custom_llm_provider"),
-            self.model_call_details.get("model"),
+            "LiteLLM-owned keys reached the provider request body. provider=%s model=%s keys=%s",
+            log_safe(self.model_call_details.get("custom_llm_provider")),
+            log_safe(self.model_call_details.get("model")),
             ", ".join(loggable_owned_keys(flagged)),
         )
 

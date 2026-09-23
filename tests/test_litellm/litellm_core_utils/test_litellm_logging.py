@@ -8618,7 +8618,7 @@ def test_pre_call_warns_for_mapping_body(caplog: pytest.LogCaptureFixture, loggi
 
     assert caplog.records[-1].getMessage() == (
         "LiteLLM-owned keys reached the provider request body. provider=None "
-        "model='bedrock/claude-haiku-4-5-20251001-v1:0' keys=user_api_key_hash"
+        "model=bedrock/claude-haiku-4-5-20251001-v1:0 keys=user_api_key_hash"
     )
 
 
@@ -8641,7 +8641,7 @@ def test_pre_call_ignores_non_object_json_body(
     assert caplog.records == []
 
 
-def test_pre_call_warns_for_single_line_repr_model(caplog: pytest.LogCaptureFixture) -> None:
+def test_pre_call_warns_with_escaped_newline_in_model(caplog: pytest.LogCaptureFixture) -> None:
     logging_obj: Final = LitellmLogging(
         model="bedrock/model\nforged",
         messages=[{"role": "user", "content": "Hey"}],
@@ -8661,6 +8661,7 @@ def test_pre_call_warns_for_single_line_repr_model(caplog: pytest.LogCaptureFixt
 
     message: Final = caplog.records[-1].getMessage()
     assert "\n" not in message
+    assert "model=bedrock/model\\nforged" in message
     assert "keys=user_api_key_hash" in message
 
 

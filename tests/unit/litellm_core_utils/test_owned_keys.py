@@ -10,6 +10,7 @@ from hypothesis import strategies as st
 from litellm.litellm_core_utils.owned_keys import (
     OWNED_KEYS,
     is_owned_key,
+    log_safe,
     loggable_owned_keys,
     owned_keys_in,
     parse_request_body,
@@ -322,3 +323,25 @@ def test_loggable_owned_keys_preserves_known_leaves_and_redacts_prefixes() -> No
         "_litellm_*",
         "user_api_key_hash",
     )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (
+        ("a\nb", "a\\nb"),
+        ("a\r\nb", "a\\r\\nb"),
+        (None, "None"),
+        ("plain", "plain"),
+    ),
+)
+def test_log_safe_escapes_line_breaks(value: object, expected: str) -> None:
+    assert log_safe(value) == expected
+
+
+@settings(max_examples=30, deadline=None)
+@given(st.text())
+def test_log_safe_never_returns_line_breaks(value: str) -> None:
+    result: Final = log_safe(value)
+
+    assert "\n" not in result
+    assert "\r" not in result
