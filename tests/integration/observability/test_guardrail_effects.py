@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually
@@ -965,19 +966,25 @@ def test_responses_pre_call_denial_stream_survives_worker_kill(gateway: Gateway,
         candidate: Final = owned.gateway
         with candidate.scenario() as scenario:
             model: Final = scenario.model(api_base=_dead_api_base())
-            children: Final = tuple(
-                member.pid for member in group_members(owned.process.pid) if member.pid != owned.process.pid
+            members: Final = tuple(
+                member for member in group_members(owned.process.pid) if member.pid != owned.process.pid
             )
-            assert len(children) >= 2, children
-            os.kill(children[0], signal.SIGKILL)
+            children: Final = tuple(member.pid for member in members)
+            workers: Final = tuple(
+                member.pid for member in members if any("spawn_main" in part for part in member.cmdline())
+            )
+            assert len(workers) >= 2, workers
+            os.kill(workers[0], signal.SIGKILL)
             expected: Final = len(children)
             eventually(
                 lambda: tuple(
                     member.pid
                     for member in group_members(owned.process.pid)
-                    if member.pid != owned.process.pid and member.is_running()
+                    if member.pid != owned.process.pid
+                    and member.is_running()
+                    and member.status() != psutil.STATUS_ZOMBIE
                 ),
-                lambda pids: len(pids) >= expected,
+                lambda pids: len(pids) >= expected and any(pid not in children for pid in pids),
                 seconds=30,
             )
 
