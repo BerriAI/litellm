@@ -770,11 +770,9 @@ def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: flo
 def is_batch_line_item_event(kwargs: object) -> bool:
     if not isinstance(kwargs, Mapping):
         return False
-    litellm_params: Final = cast(Mapping[str, object], kwargs).get(
-        "litellm_params"
-    )  # cast-ok: isinstance narrows only to unparameterized Mapping
+    typed_kwargs: Final = cast(Mapping[str, object], kwargs)  # cast-ok: isinstance leaves Mapping unparameterized
+    litellm_params: Final = typed_kwargs.get("litellm_params")
     if not isinstance(litellm_params, Mapping):
         return False
-    return bool(
-        cast(Mapping[str, object], litellm_params).get("batch_parent_id")
-    )  # cast-ok: same narrowing limit as above
+    typed_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: same narrowing limit
+    return bool(typed_params.get("batch_parent_id"))
