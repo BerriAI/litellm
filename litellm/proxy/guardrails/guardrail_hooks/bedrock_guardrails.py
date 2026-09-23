@@ -122,12 +122,14 @@ _BEDROCK_TOO_LARGE_ERROR_SUBSTRINGS: Final = (
 _BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES: Final = 3
 _BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS: Final = 0.5
 _BEDROCK_WHITESPACE: Final = re.compile(r"\s")
-UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS: Final[Mapping[str, str]] = {
-    "file": "file",
-    "document": "source",
-    "video_url": "video_url",
-    "input_audio": "input_audio",
-}
+_UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "file": "file",
+        "document": "source",
+        "video_url": "video_url",
+        "input_audio": "input_audio",
+    }
+)
 _NO_TRACING_DETAIL: Final[GuardrailTracingDetail] = {}
 # Resource-less, detect-only InvokeGuardrailChecks API (no guardrail resource required).
 _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH: Final = "/guardrail-checks/invoke"
@@ -496,7 +498,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if image_url is None:
                 self._handle_unscannable_attachment(reason="image part carries no inline url")
             return await self._build_image_content_item(image_url=image_url)
-        payload_key: Final = UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS.get(str(part.get("type")))
+        payload_key: Final = _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS.get(str(part.get("type")))
         if payload_key is not None and part.get(payload_key):
             self._handle_unscannable_attachment(reason="a document, file, video or audio attachment cannot be scanned")
         if part.get("type") == "image":
@@ -3382,8 +3384,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 new_item, masking_index = self._mask_leaf(
                     item=item, masked_texts=masked_texts, masking_index=masking_index
                 )
-                if new_item is not None:
-                    new_content.append(new_item)
+                new_content.append(new_item)
 
         return new_content, masking_index
 
