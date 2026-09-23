@@ -111,6 +111,27 @@ impl AwsSecretsManagerV2 {
         primary_name: Option<&str>,
         environment: &(dyn Lookup + Sync),
     ) -> Result<Option<Secret>, Error> {
+        self.read_secret_for_resolver_with_policy(name, primary_name, environment, false)
+            .await
+    }
+
+    pub async fn read_secret_for_python(
+        &self,
+        name: &str,
+        primary_name: Option<&str>,
+        environment: &(dyn Lookup + Sync),
+    ) -> Result<Option<Secret>, Error> {
+        self.read_secret_for_resolver_with_policy(name, primary_name, environment, true)
+            .await
+    }
+
+    async fn read_secret_for_resolver_with_policy(
+        &self,
+        name: &str,
+        primary_name: Option<&str>,
+        environment: &(dyn Lookup + Sync),
+        missing_is_error: bool,
+    ) -> Result<Option<Secret>, Error> {
         if bootstrap_key(name) {
             return Ok(environment
                 .get(name)
@@ -121,7 +142,10 @@ impl AwsSecretsManagerV2 {
             None => self
                 .async_read_secret(name)
                 .await
-                .map(|value| value.map(Secret::String)),
+                .and_then(|value| match value {
+                    None if missing_is_error => Err(Error::MissingString),
+                    value => Ok(value.map(Secret::String)),
+                }),
             Some(primary) => {
                 let value = if bootstrap_key(primary) {
                     environment.get(primary).map(SecretValue::new)
@@ -129,7 +153,11 @@ impl AwsSecretsManagerV2 {
                     self.async_read_secret(primary).await?
                 };
                 let Some(value) = value else {
-                    return Ok(None);
+                    return if missing_is_error {
+                        Err(Error::PrimarySecret)
+                    } else {
+                        Ok(None)
+                    };
                 };
                 let object: Value =
                     serde_json::from_str(value.expose()).map_err(|_| Error::PrimarySecret)?;
@@ -190,7 +218,7 @@ impl AwsSecretsManagerV2 {
         description: Option<&str>,
         tags: Option<&BTreeMap<String, String>>,
     ) -> Result<CreateSecretOutput, Error> {
-        let response = client
+        let request = client
             .create_secret()
             .name(name)
             .secret_string(value.expose())
@@ -205,10 +233,38 @@ impl AwsSecretsManagerV2 {
                 tags.iter()
                     .map(|(key, value)| Tag::builder().key(key).value(value).build())
                     .collect()
-            }))
-            .send()
-            .await
-            .map_err(|error| Error::Create(Box::new(error)))?;
+            }));
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                let scheduled = client
+                    .describe_secret()
+                    .secret_id(name)
+                    .send()
+                    .await
+                    .is_ok_and(|response| response.deleted_date().is_some());
+                if !scheduled {
+                    return Err(Error::Create(Box::new(error)));
+                }
+                client
+                    .restore_secret()
+                    .secret_id(name)
+                    .send()
+                    .await
+                    .map_err(|error| Error::Restore(Box::new(error)))?;
+                let updated = self
+                    .update_restored_secret(client, name, value, description, tags)
+                    .await;
+                match updated {
+                    Ok(response) => response,
+                    Err(error) => {
+                        self.async_delete_secret_with_client(client, name, Some(7))
+                            .await?;
+                        return Err(error);
+                    }
+                }
+            }
+        };
         if let Some(regions) = &self.write_settings.replica_regions
             && !regions.is_empty()
             && self
@@ -219,6 +275,52 @@ impl AwsSecretsManagerV2 {
             litellm_tracing::warn!("secret created but replication failed");
         }
         Ok(response)
+    }
+
+    async fn update_restored_secret(
+        &self,
+        client: &Client,
+        name: &str,
+        value: &SecretValue,
+        description: Option<&str>,
+        tags: Option<&BTreeMap<String, String>>,
+    ) -> Result<CreateSecretOutput, Error> {
+        let response = client
+            .update_secret()
+            .secret_id(name)
+            .secret_string(value.expose())
+            .set_description(
+                description
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned),
+            )
+            .set_kms_key_id(
+                self.write_settings
+                    .kms_key_id
+                    .clone()
+                    .filter(|value| !value.is_empty()),
+            )
+            .send()
+            .await
+            .map_err(|error| Error::Update(Box::new(error)))?;
+        if let Some(tags) = tags.or(self.write_settings.tags.as_ref()) {
+            client
+                .tag_resource()
+                .secret_id(name)
+                .set_tags(Some(
+                    tags.iter()
+                        .map(|(key, value)| Tag::builder().key(key).value(value).build())
+                        .collect(),
+                ))
+                .send()
+                .await
+                .map_err(|error| Error::Tag(Box::new(error)))?;
+        }
+        Ok(CreateSecretOutput::builder()
+            .set_arn(response.arn)
+            .set_name(response.name)
+            .set_version_id(response.version_id)
+            .build())
     }
 
     pub async fn async_replicate_secret(
@@ -335,6 +437,12 @@ impl AwsSecretsManagerV2 {
         value: &SecretValue,
         context: &AwsOperationContext,
     ) -> Result<RotationResponse, RotationError<RotationResponse, Error>> {
+        if current_name == new_name {
+            return self
+                .async_write_replacement(current_name, new_name, value, context)
+                .await
+                .map_err(RotationError::Write);
+        }
         async_rotate_secret(self, current_name, new_name, value, context).await
     }
 
@@ -397,8 +505,13 @@ impl ContextClientFactory {
             ),
             None => builder,
         };
-        let config = match &self.endpoint_url {
-            Some(endpoint_url) => builder.endpoint_url(endpoint_url.clone()).build(),
+        let endpoint_url = context
+            .bedrock_runtime_endpoint
+            .as_ref()
+            .map(|url| url.replace("bedrock-runtime", "secretsmanager"))
+            .or_else(|| self.endpoint_url.clone());
+        let config = match endpoint_url {
+            Some(endpoint_url) => builder.endpoint_url(endpoint_url).build(),
             None => builder.build(),
         };
         Ok(Client::from_conf(config))

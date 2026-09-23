@@ -52,10 +52,12 @@ pub struct AwsOperationContext {
     pub profile_name: Option<String>,
     pub web_identity_token: Option<SecretValue>,
     pub sts_endpoint: Option<String>,
+    pub bedrock_runtime_endpoint: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct HashicorpOperationContext {
+    pub namespace: Option<String>,
     pub timeout: Option<Duration>,
     pub mount: Option<String>,
     pub path_prefix: Option<String>,

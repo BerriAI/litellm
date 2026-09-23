@@ -2,7 +2,9 @@
 
 Construct `SecretManagerState::new(backend, settings)` for a configured manager or use `SecretManagerState::default()` for environment lookups. The configured backend determines its provider identity. Write-only settings and names excluded by `hosted_keys` use the environment directly. `secret_manager_would_be_consulted` follows the same routing decision as resolution
 
-`get_secret` distinguishes a found value, confirmed absence, and a failed read. A missing value returns `Ok(None)` without consulting another source or the caller's default. Empty strings are found values. Backend failures propagate by default, unless the caller supplied a default. `.with_failure_policy(FailurePolicy::EnvironmentFallback)` instead answers failed reads from the environment, returning `None` if it is absent. This matches Python's inner error fallback. Cancellation and other Python `BaseException`s always propagate unchanged. Explicit OIDC references keep their own errors and never use these fallbacks
+Native resolution distinguishes a found value, confirmed absence, and a failed read. Missing values use the caller's default, while provider errors propagate. Empty strings are found values
+
+`new_python_compatible` uses Python's environment fallback and conversion rules. Missing or failed manager reads fall back to the environment, including custom managers. An absent AWS primary JSON field and a successful Azure response without a value remain `None`, as in Python. Defaults do not replace these results. `.with_failure_policy(FailurePolicy::Propagate)` exposes manager failures explicitly instead. Cancellation and other Python `BaseException`s always propagate unchanged. Explicit OIDC references keep their own errors and never use these fallbacks
 
 The getters follow Python's conversion policy. Environment values use case-insensitive, whitespace-trimmed boolean parsing. Manager strings become booleans only when Python literal evaluation yields a boolean; other strings retain their exact contents. Non-string manager results produce `None`. `get_secret_str` returns only strings, and `get_secret_bool` accepts booleans or strings containing `true` or `false`. A type mismatch returns `None` and does not activate fallback
 
@@ -16,16 +18,22 @@ The Python bridge uses this shared source and resolver. The shared proxy initial
 
 ## Backend contracts
 
-AWS Secrets Manager, Azure Key Vault, Google Secret Manager, Vault, and CyberArk implement `BaseSecretManager` for reads with an operation context. Foreign provider contexts are rejected before cache access or I/O. Writes and deletes use separate `SecretWriter` and `SecretDeleter` capabilities. CyberArk supports writes but not deletion, so it cannot use the shared rotation operation that deletes an old secret
+AWS Secrets Manager, Azure Key Vault, Google Secret Manager, Vault, and CyberArk implement `BaseSecretManager` for reads with an operation context. Foreign provider contexts are rejected before cache access or I/O. Writes and deletes use separate `SecretWriter` and `SecretDeleter` capabilities. CyberArk rotation writes and verifies the replacement while retaining the old alias because Conjur does not support deletion through this API
 
-Shared rotation verifies that the replacement has the requested value before deleting the old secret. Same-name rotation keeps the replacement. Provider-specific update APIs, such as AWS version updates, remain provider-specific
+Shared rotation verifies that the replacement has the requested value before deleting the old secret. Same-name rotation keeps the replacement. AWS same-name rotation uses its version update API directly, matching Python
 
-Backend reads preserve payload strings. Conversion belongs to the resolver. Google caches only successfully decoded payloads, so values agree before and after caching. Confirmed absence and failed reads are not cached. Resource-not-found responses indicate absence; authentication, permission, transport, and malformed successful responses remain errors
+Backend reads preserve payload strings. Conversion belongs to the resolver. Google caches only successfully decoded payloads, so values agree before and after caching. Native reads do not cache absence or failures. Python-compatible Google reads preserve Python's negative cache and its always-read override. Resource-not-found responses indicate absence; authentication, permission, transport, and malformed successful responses remain errors
 
 The HashiCorp Vault backend is enabled with the `hashicorp` feature and reads KV v2 values from `HCP_VAULT_*` environment variables. It supports static tokens, AppRole authentication, and TLS certificate authentication
 
 ## Intentional differences from Python
 
-Native backends consistently distinguish absence from failure instead of swallowing provider errors. The resolver applies the chosen failure policy
+Native backends consistently distinguish absence from failure instead of swallowing provider errors. Python-compatible resolution maps these results back to the Python handler contract before applying fallback
 
 `hosted_keys` excludes a name for every backend. Python's handler recognizes Azure `SecretClient` and Google `KeyManagementServiceClient` instances before the `local` branch, allowing excluded names to reach those providers. Rust treats that as a routing bug. `test_rust_hosted_keys_exclude_azure_sdk_clients_too` in `tests/test_litellm/rust_bridge/ocr/test_secrets.py` pins this behavior
+
+Google rejects malformed base64 and mismatched CRC32C values instead of accepting corrupted payloads. Python currently ignores the checksum and uses permissive base64 decoding. Rust follows [RFC 4648](https://www.rfc-editor.org/rfc/rfc4648#section-3.3) and [Google's integrity guidance](https://docs.cloud.google.com/secret-manager/docs/data-integrity); `failed_or_missing_reads_are_not_cached` covers rejection and recovery
+
+## Test parity
+
+[The Python test inventory](PARITY.md) maps each secret-manager test to Rust coverage or its owning boundary

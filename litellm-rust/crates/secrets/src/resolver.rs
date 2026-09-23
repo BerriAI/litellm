@@ -56,6 +56,7 @@ impl SecretResolver {
     ) -> Self {
         Self {
             python_compatible: true,
+            failure_policy: FailurePolicy::EnvironmentFallback,
             ..Self::new(state, environment, oidc)
         }
     }
@@ -95,7 +96,14 @@ impl SecretResolver {
         }
         let LookupTarget::Manager { backend, settings } = self.state.lookup_target(name) else {
             return Ok(self.environment.get(name).map(|value| {
-                if self.python_compatible {
+                if self.python_compatible
+                    && self
+                        .state
+                        .settings()
+                        .is_some_and(|settings| settings.access_mode.readable())
+                {
+                    python_manager_string(SecretValue::new(value))
+                } else if self.python_compatible {
                     parse_str_bool(&value)
                         .map_or_else(|| Secret::String(SecretValue::new(value)), Secret::Bool)
                 } else {
@@ -103,9 +111,18 @@ impl SecretResolver {
                 }
             }));
         };
-        match crate::get_secret_from_manager(backend, name, settings, self.environment.as_ref())
+        let result = if self.python_compatible {
+            crate::handler::get_secret_from_python_manager(
+                backend,
+                name,
+                settings,
+                self.environment.as_ref(),
+            )
             .await
-        {
+        } else {
+            crate::get_secret_from_manager(backend, name, settings, self.environment.as_ref()).await
+        };
+        match result {
             Ok(value) => Ok(value.and_then(|value| self.manager_value(value))),
             Err(error @ Error::ExternalManager(_)) => Err(error),
             Err(error) => match self.failure_policy {
@@ -172,9 +189,23 @@ impl SecretResolver {
         let Secret::String(value) = secret else {
             return None;
         };
-        match literal_eval(value.expose()) {
-            Ok(Value::Bool(boolean)) => Some(Secret::Bool(boolean)),
-            _ => Some(Secret::String(value)),
-        }
+        Some(python_manager_string(value))
     }
+}
+
+fn python_manager_string(value: SecretValue) -> Secret {
+    match literal_eval(value.expose()) {
+        Ok(Value::Bool(boolean)) => Secret::Bool(boolean),
+        _ => Secret::String(value),
+    }
+}
+
+pub fn normalize_nonempty_secret_str(value: Option<&str>) -> Option<&str> {
+    value
+        .map(|value| {
+            value.trim_matches(|character: char| {
+                character.is_whitespace() || matches!(character, '\u{1c}'..='\u{1f}')
+            })
+        })
+        .filter(|value| !value.is_empty())
 }

@@ -28,6 +28,7 @@ pub struct GoogleSecretManager {
     endpoint: reqwest::Url,
     project: String,
     cache: SecretCache<String, SecretValue>,
+    python_misses: moka::future::Cache<String, ()>,
     always_read: bool,
 }
 
@@ -69,6 +70,10 @@ impl GoogleSecretManager {
             endpoint,
             project,
             cache,
+            python_misses: moka::future::Cache::builder()
+                .max_capacity(CACHE_CAPACITY)
+                .time_to_live(ttl)
+                .build(),
             always_read,
         })
     }
@@ -119,6 +124,20 @@ impl GoogleSecretManager {
         BaseSecretManager::async_read_secret(self, name, &GoogleOperationContext::default())
             .await
             .map(|value| value.map(Secret::String))
+    }
+
+    pub async fn get_secret_for_python(&self, name: &str) -> Result<Option<Secret>, Error> {
+        if !self.always_read && self.python_misses.get(name).await.is_some() {
+            return Ok(None);
+        }
+        let result = self.get_secret_from_google_secret_manager(name).await;
+        if matches!(
+            result,
+            Ok(None) | Err(Error::Status(_) | Error::MissingPayload)
+        ) {
+            self.python_misses.insert(name.to_owned(), ()).await;
+        }
+        result
     }
 
     async fn read(&self, name: &str) -> Result<Option<SecretValue>, Error> {

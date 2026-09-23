@@ -18,6 +18,12 @@ pub enum Error {
     Read(#[from] #[redact] Box<SdkError<aws_sdk_secretsmanager::operation::get_secret_value::GetSecretValueError>>),
     #[error("AWS Secrets Manager create failed")]
     Create(#[from] #[redact] Box<SdkError<aws_sdk_secretsmanager::operation::create_secret::CreateSecretError>>),
+    #[error("AWS Secrets Manager restore failed")]
+    Restore(#[from] #[redact] Box<SdkError<aws_sdk_secretsmanager::operation::restore_secret::RestoreSecretError>>),
+    #[error("AWS Secrets Manager restored update failed")]
+    Update(#[from] #[redact] Box<SdkError<aws_sdk_secretsmanager::operation::update_secret::UpdateSecretError>>),
+    #[error("AWS Secrets Manager tagging failed")]
+    Tag(#[from] #[redact] Box<SdkError<aws_sdk_secretsmanager::operation::tag_resource::TagResourceError>>),
     #[error("AWS Secrets Manager update failed")]
     Put(#[from] #[redact] Box<SdkError<aws_sdk_secretsmanager::operation::put_secret_value::PutSecretValueError>>),
     #[error("AWS Secrets Manager delete failed")]

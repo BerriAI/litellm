@@ -810,6 +810,7 @@ async fn rotation_applies_timeout_to_each_request(token_values: Vec<(&str, &str)
     let timeout = Duration::from_secs(1);
     let delay = timeout / 2;
     Mock::given(method("GET"))
+        .and(header("X-Vault-Namespace", "team"))
         .and(path("/v1/alternate/data/managed/current"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -819,6 +820,7 @@ async fn rotation_applies_timeout_to_each_request(token_values: Vec<(&str, &str)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
+        .and(header("X-Vault-Namespace", "team"))
         .and(path("/v1/alternate/data/managed/new"))
         .and(body_json(json!({
             "data": {"api_token": "replacement", "description": "Rotated from current"}
@@ -845,6 +847,7 @@ async fn rotation_applies_timeout_to_each_request(token_values: Vec<(&str, &str)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
+        .and(header("X-Vault-Namespace", "team"))
         .and(path("/v1/alternate/data/managed/new"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -854,12 +857,14 @@ async fn rotation_applies_timeout_to_each_request(token_values: Vec<(&str, &str)
         .mount(&server)
         .await;
     Mock::given(method("DELETE"))
+        .and(header("X-Vault-Namespace", "team"))
         .and(path("/v1/alternate/data/managed/current"))
         .respond_with(ResponseTemplate::new(204).set_delay(delay))
         .mount(&server)
         .await;
     let manager = manager(&server, &token_values);
     let context = HashicorpOperationContext {
+        namespace: Some("team".into()),
         timeout: Some(timeout),
         mount: Some("alternate".to_owned()),
         path_prefix: Some("managed".to_owned()),
@@ -1238,4 +1243,206 @@ async fn rotation_reports_partial_completion_without_losing_the_write_response(
         }
         other => panic!("unexpected rotation outcome: {other:?}"),
     }
+}
+
+#[rstest]
+#[case::different_namespace(
+    " /team-b/ ",
+    " /alternate/ ",
+    " /prefix/ ",
+    Some("team-b"),
+    "/v1/alternate/data/prefix/key"
+)]
+#[case::clear_namespace("", "", "", None, "/v1/secret/data/key")]
+#[tokio::test]
+async fn operation_overrides_isolate_cached_targets_and_apply_to_writes_and_deletes(
+    #[case] namespace: &str,
+    #[case] mount: &str,
+    #[case] prefix: &str,
+    #[case] expected_namespace: Option<&str>,
+    #[case] expected_path: &'static str,
+) {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/configured/data/configured/key"))
+        .and(header("X-Vault-Namespace", "team-a"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(read_response(json!({"key":"default-value"}))),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let namespace_header = expected_namespace.map(str::to_owned);
+    Mock::given(path(expected_path))
+        .respond_with(move |request: &wiremock::Request| {
+            assert_eq!(
+                request
+                    .headers
+                    .get("X-Vault-Namespace")
+                    .map(|value| value.to_str().unwrap()),
+                namespace_header.as_deref()
+            );
+            match request.method.as_str() {
+                "GET" => ResponseTemplate::new(200)
+                    .set_body_json(read_response(json!({"password":"override-value"}))),
+                "POST" => {
+                    assert_eq!(
+                        request.body_json::<serde_json::Value>().unwrap(),
+                        json!({"data":{"password":"written"}})
+                    );
+                    ResponseTemplate::new(200).set_body_json(write_response(2))
+                }
+                "DELETE" => ResponseTemplate::new(204),
+                _ => panic!("unexpected method"),
+            }
+        })
+        .expect(4)
+        .mount(&server)
+        .await;
+    let manager = manager(
+        &server,
+        &[
+            ("HCP_VAULT_TOKEN", "token"),
+            ("HCP_VAULT_SECRET_NAMESPACE", "team-a"),
+            ("HCP_VAULT_MOUNT_NAME", "configured"),
+            ("HCP_VAULT_PATH_PREFIX", "configured"),
+        ],
+    );
+    let context = HashicorpOperationContext {
+        namespace: Some(namespace.into()),
+        mount: Some(mount.into()),
+        path_prefix: Some(prefix.into()),
+        data_key: Some("password".into()),
+        ..Default::default()
+    };
+    for _ in 0..2 {
+        assert_eq!(
+            manager
+                .async_read_secret("key")
+                .await
+                .unwrap()
+                .unwrap()
+                .expose(),
+            "default-value"
+        );
+        assert_eq!(
+            BaseSecretManager::async_read_secret(&manager, "key", &context)
+                .await
+                .unwrap()
+                .unwrap()
+                .expose(),
+            "override-value"
+        );
+    }
+    SecretWriter::async_write_secret(
+        &manager,
+        "key",
+        &SecretValue::new("written"),
+        &SecretWriteContext {
+            operation: context.clone(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    SecretDeleter::async_delete_secret(&manager, "key", &context)
+        .await
+        .unwrap();
+    assert_eq!(
+        BaseSecretManager::async_read_secret(&manager, "key", &context)
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "override-value"
+    );
+    assert_eq!(
+        manager
+            .async_read_secret("key")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "default-value"
+    );
+}
+
+#[rstest]
+#[case::separate(
+    Some("legacy"),
+    Some("root"),
+    Some("teams/team-a"),
+    Some("root"),
+    Some("teams/team-a")
+)]
+#[case::legacy(Some("admin"), None, None, Some("admin"), Some("admin"))]
+#[case::login_override(Some("admin"), Some("root"), None, Some("root"), Some("admin"))]
+#[case::secret_override(
+    Some("admin"),
+    None,
+    Some("teams/team-a"),
+    Some("admin"),
+    Some("teams/team-a")
+)]
+#[case::no_namespace(None, None, None, None, None)]
+#[tokio::test]
+async fn login_and_secret_namespaces_follow_python_precedence(
+    #[case] legacy: Option<&str>,
+    #[case] login: Option<&str>,
+    #[case] secret: Option<&str>,
+    #[case] expected_login: Option<&'static str>,
+    #[case] expected_secret: Option<&'static str>,
+) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/auth/approle/login"))
+        .and(body_json(json!({"role_id":"role", "secret_id":"secret"})))
+        .respond_with(move |request: &wiremock::Request| {
+            assert_eq!(
+                request
+                    .headers
+                    .get("X-Vault-Namespace")
+                    .map(|value| value.to_str().unwrap()),
+                expected_login
+            );
+            ResponseTemplate::new(200).set_body_json(auth_response("login-token", 3600))
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/secret/data/key"))
+        .and(header("X-Vault-Token", "login-token"))
+        .respond_with(move |request: &wiremock::Request| {
+            assert_eq!(
+                request
+                    .headers
+                    .get("X-Vault-Namespace")
+                    .map(|value| value.to_str().unwrap()),
+                expected_secret
+            );
+            ResponseTemplate::new(200).set_body_json(read_response(json!({"key":"value"})))
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    let values: Vec<_> = [
+        ("HCP_VAULT_NAMESPACE", legacy),
+        ("HCP_VAULT_LOGIN_NAMESPACE", login),
+        ("HCP_VAULT_SECRET_NAMESPACE", secret),
+        ("HCP_VAULT_APPROLE_ROLE_ID", Some("role")),
+        ("HCP_VAULT_APPROLE_SECRET_ID", Some("secret")),
+    ]
+    .into_iter()
+    .filter_map(|(key, value)| value.map(|value| (key, value)))
+    .collect();
+    assert_eq!(
+        manager(&server, &values)
+            .async_read_secret("key")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "value"
+    );
 }

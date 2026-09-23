@@ -199,3 +199,58 @@ async fn reads_preserve_values_and_distinguish_absence_from_failure(#[case] prov
     }
     drop(guard);
 }
+
+#[rstest]
+#[case::aws(Provider::Aws)]
+#[case::azure(Provider::Azure)]
+#[case::google(Provider::Google)]
+#[case::vault(Provider::Vault)]
+#[case::cyberark(Provider::Cyberark)]
+#[tokio::test]
+async fn python_missing_and_failed_reads_use_environment_before_defaults(
+    #[case] provider: Provider,
+    #[values(false, true)] missing: bool,
+    #[values(None, Some("environment"), Some("True"), Some("true"))] environment_value: Option<
+        &'static str,
+    >,
+) {
+    use litellm_secrets::{OidcResolver, Secret, SecretManagerState, SecretResolver};
+    let server = MockServer::start().await;
+    Mock::given(path("/authn/acct/admin/authenticate"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("token"))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let response = match (provider, missing) {
+        (Provider::Aws, true) => {
+            ResponseTemplate::new(400).set_body_json(json!({"__type":"ResourceNotFoundException"}))
+        }
+        (_, true) => ResponseTemplate::new(404).set_body_json(json!({"errors":["missing"]})),
+        (_, false) => ResponseTemplate::new(403).set_body_json(json!({"errors":["forbidden"]})),
+    };
+    Mock::given(any())
+        .respond_with(response)
+        .with_priority(2)
+        .expect(1)
+        .mount(&server)
+        .await;
+    let resolver = SecretResolver::new_python_compatible(
+        Arc::new(SecretManagerState::new(
+            manager(provider, &server),
+            KeyManagementSettings::default(),
+        )),
+        Arc::new(move |_: &str| environment_value.map(str::to_owned)),
+        OidcResolver::default(),
+    );
+    let expected = environment_value.map(|value| match value {
+        "True" => Secret::Bool(true),
+        value => Secret::String(SecretValue::new(value)),
+    });
+    assert_eq!(
+        resolver
+            .get_secret("KEY", Some(Secret::String(SecretValue::new("default"))))
+            .await
+            .unwrap(),
+        expected
+    );
+}

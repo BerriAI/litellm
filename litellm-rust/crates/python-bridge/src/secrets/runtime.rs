@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
 use litellm_host_python::{from_py, run_async_value, run_sync_value};
 use litellm_secrets::{
-    KeyManagementSettings, KeyManagementSystem, SecretManager, get_secret_from_manager,
+    KeyManagementSettings, KeyManagementSystem, SecretManager, get_secret_from_python_manager,
     load_native_manager,
 };
 use pyo3::{
@@ -197,7 +197,7 @@ impl NativeSecretManager {
             .transpose()?
             .unwrap_or_else(|| self.configuration.settings.clone());
         run_sync_value(py, async move {
-            get_secret_from_manager(&backend, &name, &settings, &ProcessEnvironment)
+            get_secret_from_python_manager(&backend, &name, &settings, &ProcessEnvironment)
                 .await
                 .map(|value| value.and_then(|secret| secret.as_str().map(str::to_owned)))
                 .map_err(|error| PyValueError::new_err(error.to_string()))
@@ -216,7 +216,7 @@ impl NativeSecretManager {
             .transpose()?
             .unwrap_or_else(|| self.configuration.settings.clone());
         run_async_value(py, async move {
-            get_secret_from_manager(&backend, &name, &settings, &ProcessEnvironment)
+            get_secret_from_python_manager(&backend, &name, &settings, &ProcessEnvironment)
                 .await
                 .map(|value| value.and_then(|secret| secret.as_str().map(str::to_owned)))
                 .map_err(|error| PyValueError::new_err(error.to_string()))

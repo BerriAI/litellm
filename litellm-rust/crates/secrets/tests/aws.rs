@@ -51,9 +51,7 @@ async fn read_results_follow_the_selected_failure_policy(
     let result = resolver
         .get_secret_str("KEY", default.map(SecretValue::new))
         .await;
-    if body.get("__type").and_then(serde_json::Value::as_str) == Some("ResourceNotFoundException") {
-        assert_eq!(result.unwrap(), None);
-    } else if policy == FailurePolicy::EnvironmentFallback {
+    if policy == FailurePolicy::EnvironmentFallback {
         assert_eq!(
             result.unwrap().as_ref().map(SecretValue::expose),
             environment

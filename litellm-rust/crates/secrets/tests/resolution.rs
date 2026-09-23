@@ -183,13 +183,13 @@ fn managed(reply: Result<Option<Secret>, ()>, environment: Option<&'static str>)
 }
 
 #[tokio::test]
-async fn manager_absence_is_final_even_with_environment_and_default() {
+async fn custom_manager_absence_uses_environment_instead_of_the_default() {
     assert_eq!(
         managed(Ok(None), Some("environment"))
             .get_secret("key", Some(Secret::Bool(true)))
             .await
             .unwrap(),
-        None
+        Some(Secret::String(SecretValue::new("environment")))
     );
 }
 
@@ -290,4 +290,52 @@ async fn resolver_future_can_run_on_a_tokio_worker() {
         .unwrap()
         .unwrap();
     assert_eq!(result.unwrap().expose(), "worker-value");
+}
+
+#[rstest::rstest]
+#[case::missing(None, None)]
+#[case::empty(Some(""), None)]
+#[case::whitespace(Some("   \t\n"), None)]
+#[case::text(Some("abc"), Some("abc"))]
+#[case::padded(Some("  xyz  "), Some("xyz"))]
+#[case::python_controls(Some("\u{1c}\u{1d}\u{1e}\u{1f}"), None)]
+#[case::unicode(Some("\u{a0}π\u{2003}"), Some("π"))]
+fn normalization_matches_python_without_changing_embedded_whitespace(
+    #[case] input: Option<&str>,
+    #[case] expected: Option<&str>,
+) {
+    assert_eq!(
+        litellm_secrets::normalize_nonempty_secret_str(input),
+        expected
+    );
+}
+
+#[rstest::rstest]
+#[case::lowercase("true", false)]
+#[case::capitalized("True", true)]
+#[case::literal("(True)", true)]
+#[tokio::test]
+async fn excluded_hosted_keys_keep_the_python_manager_conversion_path(
+    #[case] raw: &'static str,
+    #[case] boolean: bool,
+) {
+    let resolver = SecretResolver::new_python_compatible(
+        Arc::new(SecretManagerState::new(
+            SecretManager::External(Arc::new(FixedManager(Err(())))),
+            KeyManagementSettings {
+                hosted_keys: Some(vec!["OTHER".into()]),
+                ..Default::default()
+            },
+        )),
+        Arc::new(move |_: &str| Some(raw.to_owned())),
+        OidcResolver::default(),
+    );
+    assert_eq!(
+        resolver.get_secret("KEY", None).await.unwrap(),
+        Some(if boolean {
+            Secret::Bool(true)
+        } else {
+            Secret::String(SecretValue::new(raw))
+        })
+    );
 }

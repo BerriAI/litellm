@@ -312,3 +312,92 @@ async fn concurrent_reads_share_one_secret_request() {
     assert_eq!(first.unwrap().unwrap().as_str(), Some("value"));
     assert_eq!(second.unwrap().unwrap().as_str(), Some("value"));
 }
+
+#[rstest]
+#[case::missing(404, serde_json::json!({}))]
+#[case::failure(403, serde_json::json!({}))]
+#[case::no_payload(200, serde_json::json!({"payload":{}}))]
+#[tokio::test]
+async fn python_reads_reuse_cached_absence_until_expiry(
+    #[case] status: u16,
+    #[case] body: serde_json::Value,
+    #[values(false, true)] always_read: bool,
+) {
+    let server = MockServer::start().await;
+    let manager = manager(&server, always_read, Duration::from_secs(60));
+    let failing = Mock::given(path(
+        "/v1/projects/project/secrets/key/versions/latest:access",
+    ))
+    .respond_with(ResponseTemplate::new(status).set_body_json(body))
+    .expect(1)
+    .mount_as_scoped(&server)
+    .await;
+    let result = manager.get_secret_for_python("key").await;
+    match status {
+        404 => assert!(result.unwrap().is_none()),
+        403 => assert!(matches!(result, Err(Error::Status(403)))),
+        200 => assert!(matches!(result, Err(Error::MissingPayload))),
+        _ => unreachable!(),
+    }
+    drop(failing);
+    Mock::given(path(
+        "/v1/projects/project/secrets/key/versions/latest:access",
+    ))
+    .respond_with(
+        ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({"payload":{"data":STANDARD.encode("recovered")}})),
+    )
+    .expect(u64::from(always_read))
+    .mount(&server)
+    .await;
+    assert_eq!(
+        manager
+            .get_secret_for_python("key")
+            .await
+            .unwrap()
+            .as_ref()
+            .and_then(|value| value.as_str()),
+        always_read.then_some("recovered")
+    );
+}
+
+#[tokio::test]
+async fn python_cached_absence_expires_and_allows_recovery() {
+    let server = MockServer::start().await;
+    let manager = manager(&server, false, Duration::from_millis(20));
+    let missing = Mock::given(path(
+        "/v1/projects/project/secrets/key/versions/latest:access",
+    ))
+    .respond_with(ResponseTemplate::new(404))
+    .expect(1)
+    .mount_as_scoped(&server)
+    .await;
+    assert!(
+        manager
+            .get_secret_for_python("key")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    drop(missing);
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    Mock::given(path(
+        "/v1/projects/project/secrets/key/versions/latest:access",
+    ))
+    .respond_with(
+        ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({"payload":{"data":STANDARD.encode("recovered")}})),
+    )
+    .expect(1)
+    .mount(&server)
+    .await;
+    assert_eq!(
+        manager
+            .get_secret_for_python("key")
+            .await
+            .unwrap()
+            .unwrap()
+            .as_str(),
+        Some("recovered")
+    );
+}

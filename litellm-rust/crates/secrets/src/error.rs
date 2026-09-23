@@ -1,5 +1,7 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("configured secret manager did not return a secret")]
+    ManagedSecretMissing,
     #[error("native secret backend is unavailable for this system")]
     NativeBackendUnavailable,
     #[error("encrypted environment value is missing")]

@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+moka.workspace = true
 tokio.workspace = true
 litellm-auth-gcp = { workspace = true, features = ["google-sdk"] }
 litellm-secrets-types.workspace = true

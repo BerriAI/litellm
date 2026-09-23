@@ -20,7 +20,6 @@ const TOKEN_JSON: &str = r#"{"protected":"p","payload":"q","signature":"s"}"#;
 
 #[derive(Deserialize)]
 struct ParityFixture {
-    endpoint: String,
     account: String,
     username: String,
     api_key: String,
@@ -465,7 +464,7 @@ async fn writes_tolerate_policy_status_and_cache_value(#[case] policy_status: u1
     let server = MockServer::start().await;
     mount_auth(&server, 1).await;
     Mock::given(path("/policies/acct/policy/root"))
-        .and(header("content-type", "text/plain"))
+        .and(header("content-type", "application/x-yaml"))
         .and(body_string("- !variable \"team/app\"\n"))
         .respond_with(ResponseTemplate::new(policy_status))
         .expect(1)
@@ -836,26 +835,62 @@ async fn trailing_slash_endpoint_preserves_base_path() {
 }
 
 #[rstest]
-fn parity_fixture_matches_authentication_contract(parity_fixture: ParityFixture) {
-    assert_eq!(parity_fixture.endpoint, "http://conjur.test:8080");
-    assert_eq!(parity_fixture.account, "acct");
-    assert_eq!(parity_fixture.username, "admin");
-    assert_eq!(parity_fixture.api_key, "k3y");
-    assert_eq!(
-        parity_fixture.authenticate_path,
-        "/authn/acct/admin/authenticate"
+#[tokio::test]
+async fn writes_match_python_parity_fixture(parity_fixture: ParityFixture) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(&parity_fixture.authenticate_path))
+        .and(body_string(&parity_fixture.api_key))
+        .respond_with(ResponseTemplate::new(200).set_body_string(&parity_fixture.token_json))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let manager = CyberArkSecretManager::with_client(
+        reqwest::Client::new(),
+        server.uri().parse().unwrap(),
+        parity_fixture.account,
+        parity_fixture.username,
+        SecretValue::new(parity_fixture.api_key),
+        Some(Duration::from_secs(60)),
     );
-    assert_eq!(parity_fixture.token_json, TOKEN_JSON);
-    assert_eq!(
-        parity_fixture.authorization_header,
-        format!("Token token=\"{}\"", STANDARD.encode(TOKEN_JSON))
-    );
-    assert_eq!(parity_fixture.policy_path, "/policies/acct/policy/root");
-    assert_eq!(parity_fixture.secrets.len(), 4);
-    assert_eq!(
-        parity_fixture.secrets[1].policy_body,
-        "- !variable \"team/app/key\"\n"
-    );
+    for secret in parity_fixture.secrets {
+        Mock::given(method("POST"))
+            .and(path(&parity_fixture.policy_path))
+            .and(header(
+                "authorization",
+                &parity_fixture.authorization_header,
+            ))
+            .and(header("content-type", "application/x-yaml"))
+            .and(body_string(&secret.policy_body))
+            .respond_with(ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(RawPath(secret.path))
+            .and(header(
+                "authorization",
+                &parity_fixture.authorization_header,
+            ))
+            .and(body_string("value"))
+            .respond_with(ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+        manager
+            .async_write_secret(&secret.name, &SecretValue::new("value"), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            manager
+                .async_read_secret(&secret.name)
+                .await
+                .unwrap()
+                .unwrap()
+                .expose(),
+            "value"
+        );
+    }
 }
 
 #[rstest]
@@ -907,4 +942,189 @@ async fn live_conjur_round_trip() {
             expected
         );
     }
+    manager
+        .async_rotate_secret(&name, &name, &SecretValue::new("rotated-value"))
+        .await
+        .unwrap();
+    let alias = format!("{name}-rotated");
+    manager
+        .async_rotate_secret(&name, &alias, &SecretValue::new("new-alias-value"))
+        .await
+        .unwrap();
+    assert_eq!(
+        manager
+            .async_read_secret(&name)
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "rotated-value"
+    );
+    assert_eq!(
+        manager
+            .async_read_secret(&alias)
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "new-alias-value"
+    );
+}
+
+#[rstest]
+#[case::same_alias("old")]
+#[case::new_alias("new")]
+#[tokio::test]
+async fn rotation_stores_the_replacement_and_retains_other_aliases(#[case] new_name: &'static str) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let server = MockServer::start().await;
+    mount_auth(&server, 1).await;
+    let written = Arc::new(AtomicBool::new(false));
+    let read_state = written.clone();
+    Mock::given(method("GET"))
+        .respond_with(move |request: &wiremock::Request| {
+            let name = request.url.path().rsplit('/').next().unwrap();
+            let value = if name == new_name && read_state.load(Ordering::SeqCst) {
+                "new-value"
+            } else {
+                "old-value"
+            };
+            ResponseTemplate::new(200).set_body_string(value)
+        })
+        .expect(if new_name == "old" { 2 } else { 3 })
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/policies/acct/policy/root"))
+        .and(body_string(format!("- !variable \"{new_name}\"\n")))
+        .respond_with(ResponseTemplate::new(201))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!("/secrets/acct/variable/{new_name}")))
+        .and(body_string("new-value"))
+        .respond_with(move |_: &wiremock::Request| {
+            written.store(true, Ordering::SeqCst);
+            ResponseTemplate::new(201)
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    let manager = manager(&server, Duration::from_secs(60));
+    manager
+        .async_rotate_secret("old", new_name, &SecretValue::new("new-value"))
+        .await
+        .unwrap();
+    assert_eq!(
+        manager
+            .async_read_secret(new_name)
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "new-value"
+    );
+    assert_eq!(
+        manager
+            .async_read_secret("old")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        if new_name == "old" {
+            "new-value"
+        } else {
+            "old-value"
+        }
+    );
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| request.method != "DELETE")
+    );
+}
+
+#[tokio::test]
+async fn rotation_verifies_the_remote_value_instead_of_the_write_cache() {
+    let server = MockServer::start().await;
+    mount_auth(&server, 1).await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("unchanged"))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/policies/acct/policy/root"))
+        .respond_with(ResponseTemplate::new(201))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/secrets/acct/variable/new"))
+        .respond_with(ResponseTemplate::new(201))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = manager(&server, Duration::from_secs(60))
+        .async_rotate_secret("old", "new", &SecretValue::new("replacement"))
+        .await;
+    assert!(matches!(
+        result,
+        Err(litellm_secrets_types::RotationError::Verification {
+            source: Error::Operation(litellm_secrets_types::Error::NewSecretMismatch),
+            ..
+        })
+    ));
+}
+
+#[rstest]
+#[case::colon("foo: bar")]
+#[case::comment("foo # bar")]
+#[case::plain("plain-alias")]
+#[case::email("team/user@example.com")]
+#[case::quote("needs \"quote\"")]
+#[case::backslash("a\\b")]
+#[tokio::test]
+async fn policy_writes_preserve_yaml_metacharacters_as_one_variable(#[case] name: &'static str) {
+    let server = MockServer::start().await;
+    mount_auth(&server, 1).await;
+    Mock::given(method("POST"))
+        .and(path("/policies/acct/policy/root"))
+        .respond_with(move |request: &wiremock::Request| {
+            let body = std::str::from_utf8(&request.body).unwrap();
+            let scalar = body
+                .strip_prefix("- !variable ")
+                .unwrap()
+                .strip_suffix('\n')
+                .unwrap();
+            assert_eq!(serde_json::from_str::<String>(scalar).unwrap(), name);
+            ResponseTemplate::new(201)
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(body_string("value"))
+        .respond_with(ResponseTemplate::new(201))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let manager = manager(&server, Duration::from_secs(60));
+    manager
+        .async_write_secret(name, &SecretValue::new("value"), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        manager
+            .async_read_secret(name)
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "value"
+    );
 }

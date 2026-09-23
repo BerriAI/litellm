@@ -15,7 +15,7 @@ async fn google_resolver_distinguishes_absence_from_failure(#[case] status: u16)
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(status))
-        .expect(2)
+        .expect(1)
         .mount(&server)
         .await;
     let environment: Arc<dyn litellm_core_utils::settings::Lookup + Send + Sync> =
@@ -41,10 +41,11 @@ async fn google_resolver_distinguishes_absence_from_failure(#[case] status: u16)
         Arc::new(state),
         environment,
         OidcResolver::default(),
-    );
+    )
+    .with_failure_policy(FailurePolicy::Propagate);
     let result = resolver.get_secret_str("KEY", None).await;
     if status == 404 {
-        assert_eq!(result.unwrap(), None);
+        assert!(matches!(result, Err(Error::ManagedSecretMissing)));
     } else {
         assert!(
             matches!(result, Err(Error::Google(litellm_secrets::google::Error::Status(actual))) if actual == status)
@@ -57,7 +58,7 @@ async fn google_resolver_distinguishes_absence_from_failure(#[case] status: u16)
         .unwrap();
     assert_eq!(
         fallback.as_ref().map(SecretValue::expose),
-        (status != 404).then_some("environment")
+        Some("environment")
     );
 }
 

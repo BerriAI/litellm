@@ -102,8 +102,8 @@ impl HashicorpVault {
             context
                 .path_prefix
                 .as_deref()
-                .and_then(path_component)
-                .or_else(|| self.config.path_prefix.clone()),
+                .or(self.config.path_prefix.as_deref())
+                .and_then(path_component),
             Some(secret_name.to_owned()),
         ]
         .into_iter()
@@ -111,12 +111,17 @@ impl HashicorpVault {
         .collect::<Vec<String>>()
         .join("/");
         Ok(SecretLocation {
-            namespace: self.config.secret_namespace().map(str::to_owned),
+            namespace: context
+                .namespace
+                .as_deref()
+                .or(self.config.secret_namespace())
+                .and_then(path_component),
             mount: context
                 .mount
                 .as_deref()
+                .or(Some(self.config.mount.as_str()))
                 .and_then(path_component)
-                .unwrap_or_else(|| self.config.mount.clone()),
+                .unwrap_or_else(|| "secret".to_owned()),
             path,
         })
     }
@@ -154,7 +159,7 @@ impl HashicorpVault {
         location: &SecretLocation,
         data_key: &str,
     ) -> Result<Option<SecretValue>, Error> {
-        let client = self.vault_client().await?;
+        let client = self.client_for_location(location).await?;
         let data: Option<HashMap<String, Value>> =
             match kv2::read(client.as_ref(), &location.mount, &location.path).await {
                 Ok(data) => Some(data),
@@ -216,7 +221,7 @@ impl HashicorpVault {
                 .collect(),
         };
         let metadata = with_timeout(&context.operation, async {
-            let client: Arc<VaultClient> = self.vault_client().await?;
+            let client = self.client_for_location(&location).await?;
             match kv2::set(client.as_ref(), &location.mount, &location.path, &data).await {
                 Ok(metadata) => Ok(metadata),
                 Err(error) if api_status(&error) == Some(400) => {
@@ -261,7 +266,7 @@ impl HashicorpVault {
     ) -> Result<(), Error> {
         let location: SecretLocation = self.secret_location_with_context(secret_name, context)?;
         with_timeout(context, async {
-            let client: Arc<VaultClient> = self.vault_client().await?;
+            let client = self.client_for_location(&location).await?;
             kv2::delete_latest(client.as_ref(), &location.mount, &location.path)
                 .await
                 .map_err(|error| map_api_error(error, ErrorContext::Secret))
@@ -295,6 +300,18 @@ impl HashicorpVault {
         context: &HashicorpOperationContext,
     ) -> Result<Value, RotationError<Value, Error>> {
         async_rotate_secret(self, current_name, new_name, value, context).await
+    }
+
+    async fn client_for_location(
+        &self,
+        location: &SecretLocation,
+    ) -> Result<Arc<VaultClient>, Error> {
+        let client = self.vault_client().await?;
+        if client.settings.namespace == location.namespace {
+            return Ok(client);
+        }
+        self.build_client(location.namespace.as_deref(), &client.settings.token)
+            .map(Arc::new)
     }
 
     async fn vault_client(&self) -> Result<Arc<VaultClient>, Error> {

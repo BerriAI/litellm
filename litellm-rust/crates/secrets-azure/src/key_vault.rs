@@ -138,3 +138,41 @@ impl BaseSecretManager for AzureKeyVault {
         }
     }
 }
+
+pub trait AzureTokenProvider: Send + Sync {
+    fn get_token<'a>(
+        &'a self,
+        scope: &'a str,
+        environment: &'a (dyn Lookup + Send + Sync),
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SecretValue, Error>> + Send + 'a>>;
+}
+
+#[derive(Default)]
+pub struct NativeAzureTokenProvider {
+    auth: AzureAuthService,
+}
+
+impl AzureTokenProvider for NativeAzureTokenProvider {
+    fn get_token<'a>(
+        &'a self,
+        scope: &'a str,
+        environment: &'a (dyn Lookup + Send + Sync),
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SecretValue, Error>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let inputs = AzureAuthInputs {
+                azure_scope: ConfigValue::Value(Sourced::new(
+                    scope.to_owned(),
+                    InputSource::Deployment,
+                )),
+                enable_azure_ad_token_refresh: Sourced::new(true, InputSource::Deployment),
+                ..Default::default()
+            };
+            self.auth
+                .get_azure_ad_token(&inputs, &|name| environment.get(name))
+                .await?
+                .map(|token| SecretValue::new(token.value().secret().expose()))
+                .ok_or(Error::MissingCredentials)
+        })
+    }
+}

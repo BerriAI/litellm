@@ -3,8 +3,9 @@ use std::{fs, sync::Arc, time::Duration};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_core_utils::settings::Lookup;
 use litellm_secrets_types::{
-    BaseSecretManager, CyberarkOperationContext, SecretCache, SecretValue, SecretWriteContext,
-    SecretWriter, validate_secret_name,
+    BaseSecretManager, CyberarkOperationContext, RotationError, SecretCache, SecretDeleter,
+    SecretRotator, SecretValue, SecretWriteContext, SecretWriter, async_rotate_secret,
+    validate_secret_name,
 };
 use moka::future::Cache;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
@@ -322,7 +323,7 @@ impl CyberArkSecretManager {
             self.client
                 .post(policy_url)
                 .header("Authorization", authorization)
-                .header("Content-Type", "text/plain")
+                .header("Content-Type", "application/x-yaml")
                 .body(body),
             context,
         )
@@ -351,6 +352,31 @@ impl CyberArkSecretManager {
                 litellm_tracing::warn!("Error ensuring CyberArk variable exists: {error}");
             }
         }
+    }
+
+    pub async fn async_rotate_secret(
+        &self,
+        current_name: &str,
+        new_name: &str,
+        value: &SecretValue,
+    ) -> Result<(), RotationError<(), Error>> {
+        self.async_rotate_secret_with_context(
+            current_name,
+            new_name,
+            value,
+            &CyberarkOperationContext::default(),
+        )
+        .await
+    }
+
+    pub async fn async_rotate_secret_with_context(
+        &self,
+        current_name: &str,
+        new_name: &str,
+        value: &SecretValue,
+        context: &CyberarkOperationContext,
+    ) -> Result<(), RotationError<(), Error>> {
+        async_rotate_secret(self, current_name, new_name, value, context).await
     }
 
     pub async fn async_delete_secret(
@@ -427,4 +453,54 @@ fn normalize_endpoint(mut endpoint: reqwest::Url) -> reqwest::Url {
         endpoint.set_path(&format!("{}/", endpoint.path()));
     }
     endpoint
+}
+
+impl SecretDeleter for CyberArkSecretManager {
+    type DeleteResponse = DeleteOutcome;
+
+    async fn async_delete_secret(
+        &self,
+        name: &str,
+        context: &Self::Context,
+    ) -> Result<DeleteOutcome, Error> {
+        self.async_delete_secret_with_context(name, None, context)
+            .await
+    }
+}
+
+impl SecretRotator for CyberArkSecretManager {
+    type RotationResponse = ();
+
+    async fn async_read_secret_fresh(
+        &self,
+        name: &str,
+        context: &Self::Context,
+    ) -> Result<Option<SecretValue>, Error> {
+        validate_secret_name(name)?;
+        let read = self
+            .secrets
+            .refresh(name.to_owned(), self.read_uncached(name, context));
+        match context.timeout {
+            Some(timeout) => tokio::time::timeout(timeout, read)
+                .await
+                .map_err(|_| Error::Timeout)?,
+            None => read.await,
+        }
+    }
+
+    async fn async_write_replacement(
+        &self,
+        current_name: &str,
+        new_name: &str,
+        value: &SecretValue,
+        context: &Self::Context,
+    ) -> Result<(), Error> {
+        SecretWriter::async_write_secret(
+            self,
+            new_name,
+            value,
+            &SecretWriteContext::rotated_from(current_name, context.clone()),
+        )
+        .await
+    }
 }
