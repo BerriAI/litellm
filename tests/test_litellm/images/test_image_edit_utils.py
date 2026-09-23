@@ -60,6 +60,80 @@ class _NonSeekableStream(io.BytesIO):
         return False
 
 
+class _FailingReadStream(io.BytesIO):
+    def read(self, size: int = -1) -> bytes:
+        raise OSError("simulated disk read failure")
+
+
+def _jpeg_sof_segment(marker: int, width: int, height: int) -> bytes:
+    return bytes((0xFF, marker)) + struct.pack(">H", 17) + struct.pack(">BHH", 8, height, width)
+
+
+def _jpeg_segment(marker: int, payload: bytes) -> bytes:
+    return bytes((0xFF, marker)) + struct.pack(">H", len(payload) + 2) + payload
+
+
+def _webp_chunk(fourcc: bytes, body: bytes) -> bytes:
+    chunk: Final = fourcc + struct.pack("<I", len(body)) + body
+    return b"RIFF" + struct.pack("<I", len(chunk) + 4) + b"WEBP" + chunk
+
+
+JPEG_APP0: Final = 0xE0
+JPEG_DHT: Final = 0xC4
+JPEG_SOF0_MARKER: Final = 0xC0
+JPEG_SOF2_MARKER: Final = 0xC2
+
+PADDED_JPEG: Final = JPEG_SOI + b"\xff\xff" + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
+SHORT_LENGTH_JPEG: Final = JPEG_SOI + bytes((0xFF, JPEG_APP0, 0x00, 0x01))
+TRUNCATED_SOF_JPEG: Final = JPEG_SOI + bytes((0xFF, JPEG_SOF0_MARKER, 0x00, 0x11, 0x08))
+SEGMENTS_63_JPEG: Final = JPEG_SOI + _jpeg_segment(JPEG_APP0, bytes(4)) * 63 + _jpeg_sof_segment(
+    JPEG_SOF0_MARKER, 320, 200
+)
+SEGMENTS_65_JPEG: Final = JPEG_SOI + _jpeg_segment(JPEG_APP0, bytes(4)) * 65 + _jpeg_sof_segment(
+    JPEG_SOF0_MARKER, 320, 200
+)
+PROGRESSIVE_JPEG: Final = JPEG_SOI + _jpeg_sof_segment(JPEG_SOF2_MARKER, 111, 55)
+DHT_JPEG: Final = JPEG_SOI + _jpeg_segment(JPEG_DHT, bytes(8)) + _jpeg_sof_segment(
+    JPEG_SOF0_MARKER, 400, 300
+)
+
+VP8_BODY: Final = bytes(3) + b"\x9d\x01\x2a" + struct.pack("<HH", 0xC000 | 500, 0xC000 | 250) + bytes(4)
+VP8L_BITS: Final = 299 | (199 << 14)
+VP8L_BODY: Final = b"\x2f" + VP8L_BITS.to_bytes(4, "little") + bytes(5)
+VP8X_BODY: Final = bytes(4) + (700 - 1).to_bytes(3, "little") + (350 - 1).to_bytes(3, "little")
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    (
+        pytest.param(PADDED_JPEG, (320, 200), id="jpeg-sof-after-0xff-padding"),
+        pytest.param(SHORT_LENGTH_JPEG, None, id="jpeg-segment-length-below-2"),
+        pytest.param(TRUNCATED_SOF_JPEG, None, id="jpeg-truncated-sof-payload"),
+        pytest.param(SEGMENTS_63_JPEG, (320, 200), id="jpeg-sof-at-segment-64-boundary"),
+        pytest.param(SEGMENTS_65_JPEG, None, id="jpeg-more-than-64-segments"),
+        pytest.param(PROGRESSIVE_JPEG, (111, 55), id="jpeg-sof2-progressive"),
+        pytest.param(DHT_JPEG, (400, 300), id="jpeg-dht-skipped-before-sof0"),
+        pytest.param(_webp_chunk(b"VP8 ", VP8_BODY), (500, 250), id="webp-vp8-lossy"),
+        pytest.param(_webp_chunk(b"VP8L", VP8L_BODY), (300, 200), id="webp-vp8l-lossless"),
+        pytest.param(_webp_chunk(b"VP8X", VP8X_BODY), (700, 350), id="webp-vp8x-extended"),
+        pytest.param(_webp_chunk(b"VP8Z", bytes(10)), None, id="webp-unknown-fourcc"),
+        pytest.param(_webp_chunk(b"VP8X", VP8X_BODY)[:29], None, id="webp-shorter-than-30-bytes"),
+        pytest.param(b"\x89PNG\r\n\x1a\n" + bytes(10), None, id="png-shorter-than-24-bytes"),
+        pytest.param(b"GIF89a" + bytes(26), None, id="unknown-format"),
+    ),
+)
+def test_measure_reference_image_parses_hand_built_headers(header: bytes, expected):
+    assert measure_reference_image(header) == expected
+
+
+def test_measure_reference_image_returns_none_and_restores_position_on_read_error():
+    stream: Final = _FailingReadStream(bytes(64))
+    stream.seek(5)
+
+    assert measure_reference_image(stream) is None
+    assert stream.tell() == 5
+
+
 @pytest.mark.parametrize("initial_position", (0, 3))
 def test_measure_reference_image_reads_png_jpeg_webp_headers_and_keeps_position(initial_position: int):
     pillow_jpeg: Final = _pillow_bytes(1024, 768, "RGB", "JPEG")
