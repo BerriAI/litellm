@@ -823,6 +823,70 @@ class TestKeywordOverride:
 
 class TestDecisionMetadata:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("content, cause", [("hi", "quality_tier"), ("write python", "keyword")])
+    async def test_conversation_shape_is_read_once_for_metadata_and_savings(self, keyword_router, content, cause):
+        class CountedMessage(dict):
+            role_reads = 0
+
+            def get(self, key, default=None):
+                if key == "role":
+                    self.role_reads += 1
+                return super().get(key, default)
+
+        message = CountedMessage(role="user", content=content)
+        kwargs: Dict[str, Any] = {}
+        response = await keyword_router.async_pre_routing_hook("qr", kwargs, [message])
+
+        assert response is not None
+        assert response.routing_decision["cause"] == cause
+        assert response.routing_decision["conversation_continuing"] is False
+        assert kwargs["metadata"]["quality_router_decision"]["conversation_continuing"] is False
+        assert message.role_reads == 2
+
+    @pytest.mark.asyncio
+    async def test_decision_includes_savings_baseline_and_conversation_shape(self, quality_router):
+        quality_router.litellm_router_instance.model_name_to_deployment_indices = {
+            "haiku": [0],
+            "sonnet": [1],
+            "opus": [2],
+            "opus-next": [3],
+        }
+        quality_router.litellm_router_instance.get_deployment_model_info.side_effect = (
+            lambda deployment_id, model: {
+                "input_cost_per_token": {
+                    "id-haiku": 0.000001,
+                    "id-sonnet": 0.000002,
+                    "id-opus": 0.000003,
+                    "id-opus-next": 0.000004,
+                }[deployment_id],
+                "output_cost_per_token": 0.000001,
+            }
+        )
+        request_kwargs: Dict[str, Any] = {}
+        response = await quality_router.async_pre_routing_hook(
+            model="quality-router-test",
+            request_kwargs=request_kwargs,
+            messages=[
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {"role": "user", "content": "continue"},
+            ],
+        )
+
+        assert response is not None
+        assert response.routing_decision["conversation_continuing"] is True
+        assert response.routing_decision["savings_baseline_model"] == "openai/sonnet"
+        assert response.routing_decision["savings_baseline_deployment_id"] == "id-sonnet"
+
+        first_turn = await quality_router.async_pre_routing_hook(
+            model="quality-router-test",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "first request"}],
+        )
+        assert first_turn is not None
+        assert first_turn.routing_decision["conversation_continuing"] is False
+
+    @pytest.mark.asyncio
     async def test_hook_stashes_decision_in_request_kwargs_metadata(
         self, quality_router
     ):
