@@ -1179,10 +1179,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return optional_params
 
-    def _map_reasoning_effort(self, reasoning_effort: str | Reasoning) -> Reasoning:
+    def _map_reasoning_effort(self, reasoning_effort: object) -> Reasoning:
         # If dict is passed, convert it directly to Reasoning object
         if isinstance(reasoning_effort, dict):
-            return Reasoning(**reasoning_effort)
+            return Reasoning(
+                **cast(Reasoning, reasoning_effort)  # cast-ok: dict is forwarded verbatim to the provider
+            )
 
         # Check if auto-summary is enabled via flag or environment variable
         # Priority: litellm.reasoning_auto_summary flag > LITELLM_REASONING_AUTO_SUMMARY env var
