@@ -14,7 +14,9 @@ Call `compile(&pricing)` once for an immutable plan, then `plan.calculate(&reque
 
 `gemini_cost` prices search and Maps grounding with per-query or per-prompt billing, a configured price or the Python fallback, and server-tool usage fallback for search counts. Gemini's token-pricing wrapper still depends on the broader Python generic token calculator
 
-`generic_usage` parses prompt and completion token details for the shared token calculator, including cached modality splits, cache-write aliases, non-token usage counts, and nested reasoning tokens. Pricing these parsed modalities remains unported
+`generic_usage` parses prompt and completion token details for the shared token calculator, including cached modality splits, cache-write aliases, non-token usage counts, and nested reasoning tokens
+
+`generic_input` prices the parsed prompt details with caller-supplied base token rates and model-specific audio, image, video, character, query, count, and duration rates. It preserves Python's service-tier fallback and suppresses token charges when a corresponding image-count or media-duration charge applies. Selecting base rates from full model metadata remains separate
 
 `custom_pricing::normalize_cache_usage` applies Python's cache field precedence and adjusts prompt tokens when cache counts use the Anthropic convention. `custom_pricing::cost_per_token_custom_pricing_helper` prices normalized usage with caller-supplied token or per-second rates. The module validates finite nonnegative quantities and rates before calculation
 
@@ -62,6 +64,10 @@ The Rust module tree does not mirror Python's overall cost module tree. The Pyth
 | `litellm.llms.gemini.cost_calculator.cost_per_google_maps_grounding_request` | `litellm_cost::gemini_cost::cost_per_google_maps_grounding_request` | `llms/gemini/test_cost_calculator.py::test_maps_*` | `python_gemini_cost.rs::cost_per_google_maps_grounding_request_*` |
 | `litellm.litellm_core_utils.llm_cost_calc.utils.parse_prompt_tokens_details` | `litellm_cost::generic_usage::parse_prompt_tokens_details` | `test_llm_cost_calc_utils.py` cache and modality cases | `python_generic_usage.rs::parse_prompt_tokens_details_*` |
 | `litellm.litellm_core_utils.llm_cost_calc.utils.parse_completion_tokens_details` | `litellm_cost::generic_usage::parse_completion_tokens_details` | `test_llm_cost_calc_utils.py` reasoning and modality cases | `python_generic_usage.rs::parse_completion_tokens_details_*` |
+| `litellm.litellm_core_utils.llm_cost_calc.utils._get_cost_per_unit` | `litellm_cost::generic_input::get_cost_per_unit` | `test_llm_cost_calc_utils.py` tier and string rate cases | `python_generic_input.rs::get_cost_per_unit_*` |
+| `litellm.litellm_core_utils.llm_cost_calc.utils.calculate_cost_component` | `litellm_cost::generic_input::calculate_cost_component` | `test_llm_cost_calc_utils.py` component cases | `python_generic_input.rs::calculate_cost_component_*` |
+| `litellm.litellm_core_utils.llm_cost_calc.utils.calculate_cache_writing_cost` | `litellm_cost::generic_input::calculate_cache_writing_cost` | `test_llm_cost_calc_utils.py::test_cache_writing_cost_*` | `python_generic_input.rs::calculate_cache_writing_cost_*` |
+| `litellm.litellm_core_utils.llm_cost_calc.utils._calculate_input_cost` | `litellm_cost::generic_input::calculate_input_cost` | `test_llm_cost_calc_utils.py::test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details` and modality cases | `python_generic_input.rs::calculate_input_cost_*` |
 
 `cost_per_token`, `completion_cost`, `response_cost_calculator`, provider calculators, and Python's model lookup and response normalization have no Rust counterpart yet. The ported Rust cases use `rstest` and synthetic prices; they cover the corresponding Python tests' price selection and arithmetic, not their integration with Python model registration
 

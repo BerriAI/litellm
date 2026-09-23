@@ -9,6 +9,7 @@ use litellm_cost::custom_pricing::{
     normalize_cache_usage,
 };
 use litellm_cost::gemini_cost::cost_per_web_search_request;
+use litellm_cost::generic_input::{InputBaseRates, calculate_input_cost};
 use litellm_cost::generic_usage::parse_prompt_tokens_details;
 use litellm_cost::guardrail_cost::bedrock_guardrail_cost;
 use litellm_cost::non_token::{
@@ -340,4 +341,16 @@ fn main() {
         "parsed_input_text={} audio={} cached_audio={}",
         parsed.text_tokens, parsed.audio_tokens, parsed.cache_hit_audio_tokens
     );
+    let generic_input = calculate_input_cost(
+        &parsed,
+        &json!({"input_cost_per_audio_token": 3e-6}),
+        InputBaseRates {
+            prompt: 2e-6,
+            cache_read: 0.5e-6,
+            cache_creation: 2.5e-6,
+            cache_creation_above_1hr: 4e-6,
+        },
+        None,
+    );
+    println!("generic_input={generic_input:.5}");
 }
