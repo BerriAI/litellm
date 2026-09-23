@@ -34,6 +34,7 @@ from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.llms.vertex_ai_text_to_speech import (
     VertexTextToSpeechAudioConfig,
     VertexTextToSpeechInput,
+    VertexTextToSpeechSpeakerVoiceConfig,
     VertexTextToSpeechVoice,
 )
 
@@ -48,6 +49,36 @@ else:
 _LyriaVoice: TypeAlias = (
     str | dict | None
 )  # mutable-ok: inherited interface supports structured provider voice dictionaries
+
+
+def _fallback_gemini_tts_audio_duration(audio: bytes, encoding: str, sample_rate: int) -> float | None:
+    if encoding == "PCM":
+        return len(audio) / (2 * sample_rate) if sample_rate > 0 else None
+    if encoding in ("ALAW", "MULAW") and not (audio[:4] == b"RIFF" and audio[8:12] == b"WAVE"):
+        return len(audio) / sample_rate if sample_rate > 0 else None
+
+    if encoding in ("LINEAR16", "ALAW", "MULAW") and audio[:4] == b"RIFF" and audio[8:12] == b"WAVE":
+        format_offset: Final = audio.find(b"fmt ", 12)
+        data_offset: Final = audio.find(b"data", 12)
+        if format_offset >= 0 and data_offset >= 0 and format_offset + 20 <= len(audio):
+            byte_rate: Final = int.from_bytes(audio[format_offset + 16 : format_offset + 20], "little")
+            data_size: Final = int.from_bytes(audio[data_offset + 4 : data_offset + 8], "little")
+            if byte_rate > 0 and data_size <= len(audio) - data_offset - 8:
+                return data_size / byte_rate
+
+    if encoding == "MP3" and speech_media_type_from_audio_bytes(audio) == "audio/mpeg":
+        return len(audio) / 4000
+
+    if encoding == "OGG_OPUS" and audio[:4] == b"OggS":
+        opus_header: Final = audio.find(b"OpusHead")
+        last_page: Final = audio.rfind(b"OggS")
+        if opus_header >= 0 and opus_header + 12 <= len(audio) and last_page + 14 <= len(audio):
+            pre_skip: Final = int.from_bytes(audio[opus_header + 10 : opus_header + 12], "little")
+            granule: Final = int.from_bytes(audio[last_page + 6 : last_page + 14], "little")
+            if pre_skip <= granule < 2**64 - 1:
+                return (granule - pre_skip) / 48000
+
+    return None
 
 
 class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
@@ -166,7 +197,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
     @staticmethod
     def _get_str_value(
-        source: dict,  # mutable-ok: provider voice payloads arrive as concrete dictionaries
+        source: Mapping[str, object],
         *keys: str,
     ) -> str | None:
         for key in keys:
@@ -177,9 +208,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
     @staticmethod
     def _get_dict_value(
-        source: dict,  # mutable-ok: provider voice payloads arrive as concrete dictionaries
+        source: Mapping[str, object],
         *keys: str,
-    ) -> dict | None:  # mutable-ok: nested provider payloads remain concrete dictionaries
+    ) -> dict[str, object] | None:  # mutable-ok: nested provider payloads remain concrete dictionaries
         for key in keys:
             value = source.get(key)
             if isinstance(value, dict):
@@ -188,8 +219,10 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
     def _extract_gemini_tts_speaker_configs(
         self,
-        voice: dict,  # mutable-ok: provider voice payload arrives as a concrete dictionary
-    ) -> list[dict[str, str]]:  # mutable-ok: provider request serialization requires a concrete list
+        voice: Mapping[str, object],
+    ) -> list[
+        VertexTextToSpeechSpeakerVoiceConfig
+    ]:  # mutable-ok: provider request serialization requires a concrete list
         speech_config: Final = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
         multi_speaker_config: Final = self._get_dict_value(
             speech_config,
@@ -208,7 +241,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         if not isinstance(raw_speaker_configs, list):
             return []  # mutable-ok: malformed speaker configuration produces a concrete empty list
         speaker_configs: Final[  # mutable-ok: validated payloads are accumulated for serialization
-            list[dict[str, str]]
+            list[VertexTextToSpeechSpeakerVoiceConfig]
         ] = []
         for raw_config in raw_speaker_configs:
             if not isinstance(raw_config, dict):
@@ -245,7 +278,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
     def _extract_gemini_tts_voice_name(
         self,
-        voice: dict,  # mutable-ok: provider voice payload arrives as a concrete dictionary
+        voice: Mapping[str, object],
     ) -> str | None:
         voice_name: Final = self._get_str_value(voice, "name", "voiceName", "voice_name", "voice")
         if voice_name is not None:
@@ -269,8 +302,8 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     def _map_gemini_tts_voice_to_vertex_format(
         self,
         model: str,
-        voice: str | dict,  # mutable-ok: provider voice payload arrives as a concrete dictionary
-    ) -> tuple[str | None, dict]:  # mutable-ok: provider request serialization requires a concrete dict
+        voice: str | Mapping[str, object],
+    ) -> tuple[str | None, dict[str, object]]:  # mutable-ok: provider request serialization requires a concrete dict
         if isinstance(voice, str):
             return voice, {  # mutable-ok: provider request serialization requires a concrete dict
                 "languageCode": self.DEFAULT_LANGUAGE_CODE,
@@ -677,9 +710,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             container_duration: Final = calculate_request_duration(binary_data)
             sample_rate: Final = audio_config.get("sampleRateHertz") or 24000
             duration: Final = (
-                len(binary_data) / (2 * sample_rate)
-                if container_duration is None and audio_config["audioEncoding"] == "PCM"
-                else container_duration
+                container_duration
+                if container_duration is not None
+                else _fallback_gemini_tts_audio_duration(binary_data, audio_config["audioEncoding"], sample_rate)
             )
             if duration is None:
                 raise ValueError("Cannot determine Gemini TTS output duration for cost calculation")

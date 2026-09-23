@@ -1,6 +1,7 @@
 import base64
 import io
 import math
+import struct
 import wave
 from pathlib import Path
 from typing import Final
@@ -13,6 +14,7 @@ import litellm
 from litellm.llms.vertex_ai.text_to_speech.transformation import (
     VertexAILyriaTextToSpeechConfig,
     VertexAITextToSpeechConfig,
+    _fallback_gemini_tts_audio_duration,
 )
 from litellm.cost_calculator import response_cost_calculator
 from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
@@ -413,7 +415,7 @@ def test_transform_text_to_speech_response_leaves_unknown_bytes_unlabeled():
     assert result.response.content == raw_pcm
 
 
-@pytest.mark.parametrize("encoding", ["LINEAR16", "PCM", "MP3"])
+@pytest.mark.parametrize("encoding", ["LINEAR16", "PCM", "MP3", "OGG_OPUS", "ALAW", "MULAW"])
 def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str):
     model: Final = "gemini-3.1-flash-tts-preview"
     input_text: Final = "Hello from Gemini text to speech"
@@ -424,10 +426,33 @@ def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str):
         wav_file.setsampwidth(2)
         wav_file.setframerate(24000)
         wav_file.writeframes(pcm_audio)
+    g711_audio: Final = (
+        struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF",
+            36 + 24000,
+            b"WAVE",
+            b"fmt ",
+            16,
+            6 if encoding == "ALAW" else 7,
+            1,
+            24000,
+            24000,
+            1,
+            8,
+            b"data",
+            24000,
+        )
+        + b"\x00" * 24000
+    )
+    fixture_dir: Final = Path(__file__).resolve().parents[4] / "audio_tests"
     audio_by_encoding: Final = {
         "PCM": pcm_audio,
         "LINEAR16": wav_buffer.getvalue(),
-        "MP3": (Path(__file__).resolve().parents[4] / "audio_tests/speech_vertex.mp3").read_bytes(),
+        "MP3": (fixture_dir / "gemini_tts_speech.mp3").read_bytes(),
+        "OGG_OPUS": (fixture_dir / "gemini_tts_speech.ogg").read_bytes(),
+        "ALAW": g711_audio,
+        "MULAW": g711_audio,
     }
     audio_bytes: Final = audio_by_encoding[encoding]
     logger: Final = MagicMock()
@@ -448,6 +473,11 @@ def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str):
     assert usage is not None
     duration: Final = len(audio_bytes) / 48000 if encoding == "PCM" else calculate_request_duration(audio_bytes)
     assert duration is not None
+    assert _fallback_gemini_tts_audio_duration(audio_bytes, encoding, 24000) == pytest.approx(duration), (
+        "Google Cloud AudioEncoding and RFC 7845, checked 2026-09-23: "
+        "https://cloud.google.com/text-to-speech/docs/reference/rest/v1/AudioEncoding "
+        "https://www.rfc-editor.org/rfc/rfc7845.html"
+    )
     assert usage.completion_tokens == math.ceil(duration * 25), (
         "Google Cloud TTS pricing, 2026-09-23: https://cloud.google.com/text-to-speech/pricing"
     )
@@ -455,6 +485,9 @@ def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str):
     assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.audio_tokens == usage.completion_tokens
+    with patch("litellm.llms.vertex_ai.text_to_speech.transformation.calculate_request_duration", return_value=None):
+        sdk_result: Final = VertexAITextToSpeechConfig().transform_text_to_speech_response(model, raw_response, logger)
+    assert sdk_result.usage == usage
 
     model_info: Final = litellm.get_model_info(model, custom_llm_provider="vertex_ai")
     cost: Final = response_cost_calculator(
@@ -471,6 +504,35 @@ def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str):
     )
     assert cost == pytest.approx(expected_cost)
     assert cost > usage.prompt_tokens * model_info["input_cost_per_token"]
+
+
+@pytest.mark.parametrize("encoding", ["ALAW", "MULAW"])
+@pytest.mark.parametrize("audio", [b"\x12" * 24000, b"RIFF" + b"\x12" * 23996])
+def test_gemini_cloud_tts_returns_raw_g711_audio_when_duration_decoder_is_unavailable(encoding: str, audio: bytes):
+    raw_response: Final = httpx.Response(200, json={"audioContent": base64.b64encode(audio).decode()})
+    logger: Final = MagicMock()
+    logger.model_call_details = {
+        "additional_args": {
+            "complete_input_dict": {
+                "dict_body": {
+                    "input": {"text": "Hello"},
+                    "audioConfig": {"audioEncoding": encoding, "sampleRateHertz": 24000},
+                }
+            }
+        }
+    }
+
+    with patch("litellm.llms.vertex_ai.text_to_speech.transformation.calculate_request_duration", return_value=None):
+        result: Final = VertexAITextToSpeechConfig().transform_text_to_speech_response(
+            "gemini-3.1-flash-tts-preview", raw_response, logger
+        )
+
+    assert result.response.content == audio
+    assert result.usage is not None
+    assert result.usage.prompt_tokens > 0
+    assert result.usage.completion_tokens == 25, (
+        "Google Cloud TTS pricing, 2026-09-23: https://cloud.google.com/text-to-speech/pricing"
+    )
 
 
 class TestVertexAILyriaTextToSpeechConfig:
@@ -933,7 +995,7 @@ def test_litellm_speech_vertex_ai_gemini_tts_mp3_uses_cloud_tts(mock_get_token, 
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = 200
     mock_response.headers = {"content-type": "application/json"}
-    audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/speech_vertex.mp3").read_bytes()
+    audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
     mock_response.json.return_value = {"audioContent": base64.b64encode(audio_bytes).decode()}
     mock_post.return_value = mock_response
 
