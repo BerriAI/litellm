@@ -4,11 +4,15 @@ The inventory covers 132 tests in the secret-manager suites and the legacy secre
 
 Tests of Python extension lifecycle, SDK credential selection in `auth-azure`, proxy hooks and example subclasses remain at their owning boundary. They are called out below rather than counted as Rust secret-manager coverage. Default AWS partition endpoints are owned by the AWS SDK
 
-Azure callback absence remains `None`, while a native HTTP 404 still permits environment fallback. `azure_callback_absence_preserves_none_but_errors_fall_back` and `python_missing_and_failed_reads_use_environment_before_defaults` cover these distinct results
+Azure callback absence remains `None`, while a native HTTP 404 still permits environment fallback. `azure_callback_absence_preserves_none_but_errors_fall_back` and `python_read_failures_preserve_provider_fallback_rules` cover these distinct results
 
 Native APIs preserve typed errors and explicit absence. Python-compatible reads restore Python fallback, coercion, Google negative caching and missing-value behavior. Vault namespaces use the SDK namespace header instead of Python’s equivalent URL prefix. Rotation verifies fresh provider reads instead of trusting a just-written cache entry, preventing deletion after a failed replacement
 
 Google payload corruption is intentionally rejected: malformed base64 and mismatched CRC32C values fail without populating the cache. `failed_or_missing_reads_are_not_cached` tests this correction against Python's permissive decoder and omitted checksum validation. See [RFC 4648 section 3.3](https://www.rfc-editor.org/rfc/rfc4648#section-3.3) and [Google's integrity guidance](https://docs.cloud.google.com/secret-manager/docs/data-integrity)
+
+The Python API audit found that earlier AWS fallback tests encoded the wrong expectation. Differential calls to the existing handler show that missing secrets, denied reads, missing string payloads, and missing or empty primary secrets return `None`; they do not activate environment fallback or defaults. `test_aws_absence_and_failed_reads_match_python_without_environment_fallback` compares the public getter under both dispatch decisions. `test_aws_primary_values_match_python_handler` checks typed values, including arbitrary-size integers. `test_aws_primary_json_errors_preserve_python_exception_details` checks the exception class, arguments, document, and position against Python
+
+Full API replacement remains incomplete: provider methods still need catalog dispatch, matching coroutine signatures, and write/delete/rotation bindings. SDK-client configuration capture also needs to preserve explicit credentials, endpoints, and regions. The catalog remains Python-only while these gaps are open
 
 ## [tests/test_litellm/secret_managers/test_aws_secret_manager_replication.py](../../../tests/test_litellm/secret_managers/test_aws_secret_manager_replication.py)
 

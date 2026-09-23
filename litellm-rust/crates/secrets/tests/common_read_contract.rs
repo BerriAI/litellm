@@ -207,7 +207,7 @@ async fn reads_preserve_values_and_distinguish_absence_from_failure(#[case] prov
 #[case::vault(Provider::Vault)]
 #[case::cyberark(Provider::Cyberark)]
 #[tokio::test]
-async fn python_missing_and_failed_reads_use_environment_before_defaults(
+async fn python_read_failures_preserve_provider_fallback_rules(
     #[case] provider: Provider,
     #[values(false, true)] missing: bool,
     #[values(None, Some("environment"), Some("True"), Some("true"))] environment_value: Option<
@@ -242,10 +242,14 @@ async fn python_missing_and_failed_reads_use_environment_before_defaults(
         Arc::new(move |_: &str| environment_value.map(str::to_owned)),
         OidcResolver::default(),
     );
-    let expected = environment_value.map(|value| match value {
-        "True" => Secret::Bool(true),
-        value => Secret::String(SecretValue::new(value)),
-    });
+    let expected = if matches!(provider, Provider::Aws) {
+        None
+    } else {
+        environment_value.map(|value| match value {
+            "True" => Secret::Bool(true),
+            value => Secret::String(SecretValue::new(value)),
+        })
+    };
     assert_eq!(
         resolver
             .get_secret("KEY", Some(Secret::String(SecretValue::new("default"))))

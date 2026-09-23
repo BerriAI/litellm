@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Final, Protocol, runtime_checkable
 
+from pydantic import JsonValue
+
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Rules, SecretManagerContext, decision
 from litellm.rust_bridge.configuration import Decision
@@ -166,7 +168,7 @@ class NativeSecretManagerRuntime(Protocol):
     @property
     def system(self) -> str: ...
 
-    def read_secret(self, name: str, settings: Mapping[str, object] | None = None) -> str | None: ...
+    def read_secret(self, name: str, settings: Mapping[str, object] | None = None) -> JsonValue: ...
 
 
 @runtime_checkable

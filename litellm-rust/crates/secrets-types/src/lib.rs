@@ -19,4 +19,4 @@ pub use context::{
 };
 pub use error::Error;
 pub use litellm_auth_types::SecretValue;
-pub use value::Secret;
+pub use value::{PythonSecretRead, Secret};

@@ -9,7 +9,7 @@ mod resolver;
 pub mod source;
 mod state;
 
-pub use compatibility::get_secret_from_python_manager;
+pub use compatibility::{get_secret_from_python_manager, read_secret_from_python_manager};
 pub use error::Error;
 pub use handler::{ExternalSecretManager, SecretManager, get_secret_from_manager};
 pub use litellm_secrets_types::{

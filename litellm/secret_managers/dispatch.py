@@ -1,5 +1,7 @@
 from typing import Final
 
+from pydantic import JsonValue
+
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Rules
 from litellm.rust_bridge.secret_manager import (
@@ -19,7 +21,7 @@ def get_secret_from_manager(
     *,
     rules: Rules | None = None,
     binding: NativeBinding[NativeSecretManagerFactory] = NATIVE_SECRET_MANAGER,
-) -> str | None:
+) -> JsonValue:
     native: Final = resolve_native_secret_manager(client, key_manager, rules, binding=binding)
     if native is None:
         return python_get_secret_from_manager(client, key_manager, secret_name, key_management_settings)

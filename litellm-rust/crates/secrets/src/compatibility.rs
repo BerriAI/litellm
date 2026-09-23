@@ -1,5 +1,6 @@
 use litellm_core_utils::settings::Lookup;
 use litellm_python_compat::{Value, literal::literal_eval};
+use litellm_secrets_types::PythonSecretRead;
 
 use crate::{
     Error, KeyManagementSettings, KeyManagementSystem, Secret, SecretManager, SecretValue,
@@ -46,4 +47,22 @@ pub(crate) fn python_manager_string(value: SecretValue) -> Secret {
         Ok(Value::Bool(boolean)) => Secret::Bool(boolean),
         _ => Secret::String(value),
     }
+}
+
+pub async fn read_secret_from_python_manager(
+    manager: &SecretManager,
+    name: &str,
+    settings: &KeyManagementSettings,
+    environment: &(dyn Lookup + Send + Sync),
+) -> Result<PythonSecretRead, Error> {
+    #[cfg(feature = "aws")]
+    if let SecretManager::AwsSecretsManagerV2(client) = manager {
+        return client
+            .read_payload_for_python(name, settings.primary_secret_name.as_deref(), environment)
+            .await
+            .map_err(Error::from);
+    }
+    get_secret_from_python_manager(manager, name, settings, environment)
+        .await
+        .map(PythonSecretRead::Value)
 }

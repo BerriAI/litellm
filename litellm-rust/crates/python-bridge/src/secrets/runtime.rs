@@ -1,11 +1,12 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
-use litellm_host_python::{from_py, run_async_value, run_sync_value};
+use litellm_host_python::{from_py, run_async_value, run_sync_value, to_py};
 use litellm_secrets::{
-    KeyManagementSettings, KeyManagementSystem, SecretManager, get_secret_from_python_manager,
-    load_native_manager,
+    KeyManagementSettings, KeyManagementSystem, Secret, SecretManager, load_native_manager,
+    read_secret_from_python_manager,
 };
+use litellm_secrets_types::PythonSecretRead;
 use pyo3::{
     exceptions::{PyAttributeError, PyRuntimeError, PyValueError},
     prelude::*,
@@ -190,17 +191,17 @@ impl NativeSecretManager {
         py: Python<'_>,
         name: String,
         settings: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<Option<String>> {
+    ) -> PyResult<Py<PyAny>> {
         let backend = self.backend()?;
         let settings = settings
             .map(|value| parse_settings(Some(value)))
             .transpose()?
             .unwrap_or_else(|| self.configuration.settings.clone());
         run_sync_value(py, async move {
-            get_secret_from_python_manager(&backend, &name, &settings, &ProcessEnvironment)
+            read_secret_from_python_manager(&backend, &name, &settings, &ProcessEnvironment)
                 .await
-                .map(|value| value.and_then(|secret| secret.as_str().map(str::to_owned)))
                 .map_err(|error| PyValueError::new_err(error.to_string()))
+                .and_then(|value| python_secret_value(value, &name))
         })
     }
     #[pyo3(signature = (name, settings=None))]
@@ -216,10 +217,10 @@ impl NativeSecretManager {
             .transpose()?
             .unwrap_or_else(|| self.configuration.settings.clone());
         run_async_value(py, async move {
-            get_secret_from_python_manager(&backend, &name, &settings, &ProcessEnvironment)
+            read_secret_from_python_manager(&backend, &name, &settings, &ProcessEnvironment)
                 .await
-                .map(|value| value.and_then(|secret| secret.as_str().map(str::to_owned)))
                 .map_err(|error| PyValueError::new_err(error.to_string()))
+                .and_then(|value| python_secret_value(value, &name))
         })
     }
 }
@@ -263,4 +264,25 @@ fn parse_settings(value: Option<&Bound<'_, PyAny>>) -> PyResult<KeyManagementSet
         })
         .transpose()
         .map(Option::unwrap_or_default)
+}
+
+fn python_secret_value(payload: PythonSecretRead, name: &str) -> PyResult<Py<PyAny>> {
+    let value = match payload {
+        PythonSecretRead::Value(value) => value,
+        PythonSecretRead::PrimaryJson(document) => {
+            return Python::attach(|py| {
+                py.import("json")?
+                    .call_method1("loads", (document.expose(),))?
+                    .call_method1("get", (name,))
+                    .map(Bound::unbind)
+            });
+        }
+    };
+    let value = match value {
+        None => serde_json::Value::Null,
+        Some(Secret::String(value)) => serde_json::Value::String(value.expose().to_owned()),
+        Some(Secret::Bool(value)) => serde_json::Value::Bool(value),
+        Some(Secret::Json(value)) => value,
+    };
+    Python::attach(|py| to_py(py, &value))
 }

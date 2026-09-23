@@ -25,13 +25,15 @@ fn state(server: &MockServer, settings: KeyManagementSettings) -> SecretManagerS
 }
 
 #[rstest::rstest]
-#[case::missing(400, serde_json::json!({"__type":"ResourceNotFoundException"}))]
-#[case::denied(400, serde_json::json!({"__type":"AccessDeniedException"}))]
-#[case::malformed(200, serde_json::json!({}))]
+#[case::missing(400, serde_json::json!({"__type":"ResourceNotFoundException"}), None)]
+#[case::denied(400, serde_json::json!({"__type":"AccessDeniedException"}), None)]
+#[case::malformed(200, serde_json::json!({}), None)]
+#[case::invalid_primary(200, serde_json::json!({"SecretString":"not-json"}), Some("primary"))]
 #[tokio::test]
 async fn read_results_follow_the_selected_failure_policy(
     #[case] status: u16,
     #[case] body: serde_json::Value,
+    #[case] primary_secret_name: Option<&str>,
     #[values(FailurePolicy::Propagate, FailurePolicy::EnvironmentFallback)] policy: FailurePolicy,
     #[values(None, Some("environment"))] environment: Option<&'static str>,
     #[values(None, Some("default"))] default: Option<&str>,
@@ -43,7 +45,13 @@ async fn read_results_follow_the_selected_failure_policy(
         .mount(&server)
         .await;
     let resolver = SecretResolver::new_python_compatible(
-        Arc::new(state(&server, KeyManagementSettings::default())),
+        Arc::new(state(
+            &server,
+            KeyManagementSettings {
+                primary_secret_name: primary_secret_name.map(str::to_owned),
+                ..Default::default()
+            },
+        )),
         Arc::new(move |_: &str| environment.map(str::to_owned)),
         OidcResolver::default(),
     )
@@ -51,7 +59,9 @@ async fn read_results_follow_the_selected_failure_policy(
     let result = resolver
         .get_secret_str("KEY", default.map(SecretValue::new))
         .await;
-    if policy == FailurePolicy::EnvironmentFallback {
+    if primary_secret_name.is_none() {
+        assert_eq!(result.unwrap(), None);
+    } else if policy == FailurePolicy::EnvironmentFallback {
         assert_eq!(
             result.unwrap().as_ref().map(SecretValue::expose),
             environment

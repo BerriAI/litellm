@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import partial
+from importlib import import_module
 from types import SimpleNamespace
 from typing import Final
 
 import pytest
+from pydantic import JsonValue
 
 import litellm
 from litellm.rust_bridge import bindings
@@ -399,3 +403,105 @@ def test_native_binding_accepts_a_callable_factory(monkeypatch: pytest.MonkeyPat
     rules: Final[Rules] = (SecretManagerRule(Rollout.RUST_REQUIRED, systems=frozenset({runtime.system})),)
 
     assert resolve_native_secret_manager(object(), runtime.system, rules) is runtime
+
+
+@pytest.mark.parametrize("value", ("text", "", True, False, 42, 2**100, [1, "two"], {"nested": True}, None))
+async def test_aws_primary_values_match_python_handler(
+    monkeypatch: pytest.MonkeyPatch, value: JsonValue
+) -> None:
+    native: Final = pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body={"SecretString": json.dumps({"KEY": value})})
+        server.expected_requests = 3
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", server.base_url)
+        manager: Final = AWSSecretsManagerV2(aws_region_name="us-east-1")
+        settings: Final = KeyManagementSettings(primary_secret_name="primary")
+        reference: Final = get_secret_from_manager(
+            manager, "aws_secret_manager", "KEY", settings, rules=(SecretManagerRule(Rollout.PYTHON_ONLY),)
+        )
+        actual: Final = get_secret_from_manager(
+            manager, "aws_secret_manager", "KEY", settings, rules=(SecretManagerRule(Rollout.RUST_REQUIRED),)
+        )
+        handle: Final = native._SecretManagerRuntime.from_client(manager)
+        assert handle is not None
+        asynchronous: Final = await handle.async_read_secret("KEY", settings.model_dump(mode="json"))
+        assert type(actual) is type(reference) is type(value)
+        assert actual == reference == value
+        assert type(asynchronous) is type(reference)
+        assert asynchronous == reference
+        assert tuple(json.loads(request.raw_body) for request in server.requests) == ({"SecretId": "primary"},) * 3
+
+
+@pytest.mark.parametrize("primary", (None, "primary"))
+@pytest.mark.parametrize(
+    ("status", "body"),
+    (
+        (400, {"__type": "ResourceNotFoundException"}),
+        (403, {"__type": "AccessDeniedException"}),
+        (200, {"Name": "without-string"}),
+        (200, {"SecretString": ""}),
+    ),
+)
+def test_aws_absence_and_failed_reads_match_python_without_environment_fallback(
+    monkeypatch: pytest.MonkeyPatch, primary: str | None, status: int, body: dict[str, str]
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.default_response = ResponseSpec(status=status, body=body)
+        server.expected_requests = 2
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", server.base_url)
+        monkeypatch.setenv("KEY", "must-not-fall-back")
+        manager: Final = AWSSecretsManagerV2(aws_region_name="us-east-1")
+        settings: Final = KeyManagementSettings(primary_secret_name=primary)
+        monkeypatch.setattr(litellm, "secret_manager_client", manager)
+        monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.AWS_SECRET_MANAGER)
+        monkeypatch.setattr(litellm, "_key_management_settings", settings)
+        main: Final = import_module("litellm.secret_managers.main")
+        monkeypatch.setattr(
+            main, "get_secret_from_manager",
+            partial(get_secret_from_manager, rules=(SecretManagerRule(Rollout.PYTHON_ONLY),)),
+        )
+        reference: Final = litellm.get_secret("KEY", "must-not-default")
+        monkeypatch.setattr(
+            main, "get_secret_from_manager",
+            partial(get_secret_from_manager, rules=(SecretManagerRule(Rollout.RUST_REQUIRED),)),
+        )
+        actual: Final = litellm.get_secret("KEY", "must-not-default")
+        assert actual == reference
+        assert actual == ("" if primary is None and body.get("SecretString") == "" else None)
+
+
+@pytest.mark.parametrize("document", ("{", "not-json", "[1]", "null", "true", "42", '\"text\"'))
+async def test_aws_primary_json_errors_preserve_python_exception_details(
+    monkeypatch: pytest.MonkeyPatch, document: str
+) -> None:
+    native: Final = pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body={"SecretString": document})
+        server.expected_requests = 3
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", server.base_url)
+        manager: Final = AWSSecretsManagerV2(aws_region_name="us-east-1")
+        settings: Final = KeyManagementSettings(primary_secret_name="primary")
+        with pytest.raises((json.JSONDecodeError, AttributeError)) as reference:
+            get_secret_from_manager(
+                manager, "aws_secret_manager", "KEY", settings, rules=(SecretManagerRule(Rollout.PYTHON_ONLY),)
+            )
+        with pytest.raises(type(reference.value)) as actual:
+            get_secret_from_manager(
+                manager, "aws_secret_manager", "KEY", settings, rules=(SecretManagerRule(Rollout.RUST_REQUIRED),)
+            )
+        assert actual.value.args == reference.value.args
+        if isinstance(reference.value, json.JSONDecodeError):
+            assert isinstance(actual.value, json.JSONDecodeError)
+            assert (actual.value.doc, actual.value.pos) == (reference.value.doc, reference.value.pos)
+        handle: Final = native._SecretManagerRuntime.from_client(manager)
+        assert handle is not None
+        with pytest.raises(type(reference.value)) as asynchronous:
+            await handle.async_read_secret("KEY", settings.model_dump(mode="json"))
+        assert asynchronous.value.args == reference.value.args
