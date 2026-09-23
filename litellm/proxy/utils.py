@@ -1052,7 +1052,11 @@ def _deployment_attribution_for_model_group(model_group: object, team_id: str | 
     )
     return MappingProxyType(
         {
-            **({"custom_llm_provider": shared_provider} if shared_provider is not None else {}),  # mutable-ok: frozen by the outer MappingProxyType
+            **(
+                {"custom_llm_provider": shared_provider}  # mutable-ok: frozen by the outer MappingProxyType
+                if shared_provider is not None
+                else {}  # mutable-ok: frozen by the outer MappingProxyType
+            ),
             **(
                 {  # mutable-ok: frozen immediately by the outer MappingProxyType
                     "model_info": dict(  # mutable-ok: preserve the router's mutable model-info payload
