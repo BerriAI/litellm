@@ -671,9 +671,8 @@ class OpenTelemetryV2(CustomLogger):
         # rides along and the call nests under whatever request phase is active —
         # e.g. a DB lookup under the live ``auth`` span), falling back to the
         # server span the proxy threaded as ``parent_otel_span``. A background
-        # service call has neither, so it starts its own root trace. A call that
-        # finished after the request span ended (post-response spend tracking)
-        # also roots its own trace, linked back to the request.
+        # service call has neither, so it starts its own root trace, as does one
+        # that finished after the request span ended (linked back to it).
         end_time_ns: Final = to_ns(end_time)
         parent_context, links = resolve_service_span_context(threaded=parent_otel_span, end_time_ns=end_time_ns)
         return self._emitter.emit(

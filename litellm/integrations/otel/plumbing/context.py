@@ -228,22 +228,12 @@ def resolve_parent_context(threaded: Span | None = None) -> Context:
 
 def resolve_service_span_context(
     threaded: Span | None = None, end_time_ns: int | None = None
-) -> "tuple[Context, tuple[Link, ...]]":
+) -> tuple[Context, tuple[Link, ...]]:
     """Parent context + links for a service/DB span that ended at ``end_time_ns``.
 
-    Nests under :func:`resolve_parent_context` while that parent is still open,
-    or was still open when the call finished. A call that outlived its parent
-    (the spend-tracking, cache and spend-counter writes the proxy fires after the
-    response is on the wire) did not contribute to the request's latency, so
-    parenting it there would stretch the request trace past the request itself.
-    Following the ``FollowsFrom`` convention (OpenTracing) and the OTel link
-    guidance for asynchronous work (the default ``:link`` propagation style of
-    the Ruby ActiveJob / Sidekiq instrumentations), such a call starts its own
-    root trace carrying a span link back to the request span. Baggage stays on
-    the returned context, so identity attributes still reach the detached span.
-
-    Only an SDK span that has actually ended detaches: a sampled-out or remote
-    ``NonRecordingSpan`` never records but is still the correct parent.
+    A call that finished after its parent ended (post-response spend tracking)
+    starts its own root trace with a span link back to the parent instead of
+    stretching the parent's trace. Baggage stays on the returned context.
     """
     ctx: Final = resolve_parent_context(threaded)
     parent: Final = get_current_span(ctx)
