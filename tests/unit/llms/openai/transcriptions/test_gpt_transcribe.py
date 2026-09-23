@@ -261,14 +261,15 @@ def test_gpt_live_transcribe_rejects_file_transcription(local_model_cost_map: No
         ("2025-04-01-preview", "2025-04-01-preview"),
     ],
 )
-def test_azure_gpt_transcribe_resolves_api_version_in_provider(
-    local_model_cost_map: None, api_version: str | None, expected_api_version: str | None
+@pytest.mark.parametrize("model", ["gpt-transcribe", "custom-transcribe-deployment"])
+def test_azure_audio_transcription_resolves_api_version_in_provider(
+    model: str, api_version: str | None, expected_api_version: str | None
 ) -> None:
     handler = AzureAudioTranscription()
     handler.async_audio_transcriptions = MagicMock(return_value=MagicMock())
 
     handler.audio_transcriptions(
-        model="gpt-transcribe",
+        model=model,
         audio_file=io.BytesIO(b"audio"),
         optional_params={"stream": True},
         logging_obj=MagicMock(),

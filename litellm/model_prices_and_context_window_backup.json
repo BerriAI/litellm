@@ -234,7 +234,6 @@
         "mode": "audio_transcription",
         "provider_specific_entry": {
             "realtime_ga_only": 1,
-            "transcription_deployment_api": 1,
             "transcription_json_only": 1
         },
         "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-gpt-transcribe-and-gpt-live-transcribe-in-microsoft-foundry/4541740",
