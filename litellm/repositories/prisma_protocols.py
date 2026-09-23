@@ -12,6 +12,11 @@ from typing import Protocol, TypeVar
 RowT_co = TypeVar("RowT_co", covariant=True)
 
 
+class DatabaseClient(Protocol):
+    @property
+    def db(self) -> object: ...
+
+
 class TableActions(Protocol[RowT_co]):
     """The prisma-client-py per-model action surface, keyed to the row it returns.
 

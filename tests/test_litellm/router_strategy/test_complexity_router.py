@@ -40,6 +40,7 @@ from litellm.router import as_output_cap
 from litellm.router_strategy.complexity_router.complexity_router import (
     _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
     _CLASSIFICATION_WITH_CONVERSATION,
+    _CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
     TIER_SEVERITY_ORDER_LABELED,
     ComplexityRouter,
     DimensionScore,
@@ -62,6 +63,12 @@ from litellm.router_strategy.complexity_router.config import (
     ComplexityRouterConfig,
     ComplexityTier,
     custom_pattern_work,
+)
+from litellm.router_strategy.complexity_router.jev_classifier import (
+    JevChoiceAnswer,
+    JevSystemOneRequest,
+    JevSystemOneResponse,
+    JevUsage,
 )
 from litellm.router_strategy.complexity_router.tier_predictor import (
     TierGlobalStatistic,
@@ -125,6 +132,34 @@ def complexity_router(mock_router_instance, basic_config):
         litellm_router_instance=mock_router_instance,
         complexity_router_config=basic_config,
     )
+
+
+class _StaticJevClient:
+    def __init__(self, response: JevSystemOneResponse | BaseException) -> None:
+        self.response = response
+        self.calls = 0
+        self.last_request: JevSystemOneRequest | None = None
+
+    async def evaluate(
+        self, request: JevSystemOneRequest, timeout_s: float, request_kwargs: Mapping[str, object] | None = None
+    ) -> JevSystemOneResponse:
+        self.calls += 1
+        self.last_request = request
+        if isinstance(self.response, BaseException):
+            raise self.response
+        return self.response
+
+
+class _TimeoutJevClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def evaluate(
+        self, request: JevSystemOneRequest, timeout_s: float, request_kwargs: Mapping[str, object] | None = None
+    ) -> JevSystemOneResponse:
+        self.calls += 1
+        await asyncio.sleep(timeout_s * 2)
+        raise AssertionError("timeout should cancel the Jev call")
 
 
 class TestDimensionScore:
@@ -255,6 +290,222 @@ class TestComplexityRouterInit:
         assert result is not None
         metadata = request_kwargs.get("metadata", {})
         assert metadata.get(RETURN_RAW_MODEL_NAME_METADATA_KEY, False) is return_raw_model_name
+
+    @pytest.mark.asyncio
+    async def test_jev_choice_maps_to_tier_and_exposes_provenance(self, mock_router_instance):
+        client = _StaticJevClient(
+            JevSystemOneResponse(
+                model="jev-1.13.0",
+                answers={
+                    "tier": JevChoiceAnswer(
+                        type="choice",
+                        choice="MEDIUM",
+                        probabilities={"SIMPLE": 0.1, "MEDIUM": 0.9},
+                        confidence=0.8,
+                    )
+                },
+                usage=JevUsage(input_tokens=10, output_tokens=2),
+            )
+        )
+        router = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test", "timeout_ms": 100},
+                "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+            },
+            derive_savings_baseline=False,
+            jev_client=client,
+        )
+
+        outcome = await router.aclassify("Explain this")
+
+        assert outcome.tier == ComplexityTier.MEDIUM
+        assert outcome.cause == "jev_classifier"
+        assert outcome.jev_verdict is not None
+        assert outcome.jev_verdict.model == "jev-1.13.0"
+        assert outcome.signals == (
+            "jev-classifier:MEDIUM",
+            "jev-confidence=0.800000",
+            "tier-probability:SIMPLE=0.100000",
+            "tier-probability:MEDIUM=0.900000",
+        )
+
+    @pytest.mark.asyncio
+    async def test_jev_pre_routing_hook_exposes_routing_decision_provenance(
+        self, mock_router_instance, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "typesafe/jev-1.13.0",
+            {"input_cost_per_token": 0.0001, "output_cost_per_token": 0.0002},
+        )
+        client = _StaticJevClient(
+            JevSystemOneResponse(
+                model="jev-1.13.0",
+                answers={
+                    "tier": JevChoiceAnswer(
+                        type="choice",
+                        choice="SIMPLE",
+                        probabilities={"SIMPLE": 1.0},
+                        confidence=0.99,
+                    )
+                },
+                usage=JevUsage(input_tokens=3, output_tokens=4),
+            )
+        )
+        router = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test", "timeout_ms": 100},
+                "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+            },
+            derive_savings_baseline=False,
+            jev_client=client,
+        )
+
+        result = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+        assert result is not None
+        assert result.routing_decision is not None
+        assert result.routing_decision["classifier_model"] == "typesafe/jev-1.13.0"
+        assert result.routing_decision["classifier_cost"] == pytest.approx(0.0011)
+        assert result.routing_decision["classifier_probabilities"] == {"SIMPLE": 1.0}
+        assert result.routing_decision["classifier_confidence"] == 0.99
+
+    @pytest.mark.asyncio
+    async def test_jev_custom_tier_criteria_are_sent_to_classifier(self, mock_router_instance):
+        client = _StaticJevClient(
+            JevSystemOneResponse(
+                answers={
+                    "tier": JevChoiceAnswer(
+                        type="choice",
+                        choice="Budget",
+                        probabilities={"Budget": 1.0},
+                        confidence=1.0,
+                    )
+                }
+            )
+        )
+        router = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test"},
+                "tier_definitions": [
+                    {"name": "Budget", "description": "Short known answers"},
+                    {"name": "Premium", "description": "Deep technical work"},
+                ],
+                "fallback_tier": "Budget",
+                "tiers": {"Budget": "cheap", "Premium": "strong"},
+            },
+            derive_savings_baseline=False,
+            jev_client=client,
+        )
+
+        await router.aclassify("What is this?")
+
+        assert client.last_request is not None
+        assert client.last_request.questions["tier"].criteria == {
+            "Budget": "Short known answers",
+            "Premium": "Deep technical work",
+        }
+
+    @pytest.mark.asyncio
+    async def test_jev_builtin_criteria_follow_configured_labels(self, mock_router_instance):
+        client = _StaticJevClient(
+            JevSystemOneResponse(
+                answers={
+                    "tier": JevChoiceAnswer(
+                        type="choice",
+                        choice="Cheap",
+                        probabilities={"Cheap": 1.0},
+                        confidence=1.0,
+                    )
+                }
+            )
+        )
+        router = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test"},
+                "tier_labels": {"SIMPLE": "Cheap", "MEDIUM": "Standard"},
+                "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+            },
+            derive_savings_baseline=False,
+            jev_client=client,
+        )
+
+        await router.aclassify("What is this?")
+
+        assert client.last_request is not None
+        assert set(client.last_request.questions["tier"].criteria) == {"Cheap", "Standard", "COMPLEX", "REASONING"}
+
+    @pytest.mark.asyncio
+    async def test_jev_timeout_opens_breaker_and_skips_next_call(self, mock_router_instance):
+        client = _TimeoutJevClient()
+        router = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test", "timeout_ms": 1},
+                "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+            },
+            derive_savings_baseline=False,
+            jev_client=client,
+        )
+
+        first = await router.aclassify("Explain this")
+        second = await router.aclassify("Explain this")
+
+        assert first.cause != "jev_classifier"
+        assert second.cause != "jev_classifier"
+        assert client.calls == 1
+        assert _CLASSIFIER_CIRCUIT_OPEN_SIGNAL in second.signals
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "response",
+        [
+            RuntimeError("upstream failed"),
+            JevSystemOneResponse(
+                answers={
+                    "tier": JevChoiceAnswer(
+                        type="choice", choice="UNKNOWN", probabilities={"UNKNOWN": 1.0}, confidence=1.0
+                    )
+                }
+            ),
+            JevSystemOneResponse(answers={}),
+        ],
+    )
+    async def test_jev_failures_fall_back(self, mock_router_instance, response):
+        client = _StaticJevClient(response)
+        router = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test"},
+                "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+            },
+            derive_savings_baseline=False,
+            jev_client=client,
+        )
+
+        outcome = await router.aclassify("Explain this")
+
+        assert outcome.cause != "jev_classifier"
 
 
 class TestTokenScoring:
@@ -1614,6 +1865,33 @@ class TestRouterComplexityDeploymentMethods:
                 ],
                 auto_router_capability_limit=lambda: 1,
             )
+
+    @pytest.mark.parametrize("instructions", [None, "Pick the lowest suitable tier"])
+    @pytest.mark.parametrize("limit", [1, None])
+    def test_jev_instructions_share_the_existing_custom_tier_quota(
+        self, instructions: str | None, limit: int | None
+    ) -> None:
+        rows: Final = [
+            self._POOL,
+            self._custom_tier_row("tiers-a", "id-a"),
+            {
+                "model_name": "jev-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "classifier_type": "jev",
+                        "jev_classifier_config": {"api_key": "test", "instructions": instructions},
+                        "tiers": {"SIMPLE": "gpt-4o-mini"},
+                    },
+                },
+            },
+        ]
+        if instructions is not None and limit is not None:
+            with pytest.raises(ValueError, match="operator-written classifier prompt"):
+                Router(model_list=rows, auto_router_capability_limit=lambda: limit)
+            return
+        router: Final = Router(model_list=rows, auto_router_capability_limit=lambda: limit)
+        assert set(router.complexity_routers) == {"tiers-a", "jev-router"}
 
     def test_the_shipped_rubric_and_default_prompt_stay_free(self) -> None:
         """Only an operator-written prompt is gated: picking a shipped rubric preset, or writing no
@@ -8083,8 +8361,10 @@ class TestContextAwareClassifier:
         assert messages == original_messages
         assert (claude_kwargs, compared_kwargs) == original_kwargs
         calls: Final = tuple(call.kwargs["messages"] for call in dependency.acompletion.await_args_list)
-        assert calls[0][0]["content"] == calls[1][0]["content"] == classification_system_prompt(
-            router.config.classifier_context_window_size
+        assert (
+            calls[0][0]["content"]
+            == calls[1][0]["content"]
+            == classification_system_prompt(router.config.classifier_context_window_size)
         )
         payloads: Final = (calls[0][1]["content"], calls[1][1]["content"])
         for payload, expected_system in zip(payloads, (False, forwards_system)):
@@ -13273,11 +13553,7 @@ class TestHealthFallbackDispatch:
                             "api_key": "test-only",
                             "api_base": f"https://{name}.test{base_suffix}",
                             **({"tags": [name]} if tagged else {}),
-                            **(
-                                {"max_budget": 1.0, "budget_duration": "1d"}
-                                if budgeted and name == "primary"
-                                else {}
-                            ),
+                            **({"max_budget": 1.0, "budget_duration": "1d"} if budgeted and name == "primary" else {}),
                         },
                         "model_info": {"id": f"{name}-id"},
                     }

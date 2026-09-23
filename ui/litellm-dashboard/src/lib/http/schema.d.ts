@@ -1490,8 +1490,8 @@ export interface paths {
          *
          *     Runs the same check every write path runs (the router's own pydantic model), so a form can
          *     show the backend's exact verdict while the operator is still editing rather than after a
-         *     rejected save. Gated exactly like the save it rehearses: a proxy admin, or a team admin
-         *     naming their own team. Nothing is created, routed, or billed.
+         *     rejected save. Uses the same team opt-in and model-access checks as configuration
+         *     writes for members. Nothing is created, routed, or billed.
          */
         post: operations["validate_complexity_router_config_auto_router_validate_complexity_router_config_post"];
         delete?: never;
@@ -10253,6 +10253,27 @@ export interface paths {
         patch: operations["openai_passthrough_route_openai_passthrough__endpoint__patch"];
         trace?: never;
     };
+    "/openrouter/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Openrouter Proxy Route */
+        get: operations["openrouter_proxy_route_openrouter__endpoint__get"];
+        /** Openrouter Proxy Route */
+        put: operations["openrouter_proxy_route_openrouter__endpoint__put"];
+        /** Openrouter Proxy Route */
+        post: operations["openrouter_proxy_route_openrouter__endpoint__post"];
+        /** Openrouter Proxy Route */
+        delete: operations["openrouter_proxy_route_openrouter__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /** Openrouter Proxy Route */
+        patch: operations["openrouter_proxy_route_openrouter__endpoint__patch"];
+        trace?: never;
+    };
     "/organization/daily/activity": {
         parameters: {
             query?: never;
@@ -16220,6 +16241,42 @@ export interface paths {
          *     will be rejected with a 403.
          */
         patch: operations["toolset_mcp_route_toolset__toolset_name__mcp_patch"];
+        trace?: never;
+    };
+    "/typesafe/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        get: operations["typesafe_proxy_route_typesafe__endpoint__get"];
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        put: operations["typesafe_proxy_route_typesafe__endpoint__put"];
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        post: operations["typesafe_proxy_route_typesafe__endpoint__post"];
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        delete: operations["typesafe_proxy_route_typesafe__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        patch: operations["typesafe_proxy_route_typesafe__endpoint__patch"];
         trace?: never;
     };
     "/update/default_team_settings": {
@@ -23656,6 +23713,11 @@ export interface components {
              */
             router_name: string;
             /**
+             * Saved Model Id
+             * @description Test this saved deployment's server-side configuration instead of the supplied config and default model
+             */
+            saved_model_id?: string | null;
+            /**
              * System
              * @description The top-level system prompt an Anthropic /v1/messages body carries beside its messages
              */
@@ -23984,7 +24046,7 @@ export interface components {
             timeout?: number | null;
             /**
              * Unreachable Fallback
-             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
+             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
              * @default fail_closed
              * @enum {string}
              */
@@ -28418,6 +28480,44 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        /** JevClassifierConfig */
+        JevClassifierConfig: {
+            /**
+             * Api Base
+             * @description TypeSafe API base, falling back to TYPESAFE_API_BASE and then https://api.typesafe.ai
+             */
+            api_base?: string | null;
+            /**
+             * Api Key
+             * @description TypeSafe API key, falling back to TYPESAFE_API_KEY
+             */
+            api_key?: string | null;
+            /**
+             * Circuit Breaker Cooldown Seconds
+             * @default 30
+             */
+            circuit_breaker_cooldown_seconds: number;
+            /**
+             * Circuit Breaker Enabled
+             * @default true
+             */
+            circuit_breaker_enabled: boolean;
+            /**
+             * Instructions
+             * @description Replaces the built-in Jev question instructions
+             */
+            instructions?: string | null;
+            /**
+             * Model
+             * @default jev-latest
+             */
+            model: string;
+            /**
+             * Timeout Ms
+             * @default 3000
+             */
+            timeout_ms: number;
+        };
         /** KeyHealthResponse */
         KeyHealthResponse: {
             /**
@@ -28443,7 +28543,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -35112,24 +35212,24 @@ export interface components {
             classification_prompt?: string | null;
             /**
              * Classifier Context Budget Chars
-             * @description Maximum characters of prior-turn text quoted to the LLM classifier, across the whole context window, per classification call. Turns are taken newest first and quoted whole while they fit, so a conversation small enough to quote entirely is never cut; once the budget runs out the older turns are dropped whole and only the turn straddling the boundary is truncated, into whatever space is left. The current ask and, except for Claude Code requests, the extracted system-role text sit outside this budget and are sent in full, as does the numbering each quoted turn carries. A budget under 120 leaves no room to quote a turn and suppresses the block; set classifier_context_window_size to 0 to turn context off deliberately. Only applies when classifier_type is 'llm'.
+             * @description Maximum characters of prior-turn text quoted to the LLM or JEV classifier, across the whole context window, per classification call. Turns are taken newest first and quoted whole while they fit, so a conversation small enough to quote entirely is never cut; once the budget runs out the older turns are dropped whole and only the turn straddling the boundary is truncated, into whatever space is left. The current ask and, except for Claude Code requests, the extracted system-role text sit outside this budget and are sent in full, as does the numbering each quoted turn carries. A budget under 120 leaves no room to quote a turn and suppresses the block; set classifier_context_window_size to 0 to turn context off deliberately. Applies to LLM and JEV classification.
              * @default 8000
              */
             classifier_context_budget_chars: number;
             /**
              * Classifier Context Include Assistant Turns
-             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies spend classifier_context_budget_chars alongside user turns, so raise it if the oldest turns stop being quoted once replies join the window. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
+             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies spend classifier_context_budget_chars alongside user turns, so raise it if the oldest turns stop being quoted once replies join the window. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Applies to LLM and JEV classification.
              * @default false
              */
             classifier_context_include_assistant_turns: boolean;
             /**
              * Classifier Context Per Turn Chars
-             * @description Optional cap on each individual prior turn's text, applied before classifier_context_budget_chars bounds the block. Unset by default, so one long turn may spend the whole budget, which is usually what a follow-up needs; set it when no single turn should dominate the context the classifier sees. A capped turn keeps its opening and its ending with the middle elided. Only applies when classifier_type is 'llm'.
+             * @description Optional cap on each individual prior turn's text, applied before classifier_context_budget_chars bounds the block. Unset by default, so one long turn may spend the whole budget, which is usually what a follow-up needs; set it when no single turn should dominate the context the classifier sees. A capped turn keeps its opening and its ending with the middle elided. Applies to LLM and JEV classification.
              */
             classifier_context_per_turn_chars?: number | null;
             /**
              * Classifier Context Window Size
-             * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM classifier prompt, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model, which may be a different deployment or provider than the routed completion model; that call carries the current user ask and, except for Claude Code requests, the extracted system-role text in full. Claude Code system text is omitted to avoid classifying harness instructions; the routed completion still receives it. Set to 0 to send neither prior turns nor any conversation context beyond the current ask. Only applies when classifier_type is 'llm'.
+             * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM or JEV classifier input, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model (the configured TypeSafe endpoint for JEV), which may be a different deployment or provider than the routed completion model; that call carries the current user ask and, except for Claude Code requests, the extracted system-role text in full. Claude Code system text is omitted to avoid classifying harness instructions; the routed completion still receives it. Set to 0 to omit prior turns and the conversation-depth summary; the current ask and selected system text are still sent. Applies to LLM and JEV classification.
              * @default 3
              */
             classifier_context_window_size: number;
@@ -35155,11 +35255,11 @@ export interface components {
             classifier_plugin_timeout_ms: number;
             /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM call, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary
+             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM call, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary, or 'jev', a TypeSafe AI Jev structured choice call
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "custom" | "heuristic_first" | "hybrid";
+            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "custom" | "heuristic_first" | "hybrid" | "jev";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -35213,7 +35313,7 @@ export interface components {
             enable_context_window_escalation: boolean;
             /**
              * Enable Non Reasoning Tier
-             * @description Add NON_REASONING as a fifth built-in tier below SIMPLE, for operational agent traffic that relays or reformats information rather than reasoning about it. Off by default: turning it on adds a rung to this router's ladder, a bullet to the LLM classifier's rubric, and a value the classifier may return, all of which move tier decisions and spend on an already-deployed router. Requires an LLM classifier or a custom classifier plugin, since the heuristic scorers cannot produce the tier, and a model in `tiers` under the NON_REASONING key. Escalation still walks up from it, and it is never the savings baseline or a `heuristic_v2` prediction.
+             * @description Add NON_REASONING as a fifth built-in tier below SIMPLE, for operational agent traffic that relays or reformats information rather than reasoning about it. Off by default: turning it on adds a rung to this router's ladder, a bullet to the LLM classifier's rubric, and a value the classifier may return, all of which move tier decisions and spend on an already-deployed router. Requires an LLM, Jev, or custom classifier plugin, since the heuristic scorers cannot produce the tier, and a model in `tiers` under the NON_REASONING key. Escalation still walks up from it, and it is never the savings baseline or a `heuristic_v2` prediction.
              * @default false
              */
             enable_non_reasoning_tier: boolean;
@@ -35248,6 +35348,7 @@ export interface components {
              * @description How close to a tier boundary a heuristic score has to land before the LLM classifier breaks the tie; required when classifier_type is 'hybrid' and rejected otherwise. Everything further than this from every active boundary routes on the scorer's own tier with no classifier call, at any tier, which is what separates 'hybrid' from 'heuristic_first' and its cheap-tier ceiling. A prompt where no dimension fired still goes to the classifier, since the scorer has no opinion to be near a boundary with. 0 escalates only scores sitting exactly on a boundary.
              */
             hybrid_boundary_margin?: number | null;
+            jev_classifier_config?: components["schemas"]["JevClassifierConfig"] | null;
             /**
              * Keyword Tier Rules
              * @description Rules that force a specific tier when their keywords match the prompt
@@ -35374,7 +35475,7 @@ export interface components {
             };
             /**
              * Tier Definitions
-             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet; entries named after a built-in tier may omit the description and inherit the built-in criteria. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, plugins, tier_labels, and the calibration-example rubric presets are unavailable with a custom tier set: the first four are built on the built-in tier ladder, and the last two rename or exemplify tiers the set replaces.
+             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet; entries named after a built-in tier may omit the description and inherit the built-in criteria. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm', 'jev' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, plugins, tier_labels, and the calibration-example rubric presets are unavailable with a custom tier set: the first four are built on the built-in tier ladder, and the last two rename or exemplify tiers the set replaces.
              */
             tier_definitions?: components["schemas"]["TierDefinition"][] | null;
             /**
@@ -36508,11 +36609,17 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "jev_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            /** Classifier Confidence */
+            classifier_confidence?: number;
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
             classifier_model?: string;
+            /** Classifier Probabilities */
+            classifier_probabilities?: {
+                [key: string]: number;
+            };
             /** Context Escalated */
             context_escalated?: boolean;
             /** Context Escalation Original Tier */
@@ -53720,6 +53827,161 @@ export interface operations {
             };
         };
     };
+    openrouter_proxy_route_openrouter__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    openrouter_proxy_route_openrouter__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    openrouter_proxy_route_openrouter__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    openrouter_proxy_route_openrouter__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    openrouter_proxy_route_openrouter__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_organization_daily_activity_organization_daily_activity_get: {
         parameters: {
             query?: {
@@ -60208,6 +60470,161 @@ export interface operations {
             header?: never;
             path: {
                 toolset_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
             };
             cookie?: never;
         };

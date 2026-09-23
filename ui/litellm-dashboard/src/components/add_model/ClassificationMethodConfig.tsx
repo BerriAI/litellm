@@ -1,3 +1,5 @@
+import { transitionClassifierType } from "./classifier_type_transition";
+import JevClassifierConfig from "./JevClassifierConfig";
 import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
@@ -17,7 +19,6 @@ import ClassifierReasoningEffortSelect from "./ClassifierReasoningEffortSelect";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import ClassifierVisionConfig from "./ClassifierVisionConfig";
 import type { ReasoningEffort } from "./complexity_router_tiers";
-import { nonReasoningTierFields } from "./nonReasoningTierFields";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
   ClassificationFrequency,
@@ -33,12 +34,11 @@ import {
   DEFAULT_CLASSIFIER_FALLBACK,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
   DEFAULT_CLASSIFICATION_RUBRIC,
-  NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
   ClassificationRubric,
   effectiveTierLabel,
   heuristicScoringRole,
   usesLlmClassifier,
-  DEFAULT_HEURISTIC_FIRST_MAX_TIER,
+  usesClassifierContext,
   DEFAULT_HYBRID_BOUNDARY_MARGIN,
   HEURISTIC_FIRST_MAX_TIER_KEYS,
   effectiveClassifierType,
@@ -210,6 +210,13 @@ const ClassifierTypeRadios: React.FC<{
             <span className="text-muted-foreground">calls a model to decide the tier (e.g. a small/fast model)</span>
           </span>
         </Label>
+        <Label className="items-start font-normal leading-normal">
+          <RadioGroupItem value="jev" className="mt-0.5" />
+          <span>
+            <strong className="font-semibold">JEV Classifier</strong>{" "}
+            <span className="text-muted-foreground">uses TypeSafe System One Choice to decide the tier</span>
+          </span>
+        </Label>
         <SimpleTooltip content={scorerLockedReason}>
           <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
             <RadioGroupItem value="heuristic_first" className="mt-0.5" disabled={scorerLocked} />
@@ -263,35 +270,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const explicitlySupportedClassifierEfforts = effortOptionsByModel[classifierModel];
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
-    const nextValue: ComplexityRouterConfigValue = {
-      ...value,
-      classifier_type: classifierType,
-      classifier_llm_config: usesLlmClassifier(classifierType)
-        ? value.classifier_llm_config ?? {
-            model: "",
-            timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS,
-            classification_rubric: NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
-          }
-        : undefined,
-      classifier_context_window_size: usesLlmClassifier(classifierType)
-        ? value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
-        : undefined,
-      classifier_context_budget_chars: usesLlmClassifier(classifierType)
-        ? value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS
-        : undefined,
-      classifier_context_include_assistant_turns: usesLlmClassifier(classifierType)
-        ? value.classifier_context_include_assistant_turns
-        : undefined,
-      classifier_fallback: usesLlmClassifier(classifierType) ? value.classifier_fallback : undefined,
-      heuristic_first_max_tier:
-        classifierType === "heuristic_first"
-          ? value.heuristic_first_max_tier ?? DEFAULT_HEURISTIC_FIRST_MAX_TIER
-          : undefined,
-      hybrid_boundary_margin:
-        classifierType === "hybrid" ? value.hybrid_boundary_margin ?? DEFAULT_HYBRID_BOUNDARY_MARGIN : undefined,
-      ...nonReasoningTierFields(classifierType, value),
-    };
-    onChange(nextValue);
+    onChange(transitionClassifierType(value, classifierType));
   };
 
   const handleHeuristicFirstMaxTierChange = (tier: string) => {
@@ -529,6 +508,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </p>
       </div>
 
+      {classifierType === "jev" && <JevClassifierConfig value={value} onChange={onChange} />}
       {usesLlmClassifier(classifierType) && (
         <div className="mt-4 space-y-3">
           <div>
@@ -621,6 +601,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               />
             )}
           </div>
+        </div>
+      )}
+      {usesClassifierContext(classifierType) && (
+        <div className="mt-4 space-y-3">
           <RestrictedSection heading="If the classifier fails" by={restrictedBy(value, "classifierFallback")}>
             <RadioGroup
               value={value.classifier_fallback ?? DEFAULT_CLASSIFIER_FALLBACK}
@@ -682,9 +666,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               className="w-full"
             />
             <span className="text-xs text-muted-foreground">
-              Number of prior user turns (tool output and harness reminders excluded) sent to the classifier as context,
-              so a referring follow-up like &quot;now do the same for the streaming path&quot; is classified against
-              what it refers to. Set to 0 to send only the current message.
+              Number of prior user turns sent to the classifier provider, excluding tool output and harness reminders.
+              LLM and JEV default to 3 turns; JEV sends them to the configured TypeSafe endpoint. Set to 0 to omit
+              conversation history. The current message and selected system text are still sent.
             </span>
           </div>
           <div>
