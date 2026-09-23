@@ -2058,6 +2058,9 @@
         ],
         "tests/integration/authorization/test_bedrock_passthrough_model_access.py::test_key_scoped_to_one_model_cannot_call_another_through_bedrock_passthrough_routes": [
             "authz.key_models.bedrock_passthrough_route_model_is_enforced"
+        ],
+        "tests/integration/authorization/test_jwt_mapped_key_email_backfill.py::test_jwt_mapped_key_request_backfills_null_user_email_from_token_claims": [
+            "authorization.jwt.mapped_key_backfills_null_user_email_from_claims"
         ]
     },
     "browser": {
