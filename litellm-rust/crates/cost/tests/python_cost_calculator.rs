@@ -476,6 +476,23 @@ fn batch_model_info_bills_cache_writes_as_input_without_a_batch_cache_rate() {
 }
 
 #[rstest]
+fn batch_model_info_parses_rates_with_surrounding_whitespace() {
+    let model_info = json!({
+        "input_cost_per_token_batches": " 1e-6 ",
+        "output_cost_per_token_batches": " 3e-6 "
+    });
+    let usage = ChatUsage {
+        prompt_tokens: 100,
+        completion_tokens: 10,
+        total_tokens: 110,
+        ..ChatUsage::default()
+    };
+    let cost = batch_cost_from_model_info(&model_info, &usage, Some("openai"), None).unwrap();
+    assert!((cost.prompt - 100.0 * 1e-6).abs() < 1e-12);
+    assert_eq!(cost.completion, 10.0 * 3e-6);
+}
+
+#[rstest]
 #[case(1000, 900, false, 100.0 * 1e-6 + 900.0 * 1e-7)]
 #[case(300_048, 300_045, false, 3.0 * 3e-6 + 300_045.0 * 3e-7)]
 #[case(1000, 900, true, 100.0 * 1e-6 + 900.0 * 1.25e-6)]

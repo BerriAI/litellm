@@ -39,6 +39,30 @@ fn calculate_generic_cost_with_resolved_rates_bills_plain_tokens() {
 }
 
 #[rstest]
+fn calculate_generic_cost_from_model_info_parses_rates_with_surrounding_whitespace() {
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "total_tokens": 110
+    }}))
+    .unwrap()
+    .unwrap();
+    let model_info = json!({
+        "input_cost_per_token": " 2e-6 ",
+        "output_cost_per_token": " 4e-6 "
+    });
+    let actual = calculate_generic_cost_from_model_info_without_off_peak(
+        &usage,
+        &model_info,
+        None,
+        false,
+        1.0,
+    );
+    assert!((actual.0 - 100.0 * 2e-6).abs() < 1e-12);
+    assert!((actual.1 - 10.0 * 4e-6).abs() < 1e-12);
+}
+
+#[rstest]
 fn billable_prompt_details_clamps_overlapping_cache_and_modalities() {
     let usage = get_usage_object(&json!({"usage": {
         "prompt_tokens": 1000,

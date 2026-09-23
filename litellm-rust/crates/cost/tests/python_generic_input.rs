@@ -18,6 +18,7 @@ fn rates() -> InputBaseRates {
 
 #[rstest]
 #[case(json!({"input_cost_per_audio_token": "3e-6"}), "input_cost_per_audio_token", None, Some(3e-6))]
+#[case(json!({"input_cost_per_audio_token": " 3e-6 "}), "input_cost_per_audio_token", None, Some(3e-6))]
 #[case(json!({"input_cost_per_audio_token": 0.0}), "input_cost_per_audio_token", Some(1e-6), Some(0.0))]
 #[case(json!({"input_cost_per_audio_token": "3e-6"}), "input_cost_per_audio_token_priority", None, Some(3e-6))]
 #[case(json!({"input_cost_per_audio_token": "bad"}), "input_cost_per_audio_token", Some(1e-6), Some(1e-6))]

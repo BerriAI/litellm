@@ -216,7 +216,10 @@ fn model_rate(model_info: &Value, key: &str) -> Rate {
     };
     match value {
         Value::Number(value) => value.as_f64().map_or(Rate::Missing, Rate::Value),
-        Value::String(value) => value.parse::<f64>().map_or(Rate::Missing, Rate::Value),
+        Value::String(value) => value
+            .trim()
+            .parse::<f64>()
+            .map_or(Rate::Missing, Rate::Value),
         _ => Rate::Missing,
     }
 }
