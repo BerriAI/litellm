@@ -282,7 +282,7 @@ class RigFactory:
     def start(self) -> Iterator[Rig]:
         config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
         config["litellm_settings"].update({"callbacks": ["otel"]})
-        config["general_settings"].update(self.settings)
+        config["general_settings"].update({"disable_model_info_refresh": True, **self.settings})
         config["callback_settings"] = {
             "otel": {"exporter": "http/json", "endpoint": self.sink.wire.url, "mapper_names": ["genai"]},
         }
