@@ -25,7 +25,9 @@ use crate::completion_cost::{
 use crate::completion_input::{
     CompletionInputRequest, PreparedCompletionInput, prepare_completion_input,
 };
-use crate::custom_pricing::CustomTokenRates;
+use crate::custom_pricing::{
+    CustomPricing, CustomPricingError, CustomTokenRates, cost_from_chat_usage,
+};
 use crate::dashscope_cost::cost_per_token as dashscope_cost_per_token;
 use crate::databricks_cost::registry_key as databricks_registry_key;
 use crate::fal_ai_image_cost::{
@@ -207,6 +209,13 @@ pub enum CatalogCallError {
     Ocr(OcrCostError),
     Batch(BatchError),
     MissingProvider,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CatalogCustomError {
+    Pricing(CustomPricingError),
+    Catalog(CatalogError),
+    Call(CatalogCallError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -407,6 +416,37 @@ impl ModelInfoCatalog {
         request: CompletionInputRequest<'_>,
     ) -> Result<PreparedCompletionInput, UsageError> {
         prepare_completion_input(request, &self.entries)
+    }
+
+    pub fn cost_per_token_with_custom(
+        &self,
+        request: ModelCostRequest<'_>,
+        pricing: CustomPricing,
+    ) -> Result<(f64, f64), CatalogCustomError> {
+        match cost_from_chat_usage(request.usage, pricing, request.response_time_ms)
+            .map_err(CatalogCustomError::Pricing)?
+        {
+            Some(cost) => Ok((cost.input, cost.output)),
+            None => self
+                .cost_per_token(request)
+                .map_err(CatalogCustomError::Catalog),
+        }
+    }
+
+    pub fn cost_per_token_for_call_with_custom(
+        &self,
+        request: ModelCostRequest<'_>,
+        call: CostCall<'_>,
+        pricing: CustomPricing,
+    ) -> Result<(f64, f64), CatalogCustomError> {
+        match cost_from_chat_usage(request.usage, pricing, request.response_time_ms)
+            .map_err(CatalogCustomError::Pricing)?
+        {
+            Some(cost) => Ok((cost.input, cost.output)),
+            None => self
+                .cost_per_token_for_call(request, call)
+                .map_err(CatalogCustomError::Call),
+        }
     }
 
     pub fn cost_per_token_for_call(

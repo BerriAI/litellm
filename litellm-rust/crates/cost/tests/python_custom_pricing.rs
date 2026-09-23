@@ -1,8 +1,13 @@
+use std::collections::HashMap;
+
+use litellm_cost::catalog::{CatalogCustomError, CostCall, ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::custom_pricing::{
-    CustomPricing, CustomTokenRates, RawUsage, cost_per_token_custom_pricing_helper,
-    normalize_cache_usage,
+    CustomPricing, CustomPricingError, CustomTokenRates, RawUsage,
+    cost_per_token_custom_pricing_helper, normalize_cache_usage,
 };
+use litellm_cost::usage_dispatch::chat_usage;
 use rstest::rstest;
+use serde_json::json;
 
 fn usage(prompt_tokens: f64, completion_tokens: f64) -> RawUsage {
     RawUsage {
@@ -167,4 +172,92 @@ fn cost_per_token_custom_pricing_helper_prefers_token_rates_over_seconds() {
     .unwrap();
     assert!((cost.input - 0.001).abs() < 1e-12);
     assert!((cost.output - 0.0002).abs() < 1e-12);
+}
+
+#[rstest]
+fn catalog_custom_rates_override_lookup_and_call_dispatch() {
+    let catalog = ModelInfoCatalog::new(HashMap::new());
+    let usage = chat_usage(&json!({
+        "prompt_tokens": 10,
+        "completion_tokens": 3,
+        "prompt_tokens_details": {"cached_tokens": 4, "cache_write_tokens": 2},
+        "cost": 99.0
+    }))
+    .unwrap();
+    let request = ModelCostRequest {
+        model: "unregistered",
+        provider: Some("openai"),
+        region: None,
+        usage: &usage,
+        service_tier: None,
+        data_residency: None,
+        vertex_location: None,
+        at: "2026-01-01T12:00Z".parse().unwrap(),
+        response_time_ms: Some(2500.0),
+    };
+    let pricing = CustomPricing {
+        token: Some(rates(0.01, 0.02, Some(0.001), Some(0.03))),
+        per_second: Some(1.0),
+    };
+    let direct = catalog
+        .cost_per_token_with_custom(request, pricing)
+        .unwrap();
+    let dispatched = catalog
+        .cost_per_token_for_call_with_custom(
+            request,
+            CostCall::Speech {
+                prompt_characters: None,
+            },
+            pricing,
+        )
+        .unwrap();
+    assert!((direct.0 - 0.104).abs() < 1e-12);
+    assert!((direct.1 - 0.06).abs() < 1e-12);
+    assert_eq!(direct, dispatched);
+    let seconds = catalog
+        .cost_per_token_with_custom(
+            request,
+            CustomPricing {
+                token: None,
+                per_second: Some(0.08),
+            },
+        )
+        .unwrap();
+    assert_eq!(seconds.0, 0.0);
+    assert!((seconds.1 - 0.2).abs() < 1e-12);
+}
+
+#[rstest]
+fn catalog_custom_pricing_falls_back_and_rejects_invalid_rates() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/mapped".to_owned(),
+        json!({"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}),
+    )]));
+    let usage = chat_usage(&json!({"prompt_tokens": 10, "completion_tokens": 3})).unwrap();
+    let request = ModelCostRequest {
+        model: "mapped",
+        provider: Some("openai"),
+        region: None,
+        usage: &usage,
+        service_tier: None,
+        data_residency: None,
+        vertex_location: None,
+        at: "2026-01-01T12:00Z".parse().unwrap(),
+        response_time_ms: None,
+    };
+    let fallback = catalog
+        .cost_per_token_with_custom(request, CustomPricing::NONE)
+        .unwrap();
+    assert!((fallback.0 - 0.1).abs() < 1e-12);
+    assert!((fallback.1 - 0.06).abs() < 1e-12);
+    assert_eq!(
+        catalog.cost_per_token_with_custom(
+            request,
+            CustomPricing {
+                token: Some(rates(-0.01, 0.02, None, None)),
+                per_second: None,
+            },
+        ),
+        Err(CatalogCustomError::Pricing(CustomPricingError::InvalidRate))
+    );
 }

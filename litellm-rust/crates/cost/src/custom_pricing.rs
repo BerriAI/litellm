@@ -180,3 +180,34 @@ pub fn cost_per_token_custom_pricing_helper(
     }
     Ok(Some(cost))
 }
+
+pub fn cost_from_chat_usage(
+    usage: &ChatUsage,
+    pricing: CustomPricing,
+    response_time_ms: Option<f64>,
+) -> Result<Option<CustomCost>, CustomPricingError> {
+    if pricing == CustomPricing::NONE {
+        return Ok(None);
+    }
+    let details = usage.prompt_tokens_details.as_ref();
+    let top_level = |field: &str| usage.extra.get(field).and_then(Value::as_f64);
+    let normalized = normalize_cache_usage(RawUsage {
+        prompt_tokens: usage.prompt_tokens as f64,
+        completion_tokens: usage.completion_tokens as f64,
+        details_cached_tokens: details.map(|details| details.cached_tokens as f64),
+        details_cache_write_tokens: details
+            .and_then(|details| details.cache_write_tokens)
+            .map(|tokens| tokens as f64),
+        details_cache_creation_tokens: details
+            .and_then(|details| details.cache_creation_tokens)
+            .map(|tokens| tokens as f64),
+        top_level_cache_read_tokens: top_level("cache_read_input_tokens"),
+        top_level_cache_creation_tokens: top_level("cache_creation_input_tokens"),
+        fallback_cache_read_tokens: None,
+        fallback_cache_creation_tokens: None,
+    })?;
+    cost_per_token_custom_pricing_helper(normalized, pricing, response_time_ms)
+}
+use serde_json::Value;
+
+use crate::responses_usage::ChatUsage;
