@@ -72377,6 +72377,7 @@
         "supports_vision": true
     },
     "azure_ai/deepseek-r1": {
+        "deprecation_date": "2026-08-13",
         "input_cost_per_token": 1.35e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -72388,6 +72389,7 @@
         "supports_vision": false
     },
     "azure_ai/deepseek-v3-0324": {
+        "deprecation_date": "2026-07-13",
         "input_cost_per_token": 1.14e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 163840,
@@ -72400,6 +72402,7 @@
         "supports_vision": false
     },
     "azure_ai/deepseek-v3.1": {
+        "deprecation_date": "2026-07-13",
         "input_cost_per_token": 1.23e-06,
         "litellm_provider": "azure_ai",
         "mode": "chat",
@@ -72412,6 +72415,7 @@
         "supports_vision": false
     },
     "azure_ai/grok-3": {
+        "deprecation_date": "2026-05-01",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
@@ -72423,6 +72427,7 @@
         "supports_tool_choice": true
     },
     "azure_ai/grok-3-mini": {
+        "deprecation_date": "2026-05-01",
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
@@ -72437,6 +72442,7 @@
         "supports_tool_choice": true
     },
     "azure_ai/grok-4-fast-non-reasoning": {
+        "deprecation_date": "2026-05-01",
         "input_cost_per_token": 2e-07,
         "litellm_provider": "azure_ai",
         "mode": "chat",
@@ -72448,6 +72454,7 @@
         "supports_tool_choice": true
     },
     "azure_ai/grok-4-fast-reasoning": {
+        "deprecation_date": "2026-05-01",
         "input_cost_per_token": 2e-07,
         "litellm_provider": "azure_ai",
         "mode": "chat",
@@ -72459,6 +72466,7 @@
         "supports_tool_choice": true
     },
     "azure_ai/MAI-Image-2e": {
+        "deprecation_date": "2026-08-15",
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",
         "mode": "embedding",
@@ -72466,6 +72474,7 @@
     },
     "azure/eu/gpt-5.1-chat": {
         "cache_read_input_token_cost": 1.375e-07,
+        "deprecation_date": "2026-06-29",
         "input_cost_per_token": 1.375e-06,
         "litellm_provider": "azure",
         "mode": "chat",
@@ -72494,6 +72503,7 @@
     },
     "azure/eu/gpt-5.3-chat": {
         "cache_read_input_token_cost": 1.925e-07,
+        "deprecation_date": "2026-06-29",
         "input_cost_per_token": 1.925e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
@@ -72532,6 +72542,7 @@
     },
     "azure/gpt-5.1-chat": {
         "cache_read_input_token_cost": 1.25e-07,
+        "deprecation_date": "2026-06-29",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
         "mode": "chat",
@@ -72559,6 +72570,7 @@
     },
     "azure/gpt-5.3-chat": {
         "cache_read_input_token_cost": 1.75e-07,
+        "deprecation_date": "2026-06-29",
         "input_cost_per_token": 1.75e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
@@ -72573,6 +72585,7 @@
     },
     "azure/us/gpt-5.1-chat": {
         "cache_read_input_token_cost": 1.375e-07,
+        "deprecation_date": "2026-06-29",
         "input_cost_per_token": 1.375e-06,
         "litellm_provider": "azure",
         "mode": "chat",
@@ -72600,6 +72613,7 @@
     },
     "azure/us/gpt-5.3-chat": {
         "cache_read_input_token_cost": 1.925e-07,
+        "deprecation_date": "2026-06-29",
         "input_cost_per_token": 1.925e-06,
         "litellm_provider": "azure",
         "max_output_tokens": 64000,
