@@ -1891,6 +1891,9 @@
     "tests/integration/providers/test_anthropic_advisor_wire.py::test_advisor_sub_call_reaches_the_router_deployment_with_its_key_instead_of_anthropic_unauthenticated": [
       "providers.anthropic_messages_advisor.sub_call_uses_the_configured_advisor_deployment"
     ],
+    "tests/integration/providers/test_anthropic_advisor_wire.py::test_advisor_api_base_without_api_key_is_rejected_before_the_proxy_anthropic_key_reaches_the_caller_host": [
+      "providers.anthropic_messages_advisor.caller_api_base_without_api_key_never_receives_the_proxy_key"
+    ],
     "tests/integration/providers/test_azure_ai_chat_wire.py::test_azure_ai_strips_thinking_blocks_and_cache_control_from_forwarded_messages": [
       "providers.azure_ai.anthropic_message_fields_are_stripped_before_foundry"
     ],
